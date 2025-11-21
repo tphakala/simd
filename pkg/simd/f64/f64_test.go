@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/thakala/simd/pkg/simd/cpu"
+	"github.com/tphakala/simd/pkg/simd/cpu"
 )
 
 func TestDotProduct(t *testing.T) {

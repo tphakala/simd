@@ -2,7 +2,7 @@
 
 package f32
 
-import "github.com/thakala/simd/pkg/simd/cpu"
+import "github.com/tphakala/simd/pkg/simd/cpu"
 
 var (
 	hasAVX = cpu.X86.AVX && cpu.X86.FMA

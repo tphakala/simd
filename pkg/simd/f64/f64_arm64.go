@@ -2,7 +2,7 @@
 
 package f64
 
-import "github.com/thakala/simd/pkg/simd/cpu"
+import "github.com/tphakala/simd/pkg/simd/cpu"
 
 var (
 	hasNEON = cpu.ARM64.NEON

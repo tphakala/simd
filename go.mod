@@ -1,4 +1,4 @@
-module github.com/thakala/simd
+module github.com/tphakala/simd
 
 go 1.25.3
 

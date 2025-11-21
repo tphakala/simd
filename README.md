@@ -1,7 +1,7 @@
 # simd
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/thakala/simd.svg)](https://pkg.go.dev/github.com/thakala/simd)
-[![Go Report Card](https://goreportcard.com/badge/github.com/thakala/simd)](https://goreportcard.com/report/github.com/thakala/simd)
+[![Go Reference](https://pkg.go.dev/badge/github.com/tphakala/simd.svg)](https://pkg.go.dev/github.com/tphakala/simd)
+[![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/simd)](https://goreportcard.com/report/github.com/tphakala/simd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64 and float32 slices.
@@ -18,7 +18,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 ## Installation
 
 ```bash
-go get github.com/thakala/simd
+go get github.com/tphakala/simd
 ```
 
 Requires Go 1.25+
@@ -30,8 +30,8 @@ package main
 
 import (
     "fmt"
-    "github.com/thakala/simd/pkg/simd/cpu"
-    "github.com/thakala/simd/pkg/simd/f64"
+    "github.com/tphakala/simd/pkg/simd/cpu"
+    "github.com/tphakala/simd/pkg/simd/f64"
 )
 
 func main() {
@@ -70,7 +70,7 @@ func main() {
 ### `cpu` - CPU Feature Detection
 
 ```go
-import "github.com/thakala/simd/pkg/simd/cpu"
+import "github.com/tphakala/simd/pkg/simd/cpu"
 
 fmt.Println(cpu.Info())      // "AMD64 AVX2+FMA" or "ARM64 NEON"
 fmt.Println(cpu.HasAVX())    // true/false
