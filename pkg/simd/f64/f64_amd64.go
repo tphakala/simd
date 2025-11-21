@@ -153,6 +153,28 @@ func cumulativeSum64(dst, a []float64) {
 	cumulativeSum64Go(dst, a)
 }
 
+func dotProductBatch64(results []float64, rows [][]float64, vec []float64) {
+	// Batch dot product benefits from cache locality of vec
+	// Each individual dot product uses SIMD internally
+	vecLen := len(vec)
+	for i, row := range rows {
+		n := min(len(row), vecLen)
+		if n == 0 {
+			results[i] = 0
+			continue
+		}
+		results[i] = dotProduct(row[:n], vec[:n])
+	}
+}
+
+func convolveValid64(dst, signal, kernel []float64) {
+	// Convolution as sliding dot products - each uses SIMD internally
+	kLen := len(kernel)
+	for i := range dst {
+		dst[i] = dotProduct(signal[i:i+kLen], kernel)
+	}
+}
+
 // Assembly function declarations
 //
 //go:noescape

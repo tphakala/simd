@@ -16,3 +16,5 @@ func abs32(dst, a []float32)            { absGo(dst, a) }
 func neg32(dst, a []float32)            { negGo(dst, a) }
 func fma32(dst, a, b, c []float32)      { fmaGo(dst, a, b, c) }
 func clamp32(dst, a []float32, minVal, maxVal float32) { clampGo(dst, a, minVal, maxVal) }
+func dotProductBatch32(results []float32, rows [][]float32, vec []float32) { dotProductBatch32Go(results, rows, vec) }
+func convolveValid32(dst, signal, kernel []float32) { convolveValid32Go(dst, signal, kernel) }

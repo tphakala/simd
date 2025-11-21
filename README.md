@@ -11,7 +11,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 - **Pure Go assembly** - No CGO required, simple cross-compilation
 - **Runtime CPU detection** - Automatically selects optimal implementation (AVX+FMA, NEON, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
-- **21 operations** - Arithmetic, reduction, statistical, and vector operations
+- **23 operations** - Arithmetic, reduction, statistical, vector, and signal processing operations
 - **Multi-architecture** - AMD64 (AVX+FMA) and ARM64 (NEON) with pure Go fallback
 - **Thread-safe** - All functions are safe for concurrent use
 
@@ -103,6 +103,8 @@ fmt.Println(cpu.HasNEON())   // true/false
 |                 | `Normalize(dst, a)`       | Unit vector normalization   | 4x / 2x              |
 |                 | `CumulativeSum(dst, a)`   | Running sum                 | Sequential           |
 | **Range**       | `Clamp(dst, a, min, max)` | Clamp to range              | 4x / 2x              |
+| **Batch**       | `DotProductBatch(r, rows, v)` | Multiple dot products   | 4x / 2x              |
+| **Signal**      | `ConvolveValid(dst, sig, k)` | FIR filter / convolution | 4x / 2x              |
 
 ### `f32` - float32 Operations
 

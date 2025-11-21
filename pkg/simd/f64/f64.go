@@ -250,6 +250,39 @@ func CumulativeSum(dst, a []float64) {
 	cumulativeSum64(dst[:n], a[:n])
 }
 
+// DotProductBatch computes multiple dot products against the same vector.
+// results[i] = DotProduct(rows[i], vec) for each row.
+// This is more cache-efficient than calling DotProduct in a loop because
+// vec stays hot in L1 cache across all dot products.
+//
+// Processes min(len(results), len(rows)) rows.
+// Each row is processed up to min(len(row), len(vec)) elements.
+func DotProductBatch(results []float64, rows [][]float64, vec []float64) {
+	n := min(len(results), len(rows))
+	if n == 0 || len(vec) == 0 {
+		return
+	}
+	dotProductBatch64(results[:n], rows[:n], vec)
+}
+
+// ConvolveValid computes valid convolution of signal with kernel.
+// dst[i] = sum(signal[i+j] * kernel[j]) for j in 0..len(kernel)-1.
+// Output length is len(signal) - len(kernel) + 1.
+//
+// Processes min(len(dst), len(signal)-len(kernel)+1) output elements.
+// This is equivalent to applying a FIR filter without zero-padding.
+func ConvolveValid(dst, signal, kernel []float64) {
+	if len(kernel) == 0 || len(signal) < len(kernel) {
+		return
+	}
+	validLen := len(signal) - len(kernel) + 1
+	n := min(len(dst), validLen)
+	if n == 0 {
+		return
+	}
+	convolveValid64(dst[:n], signal, kernel)
+}
+
 const (
 	// normalizeMagnitudeThreshold is the minimum magnitude for normalization.
 	// Vectors with magnitude below this are left unchanged to avoid division by zero.

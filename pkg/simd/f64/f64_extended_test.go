@@ -388,3 +388,187 @@ func BenchmarkCumulativeSum_1000(b *testing.B) {
 		CumulativeSum(dst, a)
 	}
 }
+
+// Tests for DotProductBatch
+
+func TestDotProductBatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		rows    [][]float64
+		vec     []float64
+		want    []float64
+	}{
+		{"empty", nil, nil, nil},
+		{"single row", [][]float64{{1, 2, 3}}, []float64{1, 1, 1}, []float64{6}},
+		{"two rows", [][]float64{{1, 2}, {3, 4}}, []float64{1, 2}, []float64{5, 11}},
+		{"polyphase", [][]float64{{1, 0, 1, 0}, {0, 1, 0, 1}}, []float64{1, 2, 3, 4}, []float64{4, 6}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.rows) == 0 {
+				return
+			}
+			results := make([]float64, len(tt.rows))
+			DotProductBatch(results, tt.rows, tt.vec)
+			for i, want := range tt.want {
+				if results[i] != want {
+					t.Errorf("DotProductBatch()[%d] = %v, want %v", i, results[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestDotProductBatch_Large(t *testing.T) {
+	// Simulate polyphase filter with 2 phases and 241-tap kernel
+	numPhases := 2
+	taps := 241
+	rows := make([][]float64, numPhases)
+	for i := range rows {
+		rows[i] = make([]float64, taps)
+		for j := range rows[i] {
+			rows[i][j] = float64(i*taps + j + 1)
+		}
+	}
+	vec := make([]float64, taps)
+	for i := range vec {
+		vec[i] = 1.0
+	}
+
+	results := make([]float64, numPhases)
+	DotProductBatch(results, rows, vec)
+
+	// First phase: sum of 1..241
+	want0 := float64(taps * (taps + 1) / 2)
+	// Second phase: sum of 242..482
+	want1 := float64(taps*(taps+1)/2 + taps*taps)
+
+	if !almostEqual(results[0], want0, 1e-10) {
+		t.Errorf("DotProductBatch()[0] = %v, want %v", results[0], want0)
+	}
+	if !almostEqual(results[1], want1, 1e-10) {
+		t.Errorf("DotProductBatch()[1] = %v, want %v", results[1], want1)
+	}
+}
+
+// Tests for ConvolveValid
+
+func TestConvolveValid(t *testing.T) {
+	tests := []struct {
+		name   string
+		signal []float64
+		kernel []float64
+		want   []float64
+	}{
+		{"empty kernel", []float64{1, 2, 3}, nil, nil},
+		{"kernel longer", []float64{1, 2}, []float64{1, 2, 3}, nil},
+		{"single output", []float64{1, 2, 3}, []float64{1, 1, 1}, []float64{6}},
+		{"two outputs", []float64{1, 2, 3, 4}, []float64{1, 1, 1}, []float64{6, 9}},
+		{"identity", []float64{1, 2, 3, 4, 5}, []float64{1}, []float64{1, 2, 3, 4, 5}},
+		{"sum2", []float64{1, 2, 3, 4, 5}, []float64{1, 1}, []float64{3, 5, 7, 9}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.kernel) == 0 || len(tt.signal) < len(tt.kernel) {
+				return
+			}
+			validLen := len(tt.signal) - len(tt.kernel) + 1
+			dst := make([]float64, validLen)
+			ConvolveValid(dst, tt.signal, tt.kernel)
+			for i, want := range tt.want {
+				if dst[i] != want {
+					t.Errorf("ConvolveValid()[%d] = %v, want %v", i, dst[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestConvolveValid_FIR(t *testing.T) {
+	// Test with a simple 5-tap FIR filter (moving average)
+	signal := make([]float64, 100)
+	for i := range signal {
+		signal[i] = float64(i + 1)
+	}
+	kernel := []float64{0.2, 0.2, 0.2, 0.2, 0.2} // 5-tap moving average
+
+	validLen := len(signal) - len(kernel) + 1
+	dst := make([]float64, validLen)
+	ConvolveValid(dst, signal, kernel)
+
+	// Check first few outputs
+	// dst[0] = (1+2+3+4+5) * 0.2 = 3
+	// dst[1] = (2+3+4+5+6) * 0.2 = 4
+	if !almostEqual(dst[0], 3.0, 1e-10) {
+		t.Errorf("ConvolveValid()[0] = %v, want 3.0", dst[0])
+	}
+	if !almostEqual(dst[1], 4.0, 1e-10) {
+		t.Errorf("ConvolveValid()[1] = %v, want 4.0", dst[1])
+	}
+}
+
+// Benchmarks for new functions
+
+func BenchmarkDotProductBatch_2x241(b *testing.B) {
+	// Simulate polyphase filter: 2 phases, 241 taps each
+	rows := make([][]float64, 2)
+	for i := range rows {
+		rows[i] = make([]float64, 241)
+		for j := range rows[i] {
+			rows[i][j] = float64(j + 1)
+		}
+	}
+	vec := make([]float64, 241)
+	for i := range vec {
+		vec[i] = float64(i + 1)
+	}
+	results := make([]float64, 2)
+
+	b.SetBytes(2 * 241 * 8 * 2) // 2 rows * 241 elements * 8 bytes * 2 (rows + vec)
+
+	for b.Loop() {
+		DotProductBatch(results, rows, vec)
+	}
+}
+
+func BenchmarkConvolveValid_1000x64(b *testing.B) {
+	// 1000-sample signal, 64-tap kernel
+	signal := make([]float64, 1000)
+	kernel := make([]float64, 64)
+	for i := range signal {
+		signal[i] = float64(i)
+	}
+	for i := range kernel {
+		kernel[i] = 1.0 / 64.0
+	}
+	validLen := len(signal) - len(kernel) + 1
+	dst := make([]float64, validLen)
+
+	b.SetBytes(int64(validLen * 64 * 8 * 2)) // Each output reads 64 signal + 64 kernel
+
+	for b.Loop() {
+		ConvolveValid(dst, signal, kernel)
+	}
+}
+
+func BenchmarkConvolveValid_1000x241(b *testing.B) {
+	// 1000-sample signal, 241-tap kernel (typical DFT size)
+	signal := make([]float64, 1000)
+	kernel := make([]float64, 241)
+	for i := range signal {
+		signal[i] = float64(i)
+	}
+	for i := range kernel {
+		kernel[i] = 1.0 / 241.0
+	}
+	validLen := len(signal) - len(kernel) + 1
+	dst := make([]float64, validLen)
+
+	b.SetBytes(int64(validLen * 241 * 8 * 2))
+
+	for b.Loop() {
+		ConvolveValid(dst, signal, kernel)
+	}
+}

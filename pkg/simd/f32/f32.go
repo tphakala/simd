@@ -146,6 +146,35 @@ func minLen(a, b, c int) int {
 	return a
 }
 
+// DotProductBatch computes multiple dot products against the same vector.
+// results[i] = DotProduct(rows[i], vec) for each row.
+// This is more cache-efficient than calling DotProduct in a loop because
+// vec stays hot in L1 cache across all dot products.
+func DotProductBatch(results []float32, rows [][]float32, vec []float32) {
+	n := min(len(results), len(rows))
+	if n == 0 || len(vec) == 0 {
+		return
+	}
+	dotProductBatch32(results[:n], rows[:n], vec)
+}
+
+// ConvolveValid computes valid convolution of signal with kernel.
+// dst[i] = sum(signal[i+j] * kernel[j]) for j in 0..len(kernel)-1.
+// Output length is len(signal) - len(kernel) + 1.
+//
+// This is equivalent to applying a FIR filter without zero-padding.
+func ConvolveValid(dst, signal, kernel []float32) {
+	if len(kernel) == 0 || len(signal) < len(kernel) {
+		return
+	}
+	validLen := len(signal) - len(kernel) + 1
+	n := min(len(dst), validLen)
+	if n == 0 {
+		return
+	}
+	convolveValid32(dst[:n], signal, kernel)
+}
+
 var (
 	posInf = float32(math.Inf(1))
 	negInf = float32(math.Inf(-1))

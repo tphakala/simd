@@ -116,6 +116,25 @@ func clamp32(dst, a []float32, minVal, maxVal float32) {
 	clampGo(dst, a, minVal, maxVal)
 }
 
+func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
+	vecLen := len(vec)
+	for i, row := range rows {
+		n := min(len(row), vecLen)
+		if n == 0 {
+			results[i] = 0
+			continue
+		}
+		results[i] = dotProduct(row[:n], vec[:n])
+	}
+}
+
+func convolveValid32(dst, signal, kernel []float32) {
+	kLen := len(kernel)
+	for i := range dst {
+		dst[i] = dotProduct(signal[i:i+kLen], kernel)
+	}
+}
+
 //go:noescape
 func dotProductNEON(a, b []float32) float32
 

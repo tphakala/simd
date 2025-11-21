@@ -180,3 +180,22 @@ func cumulativeSum64Go(dst, a []float64) {
 		dst[i] = sum
 	}
 }
+
+func dotProductBatch64Go(results []float64, rows [][]float64, vec []float64) {
+	vecLen := len(vec)
+	for i, row := range rows {
+		n := min(len(row), vecLen)
+		if n == 0 {
+			results[i] = 0
+			continue
+		}
+		results[i] = dotProductGo(row[:n], vec[:n])
+	}
+}
+
+func convolveValid64Go(dst, signal, kernel []float64) {
+	kLen := len(kernel)
+	for i := range dst {
+		dst[i] = dotProductGo(signal[i:i+kLen], kernel)
+	}
+}

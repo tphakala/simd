@@ -199,3 +199,109 @@ func BenchmarkFMA_1000(b *testing.B) {
 		FMA(dst, a, c, d)
 	}
 }
+
+// Tests for DotProductBatch
+
+func TestDotProductBatch(t *testing.T) {
+	tests := []struct {
+		name string
+		rows [][]float32
+		vec  []float32
+		want []float32
+	}{
+		{"empty", nil, nil, nil},
+		{"single row", [][]float32{{1, 2, 3}}, []float32{1, 1, 1}, []float32{6}},
+		{"two rows", [][]float32{{1, 2}, {3, 4}}, []float32{1, 2}, []float32{5, 11}},
+		{"polyphase", [][]float32{{1, 0, 1, 0}, {0, 1, 0, 1}}, []float32{1, 2, 3, 4}, []float32{4, 6}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.rows) == 0 {
+				return
+			}
+			results := make([]float32, len(tt.rows))
+			DotProductBatch(results, tt.rows, tt.vec)
+			for i, want := range tt.want {
+				if results[i] != want {
+					t.Errorf("DotProductBatch()[%d] = %v, want %v", i, results[i], want)
+				}
+			}
+		})
+	}
+}
+
+// Tests for ConvolveValid
+
+func TestConvolveValid(t *testing.T) {
+	tests := []struct {
+		name   string
+		signal []float32
+		kernel []float32
+		want   []float32
+	}{
+		{"empty kernel", []float32{1, 2, 3}, nil, nil},
+		{"kernel longer", []float32{1, 2}, []float32{1, 2, 3}, nil},
+		{"single output", []float32{1, 2, 3}, []float32{1, 1, 1}, []float32{6}},
+		{"two outputs", []float32{1, 2, 3, 4}, []float32{1, 1, 1}, []float32{6, 9}},
+		{"identity", []float32{1, 2, 3, 4, 5}, []float32{1}, []float32{1, 2, 3, 4, 5}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.kernel) == 0 || len(tt.signal) < len(tt.kernel) {
+				return
+			}
+			validLen := len(tt.signal) - len(tt.kernel) + 1
+			dst := make([]float32, validLen)
+			ConvolveValid(dst, tt.signal, tt.kernel)
+			for i, want := range tt.want {
+				if dst[i] != want {
+					t.Errorf("ConvolveValid()[%d] = %v, want %v", i, dst[i], want)
+				}
+			}
+		})
+	}
+}
+
+// Benchmarks for new functions
+
+func BenchmarkDotProductBatch_2x241(b *testing.B) {
+	rows := make([][]float32, 2)
+	for i := range rows {
+		rows[i] = make([]float32, 241)
+		for j := range rows[i] {
+			rows[i][j] = float32(j + 1)
+		}
+	}
+	vec := make([]float32, 241)
+	for i := range vec {
+		vec[i] = float32(i + 1)
+	}
+	results := make([]float32, 2)
+
+	b.SetBytes(2 * 241 * 4 * 2)
+
+	for b.Loop() {
+		DotProductBatch(results, rows, vec)
+	}
+}
+
+func BenchmarkConvolveValid_1000x64(b *testing.B) {
+	signal := make([]float32, 1000)
+	kernel := make([]float32, 64)
+	for i := range signal {
+		signal[i] = float32(i)
+	}
+	for i := range kernel {
+		kernel[i] = 1.0 / 64.0
+	}
+	validLen := len(signal) - len(kernel) + 1
+	dst := make([]float32, validLen)
+
+	b.SetBytes(int64(validLen * 64 * 4 * 2))
+
+	for b.Loop() {
+		ConvolveValid(dst, signal, kernel)
+	}
+}
