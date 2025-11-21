@@ -4,116 +4,174 @@ package f32
 
 import "github.com/tphakala/simd/pkg/simd/cpu"
 
-var (
-	hasAVX = cpu.X86.AVX && cpu.X86.FMA
+// Function pointer types for SIMD operations
+type (
+	dotProductFunc func(a, b []float32) float32
+	binaryOpFunc   func(dst, a, b []float32)
+	scaleFunc      func(dst, a []float32, s float32)
+	unaryOpFunc    func(dst, a []float32)
+	reduceFunc     func(a []float32) float32
+	fmaFunc        func(dst, a, b, c []float32)
+	clampFunc      func(dst, a []float32, minVal, maxVal float32)
 )
 
-func dotProduct(a, b []float32) float32 {
-	if hasAVX && len(a) >= 8 {
-		return dotProductAVX(a, b)
+// Function pointers - assigned at init time based on CPU features
+var (
+	dotProductImpl dotProductFunc
+	addImpl        binaryOpFunc
+	subImpl        binaryOpFunc
+	mulImpl        binaryOpFunc
+	divImpl        binaryOpFunc
+	scaleImpl      scaleFunc
+	addScalarImpl  scaleFunc
+	sumImpl        reduceFunc
+	minImpl        reduceFunc
+	maxImpl        reduceFunc
+	absImpl        unaryOpFunc
+	negImpl        unaryOpFunc
+	fmaImpl        fmaFunc
+	clampImpl      clampFunc
+)
+
+func init() {
+	// Select optimal implementation based on CPU features
+	// Priority: AVX-512 > AVX+FMA > SSE2 > Go
+	switch {
+	case cpu.X86.AVX512F && cpu.X86.AVX512VL:
+		initAVX512()
+	case cpu.X86.AVX && cpu.X86.FMA:
+		initAVX()
+	case cpu.X86.SSE2:
+		initSSE()
+	default:
+		initGo()
 	}
-	return dotProductGo(a, b)
+}
+
+func initAVX512() {
+	dotProductImpl = dotProductAVX512
+	addImpl = addAVX512
+	subImpl = subAVX512
+	mulImpl = mulAVX512
+	divImpl = divAVX512
+	scaleImpl = scaleAVX512
+	addScalarImpl = addScalarAVX512
+	sumImpl = sumAVX512
+	minImpl = minAVX512
+	maxImpl = maxAVX512
+	absImpl = absAVX512
+	negImpl = negAVX512
+	fmaImpl = fmaAVX512
+	clampImpl = clampAVX512
+}
+
+func initAVX() {
+	dotProductImpl = dotProductAVX
+	addImpl = addAVX
+	subImpl = subAVX
+	mulImpl = mulAVX
+	divImpl = divAVX
+	scaleImpl = scaleAVX
+	addScalarImpl = addScalarAVX
+	sumImpl = sumAVX
+	minImpl = minAVX
+	maxImpl = maxAVX
+	absImpl = absAVX
+	negImpl = negAVX
+	fmaImpl = fmaAVX
+	clampImpl = clampAVX
+}
+
+func initSSE() {
+	dotProductImpl = dotProductSSE
+	addImpl = addSSE
+	subImpl = subSSE
+	mulImpl = mulSSE
+	divImpl = divSSE
+	scaleImpl = scaleSSE
+	addScalarImpl = addScalarSSE
+	sumImpl = sumSSE
+	minImpl = minSSE
+	maxImpl = maxSSE
+	absImpl = absSSE
+	negImpl = negSSE
+	fmaImpl = fmaSSE
+	clampImpl = clampSSE
+}
+
+func initGo() {
+	dotProductImpl = dotProductGo
+	addImpl = addGo
+	subImpl = subGo
+	mulImpl = mulGo
+	divImpl = divGo
+	scaleImpl = scaleGo
+	addScalarImpl = addScalarGo
+	sumImpl = sumGo
+	minImpl = minGo
+	maxImpl = maxGo
+	absImpl = absGo
+	negImpl = negGo
+	fmaImpl = fmaGo
+	clampImpl = clampGo
+}
+
+// Dispatch functions - call function pointers (zero overhead after init)
+
+func dotProduct(a, b []float32) float32 {
+	return dotProductImpl(a, b)
 }
 
 func add(dst, a, b []float32) {
-	if hasAVX && len(dst) >= 8 {
-		addAVX(dst, a, b)
-		return
-	}
-	addGo(dst, a, b)
+	addImpl(dst, a, b)
 }
 
 func sub(dst, a, b []float32) {
-	if hasAVX && len(dst) >= 8 {
-		subAVX(dst, a, b)
-		return
-	}
-	subGo(dst, a, b)
+	subImpl(dst, a, b)
 }
 
 func mul(dst, a, b []float32) {
-	if hasAVX && len(dst) >= 8 {
-		mulAVX(dst, a, b)
-		return
-	}
-	mulGo(dst, a, b)
+	mulImpl(dst, a, b)
 }
 
 func div(dst, a, b []float32) {
-	if hasAVX && len(dst) >= 8 {
-		divAVX(dst, a, b)
-		return
-	}
-	divGo(dst, a, b)
+	divImpl(dst, a, b)
 }
 
 func scale(dst, a []float32, s float32) {
-	if hasAVX && len(dst) >= 8 {
-		scaleAVX(dst, a, s)
-		return
-	}
-	scaleGo(dst, a, s)
+	scaleImpl(dst, a, s)
 }
 
 func addScalar(dst, a []float32, s float32) {
-	if hasAVX && len(dst) >= 8 {
-		addScalarAVX(dst, a, s)
-		return
-	}
-	addScalarGo(dst, a, s)
+	addScalarImpl(dst, a, s)
 }
 
 func sum(a []float32) float32 {
-	if hasAVX && len(a) >= 8 {
-		return sumAVX(a)
-	}
-	return sumGo(a)
+	return sumImpl(a)
 }
 
 func min32(a []float32) float32 {
-	if hasAVX && len(a) >= 8 {
-		return minAVX(a)
-	}
-	return minGo(a)
+	return minImpl(a)
 }
 
 func max32(a []float32) float32 {
-	if hasAVX && len(a) >= 8 {
-		return maxAVX(a)
-	}
-	return maxGo(a)
+	return maxImpl(a)
 }
 
 func abs32(dst, a []float32) {
-	if hasAVX && len(dst) >= 8 {
-		absAVX(dst, a)
-		return
-	}
-	absGo(dst, a)
+	absImpl(dst, a)
 }
 
 func neg32(dst, a []float32) {
-	if hasAVX && len(dst) >= 8 {
-		negAVX(dst, a)
-		return
-	}
-	negGo(dst, a)
+	negImpl(dst, a)
 }
 
 func fma32(dst, a, b, c []float32) {
-	if hasAVX && len(dst) >= 8 {
-		fmaAVX(dst, a, b, c)
-		return
-	}
-	fmaGo(dst, a, b, c)
+	fmaImpl(dst, a, b, c)
 }
 
 func clamp32(dst, a []float32, minVal, maxVal float32) {
-	if hasAVX && len(dst) >= 8 {
-		clampAVX(dst, a, minVal, maxVal)
-		return
-	}
-	clampGo(dst, a, minVal, maxVal)
+	clampImpl(dst, a, minVal, maxVal)
 }
 
 func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
@@ -135,6 +193,8 @@ func convolveValid32(dst, signal, kernel []float32) {
 	}
 }
 
+// AVX+FMA assembly function declarations (8x float32 per iteration)
+//
 //go:noescape
 func dotProductAVX(a, b []float32) float32
 
@@ -176,3 +236,91 @@ func fmaAVX(dst, a, b, c []float32)
 
 //go:noescape
 func clampAVX(dst, a []float32, minVal, maxVal float32)
+
+// AVX-512 assembly function declarations (16x float32 per iteration)
+//
+//go:noescape
+func dotProductAVX512(a, b []float32) float32
+
+//go:noescape
+func addAVX512(dst, a, b []float32)
+
+//go:noescape
+func subAVX512(dst, a, b []float32)
+
+//go:noescape
+func mulAVX512(dst, a, b []float32)
+
+//go:noescape
+func divAVX512(dst, a, b []float32)
+
+//go:noescape
+func scaleAVX512(dst, a []float32, s float32)
+
+//go:noescape
+func addScalarAVX512(dst, a []float32, s float32)
+
+//go:noescape
+func sumAVX512(a []float32) float32
+
+//go:noescape
+func minAVX512(a []float32) float32
+
+//go:noescape
+func maxAVX512(a []float32) float32
+
+//go:noescape
+func absAVX512(dst, a []float32)
+
+//go:noescape
+func negAVX512(dst, a []float32)
+
+//go:noescape
+func fmaAVX512(dst, a, b, c []float32)
+
+//go:noescape
+func clampAVX512(dst, a []float32, minVal, maxVal float32)
+
+// SSE assembly function declarations (4x float32 per iteration)
+//
+//go:noescape
+func dotProductSSE(a, b []float32) float32
+
+//go:noescape
+func addSSE(dst, a, b []float32)
+
+//go:noescape
+func subSSE(dst, a, b []float32)
+
+//go:noescape
+func mulSSE(dst, a, b []float32)
+
+//go:noescape
+func divSSE(dst, a, b []float32)
+
+//go:noescape
+func scaleSSE(dst, a []float32, s float32)
+
+//go:noescape
+func addScalarSSE(dst, a []float32, s float32)
+
+//go:noescape
+func sumSSE(a []float32) float32
+
+//go:noescape
+func minSSE(a []float32) float32
+
+//go:noescape
+func maxSSE(a []float32) float32
+
+//go:noescape
+func absSSE(dst, a []float32)
+
+//go:noescape
+func negSSE(dst, a []float32)
+
+//go:noescape
+func fmaSSE(dst, a, b, c []float32)
+
+//go:noescape
+func clampSSE(dst, a []float32, minVal, maxVal float32)

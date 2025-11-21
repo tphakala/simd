@@ -12,7 +12,8 @@ type Features struct {
 	SSE42   bool
 	AVX     bool
 	AVX2    bool
-	AVX512F bool
+	AVX512F  bool
+	AVX512VL bool
 	FMA     bool
 	BMI1    bool
 	BMI2    bool
@@ -41,6 +42,9 @@ func HasFMA() bool { return X86.FMA }
 
 // HasNEON returns true if ARM NEON is available.
 func HasNEON() bool { return ARM64.NEON }
+
+// HasAVX512VL returns true if AVX-512VL is available.
+func HasAVX512VL() bool { return X86.AVX512VL }
 
 // Info returns a string describing the available SIMD features.
 func Info() string {
