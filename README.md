@@ -148,12 +148,39 @@ Benchmarks on AMD64 with AVX+FMA (Intel/AMD processor):
 
 ### Comparison vs Pure Go
 
-| Operation             | SIMD   | Pure Go | Speedup  |
-| --------------------- | ------ | ------- | -------- |
-| DotProduct (1000 f64) | 159 ns | 890 ns  | **5.6x** |
-| Add (1000 f64)        | 106 ns | 420 ns  | **4.0x** |
-| FMA (1000 f64)        | 121 ns | 1100 ns | **9.1x** |
-| DotProduct (1000 f32) | 70 ns  | 450 ns  | **6.4x** |
+Benchmarks on Intel Core i7-1260P (AVX+FMA):
+
+#### float64 Operations (1000 elements unless noted)
+
+| Operation         | SIMD    | Pure Go | Speedup  |
+| ----------------- | ------- | ------- | -------- |
+| DotProduct        | 165 ns  | 128 ns  | ~1x      |
+| Add               | 105 ns  | 138 ns  | **1.3x** |
+| Mul               | 104 ns  | 202 ns  | **1.9x** |
+| FMA               | 124 ns  | 127 ns  | ~1x      |
+| Sum               | 82 ns   | 126 ns  | **1.5x** |
+| Mean              | 83 ns   | 126 ns  | **1.5x** |
+| Variance          | 538 ns  | 122 ns  | 0.2x     |
+| Sqrt (100)        | 129 ns  | 24 ns   | 0.2x     |
+| Reciprocal (100)  | 87 ns   | 24 ns   | 0.3x     |
+| EuclideanDist(100)| 93 ns   | 24 ns   | 0.3x     |
+| Normalize (100)   | 39 ns   | 51 ns   | **1.3x** |
+| CumulativeSum     | 443 ns  | 129 ns  | 0.3x     |
+| DotProductBatch   | 67 ns   | -       | -        |
+| ConvolveValid     | 7.3 µs  | -       | -        |
+
+#### float32 Operations (1000 elements)
+
+| Operation    | SIMD   | Pure Go | Speedup  |
+| ------------ | ------ | ------- | -------- |
+| DotProduct   | 70 ns  | 124 ns  | **1.8x** |
+| Add          | 47 ns  | 131 ns  | **2.8x** |
+| Mul          | 50 ns  | 207 ns  | **4.1x** |
+| FMA          | 59 ns  | 126 ns  | **2.1x** |
+
+**Note:** Modern Go compilers (1.25+) perform aggressive auto-vectorization on simple loops.
+SIMD benefits are more pronounced on older Go versions and for complex operations.
+Throughput numbers above (in Performance section) are the primary performance metric.
 
 ## Architecture Support
 
