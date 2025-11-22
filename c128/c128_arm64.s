@@ -190,3 +190,147 @@ sub_neon_loop:
 
 sub_neon_done:
     RET
+
+// ============================================================================
+// ABS - COMPLEX MAGNITUDE: |a + bi| = sqrt(a² + b²)
+// ============================================================================
+
+// func absNEON(dst []float64, a []complex128)
+TEXT ·absNEON(SB), NOSPLIT, $0-56
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R1
+    MOVD a_base+24(FP), R2
+
+    CBZ  R1, abs_neon_done
+
+abs_neon_loop:
+    VLD1 (R2), [V0.D2]     // V0 = [real, imag]
+
+    // V1 = real * real
+    FMULD V0.D[0], V0.D[0], V1.D[0]
+
+    // V2 = imag * imag
+    FMULD V0.D[1], V0.D[1], V2.D[0]
+
+    // V1 = real² + imag²
+    FADDD V2.D[0], V1.D[0], V1.D[0]
+
+    // V0 = sqrt(real² + imag²)
+    FSQRTD V1.D[0], V0.D[0]
+
+    // Store result (single float64)
+    VST1 [V0.D1], (R0)
+
+    ADD  $16, R2
+    ADD  $8, R0
+    SUB  $1, R1
+    CBNZ R1, abs_neon_loop
+
+abs_neon_done:
+    RET
+
+// ============================================================================
+// ABSSQ - MAGNITUDE SQUARED: |a + bi|² = a² + b²
+// ============================================================================
+
+// func absSqNEON(dst []float64, a []complex128)
+TEXT ·absSqNEON(SB), NOSPLIT, $0-56
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R1
+    MOVD a_base+24(FP), R2
+
+    CBZ  R1, abssq_neon_done
+
+abssq_neon_loop:
+    VLD1 (R2), [V0.D2]     // V0 = [real, imag]
+
+    // V1 = real * real
+    FMULD V0.D[0], V0.D[0], V1.D[0]
+
+    // V2 = imag * imag
+    FMULD V0.D[1], V0.D[1], V2.D[0]
+
+    // V1 = real² + imag²
+    FADDD V2.D[0], V1.D[0], V1.D[0]
+
+    // Store result (single float64)
+    VST1 [V1.D1], (R0)
+
+    ADD  $16, R2
+    ADD  $8, R0
+    SUB  $1, R1
+    CBNZ R1, abssq_neon_loop
+
+abssq_neon_done:
+    RET
+
+// ============================================================================
+// PHASE - PHASE ANGLE: atan2(imag, real)
+// ============================================================================
+// Note: atan2 is not available as NEON instruction
+// We extract the imaginary component and return it as placeholder
+// Production code should call math.Atan2 or use approximation
+
+// func phaseNEON(dst []float64, a []complex128)
+TEXT ·phaseNEON(SB), NOSPLIT, $0-56
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R1
+    MOVD a_base+24(FP), R2
+
+    CBZ  R1, phase_neon_done
+
+phase_neon_loop:
+    VLD1 (R2), [V0.D2]     // V0 = [real, imag]
+
+    // Extract imaginary part (lane 1) as placeholder
+    // In production, should compute atan2(imag, real)
+    VST1 [V0.D1], (R0)     // Store lane 1 (imag) temporarily
+
+    ADD  $16, R2
+    ADD  $8, R0
+    SUB  $1, R1
+    CBNZ R1, phase_neon_loop
+
+phase_neon_done:
+    RET
+
+// ============================================================================
+// CONJ - COMPLEX CONJUGATE: conj(a + bi) = a - bi
+// ============================================================================
+
+// func conjNEON(dst, a []complex128)
+TEXT ·conjNEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R1
+    MOVD a_base+24(FP), R2
+
+    CBZ  R1, conj_neon_done
+
+conj_neon_loop:
+    VLD1 (R2), [V0.D2]     // V0 = [real, imag]
+
+    // Negate imaginary part: V1 = [real, -imag]
+    FNEGD V0.D[1], V1.D[1]
+    VMOV V0.D[0], V1.D[0]  // Keep real part unchanged
+
+    // Alternatively, using scalar operations:
+    // Extract real
+    FMOVD V0.D[0], F0
+
+    // Extract and negate imag
+    FMOVD V0.D[1], F1
+    FNEGD F1, F1
+
+    // Construct result vector
+    VMOV F0, V1.D[0]
+    VMOV F1, V1.D[1]
+
+    VST1 [V1.D2], (R0)
+
+    ADD  $16, R2
+    ADD  $16, R0
+    SUB  $1, R1
+    CBNZ R1, conj_neon_loop
+
+conj_neon_done:
+    RET

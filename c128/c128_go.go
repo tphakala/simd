@@ -1,5 +1,7 @@
 package c128
 
+import "math"
+
 // Pure Go implementations - used as fallback on all architectures
 
 // mulGo computes element-wise complex multiplication.
@@ -41,5 +43,39 @@ func addGo(dst, a, b []complex128) {
 func subGo(dst, a, b []complex128) {
 	for i := range dst {
 		dst[i] = a[i] - b[i]
+	}
+}
+
+// absGo computes element-wise complex magnitude: |a + bi| = sqrt(a² + b²).
+func absGo(dst []float64, a []complex128) {
+	for i := range dst {
+		r := real(a[i])
+		im := imag(a[i])
+		dst[i] = math.Hypot(r, im)
+	}
+}
+
+// absSqGo computes element-wise magnitude squared: |a + bi|² = a² + b².
+func absSqGo(dst []float64, a []complex128) {
+	for i := range dst {
+		r := real(a[i])
+		im := imag(a[i])
+		dst[i] = r*r + im*im
+	}
+}
+
+// phaseGo computes element-wise phase angle: atan2(imag, real).
+func phaseGo(dst []float64, a []complex128) {
+	for i := range dst {
+		r := real(a[i])
+		im := imag(a[i])
+		dst[i] = math.Atan2(im, r)
+	}
+}
+
+// conjGo computes element-wise complex conjugate: conj(a + bi) = a - bi.
+func conjGo(dst, a []complex128) {
+	for i := range dst {
+		dst[i] = complex(real(a[i]), -imag(a[i]))
 	}
 }

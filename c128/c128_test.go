@@ -254,3 +254,206 @@ func BenchmarkScale(b *testing.B) {
 		}
 	})
 }
+
+// ============================================================================
+// Tests for new functions: Abs, AbsSq, Phase, Conj
+// ============================================================================
+
+func TestAbs(t *testing.T) {
+	t.Logf("CPU: %s", cpu.Info())
+
+	tests := []struct {
+		name string
+		a    []complex128
+	}{
+		{"single_1_0", []complex128{1 + 0i}},
+		{"single_3_4", []complex128{3 + 4i}},
+		{"pair", []complex128{3 + 4i, 5 + 12i}},
+		{"pure_real", []complex128{5 + 0i, 10 + 0i}},
+		{"pure_imag", []complex128{0 + 5i, 0 + 10i}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := make([]float64, len(tt.a))
+			Abs(dst, tt.a)
+			for i := range dst {
+				expected := cmplx.Abs(tt.a[i])
+				if math.Abs(dst[i]-expected) > epsilon {
+					t.Errorf("Abs()[%d] = %v, want %v", i, dst[i], expected)
+				}
+			}
+		})
+	}
+}
+
+func TestAbs_Large(t *testing.T) {
+	n := 100
+	a := make([]complex128, n)
+	for i := range n {
+		a[i] = complex(float64(i+1), float64(i+2))
+	}
+
+	dst := make([]float64, n)
+	Abs(dst, a)
+
+	for i := range n {
+		expected := cmplx.Abs(a[i])
+		if math.Abs(dst[i]-expected) > epsilon {
+			t.Errorf("Abs_Large()[%d] = %v, want %v", i, dst[i], expected)
+		}
+	}
+}
+
+func TestAbsSq(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []complex128
+	}{
+		{"single_3_4", []complex128{3 + 4i}},
+		{"pair", []complex128{3 + 4i, 5 + 12i}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := make([]float64, len(tt.a))
+			AbsSq(dst, tt.a)
+			for i := range dst {
+				r := real(tt.a[i])
+				im := imag(tt.a[i])
+				expected := r*r + im*im
+				if math.Abs(dst[i]-expected) > epsilon {
+					t.Errorf("AbsSq()[%d] = %v, want %v", i, dst[i], expected)
+				}
+			}
+		})
+	}
+}
+
+func TestAbsSq_Large(t *testing.T) {
+	n := 100
+	a := make([]complex128, n)
+	for i := range n {
+		a[i] = complex(float64(i+1), float64(i+2))
+	}
+
+	dst := make([]float64, n)
+	AbsSq(dst, a)
+
+	for i := range n {
+		r := real(a[i])
+		im := imag(a[i])
+		expected := r*r + im*im
+		if math.Abs(dst[i]-expected) > epsilon {
+			t.Errorf("AbsSq_Large()[%d] = %v, want %v", i, dst[i], expected)
+		}
+	}
+}
+
+func TestConj(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []complex128
+		want []complex128
+	}{
+		{"empty", nil, nil},
+		{"single", []complex128{1 + 2i}, []complex128{1 - 2i}},
+		{"pair", []complex128{1 + 2i, 3 + 4i}, []complex128{1 - 2i, 3 - 4i}},
+		{"pure_real", []complex128{5 + 0i}, []complex128{5 + 0i}},
+		{"pure_imag", []complex128{0 + 5i}, []complex128{0 - 5i}},
+		{"zero", []complex128{0 + 0i}, []complex128{0 + 0i}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.a) == 0 {
+				dst := make([]complex128, 0)
+				Conj(dst, tt.a)
+				return
+			}
+			dst := make([]complex128, len(tt.a))
+			Conj(dst, tt.a)
+			for i := range dst {
+				if !complexClose(dst[i], tt.want[i]) {
+					t.Errorf("Conj()[%d] = %v, want %v", i, dst[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestConj_Large(t *testing.T) {
+	n := 100
+	a := make([]complex128, n)
+	for i := range n {
+		a[i] = complex(float64(i+1), float64(i+2))
+	}
+
+	dst := make([]complex128, n)
+	Conj(dst, a)
+
+	for i := range n {
+		expected := cmplx.Conj(a[i])
+		if !complexClose(dst[i], expected) {
+			t.Errorf("Conj_Large()[%d] = %v, want %v", i, dst[i], expected)
+		}
+	}
+}
+
+// Benchmarks for new functions
+
+func benchmarkUnaryAbsOp(b *testing.B, size int, simdFn func([]float64, []complex128), goFn func([]float64, []complex128)) {
+	a := make([]complex128, size)
+	dst := make([]float64, size)
+	for i := range size {
+		a[i] = complex(float64(i+1), float64(i+2))
+	}
+
+	b.Run("SIMD", func(b *testing.B) {
+		b.SetBytes(int64(size * 16)) // Input: complex128 (16 bytes), Output: float64 (8 bytes)
+		for i := 0; i < b.N; i++ {
+			simdFn(dst, a)
+		}
+	})
+
+	b.Run("Go", func(b *testing.B) {
+		b.SetBytes(int64(size * 16))
+		for i := 0; i < b.N; i++ {
+			goFn(dst, a)
+		}
+	})
+}
+
+func benchmarkUnaryConjOp(b *testing.B, size int, simdFn func([]complex128, []complex128), goFn func([]complex128, []complex128)) {
+	a := make([]complex128, size)
+	dst := make([]complex128, size)
+	for i := range size {
+		a[i] = complex(float64(i+1), float64(i+2))
+	}
+
+	b.Run("SIMD", func(b *testing.B) {
+		b.SetBytes(int64(size * 16 * 2))
+		for i := 0; i < b.N; i++ {
+			simdFn(dst, a)
+		}
+	})
+
+	b.Run("Go", func(b *testing.B) {
+		b.SetBytes(int64(size * 16 * 2))
+		for i := 0; i < b.N; i++ {
+			goFn(dst, a)
+		}
+	})
+}
+
+func BenchmarkAbs(b *testing.B) {
+	benchmarkUnaryAbsOp(b, 1024, Abs, absGo)
+}
+
+func BenchmarkAbsSq(b *testing.B) {
+	benchmarkUnaryAbsOp(b, 1024, AbsSq, absSqGo)
+}
+
+func BenchmarkConj(b *testing.B) {
+	benchmarkUnaryConjOp(b, 1024, Conj, conjGo)
+}

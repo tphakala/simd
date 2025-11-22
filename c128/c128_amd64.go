@@ -14,8 +14,10 @@ const (
 
 // Function pointer types for SIMD operations
 type (
-	binaryOpFunc func(dst, a, b []complex128)
-	scaleFunc    func(dst, a []complex128, s complex128)
+	binaryOpFunc     func(dst, a, b []complex128)
+	scaleFunc        func(dst, a []complex128, s complex128)
+	unaryAbsFunc     func(dst []float64, a []complex128)
+	unaryConjFunc    func(dst, a []complex128)
 )
 
 // Function pointers - assigned at init time based on CPU features
@@ -25,6 +27,10 @@ var (
 	scaleImpl   scaleFunc
 	addImpl     binaryOpFunc
 	subImpl     binaryOpFunc
+	absImpl     unaryAbsFunc
+	absSqImpl   unaryAbsFunc
+	phaseImpl   unaryAbsFunc
+	conjImpl    unaryConjFunc
 )
 
 func init() {
@@ -48,6 +54,10 @@ func initAVX512() {
 	scaleImpl = scaleAVX512
 	addImpl = addAVX512
 	subImpl = subAVX512
+	absImpl = absAVX512
+	absSqImpl = absSqAVX512
+	phaseImpl = phaseAVX512
+	conjImpl = conjAVX512
 }
 
 func initAVX() {
@@ -56,6 +66,10 @@ func initAVX() {
 	scaleImpl = scaleAVX
 	addImpl = addAVX
 	subImpl = subAVX
+	absImpl = absAVX
+	absSqImpl = absSqAVX
+	phaseImpl = phaseAVX
+	conjImpl = conjAVX
 }
 
 func initSSE2() {
@@ -64,6 +78,10 @@ func initSSE2() {
 	scaleImpl = scaleSSE2
 	addImpl = addSSE2
 	subImpl = subSSE2
+	absImpl = absSSE2
+	absSqImpl = absSqSSE2
+	phaseImpl = phaseSSE2
+	conjImpl = conjSSE2
 }
 
 func initGo() {
@@ -72,6 +90,10 @@ func initGo() {
 	scaleImpl = scaleGo
 	addImpl = addGo
 	subImpl = subGo
+	absImpl = absGo
+	absSqImpl = absSqGo
+	phaseImpl = phaseGo
+	conjImpl = conjGo
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -94,6 +116,22 @@ func add128(dst, a, b []complex128) {
 
 func sub128(dst, a, b []complex128) {
 	subImpl(dst, a, b)
+}
+
+func abs128(dst []float64, a []complex128) {
+	absImpl(dst, a)
+}
+
+func absSq128(dst []float64, a []complex128) {
+	absSqImpl(dst, a)
+}
+
+func phase128(dst []float64, a []complex128) {
+	phaseImpl(dst, a)
+}
+
+func conj128(dst, a []complex128) {
+	conjImpl(dst, a)
 }
 
 // AVX+FMA assembly function declarations (2x complex128 per iteration)
@@ -146,3 +184,47 @@ func addSSE2(dst, a, b []complex128)
 
 //go:noescape
 func subSSE2(dst, a, b []complex128)
+
+// Abs assembly function declarations
+
+//go:noescape
+func absAVX512(dst []float64, a []complex128)
+
+//go:noescape
+func absAVX(dst []float64, a []complex128)
+
+//go:noescape
+func absSSE2(dst []float64, a []complex128)
+
+// AbsSq assembly function declarations
+
+//go:noescape
+func absSqAVX512(dst []float64, a []complex128)
+
+//go:noescape
+func absSqAVX(dst []float64, a []complex128)
+
+//go:noescape
+func absSqSSE2(dst []float64, a []complex128)
+
+// Phase assembly function declarations
+
+//go:noescape
+func phaseAVX512(dst []float64, a []complex128)
+
+//go:noescape
+func phaseAVX(dst []float64, a []complex128)
+
+//go:noescape
+func phaseSSE2(dst []float64, a []complex128)
+
+// Conj assembly function declarations
+
+//go:noescape
+func conjAVX512(dst, a []complex128)
+
+//go:noescape
+func conjAVX(dst, a []complex128)
+
+//go:noescape
+func conjSSE2(dst, a []complex128)

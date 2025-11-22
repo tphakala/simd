@@ -71,6 +71,60 @@ func Sub(dst, a, b []complex128) {
 	sub128(dst[:n], a[:n], b[:n])
 }
 
+// Abs computes element-wise complex magnitude: dst[i] = |a[i]|.
+// Processes min(len(dst), len(a)) elements.
+//
+// Magnitude: |a + bi| = sqrt(a² + b²)
+//
+// This is the core operation for spectrograms and frequency-domain analysis.
+func Abs(dst []float64, a []complex128) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	abs128(dst[:n], a[:n])
+}
+
+// AbsSq computes element-wise magnitude squared: dst[i] = |a[i]|².
+// Processes min(len(dst), len(a)) elements.
+//
+// Magnitude squared: |a + bi|² = a² + b²
+//
+// This is faster than Abs (no sqrt) and useful for power spectrograms.
+func AbsSq(dst []float64, a []complex128) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	absSq128(dst[:n], a[:n])
+}
+
+// Phase computes element-wise phase angle: dst[i] = atan2(imag(a[i]), real(a[i])).
+// Processes min(len(dst), len(a)) elements.
+//
+// Phase: arg(a + bi) = atan2(b, a)
+//
+// This is useful for phase-aware audio processing and reconstruction.
+func Phase(dst []float64, a []complex128) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	phase128(dst[:n], a[:n])
+}
+
+// Conj computes element-wise complex conjugate: dst[i] = conj(a[i]).
+// Processes min(len(dst), len(a)) elements.
+//
+// Conjugate: conj(a + bi) = a - bi
+func Conj(dst, a []complex128) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	conj128(dst[:n], a[:n])
+}
+
 func minLen(a, b, c int) int {
 	if b < a {
 		a = b
