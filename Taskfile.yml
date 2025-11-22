@@ -1,0 +1,278 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  BENCH_TIME: 2s
+  BENCH_COUNT: 1
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # Testing
+  test:
+    desc: Run all tests
+    cmds:
+      - go test -v ./...
+
+  test:short:
+    desc: Run tests without verbose output
+    cmds:
+      - go test ./...
+
+  test:f32:
+    desc: Run float32 tests
+    cmds:
+      - go test -v ./pkg/simd/f32/
+
+  test:f64:
+    desc: Run float64 tests
+    cmds:
+      - go test -v ./pkg/simd/f64/
+
+  test:race:
+    desc: Run tests with race detector
+    cmds:
+      - go test -race ./...
+
+  # Benchmarks
+  bench:
+    desc: Run all benchmarks
+    cmds:
+      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f32/
+      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f64/
+
+  bench:f32:
+    desc: Run float32 benchmarks
+    cmds:
+      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f32/
+
+  bench:f64:
+    desc: Run float64 benchmarks
+    cmds:
+      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f64/
+
+  bench:dot:
+    desc: Run DotProduct benchmarks only
+    cmds:
+      - go test -bench=BenchmarkDotProduct -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f32/
+      - go test -bench=BenchmarkDotProduct -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f64/
+
+  bench:compare:
+    desc: Run SIMD vs Pure Go comparison benchmark
+    cmds:
+      - |
+        cat > /tmp/bench_compare.go << 'EOF'
+        package main
+
+        import (
+        	"fmt"
+        	"math"
+        	"runtime"
+        	"time"
+
+        	"github.com/tphakala/simd/pkg/simd/cpu"
+        	"github.com/tphakala/simd/pkg/simd/f32"
+        	"github.com/tphakala/simd/pkg/simd/f64"
+        )
+
+        func main() {
+        	fmt.Printf("Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+        	fmt.Printf("CPU: %s\n", cpu.Info())
+        	fmt.Println()
+
+        	sizes := []int{100, 1000, 10000}
+
+        	fmt.Println("=== Float32 DotProduct ===")
+        	for _, n := range sizes {
+        		a := make([]float32, n)
+        		b := make([]float32, n)
+        		for i := range a {
+        			a[i] = float32(i+1)
+        			b[i] = float32(i+1)
+        		}
+
+        		_ = f32.DotProduct(a, b)
+
+        		iterations := 100000
+        		if n >= 10000 { iterations = 10000 }
+
+        		start := time.Now()
+        		var goResult float32
+        		for i := 0; i < iterations; i++ {
+        			goResult = dotProductGo32(a, b)
+        		}
+        		goTime := time.Since(start)
+
+        		start = time.Now()
+        		var simdResult float32
+        		for i := 0; i < iterations; i++ {
+        			simdResult = f32.DotProduct(a, b)
+        		}
+        		simdTime := time.Since(start)
+
+        		speedup := float64(goTime) / float64(simdTime)
+        		fmt.Printf("n=%5d: Go=%7.2f ns, SIMD=%7.2f ns, Speedup=%.2fx (match: %v)\n",
+        			n, float64(goTime.Nanoseconds())/float64(iterations),
+        			float64(simdTime.Nanoseconds())/float64(iterations), speedup,
+        			math.Abs(float64(goResult-simdResult)) < 1)
+        	}
+
+        	fmt.Println("\n=== Float64 DotProduct ===")
+        	for _, n := range sizes {
+        		a := make([]float64, n)
+        		b := make([]float64, n)
+        		for i := range a {
+        			a[i] = float64(i+1)
+        			b[i] = float64(i+1)
+        		}
+
+        		_ = f64.DotProduct(a, b)
+
+        		iterations := 100000
+        		if n >= 10000 { iterations = 10000 }
+
+        		start := time.Now()
+        		var goResult float64
+        		for i := 0; i < iterations; i++ {
+        			goResult = dotProductGo64(a, b)
+        		}
+        		goTime := time.Since(start)
+
+        		start = time.Now()
+        		var simdResult float64
+        		for i := 0; i < iterations; i++ {
+        			simdResult = f64.DotProduct(a, b)
+        		}
+        		simdTime := time.Since(start)
+
+        		speedup := float64(goTime) / float64(simdTime)
+        		fmt.Printf("n=%5d: Go=%7.2f ns, SIMD=%7.2f ns, Speedup=%.2fx (match: %v)\n",
+        			n, float64(goTime.Nanoseconds())/float64(iterations),
+        			float64(simdTime.Nanoseconds())/float64(iterations), speedup,
+        			math.Abs(goResult-simdResult) < 0.001)
+        	}
+
+        	fmt.Println("\n=== Float32 Add ===")
+        	for _, n := range sizes {
+        		a := make([]float32, n)
+        		b := make([]float32, n)
+        		dst := make([]float32, n)
+        		for i := range a {
+        			a[i] = float32(i+1)
+        			b[i] = float32(i+1)
+        		}
+
+        		iterations := 100000
+        		if n >= 10000 { iterations = 10000 }
+
+        		start := time.Now()
+        		for i := 0; i < iterations; i++ {
+        			for j := range dst { dst[j] = a[j] + b[j] }
+        		}
+        		goTime := time.Since(start)
+
+        		start = time.Now()
+        		for i := 0; i < iterations; i++ {
+        			f32.Add(dst, a, b)
+        		}
+        		simdTime := time.Since(start)
+
+        		speedup := float64(goTime) / float64(simdTime)
+        		fmt.Printf("n=%5d: Go=%7.2f ns, SIMD=%7.2f ns, Speedup=%.2fx\n",
+        			n, float64(goTime.Nanoseconds())/float64(iterations),
+        			float64(simdTime.Nanoseconds())/float64(iterations), speedup)
+        	}
+        }
+
+        func dotProductGo32(a, b []float32) float32 {
+        	var sum float32
+        	for i := range a { sum += a[i] * b[i] }
+        	return sum
+        }
+
+        func dotProductGo64(a, b []float64) float64 {
+        	var sum float64
+        	for i := range a { sum += a[i] * b[i] }
+        	return sum
+        }
+        EOF
+        go run /tmp/bench_compare.go
+
+  # Build & Lint
+  build:
+    desc: Build the project
+    cmds:
+      - go build ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  lint:fix:
+    desc: Run golangci-lint with auto-fix
+    cmds:
+      - golangci-lint run --fix ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - go fmt ./...
+
+  # Development
+  cpu:
+    desc: Show CPU SIMD capabilities
+    cmds:
+      - |
+        cat > /tmp/cpu_info.go << 'EOF'
+        package main
+
+        import (
+        	"fmt"
+        	"runtime"
+        	"github.com/tphakala/simd/pkg/simd/cpu"
+        )
+
+        func main() {
+        	fmt.Printf("Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+        	fmt.Printf("SIMD: %s\n", cpu.Info())
+        	fmt.Printf("\nx86/AMD64 Features:\n")
+        	fmt.Printf("  AVX-512F:  %v\n", cpu.X86.AVX512F)
+        	fmt.Printf("  AVX-512VL: %v\n", cpu.X86.AVX512VL)
+        	fmt.Printf("  AVX2:      %v\n", cpu.X86.AVX2)
+        	fmt.Printf("  AVX:       %v\n", cpu.X86.AVX)
+        	fmt.Printf("  FMA:       %v\n", cpu.X86.FMA)
+        	fmt.Printf("  SSE2:      %v\n", cpu.X86.SSE2)
+        	fmt.Printf("\nARM64 Features:\n")
+        	fmt.Printf("  NEON:      %v\n", cpu.ARM64.NEON)
+        	fmt.Printf("  SVE:       %v\n", cpu.ARM64.SVE)
+        	fmt.Printf("  SVE2:      %v\n", cpu.ARM64.SVE2)
+        }
+        EOF
+        go run /tmp/cpu_info.go
+
+  # CI/CD
+  ci:
+    desc: Run CI checks (test, lint, vet)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test:short
+
+  # Cleanup
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - go clean ./...
+      - rm -f /tmp/bench_compare.go /tmp/cpu_info.go
+      - rm -f testdata/generate_expectations

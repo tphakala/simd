@@ -3,9 +3,24 @@
 #include "textflag.h"
 
 // ARM64 NEON for float32: 4 elements per 128-bit register
+// All vector instructions use WORD opcodes since Go's ARM64 assembler
+// doesn't support NEON mnemonics directly.
+
+// Opcode formulas for float32 (4S arrangement):
+// FADD Vd.4S, Vn.4S, Vm.4S: 0x4E20D400 | (Vm << 16) | (Vn << 5) | Vd
+// FSUB Vd.4S, Vn.4S, Vm.4S: 0x4EA0D400 | (Vm << 16) | (Vn << 5) | Vd
+// FMUL Vd.4S, Vn.4S, Vm.4S: 0x6E20DC00 | (Vm << 16) | (Vn << 5) | Vd
+// FDIV Vd.4S, Vn.4S, Vm.4S: 0x6E20FC00 | (Vm << 16) | (Vn << 5) | Vd
+// FMIN Vd.4S, Vn.4S, Vm.4S: 0x4EA0F400 | (Vm << 16) | (Vn << 5) | Vd
+// FMAX Vd.4S, Vn.4S, Vm.4S: 0x4E20F400 | (Vm << 16) | (Vn << 5) | Vd
+// FABS Vd.4S, Vn.4S:        0x4EA0F800 | (Vn << 5) | Vd
+// FNEG Vd.4S, Vn.4S:        0x6EA0F800 | (Vn << 5) | Vd
+// FMLA Vd.4S, Vn.4S, Vm.4S: 0x4E20CC00 | (Vm << 16) | (Vn << 5) | Vd
+// FADDP Vd.4S, Vn.4S, Vm.4S: 0x6E20D400 | (Vm << 16) | (Vn << 5) | Vd
+// FADDP Sd, Vn.2S:          0x7E30D800 | (Vn << 5) | Vd
 
 // func dotProductNEON(a, b []float32) float32
-TEXT ·dotProductNEON(SB), NOSPLIT, $0-28
+TEXT ·dotProductNEON(SB), NOSPLIT, $0-52
     MOVD a_base+0(FP), R0
     MOVD a_len+8(FP), R2
     MOVD b_base+24(FP), R1
@@ -27,7 +42,8 @@ dot32_loop8:
     SUB $1, R3
     CBNZ R3, dot32_loop8
 
-    VFADD V0.S4, V1.S4, V0.S4
+    // Combine accumulators: V0 = V0 + V1
+    WORD $0x4E21D400           // FADD V0.4S, V0.4S, V1.4S
 
 dot32_remainder4:
     AND $7, R2, R3
@@ -42,21 +58,26 @@ dot32_remainder:
     AND $3, R3, R4
     CBZ R4, dot32_reduce
 
+    // Must reduce vector FIRST before scalar ops (scalar ops zero upper V bits)
+    WORD $0x6E20D400           // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800           // FADDP S0, V0.2S
+
 dot32_scalar:
     FMOVS (R0), F2
     FMOVS (R1), F4
-    FMADDS F2, F4, F0, F0
+    FMADDS F4, F0, F2, F0      // F0 = F2 * F4 + F0 (Go syntax: Fm, Fa, Fn, Fd)
     ADD $4, R0
     ADD $4, R1
     SUB $1, R4
     CBNZ R4, dot32_scalar
 
+    FMOVS F0, ret+48(FP)
+    RET
+
 dot32_reduce:
-    // Horizontal sum of V0.S4
-    WORD $0x7E30D800           // FADDP V0.2S, V0.2S -> actually need 4S reduction
-    // Proper horizontal reduction for 4S
-    VFADDP V0.S4, V0.S4, V0.S4
-    VFADDP V0.S4, V0.S4, V0.S4
+    // Horizontal sum of V0.4S -> S0 when no scalar remainder
+    WORD $0x6E20D400           // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800           // FADDP S0, V0.2S
 
     FMOVS F0, ret+48(FP)
     RET
@@ -74,7 +95,7 @@ TEXT ·addNEON(SB), NOSPLIT, $0-72
 add32_loop4:
     VLD1.P 16(R1), [V0.S4]
     VLD1.P 16(R2), [V1.S4]
-    VFADD V0.S4, V1.S4, V2.S4
+    WORD $0x4E21D402           // FADD V2.4S, V0.4S, V1.4S
     VST1.P [V2.S4], 16(R0)
     SUB $1, R4
     CBNZ R4, add32_loop4
@@ -110,7 +131,7 @@ TEXT ·subNEON(SB), NOSPLIT, $0-72
 sub32_loop4:
     VLD1.P 16(R1), [V0.S4]
     VLD1.P 16(R2), [V1.S4]
-    VFSUB V1.S4, V0.S4, V2.S4
+    WORD $0x4EA1D402           // FSUB V2.4S, V0.4S, V1.4S
     VST1.P [V2.S4], 16(R0)
     SUB $1, R4
     CBNZ R4, sub32_loop4
@@ -146,7 +167,7 @@ TEXT ·mulNEON(SB), NOSPLIT, $0-72
 mul32_loop4:
     VLD1.P 16(R1), [V0.S4]
     VLD1.P 16(R2), [V1.S4]
-    VFMUL V0.S4, V1.S4, V2.S4
+    WORD $0x6E21DC02           // FMUL V2.4S, V0.4S, V1.4S
     VST1.P [V2.S4], 16(R0)
     SUB $1, R4
     CBNZ R4, mul32_loop4
@@ -182,7 +203,7 @@ TEXT ·divNEON(SB), NOSPLIT, $0-72
 div32_loop4:
     VLD1.P 16(R1), [V0.S4]
     VLD1.P 16(R2), [V1.S4]
-    VFDIV V1.S4, V0.S4, V2.S4
+    WORD $0x6E21FC02           // FDIV V2.4S, V0.4S, V1.4S
     VST1.P [V2.S4], 16(R0)
     SUB $1, R4
     CBNZ R4, div32_loop4
@@ -211,14 +232,15 @@ TEXT ·scaleNEON(SB), NOSPLIT, $0-52
     MOVD dst_len+8(FP), R2
     MOVD a_base+24(FP), R1
     FMOVS s+48(FP), F3
-    VDUP F3, V3.S4
+    // DUP V3.4S, V3.S[0] - broadcast scalar to all lanes
+    WORD $0x4E040463           // DUP V3.4S, V3.S[0]
 
     LSR $2, R2, R3
     CBZ R3, scale32_scalar
 
 scale32_loop4:
     VLD1.P 16(R1), [V0.S4]
-    VFMUL V0.S4, V3.S4, V1.S4
+    WORD $0x6E23DC01           // FMUL V1.4S, V0.4S, V3.4S
     VST1.P [V1.S4], 16(R0)
     SUB $1, R3
     CBNZ R3, scale32_loop4
@@ -245,14 +267,15 @@ TEXT ·addScalarNEON(SB), NOSPLIT, $0-52
     MOVD dst_len+8(FP), R2
     MOVD a_base+24(FP), R1
     FMOVS s+48(FP), F3
-    VDUP F3, V3.S4
+    // DUP V3.4S, V3.S[0] - broadcast scalar to all lanes
+    WORD $0x4E040463           // DUP V3.4S, V3.S[0]
 
     LSR $2, R2, R3
     CBZ R3, addsc32_scalar
 
 addsc32_loop4:
     VLD1.P 16(R1), [V0.S4]
-    VFADD V0.S4, V3.S4, V1.S4
+    WORD $0x4E23D401           // FADD V1.4S, V0.4S, V3.4S
     VST1.P [V1.S4], 16(R0)
     SUB $1, R3
     CBNZ R3, addsc32_loop4
@@ -281,17 +304,23 @@ TEXT ·sumNEON(SB), NOSPLIT, $0-28
     VEOR V0.B16, V0.B16, V0.B16
 
     LSR $2, R1, R2
-    CBZ R2, sum32_scalar
+    CBZ R2, sum32_reduce_first
 
 sum32_loop4:
     VLD1.P 16(R0), [V1.S4]
-    VFADD V0.S4, V1.S4, V0.S4
+    WORD $0x4E21D400           // FADD V0.4S, V0.4S, V1.4S
     SUB $1, R2
     CBNZ R2, sum32_loop4
 
-sum32_scalar:
+sum32_reduce_first:
+    // Horizontal sum of vector accumulator BEFORE scalar ops
+    // (scalar ops zero upper bits of V registers)
+    WORD $0x6E20D400           // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800           // FADDP S0, V0.2S
+
+    // Now process scalar remainder
     AND $3, R1
-    CBZ R1, sum32_reduce
+    CBZ R1, sum32_done
 
 sum32_loop1:
     FMOVS (R0), F1
@@ -300,9 +329,7 @@ sum32_loop1:
     SUB $1, R1
     CBNZ R1, sum32_loop1
 
-sum32_reduce:
-    VFADDP V0.S4, V0.S4, V0.S4
-    VFADDP V0.S4, V0.S4, V0.S4
+sum32_done:
     FMOVS F0, ret+24(FP)
     RET
 
@@ -319,13 +346,17 @@ TEXT ·minNEON(SB), NOSPLIT, $0-28
 
 min32_loop4:
     VLD1.P 16(R0), [V1.S4]
-    VFMIN V0.S4, V1.S4, V0.S4
+    WORD $0x4EA1F400           // FMIN V0.4S, V0.4S, V1.4S
     SUB $1, R2
     CBNZ R2, min32_loop4
 
 min32_scalar:
     AND $3, R1
     CBZ R1, min32_reduce
+
+    // Reduce vector FIRST before scalar ops
+    WORD $0x6EB0F400           // FMINP V0.4S, V0.4S, V0.4S
+    WORD $0x7EB0F800           // FMINP S0, V0.2S
 
 min32_loop1:
     FMOVS (R0), F1
@@ -334,9 +365,13 @@ min32_loop1:
     SUB $1, R1
     CBNZ R1, min32_loop1
 
+    FMOVS F0, ret+24(FP)
+    RET
+
 min32_reduce:
-    VFMINP V0.S4, V0.S4, V0.S4
-    VFMINP V0.S4, V0.S4, V0.S4
+    // Horizontal min when no scalar remainder
+    WORD $0x6EB0F400           // FMINP V0.4S, V0.4S, V0.4S
+    WORD $0x7EB0F800           // FMINP S0, V0.2S
     FMOVS F0, ret+24(FP)
     RET
 
@@ -353,13 +388,17 @@ TEXT ·maxNEON(SB), NOSPLIT, $0-28
 
 max32_loop4:
     VLD1.P 16(R0), [V1.S4]
-    VFMAX V0.S4, V1.S4, V0.S4
+    WORD $0x4E21F400           // FMAX V0.4S, V0.4S, V1.4S
     SUB $1, R2
     CBNZ R2, max32_loop4
 
 max32_scalar:
     AND $3, R1
     CBZ R1, max32_reduce
+
+    // Reduce vector FIRST before scalar ops
+    WORD $0x6E30F400           // FMAXP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30F800           // FMAXP S0, V0.2S
 
 max32_loop1:
     FMOVS (R0), F1
@@ -368,9 +407,13 @@ max32_loop1:
     SUB $1, R1
     CBNZ R1, max32_loop1
 
+    FMOVS F0, ret+24(FP)
+    RET
+
 max32_reduce:
-    VFMAXP V0.S4, V0.S4, V0.S4
-    VFMAXP V0.S4, V0.S4, V0.S4
+    // Horizontal max when no scalar remainder
+    WORD $0x6E30F400           // FMAXP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30F800           // FMAXP S0, V0.2S
     FMOVS F0, ret+24(FP)
     RET
 
@@ -385,7 +428,7 @@ TEXT ·absNEON(SB), NOSPLIT, $0-48
 
 abs32_loop4:
     VLD1.P 16(R1), [V0.S4]
-    VFABS V0.S4, V1.S4
+    WORD $0x4EA0F801           // FABS V1.4S, V0.4S
     VST1.P [V1.S4], 16(R0)
     SUB $1, R3
     CBNZ R3, abs32_loop4
@@ -417,7 +460,7 @@ TEXT ·negNEON(SB), NOSPLIT, $0-48
 
 neg32_loop4:
     VLD1.P 16(R1), [V0.S4]
-    VFNEG V0.S4, V1.S4
+    WORD $0x6EA0F801           // FNEG V1.4S, V0.4S
     VST1.P [V1.S4], 16(R0)
     SUB $1, R3
     CBNZ R3, neg32_loop4
@@ -463,10 +506,10 @@ fma32_scalar:
     CBZ R4, fma32_done
 
 fma32_loop1:
-    FMOVS (R1), F0
-    FMOVS (R2), F1
-    FMOVS (R3), F2
-    FMADDS F0, F1, F2, F2
+    FMOVS (R1), F0              // a[i]
+    FMOVS (R2), F1              // b[i]
+    FMOVS (R3), F2              // c[i]
+    FMADDS F1, F2, F0, F2       // F2 = F0 * F1 + F2 = a[i] * b[i] + c[i] (Go syntax: Fm, Fa, Fn, Fd)
     FMOVS F2, (R0)
     ADD $4, R0
     ADD $4, R1
@@ -485,16 +528,17 @@ TEXT ·clampNEON(SB), NOSPLIT, $0-56
     MOVD a_base+24(FP), R1
     FMOVS minVal+48(FP), F2
     FMOVS maxVal+52(FP), F3
-    VDUP F2, V2.S4
-    VDUP F3, V3.S4
+    // DUP V2.4S, V2.S[0] and DUP V3.4S, V3.S[0]
+    WORD $0x4E040442           // DUP V2.4S, V2.S[0]
+    WORD $0x4E040463           // DUP V3.4S, V3.S[0]
 
     LSR $2, R2, R3
     CBZ R3, clamp32_scalar
 
 clamp32_loop4:
     VLD1.P 16(R1), [V0.S4]
-    VFMAX V0.S4, V2.S4, V0.S4
-    VFMIN V0.S4, V3.S4, V0.S4
+    WORD $0x4E22F400           // FMAX V0.4S, V0.4S, V2.4S (clamp to min)
+    WORD $0x4EA3F400           // FMIN V0.4S, V0.4S, V3.4S (clamp to max)
     VST1.P [V0.S4], 16(R0)
     SUB $1, R3
     CBNZ R3, clamp32_loop4

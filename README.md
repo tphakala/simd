@@ -8,7 +8,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 
 ## Features
 
-- **Pure Go assembly** - No CGO required, simple cross-compilation
+- **Pure Go assembly** - Native Go assembler, simple cross-compilation
 - **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE2, NEON, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
 - **23 operations** - Arithmetic, reduction, statistical, vector, and signal processing operations
@@ -120,9 +120,9 @@ Same API as `f64` but for `float32` with wider SIMD:
 
 ## Performance
 
-Benchmarks on AMD64 with AVX+FMA (Intel Core i7-1260P):
+### AMD64 (Intel Core i7-1260P, AVX+FMA)
 
-### float64 Operations
+#### float64 Operations
 
 | Operation         | Size | Time     | Throughput |
 | ----------------- | ---- | -------- | ---------- |
@@ -139,7 +139,7 @@ Benchmarks on AMD64 with AVX+FMA (Intel Core i7-1260P):
 | Sqrt              | 100  | 66 ns    | 24 GB/s    |
 | Reciprocal        | 100  | 43 ns    | 37 GB/s    |
 
-### float32 Operations
+#### float32 Operations
 
 | Operation  | Size | Time    | Throughput |
 | ---------- | ---- | ------- | ---------- |
@@ -149,41 +149,61 @@ Benchmarks on AMD64 with AVX+FMA (Intel Core i7-1260P):
 | Mul        | 1000 | 44 ns   | 274 GB/s   |
 | FMA        | 1000 | 59 ns   | 270 GB/s   |
 
-### Comparison vs Pure Go
-
-Benchmarks on Intel Core i7-1260P (AVX+FMA) with Go 1.25:
-
-#### float64 Operations (1000 elements unless noted)
-
-| Operation          | SIMD    | Pure Go | Speedup  |
-| ------------------ | ------- | ------- | -------- |
-| DotProduct         | 160 ns  | 128 ns  | ~1x      |
-| Add                | 97 ns   | 138 ns  | **1.4x** |
-| Mul                | 88 ns   | 202 ns  | **2.3x** |
-| FMA                | 120 ns  | 127 ns  | ~1x      |
-| Sum                | 86 ns   | 126 ns  | **1.5x** |
-| Mean               | 92 ns   | 126 ns  | **1.4x** |
-| EuclideanDist (100)| 14 ns   | 90 ns   | **6.4x** |
-| Sqrt (100)         | 66 ns   | 130 ns  | **2.0x** |
-| Reciprocal (100)   | 43 ns   | 87 ns   | **2.0x** |
-| Normalize (100)    | 42 ns   | 51 ns   | **1.2x** |
-| Variance           | 483 ns  | 538 ns  | **1.1x** |
-| CumulativeSum      | 432 ns  | Uses Go | N/A      |
-| DotProductBatch    | 64 ns   | -       | -        |
-| ConvolveValid      | 7.2 µs  | -       | -        |
-
-#### float32 Operations (1000 elements)
+#### Comparison vs Pure Go (1000 elements)
 
 | Operation    | SIMD   | Pure Go | Speedup  |
 | ------------ | ------ | ------- | -------- |
-| DotProduct   | 69 ns  | 124 ns  | **1.8x** |
-| Add          | 49 ns  | 131 ns  | **2.7x** |
-| Mul          | 44 ns  | 207 ns  | **4.7x** |
-| FMA          | 59 ns  | 126 ns  | **2.1x** |
+| DotProduct   | 160 ns | 128 ns  | ~1x      |
+| Add          | 97 ns  | 138 ns  | **1.4x** |
+| Mul          | 88 ns  | 202 ns  | **2.3x** |
+| FMA          | 120 ns | 127 ns  | ~1x      |
+| Sum          | 86 ns  | 126 ns  | **1.5x** |
 
-**Note:** CumulativeSum is inherently sequential (each element depends on the previous) and uses pure Go.
-Modern Go compilers perform auto-vectorization on simple loops, but explicit SIMD provides consistent
-performance across Go versions and more complex operations like EuclideanDistance benefit significantly.
+### ARM64 (Raspberry Pi 5, NEON)
+
+#### float64 Operations
+
+| Operation         | Size | Time     | Throughput |
+| ----------------- | ---- | -------- | ---------- |
+| DotProduct        | 277  | 151 ns   | 29 GB/s    |
+| DotProduct        | 1000 | 513 ns   | 31 GB/s    |
+| Add               | 1000 | 775 ns   | 31 GB/s    |
+| Mul               | 1000 | 727 ns   | 33 GB/s    |
+| FMA               | 1000 | 890 ns   | 36 GB/s    |
+| Sum               | 1000 | 635 ns   | 13 GB/s    |
+| Mean              | 1000 | 677 ns   | 12 GB/s    |
+
+#### float32 Operations
+
+| Operation  | Size  | Time     | Throughput |
+| ---------- | ----- | -------- | ---------- |
+| DotProduct | 100   | 37 ns    | 21 GB/s    |
+| DotProduct | 1000  | 263 ns   | 30 GB/s    |
+| DotProduct | 10000 | 2.78 µs  | 29 GB/s    |
+| Add        | 1000  | 389 ns   | 31 GB/s    |
+| Mul        | 1000  | 390 ns   | 31 GB/s    |
+| FMA        | 1000  | 479 ns   | 33 GB/s    |
+
+#### Comparison vs Pure Go
+
+| Operation        | Size | SIMD    | Pure Go  | Speedup  |
+| ---------------- | ---- | ------- | -------- | -------- |
+| DotProduct (f32) | 100  | 37 ns   | 137 ns   | **3.7x** |
+| DotProduct (f32) | 1000 | 262 ns  | 1350 ns  | **5.2x** |
+| DotProduct (f64) | 100  | 62 ns   | 138 ns   | **2.2x** |
+| DotProduct (f64) | 1000 | 513 ns  | 1353 ns  | **2.6x** |
+| Add (f32)        | 1000 | 389 ns  | 2015 ns  | **5.2x** |
+| Sum (f32)        | 1000 | 343 ns  | 1327 ns  | **3.9x** |
+
+### Performance Notes
+
+- **AMD64**: On modern x86-64 CPUs, Go 1.25's auto-vectorization handles simple loops well, but explicit SIMD provides consistent performance and significant speedups for complex operations like EuclideanDistance (**6.4x**).
+
+- **ARM64**: NEON SIMD provides substantial speedups over pure Go across all operations:
+  - float32: **3.7x - 5.2x** faster (4 elements per 128-bit vector)
+  - float64: **2.2x - 2.6x** faster (2 elements per 128-bit vector)
+
+- **CumulativeSum** is inherently sequential (each element depends on the previous) and uses pure Go on all platforms.
 
 ## Architecture Support
 
@@ -198,7 +218,7 @@ performance across Go versions and more complex operations like EuclideanDistanc
 
 ## Design Principles
 
-1. **No CGO** - Pure Go assembly for maximum portability and easy cross-compilation
+1. **Pure Go assembly** - Native Go assembler for maximum portability and easy cross-compilation
 2. **Runtime dispatch** - CPU features detected once at init time, zero runtime overhead
 3. **Zero allocations** - No heap allocations in hot paths
 4. **Safe defaults** - Gracefully falls back to pure Go on unsupported CPUs
@@ -206,19 +226,26 @@ performance across Go versions and more complex operations like EuclideanDistanc
 
 ## Testing
 
-The library includes comprehensive tests validated against a C reference implementation:
+The library includes comprehensive tests with pure Go reference implementations for validation:
 
 ```bash
 # Run all tests
 go test ./...
 
-# Run benchmarks
-go test ./pkg/simd/f64 -bench=. -benchmem
+# Run tests with verbose output
+task test
 
-# Generate test expectations from C reference
-cd testdata && gcc -O2 -march=native -o generate_expectations generate_expectations.c -lm
-./generate_expectations
+# Run benchmarks
+task bench
+
+# Compare SIMD vs pure Go performance
+task bench:compare
+
+# Show CPU SIMD capabilities
+task cpu
 ```
+
+See [Taskfile.yml](Taskfile.yml) for all available tasks.
 
 ## Contributing
 
