@@ -259,6 +259,11 @@ func convolveValid64(dst, signal, kernel []float64) {
 	}
 }
 
+func accumulateAdd64(dst, src []float64) {
+	// AccumulateAdd is dst += src, which is the same as add(dst, dst, src)
+	addImpl(dst, dst, src)
+}
+
 // AVX+FMA assembly function declarations (4x float64 per iteration)
 //
 //go:noescape

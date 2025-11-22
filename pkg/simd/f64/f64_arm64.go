@@ -172,6 +172,15 @@ func convolveValid64(dst, signal, kernel []float64) {
 	}
 }
 
+func accumulateAdd64(dst, src []float64) {
+	// AccumulateAdd is dst += src, use add with dst as both operands
+	if hasNEON && len(dst) >= 2 {
+		addNEON(dst, dst, src)
+		return
+	}
+	accumulateAdd64Go(dst, src)
+}
+
 //go:noescape
 func dotProductNEON(a, b []float64) float64
 

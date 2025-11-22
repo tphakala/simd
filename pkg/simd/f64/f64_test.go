@@ -224,6 +224,80 @@ func TestClamp(t *testing.T) {
 	}
 }
 
+func TestAccumulateAdd(t *testing.T) {
+	tests := []struct {
+		name   string
+		dst    []float64
+		src    []float64
+		offset int
+		want   []float64
+	}{
+		{
+			"basic",
+			[]float64{1, 2, 3, 4, 5},
+			[]float64{10, 20},
+			1,
+			[]float64{1, 12, 23, 4, 5},
+		},
+		{
+			"at start",
+			[]float64{1, 2, 3, 4},
+			[]float64{10, 20, 30},
+			0,
+			[]float64{11, 22, 33, 4},
+		},
+		{
+			"at end",
+			[]float64{1, 2, 3, 4},
+			[]float64{10, 20},
+			2,
+			[]float64{1, 2, 13, 24},
+		},
+		{
+			"empty src",
+			[]float64{1, 2, 3},
+			[]float64{},
+			0,
+			[]float64{1, 2, 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := make([]float64, len(tt.dst))
+			copy(dst, tt.dst)
+			AccumulateAdd(dst, tt.src, tt.offset)
+			for i := range dst {
+				if dst[i] != tt.want[i] {
+					t.Errorf("AccumulateAdd()[%d] = %v, want %v", i, dst[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestAccumulateAdd_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for negative offset")
+		}
+	}()
+	dst := make([]float64, 5)
+	src := []float64{1, 2}
+	AccumulateAdd(dst, src, -1)
+}
+
+func TestAccumulateAdd_PanicsOverflow(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for overflow")
+		}
+	}()
+	dst := make([]float64, 5)
+	src := []float64{1, 2, 3}
+	AccumulateAdd(dst, src, 4) // 4+3 > 5
+}
+
 // Benchmarks
 
 func BenchmarkDotProduct_20(b *testing.B) {
@@ -323,5 +397,23 @@ func BenchmarkFMA_1000(b *testing.B) {
 
 	for b.Loop() {
 		FMA(dst, a, c, d)
+	}
+}
+
+func BenchmarkAccumulateAdd_1000(b *testing.B) {
+	dst := make([]float64, 1000)
+	src := make([]float64, 500)
+	for i := range src {
+		src[i] = float64(i)
+	}
+
+	b.SetBytes(500 * 8 * 2) // read src, read+write dst
+
+	for b.Loop() {
+		// Reset dst for consistent benchmark
+		for i := range dst {
+			dst[i] = float64(i)
+		}
+		AccumulateAdd(dst, src, 250)
 	}
 }

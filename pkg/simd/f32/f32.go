@@ -175,6 +175,24 @@ func ConvolveValid(dst, signal, kernel []float32) {
 	convolveValid32(dst[:n], signal, kernel)
 }
 
+// AccumulateAdd adds src to dst starting at offset: dst[offset:offset+len(src)] += src.
+// This is a key primitive for overlap-add in FFT-based convolution.
+//
+// Panics if offset+len(src) > len(dst) or if offset < 0.
+func AccumulateAdd(dst, src []float32, offset int) {
+	if offset < 0 {
+		panic("simd: negative offset")
+	}
+	n := len(src)
+	if n == 0 {
+		return
+	}
+	if offset+n > len(dst) {
+		panic("simd: offset+len(src) exceeds len(dst)")
+	}
+	accumulateAdd32(dst[offset:offset+n], src)
+}
+
 var (
 	posInf = float32(math.Inf(1))
 	negInf = float32(math.Inf(-1))

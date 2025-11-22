@@ -264,6 +264,82 @@ func TestConvolveValid(t *testing.T) {
 	}
 }
 
+// Tests for AccumulateAdd
+
+func TestAccumulateAdd(t *testing.T) {
+	tests := []struct {
+		name   string
+		dst    []float32
+		src    []float32
+		offset int
+		want   []float32
+	}{
+		{
+			"basic",
+			[]float32{1, 2, 3, 4, 5},
+			[]float32{10, 20},
+			1,
+			[]float32{1, 12, 23, 4, 5},
+		},
+		{
+			"at start",
+			[]float32{1, 2, 3, 4},
+			[]float32{10, 20, 30},
+			0,
+			[]float32{11, 22, 33, 4},
+		},
+		{
+			"at end",
+			[]float32{1, 2, 3, 4},
+			[]float32{10, 20},
+			2,
+			[]float32{1, 2, 13, 24},
+		},
+		{
+			"empty src",
+			[]float32{1, 2, 3},
+			[]float32{},
+			0,
+			[]float32{1, 2, 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := make([]float32, len(tt.dst))
+			copy(dst, tt.dst)
+			AccumulateAdd(dst, tt.src, tt.offset)
+			for i := range dst {
+				if dst[i] != tt.want[i] {
+					t.Errorf("AccumulateAdd()[%d] = %v, want %v", i, dst[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestAccumulateAdd_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for negative offset")
+		}
+	}()
+	dst := make([]float32, 5)
+	src := []float32{1, 2}
+	AccumulateAdd(dst, src, -1)
+}
+
+func TestAccumulateAdd_PanicsOverflow(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for overflow")
+		}
+	}()
+	dst := make([]float32, 5)
+	src := []float32{1, 2, 3}
+	AccumulateAdd(dst, src, 4) // 4+3 > 5
+}
+
 // Benchmarks for new functions
 
 func BenchmarkDotProductBatch_2x241(b *testing.B) {
@@ -303,5 +379,23 @@ func BenchmarkConvolveValid_1000x64(b *testing.B) {
 
 	for b.Loop() {
 		ConvolveValid(dst, signal, kernel)
+	}
+}
+
+func BenchmarkAccumulateAdd_1000(b *testing.B) {
+	dst := make([]float32, 1000)
+	src := make([]float32, 500)
+	for i := range src {
+		src[i] = float32(i)
+	}
+
+	b.SetBytes(500 * 4 * 2) // read src, read+write dst
+
+	for b.Loop() {
+		// Reset dst for consistent benchmark
+		for i := range dst {
+			dst[i] = float32(i)
+		}
+		AccumulateAdd(dst, src, 250)
 	}
 }

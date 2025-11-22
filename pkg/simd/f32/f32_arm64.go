@@ -135,6 +135,15 @@ func convolveValid32(dst, signal, kernel []float32) {
 	}
 }
 
+func accumulateAdd32(dst, src []float32) {
+	// AccumulateAdd is dst += src, use add with dst as both operands
+	if hasNEON && len(dst) >= 4 {
+		addNEON(dst, dst, src)
+		return
+	}
+	accumulateAdd32Go(dst, src)
+}
+
 //go:noescape
 func dotProductNEON(a, b []float32) float32
 

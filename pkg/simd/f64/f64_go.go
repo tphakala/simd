@@ -215,3 +215,9 @@ func convolveValid64Go(dst, signal, kernel []float64) {
 		dst[i] = dotProductGo(signal[i:i+kLen], kernel)
 	}
 }
+
+func accumulateAdd64Go(dst, src []float64) {
+	for i := range dst {
+		dst[i] += src[i]
+	}
+}

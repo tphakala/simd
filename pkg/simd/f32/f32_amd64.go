@@ -216,6 +216,11 @@ func convolveValid32(dst, signal, kernel []float32) {
 	}
 }
 
+func accumulateAdd32(dst, src []float32) {
+	// AccumulateAdd is dst += src, which is the same as add(dst, dst, src)
+	addImpl(dst, dst, src)
+}
+
 // AVX+FMA assembly function declarations (8x float32 per iteration)
 //
 //go:noescape

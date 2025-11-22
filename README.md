@@ -4,14 +4,14 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/simd)](https://goreportcard.com/report/github.com/tphakala/simd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64 and float32 slices.
+A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, and complex128 slices.
 
 ## Features
 
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
 - **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE2, NEON, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
-- **23 operations** - Arithmetic, reduction, statistical, vector, and signal processing operations
+- **30 operations** - Arithmetic, reduction, statistical, vector, signal processing, and complex number operations
 - **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2) and ARM64 (NEON) with pure Go fallback
 - **Thread-safe** - All functions are safe for concurrent use
 
@@ -106,6 +106,7 @@ fmt.Println(cpu.HasNEON())   // true/false
 | **Range**       | `Clamp(dst, a, min, max)`     | Clamp to range              | 8x / 4x / 2x                        |
 | **Batch**       | `DotProductBatch(r, rows, v)` | Multiple dot products       | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`  | FIR filter / convolution    | 8x / 4x / 2x                        |
+|                 | `AccumulateAdd(dst, src, off)`| Overlap-add: dst[off:] += src | 8x / 4x / 2x                      |
 
 ### `f32` - float32 Operations
 
@@ -117,6 +118,41 @@ Same API as `f64` but for `float32` with wider SIMD:
 | AMD64 (AVX+FMA) | 8x float32  |
 | AMD64 (SSE2)    | 4x float32  |
 | ARM64 (NEON)    | 4x float32  |
+
+### `c128` - complex128 Operations
+
+SIMD-accelerated complex number operations for FFT-based signal processing:
+
+| Category       | Function              | Description                          | SIMD Width             |
+| -------------- | --------------------- | ------------------------------------ | ---------------------- |
+| **Arithmetic** | `Mul(dst, a, b)`      | Complex multiplication               | 4x (AVX-512) / 2x (AVX)|
+|                | `MulConj(dst, a, b)`  | Multiply by conjugate: a × conj(b)   | 4x / 2x                |
+|                | `Scale(dst, a, s)`    | Scale by complex scalar              | 4x / 2x                |
+|                | `Add(dst, a, b)`      | Complex addition                     | 4x / 2x                |
+|                | `Sub(dst, a, b)`      | Complex subtraction                  | 4x / 2x                |
+
+These operations are designed for FFT-based convolution pipelines:
+
+```go
+import "github.com/tphakala/simd/pkg/simd/c128"
+
+// Frequency-domain multiplication (FFT convolution)
+signalFFT := make([]complex128, n)
+kernelFFT := make([]complex128, n)
+result := make([]complex128, n)
+
+c128.Mul(result, signalFFT, kernelFFT)          // Element-wise complex multiply
+c128.MulConj(result, signalFFT, kernelFFT)      // Cross-correlation
+```
+
+**Benchmark (1024 complex128, Intel i7-1260P AVX+FMA):**
+
+| Operation | SIMD     | Pure Go  | Speedup  |
+| --------- | -------- | -------- | -------- |
+| Mul       | 341 ns   | 757 ns   | **2.2x** |
+| MulConj   | 340 ns   | 749 ns   | **2.2x** |
+| Scale     | 253 ns   | 551 ns   | **2.2x** |
+| Add       | 86 ns    | 189 ns   | **2.2x** |
 
 ## Performance
 
@@ -181,10 +217,11 @@ Same API as `f64` but for `float32` with wider SIMD:
 
 #### Performance Summary
 
-| Package | Average Speedup | Best         | Operations   |
-| ------- | --------------- | ------------ | ------------ |
-| **f32** | **6.5x**        | 21.8x (Abs)  | 16 functions |
-| **f64** | **3.2x**        | 7.9x (Clamp) | 24 functions |
+| Package  | Average Speedup | Best         | Operations   |
+| -------- | --------------- | ------------ | ------------ |
+| **f32**  | **6.5x**        | 21.8x (Abs)  | 17 functions |
+| **f64**  | **3.2x**        | 7.9x (Clamp) | 25 functions |
+| **c128** | **2.2x**        | 2.2x (all)   | 5 functions  |
 
 ### ARM64 (Raspberry Pi 5, NEON)
 

@@ -283,6 +283,24 @@ func ConvolveValid(dst, signal, kernel []float64) {
 	convolveValid64(dst[:n], signal, kernel)
 }
 
+// AccumulateAdd adds src to dst starting at offset: dst[offset:offset+len(src)] += src.
+// This is a key primitive for overlap-add in FFT-based convolution.
+//
+// Panics if offset+len(src) > len(dst) or if offset < 0.
+func AccumulateAdd(dst, src []float64, offset int) {
+	if offset < 0 {
+		panic("simd: negative offset")
+	}
+	n := len(src)
+	if n == 0 {
+		return
+	}
+	if offset+n > len(dst) {
+		panic("simd: offset+len(src) exceeds len(dst)")
+	}
+	accumulateAdd64(dst[offset:offset+n], src)
+}
+
 const (
 	// normalizeMagnitudeThreshold is the minimum magnitude for normalization.
 	// Vectors with magnitude below this are left unchanged to avoid division by zero.
