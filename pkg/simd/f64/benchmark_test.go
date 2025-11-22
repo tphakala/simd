@@ -391,10 +391,31 @@ func BenchmarkVariance(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				_ = Variance(a)
 			}
+			// Two passes: mean + variance, so 2x data read
+			reportThroughput64(b, size*2)
+		})
+		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				_ = varianceFullGo(a)
+			}
+			// Two passes: mean + variance, so 2x data read
+			reportThroughput64(b, size*2)
+		})
+	}
+}
+
+// BenchmarkVarianceKernel tests just the variance kernel with pre-computed mean
+func BenchmarkVarianceKernel(b *testing.B) {
+	for _, size := range benchSizes {
+		a, _, _, _ := makeBenchData64(size)
+		mean := Mean(a)
+		b.Run(fmt.Sprintf("SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				_ = variance64(a, mean)
+			}
 			reportThroughput64(b, size)
 		})
 		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
-			mean := Mean(a)
 			for i := 0; i < b.N; i++ {
 				_ = variance64Go(a, mean)
 			}

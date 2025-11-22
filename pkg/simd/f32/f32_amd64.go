@@ -4,6 +4,18 @@ package f32
 
 import "github.com/tphakala/simd/pkg/simd/cpu"
 
+// Minimum number of float32 elements required for SIMD operations.
+// AVX processes 8 float32 values per 256-bit register.
+// AVX-512 processes 16 float32 values per 512-bit register.
+const (
+	minAVXElements    = 8
+	minAVX512Elements = 16
+)
+
+// minSIMDElements is set at init time based on which SIMD implementation is selected.
+// Used by min32/max32 to determine when to fall back to scalar code.
+var minSIMDElements = minAVXElements
+
 // Function pointer types for SIMD operations
 type (
 	dotProductFunc func(a, b []float32) float32
@@ -49,6 +61,7 @@ func init() {
 }
 
 func initAVX512() {
+	minSIMDElements = minAVX512Elements
 	dotProductImpl = dotProductAVX512
 	addImpl = addAVX512
 	subImpl = subAVX512
@@ -151,18 +164,18 @@ func sum(a []float32) float32 {
 }
 
 func min32(a []float32) float32 {
-	// AVX/AVX-512 requires at least 8/16 elements for initial load
+	// AVX/AVX-512 requires at least 8/16 elements for initial vector load
 	// Fall back to Go for small slices to avoid reading beyond bounds
-	if len(a) < 8 {
+	if len(a) < minSIMDElements {
 		return minGo(a)
 	}
 	return minImpl(a)
 }
 
 func max32(a []float32) float32 {
-	// AVX/AVX-512 requires at least 8/16 elements for initial load
+	// AVX/AVX-512 requires at least 8/16 elements for initial vector load
 	// Fall back to Go for small slices to avoid reading beyond bounds
-	if len(a) < 8 {
+	if len(a) < minSIMDElements {
 		return maxGo(a)
 	}
 	return maxImpl(a)

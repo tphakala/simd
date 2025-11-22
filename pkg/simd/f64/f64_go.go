@@ -145,6 +145,22 @@ func variance64Go(a []float64, mean float64) float64 {
 	return sum / float64(len(a))
 }
 
+// varianceFullGo computes variance including mean calculation (two-pass).
+// Used for fair benchmarking against the public Variance function.
+func varianceFullGo(a []float64) float64 {
+	if len(a) == 0 {
+		return 0
+	}
+	// First pass: compute mean
+	var sum float64
+	for _, v := range a {
+		sum += v
+	}
+	mean := sum / float64(len(a))
+	// Second pass: compute variance
+	return variance64Go(a, mean)
+}
+
 func euclideanDistance64Go(a, b []float64) float64 {
 	var sum float64
 	n := len(a)

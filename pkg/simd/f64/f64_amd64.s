@@ -658,24 +658,63 @@ recip_avx_done:
     RET
 
 // func varianceAVX(a []float64, mean float64) float64
+// Uses 4 accumulators to avoid FMA dependency chain stalls
 TEXT ·varianceAVX(SB), NOSPLIT, $0-40
     MOVQ a_base+0(FP), SI
     MOVQ a_len+8(FP), CX
     VBROADCASTSD mean+24(FP), Y2
 
-    VXORPD Y0, Y0, Y0  // accumulator
+    // Initialize 4 accumulators for parallel reduction
+    VXORPD Y0, Y0, Y0
+    VXORPD Y3, Y3, Y3
+    VXORPD Y4, Y4, Y4
+    VXORPD Y5, Y5, Y5
 
+    // Process 16 elements (4 vectors) per iteration
     MOVQ CX, AX
+    SHRQ $4, AX           // len / 16
+    JZ   var_avx_loop4
+
+var_avx_loop16:
+    VMOVUPD 0(SI), Y1
+    VSUBPD Y2, Y1, Y1
+    VFMADD231PD Y1, Y1, Y0
+
+    VMOVUPD 32(SI), Y1
+    VSUBPD Y2, Y1, Y1
+    VFMADD231PD Y1, Y1, Y3
+
+    VMOVUPD 64(SI), Y1
+    VSUBPD Y2, Y1, Y1
+    VFMADD231PD Y1, Y1, Y4
+
+    VMOVUPD 96(SI), Y1
+    VSUBPD Y2, Y1, Y1
+    VFMADD231PD Y1, Y1, Y5
+
+    ADDQ $128, SI
+    DECQ AX
+    JNZ  var_avx_loop16
+
+    // Combine accumulators
+    VADDPD Y3, Y0, Y0
+    VADDPD Y5, Y4, Y4
+    VADDPD Y4, Y0, Y0
+
+var_avx_loop4:
+    // Handle remaining groups of 4
+    MOVQ CX, AX
+    ANDQ $12, AX          // (len % 16) & ~3 = remaining complete vectors
     SHRQ $2, AX
     JZ   var_avx_remainder
 
-var_avx_loop4:
+var_avx_loop4_inner:
     VMOVUPD (SI), Y1
-    VSUBPD Y2, Y1, Y1        // diff = val - mean
-    VFMADD231PD Y1, Y1, Y0   // sum += diff * diff
+    VSUBPD Y2, Y1, Y1
+    VFMADD231PD Y1, Y1, Y0
     ADDQ $32, SI
     DECQ AX
-    JNZ  var_avx_loop4
+    JNZ  var_avx_loop4_inner
 
 var_avx_remainder:
     VEXTRACTF128 $1, Y0, X1
@@ -1402,24 +1441,63 @@ recip_512_done:
     RET
 
 // func varianceAVX512(a []float64, mean float64) float64
+// Uses 4 accumulators to avoid FMA dependency chain stalls
 TEXT ·varianceAVX512(SB), NOSPLIT, $0-40
     MOVQ a_base+0(FP), SI
     MOVQ a_len+8(FP), CX
     VBROADCASTSD mean+24(FP), Z2
 
+    // Initialize 4 accumulators for parallel reduction
     VXORPD Z0, Z0, Z0
+    VXORPD Z3, Z3, Z3
+    VXORPD Z4, Z4, Z4
+    VXORPD Z5, Z5, Z5
 
+    // Process 32 elements (4 vectors of 8) per iteration
     MOVQ CX, AX
+    SHRQ $5, AX           // len / 32
+    JZ   var_512_loop8
+
+var_512_loop32:
+    VMOVUPD 0(SI), Z1
+    VSUBPD Z2, Z1, Z1
+    VFMADD231PD Z1, Z1, Z0
+
+    VMOVUPD 64(SI), Z1
+    VSUBPD Z2, Z1, Z1
+    VFMADD231PD Z1, Z1, Z3
+
+    VMOVUPD 128(SI), Z1
+    VSUBPD Z2, Z1, Z1
+    VFMADD231PD Z1, Z1, Z4
+
+    VMOVUPD 192(SI), Z1
+    VSUBPD Z2, Z1, Z1
+    VFMADD231PD Z1, Z1, Z5
+
+    ADDQ $256, SI
+    DECQ AX
+    JNZ  var_512_loop32
+
+    // Combine accumulators
+    VADDPD Z3, Z0, Z0
+    VADDPD Z5, Z4, Z4
+    VADDPD Z4, Z0, Z0
+
+var_512_loop8:
+    // Handle remaining groups of 8
+    MOVQ CX, AX
+    ANDQ $24, AX          // (len % 32) & ~7 = remaining complete vectors
     SHRQ $3, AX
     JZ   var_512_remainder
 
-var_512_loop8:
+var_512_loop8_inner:
     VMOVUPD (SI), Z1
     VSUBPD Z2, Z1, Z1
     VFMADD231PD Z1, Z1, Z0
     ADDQ $64, SI
     DECQ AX
-    JNZ  var_512_loop8
+    JNZ  var_512_loop8_inner
 
 var_512_remainder:
     VEXTRACTF64X4 $1, Z0, Y1
@@ -2048,26 +2126,69 @@ recip_sse2_done:
     RET
 
 // func varianceSSE2(a []float64, mean float64) float64
+// Uses 4 accumulators to avoid dependency chain stalls
 TEXT ·varianceSSE2(SB), NOSPLIT, $0-40
     MOVQ a_base+0(FP), SI
     MOVQ a_len+8(FP), CX
     MOVSD mean+24(FP), X2
     SHUFPD $0, X2, X2
 
+    // Initialize 4 accumulators for parallel reduction
     XORPD X0, X0
+    XORPD X3, X3
+    XORPD X4, X4
+    XORPD X5, X5
 
+    // Process 8 elements (4 vectors of 2) per iteration
     MOVQ CX, AX
+    SHRQ $3, AX           // len / 8
+    JZ   var_sse2_loop2
+
+var_sse2_loop8:
+    MOVUPD 0(SI), X1
+    SUBPD X2, X1
+    MULPD X1, X1
+    ADDPD X1, X0
+
+    MOVUPD 16(SI), X1
+    SUBPD X2, X1
+    MULPD X1, X1
+    ADDPD X1, X3
+
+    MOVUPD 32(SI), X1
+    SUBPD X2, X1
+    MULPD X1, X1
+    ADDPD X1, X4
+
+    MOVUPD 48(SI), X1
+    SUBPD X2, X1
+    MULPD X1, X1
+    ADDPD X1, X5
+
+    ADDQ $64, SI
+    DECQ AX
+    JNZ  var_sse2_loop8
+
+    // Combine accumulators
+    ADDPD X3, X0
+    ADDPD X5, X4
+    ADDPD X4, X0
+
+var_sse2_loop2:
+    // Handle remaining groups of 2
+    MOVQ CX, AX
+    ANDQ $6, AX           // (len % 8) & ~1 = remaining complete vectors
     SHRQ $1, AX
     JZ   var_sse2_remainder
 
-var_sse2_loop2:
+var_sse2_loop2_inner:
     MOVUPD (SI), X1
     SUBPD X2, X1
     MULPD X1, X1
     ADDPD X1, X0
     ADDQ $16, SI
     DECQ AX
-    JNZ  var_sse2_loop2
+    JNZ  var_sse2_loop2_inner
 
 var_sse2_remainder:
     MOVAPD X0, X1
