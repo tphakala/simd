@@ -269,6 +269,24 @@ tasks:
       - task: lint
       - task: test:short
 
+  # Git Hooks
+  hooks:install:
+    desc: Install git pre-commit hook
+    cmds:
+      - git config core.hooksPath .githooks
+      - echo "Pre-commit hook installed (using .githooks directory)"
+
+  hooks:uninstall:
+    desc: Remove git pre-commit hook
+    cmds:
+      - git config --unset core.hooksPath || true
+      - echo "Pre-commit hook uninstalled"
+
+  hooks:run:
+    desc: Run pre-commit checks manually
+    cmds:
+      - ./.githooks/pre-commit
+
   # Cleanup
   clean:
     desc: Clean build artifacts
