@@ -4,20 +4,20 @@ package cpu
 // Features contains detected CPU SIMD capabilities.
 type Features struct {
 	// x86/AMD64 features
-	SSE     bool
-	SSE2    bool
-	SSE3    bool
-	SSSE3   bool
-	SSE41   bool
-	SSE42   bool
-	AVX     bool
-	AVX2    bool
+	SSE      bool
+	SSE2     bool
+	SSE3     bool
+	SSSE3    bool
+	SSE41    bool
+	SSE42    bool
+	AVX      bool
+	AVX2     bool
 	AVX512F  bool
 	AVX512VL bool
-	FMA     bool
-	BMI1    bool
-	BMI2    bool
-	POPCNT  bool
+	FMA      bool
+	BMI1     bool
+	BMI2     bool
+	POPCNT   bool
 
 	// ARM64 features
 	NEON bool

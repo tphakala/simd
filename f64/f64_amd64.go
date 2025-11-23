@@ -18,37 +18,41 @@ var minSIMDElements = minAVXElements
 
 // Function pointer types for SIMD operations
 type (
-	dotProductFunc         func(a, b []float64) float64
-	binaryOpFunc           func(dst, a, b []float64)
-	scaleFunc              func(dst, a []float64, s float64)
-	unaryOpFunc            func(dst, a []float64)
-	reduceFunc             func(a []float64) float64
-	fmaFunc                func(dst, a, b, c []float64)
-	clampFunc              func(dst, a []float64, minVal, maxVal float64)
-	varianceFunc           func(a []float64, mean float64) float64
-	euclideanDistanceFunc  func(a, b []float64) float64
+	dotProductFunc        func(a, b []float64) float64
+	binaryOpFunc          func(dst, a, b []float64)
+	scaleFunc             func(dst, a []float64, s float64)
+	unaryOpFunc           func(dst, a []float64)
+	reduceFunc            func(a []float64) float64
+	fmaFunc               func(dst, a, b, c []float64)
+	clampFunc             func(dst, a []float64, minVal, maxVal float64)
+	varianceFunc          func(a []float64, mean float64) float64
+	euclideanDistanceFunc func(a, b []float64) float64
+	interleave2Func       func(dst, a, b []float64)
+	deinterleave2Func     func(a, b, src []float64)
 )
 
 // Function pointers - assigned at init time based on CPU features
 var (
-	dotProductImpl         dotProductFunc
-	addImpl                binaryOpFunc
-	subImpl                binaryOpFunc
-	mulImpl                binaryOpFunc
-	divImpl                binaryOpFunc
-	scaleImpl              scaleFunc
-	addScalarImpl          scaleFunc
-	sumImpl                reduceFunc
-	minImpl                reduceFunc
-	maxImpl                reduceFunc
-	absImpl                unaryOpFunc
-	negImpl                unaryOpFunc
-	sqrtImpl               unaryOpFunc
-	reciprocalImpl         unaryOpFunc
-	fmaImpl                fmaFunc
-	clampImpl              clampFunc
-	varianceImpl           varianceFunc
-	euclideanDistanceImpl  euclideanDistanceFunc
+	dotProductImpl        dotProductFunc
+	addImpl               binaryOpFunc
+	subImpl               binaryOpFunc
+	mulImpl               binaryOpFunc
+	divImpl               binaryOpFunc
+	scaleImpl             scaleFunc
+	addScalarImpl         scaleFunc
+	sumImpl               reduceFunc
+	minImpl               reduceFunc
+	maxImpl               reduceFunc
+	absImpl               unaryOpFunc
+	negImpl               unaryOpFunc
+	sqrtImpl              unaryOpFunc
+	reciprocalImpl        unaryOpFunc
+	fmaImpl               fmaFunc
+	clampImpl             clampFunc
+	varianceImpl          varianceFunc
+	euclideanDistanceImpl euclideanDistanceFunc
+	interleave2Impl       interleave2Func
+	deinterleave2Impl     deinterleave2Func
 )
 
 func init() {
@@ -86,6 +90,8 @@ func initAVX512() {
 	clampImpl = clampAVX512
 	varianceImpl = varianceAVX512
 	euclideanDistanceImpl = euclideanDistanceAVX512
+	interleave2Impl = interleave2AVX
+	deinterleave2Impl = deinterleave2AVX
 }
 
 func initAVX() {
@@ -107,6 +113,8 @@ func initAVX() {
 	clampImpl = clampAVX
 	varianceImpl = varianceAVX
 	euclideanDistanceImpl = euclideanDistanceAVX
+	interleave2Impl = interleave2AVX
+	deinterleave2Impl = deinterleave2AVX
 }
 
 func initSSE2() {
@@ -128,6 +136,8 @@ func initSSE2() {
 	clampImpl = clampSSE2
 	varianceImpl = varianceSSE2
 	euclideanDistanceImpl = euclideanDistanceSSE2
+	interleave2Impl = interleave2SSE2
+	deinterleave2Impl = deinterleave2SSE2
 }
 
 func initGo() {
@@ -149,6 +159,8 @@ func initGo() {
 	clampImpl = clampGo
 	varianceImpl = variance64Go
 	euclideanDistanceImpl = euclideanDistance64Go
+	interleave2Impl = interleave2Go
+	deinterleave2Impl = deinterleave2Go
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -262,6 +274,34 @@ func convolveValid64(dst, signal, kernel []float64) {
 func accumulateAdd64(dst, src []float64) {
 	// AccumulateAdd is dst += src, which is the same as add(dst, dst, src)
 	addImpl(dst, dst, src)
+}
+
+func interleave2_64(dst, a, b []float64) {
+	// Need at least 2 pairs for SIMD to be worthwhile (AVX processes 4 at a time)
+	if len(a) >= minAVXElements {
+		interleave2Impl(dst, a, b)
+		return
+	}
+	interleave2Go(dst, a, b)
+}
+
+func deinterleave2_64(a, b, src []float64) {
+	// Need at least 2 pairs for SIMD to be worthwhile
+	if len(a) >= minAVXElements {
+		deinterleave2Impl(a, b, src)
+		return
+	}
+	deinterleave2Go(a, b, src)
+}
+
+func convolveValidMulti64(dsts [][]float64, signal []float64, kernels [][]float64, n, kLen int) {
+	// Use the SIMD dotProduct for each kernel application
+	for i := range n {
+		sig := signal[i : i+kLen]
+		for k, kernel := range kernels {
+			dsts[k][i] = dotProduct(sig, kernel)
+		}
+	}
 }
 
 // AVX+FMA assembly function declarations (4x float64 per iteration)
@@ -431,3 +471,17 @@ func varianceSSE2(a []float64, mean float64) float64
 
 //go:noescape
 func euclideanDistanceSSE2(a, b []float64) float64
+
+// Interleave/Deinterleave assembly function declarations
+//
+//go:noescape
+func interleave2AVX(dst, a, b []float64)
+
+//go:noescape
+func deinterleave2AVX(a, b, src []float64)
+
+//go:noescape
+func interleave2SSE2(dst, a, b []float64)
+
+//go:noescape
+func deinterleave2SSE2(a, b, src []float64)

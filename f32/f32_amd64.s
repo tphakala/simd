@@ -1738,3 +1738,143 @@ clamp32_sse_scalar:
 
 clamp32_sse_done:
     RET
+
+// ============================================================================
+// INTERLEAVE/DEINTERLEAVE IMPLEMENTATIONS
+// ============================================================================
+
+// func interleave2AVX(dst, a, b []float32)
+// Interleaves two slices: dst[0]=a[0], dst[1]=b[0], dst[2]=a[1], dst[3]=b[1], ...
+TEXT ·interleave2AVX(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX    // dst pointer
+    MOVQ a_base+24(FP), SI     // a pointer
+    MOVQ a_len+32(FP), CX      // n = len(a)
+    MOVQ b_base+48(FP), DI     // b pointer
+
+    // Process 8 pairs at a time (16 output elements)
+    MOVQ CX, AX
+    SHRQ $3, AX                // AX = n / 8
+    JZ   interleave2_avx32_remainder
+
+interleave2_avx32_loop8:
+    // Load 8 from a: Y0 = [a0..a7]
+    VMOVUPS (SI), Y0
+    // Load 8 from b: Y1 = [b0..b7]
+    VMOVUPS (DI), Y1
+
+    // Unpack within 128-bit lanes
+    VUNPCKLPS Y1, Y0, Y2       // [a0,b0,a1,b1 | a4,b4,a5,b5]
+    VUNPCKHPS Y1, Y0, Y3       // [a2,b2,a3,b3 | a6,b6,a7,b7]
+
+    // Permute to get final order
+    VPERM2F128 $0x20, Y3, Y2, Y4  // [a0,b0,a1,b1,a2,b2,a3,b3]
+    VPERM2F128 $0x31, Y3, Y2, Y5  // [a4,b4,a5,b5,a6,b6,a7,b7]
+
+    // Store 16 elements to dst
+    VMOVUPS Y4, (DX)
+    VMOVUPS Y5, 32(DX)
+
+    ADDQ $32, SI               // a += 8 * 4
+    ADDQ $32, DI               // b += 8 * 4
+    ADDQ $64, DX               // dst += 16 * 4
+    DECQ AX
+    JNZ  interleave2_avx32_loop8
+
+interleave2_avx32_remainder:
+    ANDQ $7, CX
+    JZ   interleave2_avx32_done
+
+interleave2_avx32_scalar:
+    VMOVSS (SI), X0
+    VMOVSS (DI), X1
+    VMOVSS X0, (DX)
+    VMOVSS X1, 4(DX)
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  interleave2_avx32_scalar
+
+interleave2_avx32_done:
+    VZEROUPPER
+    RET
+
+// func deinterleave2AVX(a, b, src []float32)
+// Deinterleaves: a[0]=src[0], b[0]=src[1], a[1]=src[2], b[1]=src[3], ...
+// Algorithm based on Intel AVX intrinsics guide:
+// 1. VSHUFPS $0x88 extracts evens (a's), $0xDD extracts odds (b's)
+// 2. VPERM2F128 + VUNPCKLPD/VUNPCKHPD reorders 64-bit chunks across lanes
+TEXT ·deinterleave2AVX(SB), NOSPLIT, $0-72
+    MOVQ a_base+0(FP), DX      // a pointer
+    MOVQ a_len+8(FP), CX       // n = len(a)
+    MOVQ b_base+24(FP), R8     // b pointer
+    MOVQ src_base+48(FP), SI   // src pointer
+
+    // Process 8 pairs at a time
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   deinterleave2_avx32_remainder
+
+deinterleave2_avx32_loop8:
+    // Load 16 interleaved elements
+    // Y0 = [a0,b0,a1,b1 | a2,b2,a3,b3]
+    // Y1 = [a4,b4,a5,b5 | a6,b6,a7,b7]
+    VMOVUPS (SI), Y0
+    VMOVUPS 32(SI), Y1
+
+    // Step 1: Extract evens and odds using VSHUFPS
+    // VSHUFPS $0x88: select indices 0,2 from each source per lane
+    // Y2 = [a0,a1,a4,a5 | a2,a3,a6,a7]
+    VSHUFPS $0x88, Y1, Y0, Y2
+    // VSHUFPS $0xDD: select indices 1,3 from each source per lane
+    // Y3 = [b0,b1,b4,b5 | b2,b3,b6,b7]
+    VSHUFPS $0xDD, Y1, Y0, Y3
+
+    // Step 2: Reorder Y2 to get [a0,a1,a2,a3 | a4,a5,a6,a7]
+    // Swap lanes: Y4 = [a2,a3,a6,a7 | a0,a1,a4,a5]
+    VPERM2F128 $0x01, Y2, Y2, Y4
+    // Unpack low 64-bit pairs: Y5 = [a0,a1,a2,a3 | ...]
+    VUNPCKLPD Y4, Y2, Y5
+    // Unpack high 64-bit pairs: Y6 = [a4,a5,a6,a7 | ...]
+    VUNPCKHPD Y4, Y2, Y6
+    // Combine low lanes: Y7 = [a0,a1,a2,a3 | a4,a5,a6,a7]
+    VPERM2F128 $0x20, Y6, Y5, Y7
+
+    // Step 3: Reorder Y3 to get [b0,b1,b2,b3 | b4,b5,b6,b7]
+    // Swap lanes: Y4 = [b2,b3,b6,b7 | b0,b1,b4,b5]
+    VPERM2F128 $0x01, Y3, Y3, Y4
+    // Unpack low 64-bit pairs: Y5 = [b0,b1,b2,b3 | ...]
+    VUNPCKLPD Y4, Y3, Y5
+    // Unpack high 64-bit pairs: Y6 = [b4,b5,b6,b7 | ...]
+    VUNPCKHPD Y4, Y3, Y6
+    // Combine low lanes: Y4 = [b0,b1,b2,b3 | b4,b5,b6,b7]
+    VPERM2F128 $0x20, Y6, Y5, Y4
+
+    // Store results
+    VMOVUPS Y7, (DX)           // store a
+    VMOVUPS Y4, (R8)           // store b
+
+    ADDQ $64, SI               // src += 16 * 4
+    ADDQ $32, DX               // a += 8 * 4
+    ADDQ $32, R8               // b += 8 * 4
+    DECQ AX
+    JNZ  deinterleave2_avx32_loop8
+
+deinterleave2_avx32_remainder:
+    ANDQ $7, CX
+    JZ   deinterleave2_avx32_done
+
+deinterleave2_avx32_scalar:
+    VMOVSS (SI), X0
+    VMOVSS 4(SI), X1
+    VMOVSS X0, (DX)
+    VMOVSS X1, (R8)
+    ADDQ $8, SI
+    ADDQ $4, DX
+    ADDQ $4, R8
+    DECQ CX
+    JNZ  deinterleave2_avx32_scalar
+
+deinterleave2_avx32_done:
+    VZEROUPPER
+    RET

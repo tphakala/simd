@@ -234,3 +234,34 @@ func varianceNEON(a []float64, mean float64) float64
 
 //go:noescape
 func euclideanDistanceNEON(a, b []float64) float64
+
+func interleave2_64(dst, a, b []float64) {
+	if hasNEON && len(a) >= 2 {
+		interleave2NEON(dst, a, b)
+		return
+	}
+	interleave2Go(dst, a, b)
+}
+
+func deinterleave2_64(a, b, src []float64) {
+	if hasNEON && len(a) >= 2 {
+		deinterleave2NEON(a, b, src)
+		return
+	}
+	deinterleave2Go(a, b, src)
+}
+
+func convolveValidMulti64(dsts [][]float64, signal []float64, kernels [][]float64, n, kLen int) {
+	for i := range n {
+		sig := signal[i : i+kLen]
+		for k, kernel := range kernels {
+			dsts[k][i] = dotProduct(sig, kernel)
+		}
+	}
+}
+
+//go:noescape
+func interleave2NEON(dst, a, b []float64)
+
+//go:noescape
+func deinterleave2NEON(a, b, src []float64)

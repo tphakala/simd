@@ -185,3 +185,34 @@ func fmaNEON(dst, a, b, c []float32)
 
 //go:noescape
 func clampNEON(dst, a []float32, minVal, maxVal float32)
+
+func interleave2_32(dst, a, b []float32) {
+	if hasNEON && len(a) >= 4 {
+		interleave2NEON(dst, a, b)
+		return
+	}
+	interleave2Go(dst, a, b)
+}
+
+func deinterleave2_32(a, b, src []float32) {
+	if hasNEON && len(a) >= 4 {
+		deinterleave2NEON(a, b, src)
+		return
+	}
+	deinterleave2Go(a, b, src)
+}
+
+func convolveValidMulti32(dsts [][]float32, signal []float32, kernels [][]float32, n, kLen int) {
+	for i := range n {
+		sig := signal[i : i+kLen]
+		for k, kernel := range kernels {
+			dsts[k][i] = dotProduct(sig, kernel)
+		}
+	}
+}
+
+//go:noescape
+func interleave2NEON(dst, a, b []float32)
+
+//go:noescape
+func deinterleave2NEON(a, b, src []float32)

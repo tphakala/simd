@@ -14,10 +14,10 @@ const (
 
 // Function pointer types for SIMD operations
 type (
-	binaryOpFunc     func(dst, a, b []complex128)
-	scaleFunc        func(dst, a []complex128, s complex128)
-	unaryAbsFunc     func(dst []float64, a []complex128)
-	unaryConjFunc    func(dst, a []complex128)
+	binaryOpFunc  func(dst, a, b []complex128)
+	scaleFunc     func(dst, a []complex128, s complex128)
+	unaryAbsFunc  func(dst []float64, a []complex128)
+	unaryConjFunc func(dst, a []complex128)
 )
 
 // Function pointers - assigned at init time based on CPU features

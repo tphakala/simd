@@ -150,3 +150,26 @@ func accumulateAdd32Go(dst, src []float32) {
 		dst[i] += src[i]
 	}
 }
+
+func interleave2Go(dst, a, b []float32) {
+	for i := range a {
+		dst[i*2] = a[i]
+		dst[i*2+1] = b[i]
+	}
+}
+
+func deinterleave2Go(a, b, src []float32) {
+	for i := range a {
+		a[i] = src[i*2]
+		b[i] = src[i*2+1]
+	}
+}
+
+func convolveValidMultiGo(dsts [][]float32, signal []float32, kernels [][]float32, n, kLen int) {
+	for i := range n {
+		sig := signal[i : i+kLen]
+		for k, kernel := range kernels {
+			dsts[k][i] = dotProductGo(sig, kernel)
+		}
+	}
+}

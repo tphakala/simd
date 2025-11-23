@@ -221,6 +221,32 @@ func accumulateAdd32(dst, src []float32) {
 	addImpl(dst, dst, src)
 }
 
+func interleave2_32(dst, a, b []float32) {
+	// Need at least 8 pairs for SIMD to be worthwhile (AVX processes 8 at a time)
+	if len(a) >= minAVXElements {
+		interleave2AVX(dst, a, b)
+		return
+	}
+	interleave2Go(dst, a, b)
+}
+
+func deinterleave2_32(a, b, src []float32) {
+	if len(a) >= minAVXElements {
+		deinterleave2AVX(a, b, src)
+		return
+	}
+	deinterleave2Go(a, b, src)
+}
+
+func convolveValidMulti32(dsts [][]float32, signal []float32, kernels [][]float32, n, kLen int) {
+	for i := range n {
+		sig := signal[i : i+kLen]
+		for k, kernel := range kernels {
+			dsts[k][i] = dotProduct(sig, kernel)
+		}
+	}
+}
+
 // AVX+FMA assembly function declarations (8x float32 per iteration)
 //
 //go:noescape
@@ -352,3 +378,11 @@ func fmaSSE(dst, a, b, c []float32)
 
 //go:noescape
 func clampSSE(dst, a []float32, minVal, maxVal float32)
+
+// Interleave/Deinterleave assembly function declarations
+//
+//go:noescape
+func interleave2AVX(dst, a, b []float32)
+
+//go:noescape
+func deinterleave2AVX(a, b, src []float32)

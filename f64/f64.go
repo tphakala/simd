@@ -311,3 +311,68 @@ var (
 	posInf = math.Inf(1)
 	negInf = math.Inf(-1)
 )
+
+// Interleave2 interleaves two slices: dst[0]=a[0], dst[1]=b[0], dst[2]=a[1], dst[3]=b[1], ...
+// Processes min(len(a), len(b), len(dst)/2) pairs.
+// This is useful for converting separate channels to interleaved stereo audio.
+func Interleave2(dst, a, b []float64) {
+	n := min(len(dst)/interleave2Channels, min(len(a), len(b)))
+	if n == 0 {
+		return
+	}
+	interleave2_64(dst[:n*interleave2Channels], a[:n], b[:n])
+}
+
+// Deinterleave2 deinterleaves a slice: a[0]=src[0], b[0]=src[1], a[1]=src[2], b[1]=src[3], ...
+// Processes min(len(a), len(b), len(src)/2) pairs.
+// This is the inverse of Interleave2, useful for splitting stereo audio to channels.
+func Deinterleave2(a, b, src []float64) {
+	n := min(len(src)/interleave2Channels, min(len(a), len(b)))
+	if n == 0 {
+		return
+	}
+	deinterleave2_64(a[:n], b[:n], src[:n*interleave2Channels])
+}
+
+const interleave2Channels = 2
+
+// ConvolveValidMulti applies multiple kernels to the same signal in one pass.
+// dsts[k][i] = sum(signal[i+j] * kernels[k][j]) for each kernel k.
+// All kernels must have the same length.
+//
+// This is more cache-efficient than calling ConvolveValid in a loop because
+// the signal data stays hot in cache across all kernel applications.
+//
+// Panics if kernels have different lengths or if dsts/kernels lengths don't match.
+func ConvolveValidMulti(dsts [][]float64, signal []float64, kernels [][]float64) {
+	numKernels := len(kernels)
+	if numKernels == 0 || len(dsts) < numKernels {
+		return
+	}
+
+	// Validate all kernels have the same length
+	kLen := len(kernels[0])
+	if kLen == 0 || len(signal) < kLen {
+		return
+	}
+	for i := 1; i < numKernels; i++ {
+		if len(kernels[i]) != kLen {
+			panic("simd: all kernels must have the same length")
+		}
+	}
+
+	validLen := len(signal) - kLen + 1
+
+	// Determine actual output length based on smallest dst
+	n := validLen
+	for i := range numKernels {
+		if len(dsts[i]) < n {
+			n = len(dsts[i])
+		}
+	}
+	if n <= 0 {
+		return
+	}
+
+	convolveValidMulti64(dsts, signal, kernels, n, kLen)
+}

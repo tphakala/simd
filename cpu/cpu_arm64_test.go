@@ -20,9 +20,9 @@ func TestCpuInfoAllBranches(t *testing.T) {
 	}()
 
 	tests := []struct {
-		name         string
+		name            string
 		neon, sve, sve2 bool
-		want         string
+		want            string
 	}{
 		{"SVE2", true, true, true, "ARM64 SVE2"},
 		{"SVE", true, true, false, "ARM64 SVE"},

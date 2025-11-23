@@ -402,7 +402,8 @@ func TestConj_Large(t *testing.T) {
 
 // Benchmarks for new functions
 
-func benchmarkUnaryAbsOp(b *testing.B, size int, simdFn func([]float64, []complex128), goFn func([]float64, []complex128)) {
+func benchmarkUnaryAbsOp(b *testing.B, size int, simdFn, goFn func([]float64, []complex128)) {
+	b.Helper()
 	a := make([]complex128, size)
 	dst := make([]float64, size)
 	for i := range size {
@@ -424,7 +425,8 @@ func benchmarkUnaryAbsOp(b *testing.B, size int, simdFn func([]float64, []comple
 	})
 }
 
-func benchmarkUnaryConjOp(b *testing.B, size int, simdFn func([]complex128, []complex128), goFn func([]complex128, []complex128)) {
+func benchmarkUnaryConjOp(b *testing.B, size int, simdFn, goFn func([]complex128, []complex128)) {
+	b.Helper()
 	a := make([]complex128, size)
 	dst := make([]complex128, size)
 	for i := range size {

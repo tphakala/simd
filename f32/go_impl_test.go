@@ -97,10 +97,10 @@ func TestMaxGo(t *testing.T) {
 
 func TestClampGo(t *testing.T) {
 	tests := []struct {
-		name        string
-		a           []float32
-		minV, maxV  float32
-		want        []float32
+		name       string
+		a          []float32
+		minV, maxV float32
+		want       []float32
 	}{
 		{"below_min", []float32{1, 2, 3}, 5, 10, []float32{5, 5, 5}},
 		{"above_max", []float32{11, 12, 13}, 5, 10, []float32{10, 10, 10}},
@@ -125,8 +125,8 @@ func TestDotProductBatch32Go(t *testing.T) {
 		{1, 0, 0, 0},
 		{0, 1, 0, 0},
 		{1, 1, 1, 1},
-		{},           // empty row
-		{1, 2},       // shorter than vec
+		{},     // empty row
+		{1, 2}, // shorter than vec
 	}
 	results := make([]float32, len(rows))
 

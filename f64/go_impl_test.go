@@ -125,8 +125,8 @@ func TestDotProductBatch64Go(t *testing.T) {
 		{1, 0, 0, 0},
 		{0, 1, 0, 0},
 		{1, 1, 1, 1},
-		{},           // empty row
-		{1, 2},       // shorter than vec
+		{},     // empty row
+		{1, 2}, // shorter than vec
 	}
 	results := make([]float64, len(rows))
 

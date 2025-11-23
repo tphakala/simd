@@ -486,3 +486,75 @@ TEXT ·varianceNEON(SB), $0-32
 
 TEXT ·euclideanDistanceNEON(SB), $0-56
     B ·euclideanDistance64Go(SB)
+
+// Interleave/Deinterleave with NEON ZIP/UZP instructions
+// ZIP1 Vd.2D, Vn.2D, Vm.2D: 0x4EC03800 | (Vm << 16) | (Vn << 5) | Vd
+// ZIP2 Vd.2D, Vn.2D, Vm.2D: 0x4EC07800 | (Vm << 16) | (Vn << 5) | Vd
+// UZP1 Vd.2D, Vn.2D, Vm.2D: 0x4EC01800 | (Vm << 16) | (Vn << 5) | Vd
+// UZP2 Vd.2D, Vn.2D, Vm.2D: 0x4EC05800 | (Vm << 16) | (Vn << 5) | Vd
+
+// func interleave2NEON(dst, a, b []float64)
+TEXT ·interleave2NEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0    // dst pointer
+    MOVD a_base+24(FP), R1     // a pointer
+    MOVD a_len+32(FP), R3      // n = len(a)
+    MOVD b_base+48(FP), R2     // b pointer
+
+    // Process 2 pairs at a time
+    LSR $1, R3, R4             // R4 = n / 2
+    CBZ R4, interleave2_neon_remainder
+
+interleave2_neon_loop2:
+    VLD1.P 16(R1), [V0.D2]     // V0 = [a0, a1]
+    VLD1.P 16(R2), [V1.D2]     // V1 = [b0, b1]
+    WORD $0x4EC13802           // ZIP1 V2.2D, V0.2D, V1.2D -> [a0, b0]
+    WORD $0x4EC17803           // ZIP2 V3.2D, V0.2D, V1.2D -> [a1, b1]
+    VST1.P [V2.D2], 16(R0)     // Store [a0, b0]
+    VST1.P [V3.D2], 16(R0)     // Store [a1, b1]
+    SUB $1, R4
+    CBNZ R4, interleave2_neon_loop2
+
+interleave2_neon_remainder:
+    AND $1, R3
+    CBZ R3, interleave2_neon_done
+
+    FMOVD (R1), F0
+    FMOVD (R2), F1
+    FMOVD F0, (R0)
+    FMOVD F1, 8(R0)
+
+interleave2_neon_done:
+    RET
+
+// func deinterleave2NEON(a, b, src []float64)
+TEXT ·deinterleave2NEON(SB), NOSPLIT, $0-72
+    MOVD a_base+0(FP), R0      // a pointer
+    MOVD a_len+8(FP), R3       // n = len(a)
+    MOVD b_base+24(FP), R1     // b pointer
+    MOVD src_base+48(FP), R2   // src pointer
+
+    // Process 2 pairs at a time
+    LSR $1, R3, R4             // R4 = n / 2
+    CBZ R4, deinterleave2_neon_remainder
+
+deinterleave2_neon_loop2:
+    VLD1.P 16(R2), [V0.D2]     // V0 = [a0, b0]
+    VLD1.P 16(R2), [V1.D2]     // V1 = [a1, b1]
+    WORD $0x4EC11802           // UZP1 V2.2D, V0.2D, V1.2D -> [a0, a1]
+    WORD $0x4EC15803           // UZP2 V3.2D, V0.2D, V1.2D -> [b0, b1]
+    VST1.P [V2.D2], 16(R0)     // Store a
+    VST1.P [V3.D2], 16(R1)     // Store b
+    SUB $1, R4
+    CBNZ R4, deinterleave2_neon_loop2
+
+deinterleave2_neon_remainder:
+    AND $1, R3
+    CBZ R3, deinterleave2_neon_done
+
+    FMOVD (R2), F0
+    FMOVD 8(R2), F1
+    FMOVD F0, (R0)
+    FMOVD F1, (R1)
+
+deinterleave2_neon_done:
+    RET

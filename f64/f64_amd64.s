@@ -2252,3 +2252,221 @@ euclid_sse2_sqrt:
     SQRTSD X0, X0
     MOVSD X0, ret+48(FP)
     RET
+
+// ============================================================================
+// INTERLEAVE/DEINTERLEAVE IMPLEMENTATIONS
+// ============================================================================
+
+// func interleave2AVX(dst, a, b []float64)
+// Interleaves two slices: dst[0]=a[0], dst[1]=b[0], dst[2]=a[1], dst[3]=b[1], ...
+// Input a has n elements, b has n elements, dst has 2n elements
+TEXT ·interleave2AVX(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX    // dst pointer
+    MOVQ a_base+24(FP), SI     // a pointer
+    MOVQ a_len+32(FP), CX      // n = len(a)
+    MOVQ b_base+48(FP), DI     // b pointer
+
+    // Process 4 pairs at a time (8 output elements)
+    MOVQ CX, AX
+    SHRQ $2, AX                // AX = n / 4
+    JZ   interleave2_avx_remainder
+
+interleave2_avx_loop4:
+    // Load 4 from a: Y0 = [a0, a1, a2, a3]
+    VMOVUPD (SI), Y0
+    // Load 4 from b: Y1 = [b0, b1, b2, b3]
+    VMOVUPD (DI), Y1
+
+    // Unpack within 128-bit lanes
+    // VUNPCKLPD: Y2 = [a0, b0, a2, b2]
+    VUNPCKLPD Y1, Y0, Y2
+    // VUNPCKHPD: Y3 = [a1, b1, a3, b3]
+    VUNPCKHPD Y1, Y0, Y3
+
+    // Permute to get final order
+    // Y4 = [a0, b0, a1, b1] (low halves)
+    VPERM2F128 $0x20, Y3, Y2, Y4
+    // Y5 = [a2, b2, a3, b3] (high halves)
+    VPERM2F128 $0x31, Y3, Y2, Y5
+
+    // Store 8 elements to dst
+    VMOVUPD Y4, (DX)
+    VMOVUPD Y5, 32(DX)
+
+    ADDQ $32, SI               // a += 4 * 8
+    ADDQ $32, DI               // b += 4 * 8
+    ADDQ $64, DX               // dst += 8 * 8
+    DECQ AX
+    JNZ  interleave2_avx_loop4
+
+interleave2_avx_remainder:
+    ANDQ $3, CX
+    JZ   interleave2_avx_done
+
+interleave2_avx_scalar:
+    VMOVSD (SI), X0
+    VMOVSD (DI), X1
+    VMOVSD X0, (DX)
+    VMOVSD X1, 8(DX)
+    ADDQ $8, SI
+    ADDQ $8, DI
+    ADDQ $16, DX
+    DECQ CX
+    JNZ  interleave2_avx_scalar
+
+interleave2_avx_done:
+    VZEROUPPER
+    RET
+
+// func deinterleave2AVX(a, b, src []float64)
+// Deinterleaves: a[0]=src[0], b[0]=src[1], a[1]=src[2], b[1]=src[3], ...
+TEXT ·deinterleave2AVX(SB), NOSPLIT, $0-72
+    MOVQ a_base+0(FP), DX      // a pointer
+    MOVQ a_len+8(FP), CX       // n = len(a)
+    MOVQ b_base+24(FP), R8     // b pointer
+    MOVQ src_base+48(FP), SI   // src pointer
+
+    // Process 4 pairs at a time
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   deinterleave2_avx_remainder
+
+deinterleave2_avx_loop4:
+    // Load 8 interleaved elements
+    // Y0 = [a0, b0, a1, b1]
+    VMOVUPD (SI), Y0
+    // Y1 = [a2, b2, a3, b3]
+    VMOVUPD 32(SI), Y1
+
+    // Permute to group a's and b's
+    // Y2 = [a0, b0, a2, b2] (low halves of Y0 and Y1)
+    VPERM2F128 $0x20, Y1, Y0, Y2
+    // Y3 = [a1, b1, a3, b3] (high halves of Y0 and Y1)
+    VPERM2F128 $0x31, Y1, Y0, Y3
+
+    // Unpack to separate a's and b's
+    // Y4 = [a0, a1, a2, a3]
+    VUNPCKLPD Y3, Y2, Y4
+    // Y5 = [b0, b1, b2, b3]
+    VUNPCKHPD Y3, Y2, Y5
+
+    // Store results
+    VMOVUPD Y4, (DX)
+    VMOVUPD Y5, (R8)
+
+    ADDQ $64, SI               // src += 8 * 8
+    ADDQ $32, DX               // a += 4 * 8
+    ADDQ $32, R8               // b += 4 * 8
+    DECQ AX
+    JNZ  deinterleave2_avx_loop4
+
+deinterleave2_avx_remainder:
+    ANDQ $3, CX
+    JZ   deinterleave2_avx_done
+
+deinterleave2_avx_scalar:
+    VMOVSD (SI), X0
+    VMOVSD 8(SI), X1
+    VMOVSD X0, (DX)
+    VMOVSD X1, (R8)
+    ADDQ $16, SI
+    ADDQ $8, DX
+    ADDQ $8, R8
+    DECQ CX
+    JNZ  deinterleave2_avx_scalar
+
+deinterleave2_avx_done:
+    VZEROUPPER
+    RET
+
+// func interleave2SSE2(dst, a, b []float64)
+TEXT ·interleave2SSE2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ a_base+24(FP), SI
+    MOVQ a_len+32(FP), CX
+    MOVQ b_base+48(FP), DI
+
+    // Process 2 pairs at a time (4 output elements)
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   interleave2_sse2_remainder
+
+interleave2_sse2_loop2:
+    // X0 = [a0, a1]
+    MOVUPD (SI), X0
+    // X1 = [b0, b1]
+    MOVUPD (DI), X1
+
+    // X2 = [a0, b0]
+    MOVAPD X0, X2
+    UNPCKLPD X1, X2
+    // X3 = [a1, b1]
+    MOVAPD X0, X3
+    UNPCKHPD X1, X3
+
+    MOVUPD X2, (DX)
+    MOVUPD X3, 16(DX)
+
+    ADDQ $16, SI
+    ADDQ $16, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  interleave2_sse2_loop2
+
+interleave2_sse2_remainder:
+    ANDQ $1, CX
+    JZ   interleave2_sse2_done
+
+    MOVSD (SI), X0
+    MOVSD (DI), X1
+    MOVSD X0, (DX)
+    MOVSD X1, 8(DX)
+
+interleave2_sse2_done:
+    RET
+
+// func deinterleave2SSE2(a, b, src []float64)
+TEXT ·deinterleave2SSE2(SB), NOSPLIT, $0-72
+    MOVQ a_base+0(FP), DX
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), R8
+    MOVQ src_base+48(FP), SI
+
+    // Process 2 pairs at a time
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   deinterleave2_sse2_remainder
+
+deinterleave2_sse2_loop2:
+    // X0 = [a0, b0]
+    MOVUPD (SI), X0
+    // X1 = [a1, b1]
+    MOVUPD 16(SI), X1
+
+    // X2 = [a0, a1]
+    MOVAPD X0, X2
+    UNPCKLPD X1, X2
+    // X3 = [b0, b1]
+    MOVAPD X0, X3
+    UNPCKHPD X1, X3
+
+    MOVUPD X2, (DX)
+    MOVUPD X3, (R8)
+
+    ADDQ $32, SI
+    ADDQ $16, DX
+    ADDQ $16, R8
+    DECQ AX
+    JNZ  deinterleave2_sse2_loop2
+
+deinterleave2_sse2_remainder:
+    ANDQ $1, CX
+    JZ   deinterleave2_sse2_done
+
+    MOVSD (SI), X0
+    MOVSD 8(SI), X1
+    MOVSD X0, (DX)
+    MOVSD X1, (R8)
+
+deinterleave2_sse2_done:
+    RET

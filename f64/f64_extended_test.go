@@ -393,10 +393,10 @@ func BenchmarkCumulativeSum_1000(b *testing.B) {
 
 func TestDotProductBatch(t *testing.T) {
 	tests := []struct {
-		name    string
-		rows    [][]float64
-		vec     []float64
-		want    []float64
+		name string
+		rows [][]float64
+		vec  []float64
+		want []float64
 	}{
 		{"empty", nil, nil, nil},
 		{"single row", [][]float64{{1, 2, 3}}, []float64{1, 1, 1}, []float64{6}},
@@ -570,5 +570,299 @@ func BenchmarkConvolveValid_1000x241(b *testing.B) {
 
 	for b.Loop() {
 		ConvolveValid(dst, signal, kernel)
+	}
+}
+
+// Tests for Interleave2 and Deinterleave2
+
+func TestInterleave2(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []float64
+		b    []float64
+		want []float64
+	}{
+		{"empty", nil, nil, nil},
+		{"single", []float64{1}, []float64{2}, []float64{1, 2}},
+		{"two", []float64{1, 3}, []float64{2, 4}, []float64{1, 2, 3, 4}},
+		{"four", []float64{1, 3, 5, 7}, []float64{2, 4, 6, 8}, []float64{1, 2, 3, 4, 5, 6, 7, 8}},
+		{"five", []float64{1, 3, 5, 7, 9}, []float64{2, 4, 6, 8, 10}, []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
+		{"stereo", []float64{-1, 0, 1, 0, -1}, []float64{1, 0, -1, 0, 1}, []float64{-1, 1, 0, 0, 1, -1, 0, 0, -1, 1}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.a) == 0 {
+				return
+			}
+			dst := make([]float64, len(tt.a)*2)
+			Interleave2(dst, tt.a, tt.b)
+			for i, want := range tt.want {
+				if dst[i] != want {
+					t.Errorf("Interleave2()[%d] = %v, want %v", i, dst[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestInterleave2_Large(t *testing.T) {
+	// Test with larger arrays to exercise SIMD paths
+	sizes := []int{8, 16, 17, 100, 1024, 1025}
+	for _, n := range sizes {
+		a := make([]float64, n)
+		b := make([]float64, n)
+		for i := range a {
+			a[i] = float64(i * 2)
+			b[i] = float64(i*2 + 1)
+		}
+
+		dst := make([]float64, n*2)
+		Interleave2(dst, a, b)
+
+		// Verify interleaving
+		for i := range n {
+			if dst[i*2] != a[i] {
+				t.Errorf("size=%d: Interleave2()[%d] = %v, want %v", n, i*2, dst[i*2], a[i])
+			}
+			if dst[i*2+1] != b[i] {
+				t.Errorf("size=%d: Interleave2()[%d] = %v, want %v", n, i*2+1, dst[i*2+1], b[i])
+			}
+		}
+	}
+}
+
+func TestDeinterleave2(t *testing.T) {
+	tests := []struct {
+		name  string
+		src   []float64
+		wantA []float64
+		wantB []float64
+	}{
+		{"empty", nil, nil, nil},
+		{"single", []float64{1, 2}, []float64{1}, []float64{2}},
+		{"two", []float64{1, 2, 3, 4}, []float64{1, 3}, []float64{2, 4}},
+		{"four", []float64{1, 2, 3, 4, 5, 6, 7, 8}, []float64{1, 3, 5, 7}, []float64{2, 4, 6, 8}},
+		{"five", []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, []float64{1, 3, 5, 7, 9}, []float64{2, 4, 6, 8, 10}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.src) < 2 {
+				return
+			}
+			n := len(tt.src) / 2
+			a := make([]float64, n)
+			b := make([]float64, n)
+			Deinterleave2(a, b, tt.src)
+			for i, want := range tt.wantA {
+				if a[i] != want {
+					t.Errorf("Deinterleave2() a[%d] = %v, want %v", i, a[i], want)
+				}
+			}
+			for i, want := range tt.wantB {
+				if b[i] != want {
+					t.Errorf("Deinterleave2() b[%d] = %v, want %v", i, b[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestDeinterleave2_Large(t *testing.T) {
+	sizes := []int{8, 16, 17, 100, 1024, 1025}
+	for _, n := range sizes {
+		src := make([]float64, n*2)
+		for i := range src {
+			src[i] = float64(i)
+		}
+
+		a := make([]float64, n)
+		b := make([]float64, n)
+		Deinterleave2(a, b, src)
+
+		for i := range n {
+			wantA := float64(i * 2)
+			wantB := float64(i*2 + 1)
+			if a[i] != wantA {
+				t.Errorf("size=%d: Deinterleave2() a[%d] = %v, want %v", n, i, a[i], wantA)
+			}
+			if b[i] != wantB {
+				t.Errorf("size=%d: Deinterleave2() b[%d] = %v, want %v", n, i, b[i], wantB)
+			}
+		}
+	}
+}
+
+func TestInterleaveDeinterleaveRoundTrip(t *testing.T) {
+	sizes := []int{1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 100, 1000}
+	for _, n := range sizes {
+		// Original data
+		a := make([]float64, n)
+		b := make([]float64, n)
+		for i := range a {
+			a[i] = float64(i)
+			b[i] = float64(i + 1000)
+		}
+
+		// Interleave then deinterleave
+		interleaved := make([]float64, n*2)
+		Interleave2(interleaved, a, b)
+
+		aOut := make([]float64, n)
+		bOut := make([]float64, n)
+		Deinterleave2(aOut, bOut, interleaved)
+
+		// Should match original
+		for i := range n {
+			if aOut[i] != a[i] {
+				t.Errorf("size=%d: round-trip a[%d] = %v, want %v", n, i, aOut[i], a[i])
+			}
+			if bOut[i] != b[i] {
+				t.Errorf("size=%d: round-trip b[%d] = %v, want %v", n, i, bOut[i], b[i])
+			}
+		}
+	}
+}
+
+// Tests for ConvolveValidMulti
+
+func TestConvolveValidMulti(t *testing.T) {
+	tests := []struct {
+		name    string
+		signal  []float64
+		kernels [][]float64
+		want    [][]float64
+	}{
+		{
+			"two_kernels_simple",
+			[]float64{1, 2, 3, 4, 5},
+			[][]float64{{1, 1}, {1, -1}},
+			[][]float64{{3, 5, 7, 9}, {-1, -1, -1, -1}},
+		},
+		{
+			"polyphase_like",
+			[]float64{1, 2, 3, 4, 5, 6},
+			[][]float64{{1, 0, 1}, {0, 1, 0}},
+			[][]float64{{4, 6, 8, 10}, {2, 3, 4, 5}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kLen := len(tt.kernels[0])
+			validLen := len(tt.signal) - kLen + 1
+			dsts := make([][]float64, len(tt.kernels))
+			for i := range dsts {
+				dsts[i] = make([]float64, validLen)
+			}
+
+			ConvolveValidMulti(dsts, tt.signal, tt.kernels)
+
+			for k, want := range tt.want {
+				for i, v := range want {
+					if !almostEqual(dsts[k][i], v, 1e-10) {
+						t.Errorf("ConvolveValidMulti() dsts[%d][%d] = %v, want %v", k, i, dsts[k][i], v)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestConvolveValidMulti_MatchesSingle(t *testing.T) {
+	// Verify ConvolveValidMulti gives same results as multiple ConvolveValid calls
+	signal := make([]float64, 1000)
+	for i := range signal {
+		signal[i] = float64(i) * 0.1
+	}
+
+	kernels := make([][]float64, 3)
+	for k := range kernels {
+		kernels[k] = make([]float64, 64)
+		for i := range kernels[k] {
+			kernels[k][i] = float64(k*64+i) * 0.01
+		}
+	}
+
+	kLen := len(kernels[0])
+	validLen := len(signal) - kLen + 1
+
+	// Using ConvolveValidMulti
+	dstsMulti := make([][]float64, len(kernels))
+	for i := range dstsMulti {
+		dstsMulti[i] = make([]float64, validLen)
+	}
+	ConvolveValidMulti(dstsMulti, signal, kernels)
+
+	// Using individual ConvolveValid calls
+	for k, kernel := range kernels {
+		dstSingle := make([]float64, validLen)
+		ConvolveValid(dstSingle, signal, kernel)
+
+		for i := range dstSingle {
+			if !almostEqual(dstsMulti[k][i], dstSingle[i], 1e-10) {
+				t.Errorf("kernel %d, pos %d: multi=%v, single=%v", k, i, dstsMulti[k][i], dstSingle[i])
+			}
+		}
+	}
+}
+
+// Benchmarks for Interleave2 and Deinterleave2
+
+func BenchmarkInterleave2_1000(b *testing.B) {
+	a := make([]float64, 1000)
+	c := make([]float64, 1000)
+	dst := make([]float64, 2000)
+	for i := range a {
+		a[i] = float64(i)
+		c[i] = float64(i + 1000)
+	}
+
+	b.SetBytes(1000 * 8 * 3) // Read 2 arrays, write 1
+
+	for b.Loop() {
+		Interleave2(dst, a, c)
+	}
+}
+
+func BenchmarkDeinterleave2_1000(b *testing.B) {
+	src := make([]float64, 2000)
+	a := make([]float64, 1000)
+	c := make([]float64, 1000)
+	for i := range src {
+		src[i] = float64(i)
+	}
+
+	b.SetBytes(1000 * 8 * 3)
+
+	for b.Loop() {
+		Deinterleave2(a, c, src)
+	}
+}
+
+func BenchmarkConvolveValidMulti_2x1000x64(b *testing.B) {
+	// 2 kernels, 1000-sample signal, 64-tap kernels (polyphase resampler scenario)
+	signal := make([]float64, 1000)
+	kernels := make([][]float64, 2)
+	for i := range signal {
+		signal[i] = float64(i)
+	}
+	for k := range kernels {
+		kernels[k] = make([]float64, 64)
+		for i := range kernels[k] {
+			kernels[k][i] = 1.0 / 64.0
+		}
+	}
+	validLen := len(signal) - len(kernels[0]) + 1
+	dsts := make([][]float64, 2)
+	for i := range dsts {
+		dsts[i] = make([]float64, validLen)
+	}
+
+	b.SetBytes(int64(validLen * 64 * 8 * 2 * 2)) // 2 kernels
+
+	for b.Loop() {
+		ConvolveValidMulti(dsts, signal, kernels)
 	}
 }

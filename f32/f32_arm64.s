@@ -559,3 +559,87 @@ clamp32_loop1:
 
 clamp32_done:
     RET
+
+// Interleave/Deinterleave with NEON ZIP/UZP instructions for float32
+// ZIP1 Vd.4S, Vn.4S, Vm.4S: 0x4E803800 | (Vm << 16) | (Vn << 5) | Vd
+// ZIP2 Vd.4S, Vn.4S, Vm.4S: 0x4E807800 | (Vm << 16) | (Vn << 5) | Vd
+// UZP1 Vd.4S, Vn.4S, Vm.4S: 0x4E801800 | (Vm << 16) | (Vn << 5) | Vd
+// UZP2 Vd.4S, Vn.4S, Vm.4S: 0x4E805800 | (Vm << 16) | (Vn << 5) | Vd
+
+// func interleave2NEON(dst, a, b []float32)
+TEXT ·interleave2NEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0    // dst pointer
+    MOVD a_base+24(FP), R1     // a pointer
+    MOVD a_len+32(FP), R3      // n = len(a)
+    MOVD b_base+48(FP), R2     // b pointer
+
+    // Process 4 pairs at a time
+    LSR $2, R3, R4             // R4 = n / 4
+    CBZ R4, interleave2_neon32_remainder
+
+interleave2_neon32_loop4:
+    VLD1.P 16(R1), [V0.S4]     // V0 = [a0, a1, a2, a3]
+    VLD1.P 16(R2), [V1.S4]     // V1 = [b0, b1, b2, b3]
+    WORD $0x4E813802           // ZIP1 V2.4S, V0.4S, V1.4S -> [a0, b0, a1, b1]
+    WORD $0x4E817803           // ZIP2 V3.4S, V0.4S, V1.4S -> [a2, b2, a3, b3]
+    VST1.P [V2.S4], 16(R0)     // Store [a0, b0, a1, b1]
+    VST1.P [V3.S4], 16(R0)     // Store [a2, b2, a3, b3]
+    SUB $1, R4
+    CBNZ R4, interleave2_neon32_loop4
+
+interleave2_neon32_remainder:
+    AND $3, R3
+    CBZ R3, interleave2_neon32_done
+
+interleave2_neon32_loop1:
+    FMOVS (R1), F0
+    FMOVS (R2), F1
+    FMOVS F0, (R0)
+    FMOVS F1, 4(R0)
+    ADD $4, R1
+    ADD $4, R2
+    ADD $8, R0
+    SUB $1, R3
+    CBNZ R3, interleave2_neon32_loop1
+
+interleave2_neon32_done:
+    RET
+
+// func deinterleave2NEON(a, b, src []float32)
+TEXT ·deinterleave2NEON(SB), NOSPLIT, $0-72
+    MOVD a_base+0(FP), R0      // a pointer
+    MOVD a_len+8(FP), R3       // n = len(a)
+    MOVD b_base+24(FP), R1     // b pointer
+    MOVD src_base+48(FP), R2   // src pointer
+
+    // Process 4 pairs at a time
+    LSR $2, R3, R4             // R4 = n / 4
+    CBZ R4, deinterleave2_neon32_remainder
+
+deinterleave2_neon32_loop4:
+    VLD1.P 16(R2), [V0.S4]     // V0 = [a0, b0, a1, b1]
+    VLD1.P 16(R2), [V1.S4]     // V1 = [a2, b2, a3, b3]
+    WORD $0x4E811802           // UZP1 V2.4S, V0.4S, V1.4S -> [a0, a1, a2, a3]
+    WORD $0x4E815803           // UZP2 V3.4S, V0.4S, V1.4S -> [b0, b1, b2, b3]
+    VST1.P [V2.S4], 16(R0)     // Store a
+    VST1.P [V3.S4], 16(R1)     // Store b
+    SUB $1, R4
+    CBNZ R4, deinterleave2_neon32_loop4
+
+deinterleave2_neon32_remainder:
+    AND $3, R3
+    CBZ R3, deinterleave2_neon32_done
+
+deinterleave2_neon32_loop1:
+    FMOVS (R2), F0
+    FMOVS 4(R2), F1
+    FMOVS F0, (R0)
+    FMOVS F1, (R1)
+    ADD $8, R2
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R3
+    CBNZ R3, deinterleave2_neon32_loop1
+
+deinterleave2_neon32_done:
+    RET
