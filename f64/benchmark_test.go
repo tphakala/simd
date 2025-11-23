@@ -8,8 +8,44 @@ import (
 // Benchmark sizes: Small, Medium, Large
 var benchSizes = []int{128, 512, 1024, 4096, 16384, 65536}
 
-// Sink variables to prevent compiler optimizations (dead code elimination)
-// The compiler can't optimize away computations when results are stored in package-level variables
+// =============================================================================
+// IMPORTANT: Sink Variables for Accurate Benchmarking
+// =============================================================================
+//
+// These package-level sink variables MUST be used for functions that return values.
+// Without them, the Go compiler can apply dead code elimination (DCE) to optimize
+// away function calls when their results are discarded.
+//
+// THE BUG (DO NOT REPEAT):
+//
+//	for i := 0; i < b.N; i++ {
+//	    _ = sumGo(a)  // WRONG: compiler may optimize this away entirely!
+//	}
+//
+// When benchmarking Go functions in the same package, the compiler can see their
+// implementation. If the result is discarded with "_ = func()", the compiler may
+// determine the computation has no observable side effects and eliminate it.
+// This causes the Go implementation to appear artificially faster than SIMD.
+//
+// Assembly functions (SIMD) are opaque to the compiler and cannot be optimized
+// away, which creates a false comparison where Go appears faster.
+//
+// THE FIX (ALWAYS USE THIS PATTERN):
+//
+//	for i := 0; i < b.N; i++ {
+//	    sink64 = sumGo(a)  // CORRECT: result stored in package-level variable
+//	}
+//
+// Package-level variables cannot be optimized away because the compiler cannot
+// prove they won't be read by other code after the benchmark completes.
+//
+// ALTERNATIVE SAFE PATTERN (also acceptable):
+//
+//	var result float64
+//	for i := 0; i < b.N; i++ {
+//	    result = Sum(a)
+//	}
+//	_ = result  // Use result after loop to prevent DCE
 var (
 	sink64   float64
 	sinkBool bool
