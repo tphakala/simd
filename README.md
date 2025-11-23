@@ -11,7 +11,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
 - **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE2, NEON, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
-- **40 operations** - Arithmetic, reduction, statistical, vector, signal processing, and complex number operations
+- **39 operations** - Arithmetic, reduction, statistical, vector, signal processing, and complex number operations
 - **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2) and ARM64 (NEON) with pure Go fallback
 - **Thread-safe** - All functions are safe for concurrent use
 
@@ -139,7 +139,6 @@ SIMD-accelerated complex number operations for FFT-based signal processing:
 | **Unary**      | `Abs(dst, a)`        | Complex magnitude \|a + bi\|       | 4x (AVX-512) / 2x (AVX) |
 |                | `AbsSq(dst, a)`      | Magnitude squared \|a + bi\|²      | 4x / 2x                 |
 |                | `Conj(dst, a)`       | Complex conjugate: a - bi          | 4x / 2x                 |
-|                | `Phase(dst, a)`      | Phase angle: atan2(imag, real)     | Scalar fallback         |
 
 These operations are designed for FFT-based signal processing pipelines:
 
@@ -164,7 +163,6 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 
 - **Abs/AbsSq**: Spectrograms, power spectral density, frequency analysis
 - **Conj**: Cross-correlation, frequency-domain filtering
-- **Phase**: Phase vocoding, time-stretching, high-quality reconstruction
 - **Mul/MulConj**: FFT-based convolution, filtering, correlation
 
 **Benchmark (1024 elements, Intel i7-1260P AVX+FMA):**
@@ -251,7 +249,7 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 | -------- | --------------- | ------------ | ------------ |
 | **f32**  | **6.5x**        | 21.8x (Abs)  | 31 functions |
 | **f64**  | **3.2x**        | 7.9x (Clamp) | 31 functions |
-| **c128** | **1.77x**       | 2.2x (Mul)   | 9 functions  |
+| **c128** | **1.77x**       | 2.2x (Mul)   | 8 functions  |
 
 ### ARM64 (Raspberry Pi 5, NEON)
 

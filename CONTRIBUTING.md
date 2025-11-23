@@ -31,8 +31,8 @@ go test ./...
 go test -v ./...
 
 # Run benchmarks
-go test ./pkg/simd/f64 -bench=. -benchmem
-go test ./pkg/simd/f32 -bench=. -benchmem
+go test ./f64 -bench=. -benchmem
+go test ./f32 -bench=. -benchmem
 
 # Run linter
 golangci-lint run
@@ -47,23 +47,28 @@ gcc -O2 -march=native -o generate_expectations generate_expectations.c -lm
 
 ```
 simd/
-├── pkg/simd/
-│   ├── cpu/           # CPU feature detection
-│   │   ├── cpu.go     # Common types and functions
-│   │   ├── cpu_amd64.go
-│   │   ├── cpu_arm64.go
-│   │   └── cpu_other.go
-│   ├── f64/           # float64 operations
-│   │   ├── f64.go     # Public API
-│   │   ├── f64_go.go  # Pure Go implementations
-│   │   ├── f64_amd64.go  # AMD64 dispatchers
-│   │   ├── f64_amd64.s   # AMD64 assembly
-│   │   ├── f64_arm64.go  # ARM64 dispatchers
-│   │   ├── f64_arm64.s   # ARM64 assembly
-│   │   └── f64_other.go  # Fallback dispatchers
-│   └── f32/           # float32 operations (same structure)
+├── cpu/               # CPU feature detection
+│   ├── cpu.go         # Common types and functions
+│   ├── cpu_amd64.go
+│   ├── cpu_arm64.go
+│   └── cpu_other.go
+├── f64/               # float64 operations
+│   ├── f64.go         # Public API
+│   ├── f64_go.go      # Pure Go implementations
+│   ├── f64_amd64.go   # AMD64 dispatchers
+│   ├── f64_amd64.s    # AMD64 assembly
+│   ├── f64_arm64.go   # ARM64 dispatchers
+│   ├── f64_arm64.s    # ARM64 assembly
+│   ├── f64_other.go   # Fallback dispatchers
+│   └── *_test.go      # Tests and benchmarks
+├── f32/               # float32 operations (same structure)
+├── c128/              # complex128 operations (same structure)
 ├── testdata/          # C reference implementation
+├── .githooks/         # Git pre-commit hooks
+├── Taskfile.yml       # Task runner configuration
+├── doc.go             # Package documentation
 ├── README.md
+├── CONTRIBUTING.md
 ├── LICENSE
 └── go.mod
 ```
@@ -99,6 +104,7 @@ func operationNameGo(dst, a []float64) {
 ### 3. Add Dispatchers
 
 **For AMD64 (`f64_amd64.go`):**
+
 ```go
 func operationName64(dst, a []float64) {
     if hasAVX && len(dst) >= 4 {
@@ -113,6 +119,7 @@ func operationNameAVX(dst, a []float64)
 ```
 
 **For ARM64 (`f64_arm64.go`):**
+
 ```go
 func operationName64(dst, a []float64) {
     if hasNEON && len(dst) >= 2 {
@@ -127,6 +134,7 @@ func operationNameNEON(dst, a []float64)
 ```
 
 **For other architectures (`f64_other.go`):**
+
 ```go
 func operationName64(dst, a []float64) { operationNameGo(dst, a) }
 ```
