@@ -329,6 +329,16 @@ func StdDev(a []float32) float32 {
 	return float32(math.Sqrt(float64(Variance(a))))
 }
 
+// EuclideanDistance computes the Euclidean distance between two vectors.
+// Returns sqrt(sum((a[i] - b[i])^2)) for i in 0..min(len(a), len(b)).
+func EuclideanDistance(a, b []float32) float32 {
+	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	return euclideanDistance32(a[:n], b[:n])
+}
+
 const normalizeMagnitudeThreshold32 = 1e-7
 
 // ConvolveValidMulti applies multiple kernels to the same signal in one pass.

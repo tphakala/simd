@@ -187,6 +187,9 @@ func reciprocal32Go(dst, a []float32) {
 }
 
 func minIdxGo(a []float32) int {
+	if len(a) == 0 {
+		return -1
+	}
 	idx := 0
 	m := a[0]
 	for i, v := range a[1:] {
@@ -199,6 +202,9 @@ func minIdxGo(a []float32) int {
 }
 
 func maxIdxGo(a []float32) int {
+	if len(a) == 0 {
+		return -1
+	}
 	idx := 0
 	m := a[0]
 	for i, v := range a[1:] {

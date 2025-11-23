@@ -32,4 +32,5 @@ func cumulativeSum32(dst, a []float32)                      { cumulativeSum32Go(
 func convolveValidMulti32(dsts [][]float32, signal []float32, kernels [][]float32, n, kLen int) {
 	convolveValidMultiGo(dsts, signal, kernels, n, kLen)
 }
-func variance32(a []float32, mean float32) float32 { return variance32Go(a, mean) }
+func variance32(a []float32, mean float32) float32       { return variance32Go(a, mean) }
+func euclideanDistance32(a, b []float32) float32         { return euclideanDistance32Go(a, b) }

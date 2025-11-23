@@ -968,3 +968,60 @@ func BenchmarkStdDev_1000(b *testing.B) {
 	}
 	_ = result
 }
+
+func TestEuclideanDistance(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []float32
+		want float32
+	}{
+		{"empty", nil, nil, 0},
+		{"same", []float32{1, 2, 3}, []float32{1, 2, 3}, 0},
+		{"2d", []float32{0, 0}, []float32{3, 4}, 5},                       // 3-4-5 triangle
+		{"3d", []float32{1, 2, 3}, []float32{4, 6, 8}, float32(math.Sqrt(50))}, // sqrt(9+16+25)
+		{"negative", []float32{-1, -2}, []float32{1, 2}, float32(math.Sqrt(20))}, // sqrt(4+16)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EuclideanDistance(tt.a, tt.b)
+			if math.Abs(float64(got-tt.want)) > 1e-5 {
+				t.Errorf("EuclideanDistance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEuclideanDistance_Large(t *testing.T) {
+	n := 1000
+	a := make([]float32, n)
+	b := make([]float32, n)
+	for i := range a {
+		a[i] = float32(i)
+		b[i] = float32(i + 1) // diff = 1 for each element
+	}
+
+	got := EuclideanDistance(a, b)
+	// Each element differs by 1, so sum of squares = n, distance = sqrt(n)
+	want := float32(math.Sqrt(float64(n)))
+	if math.Abs(float64(got-want)) > 1e-3 {
+		t.Errorf("EuclideanDistance large = %v, want %v", got, want)
+	}
+}
+
+func BenchmarkEuclideanDistance_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	v := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i)
+		v[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4 * 2)
+
+	var result float32
+	for b.Loop() {
+		result = EuclideanDistance(a, v)
+	}
+	_ = result
+}

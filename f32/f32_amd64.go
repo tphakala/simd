@@ -469,3 +469,7 @@ func deinterleave2AVX(a, b, src []float32)
 func variance32(a []float32, mean float32) float32 {
 	return variance32Go(a, mean)
 }
+
+func euclideanDistance32(a, b []float32) float32 {
+	return euclideanDistance32Go(a, b)
+}

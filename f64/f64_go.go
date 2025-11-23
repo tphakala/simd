@@ -246,6 +246,9 @@ func convolveValidMultiGo(dsts [][]float64, signal []float64, kernels [][]float6
 }
 
 func minIdxGo64(a []float64) int {
+	if len(a) == 0 {
+		return -1
+	}
 	idx := 0
 	m := a[0]
 	for i, v := range a[1:] {
@@ -258,6 +261,9 @@ func minIdxGo64(a []float64) int {
 }
 
 func maxIdxGo64(a []float64) int {
+	if len(a) == 0 {
+		return -1
+	}
 	idx := 0
 	m := a[0]
 	for i, v := range a[1:] {

@@ -269,6 +269,13 @@ func variance32(a []float32, mean float32) float32 {
 	return variance32Go(a, mean)
 }
 
+func euclideanDistance32(a, b []float32) float32 {
+	if hasNEON && len(a) >= 4 {
+		return euclideanDistanceNEON32(a, b)
+	}
+	return euclideanDistance32Go(a, b)
+}
+
 //go:noescape
 func varianceNEON32(a []float32, mean float32) float32
 
