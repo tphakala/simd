@@ -536,7 +536,7 @@ recip64_done:
     RET
 
 // func varianceNEON(a []float64, mean float64) float64
-TEXT ·varianceNEON(SB), NOSPLIT, $0-32
+TEXT ·varianceNEON(SB), NOSPLIT, $0-40
     MOVD a_base+0(FP), R0
     MOVD a_len+8(FP), R1
     FMOVD mean+24(FP), F3
@@ -574,7 +574,7 @@ var64_div:
     MOVD a_len+8(FP), R1
     SCVTFD R1, F1              // Convert n to float64
     FDIVD F1, F0, F0           // variance = sum / n
-    FMOVD F0, ret+24(FP)
+    FMOVD F0, ret+32(FP)
     RET
 
 // func euclideanDistanceNEON(a, b []float64) float64

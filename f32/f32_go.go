@@ -226,3 +226,21 @@ func cumulativeSum32Go(dst, a []float32) {
 		dst[i] = sum
 	}
 }
+
+func variance32Go(a []float32, mean float32) float32 {
+	var sum float32
+	for _, v := range a {
+		diff := v - mean
+		sum += diff * diff
+	}
+	return sum / float32(len(a))
+}
+
+func euclideanDistance32Go(a, b []float32) float32 {
+	var sum float32
+	for i := range a {
+		diff := a[i] - b[i]
+		sum += diff * diff
+	}
+	return float32(math.Sqrt(float64(sum)))
+}

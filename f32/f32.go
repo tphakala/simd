@@ -320,12 +320,7 @@ func Variance(a []float32) float32 {
 		return 0
 	}
 	mean := Mean(a)
-	var sum float32
-	for _, v := range a {
-		diff := v - mean
-		sum += diff * diff
-	}
-	return sum / float32(n)
+	return variance32(a, mean)
 }
 
 // StdDev computes the population standard deviation of a slice.

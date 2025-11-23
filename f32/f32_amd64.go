@@ -465,3 +465,7 @@ func interleave2AVX(dst, a, b []float32)
 
 //go:noescape
 func deinterleave2AVX(a, b, src []float32)
+
+func variance32(a []float32, mean float32) float32 {
+	return variance32Go(a, mean)
+}

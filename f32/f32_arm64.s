@@ -755,3 +755,100 @@ addscaled32_loop1:
 
 addscaled32_done:
     RET
+
+// func varianceNEON32(a []float32, mean float32) float32
+// Frame: a(24) + mean(4) + padding(4) + ret(4) = 36
+TEXT ·varianceNEON32(SB), NOSPLIT, $0-36
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R1
+    FMOVS mean+24(FP), F3
+    // DUP V3.4S, V3.S[0] - broadcast mean to all lanes
+    WORD $0x4E040463           // DUP V3.4S, V3.S[0]
+
+    VEOR V0.B16, V0.B16, V0.B16     // Accumulator = 0
+
+    LSR $2, R1, R2
+    CBZ R2, var32_scalar
+
+var32_loop4:
+    VLD1.P 16(R0), [V1.S4]     // Load 4 elements
+    WORD $0x4EA3D421           // FSUB V1.4S, V1.4S, V3.4S  (diff = a[i] - mean)
+    WORD $0x4E21CC20           // FMLA V0.4S, V1.4S, V1.4S  (acc += diff * diff)
+    SUB $1, R2
+    CBNZ R2, var32_loop4
+
+var32_scalar:
+    AND $3, R1
+    CBZ R1, var32_reduce
+
+    // Reduce vector FIRST before scalar ops
+    WORD $0x6E20D400           // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800           // FADDP S0, V0.2S
+
+var32_loop1:
+    FMOVS (R0), F1
+    FSUBS F3, F1, F1           // diff = a[i] - mean
+    FMADDS F1, F0, F1, F0      // acc += diff * diff
+    ADD $4, R0
+    SUB $1, R1
+    CBNZ R1, var32_loop1
+    B var32_div
+
+var32_reduce:
+    WORD $0x6E20D400           // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800           // FADDP S0, V0.2S
+
+var32_div:
+    // Divide by n
+    MOVD a_len+8(FP), R1
+    SCVTFS R1, F1              // Convert n to float32
+    FDIVS F1, F0, F0           // variance = sum / n
+    FMOVS F0, ret+32(FP)
+    RET
+
+// func euclideanDistanceNEON32(a, b []float32) float32
+TEXT ·euclideanDistanceNEON32(SB), NOSPLIT, $0-52
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R2
+    MOVD b_base+24(FP), R1
+
+    VEOR V0.B16, V0.B16, V0.B16     // Accumulator = 0
+
+    LSR $2, R2, R3
+    CBZ R3, euclid32_scalar
+
+euclid32_loop4:
+    VLD1.P 16(R0), [V1.S4]     // Load a[i:i+4]
+    VLD1.P 16(R1), [V2.S4]     // Load b[i:i+4]
+    WORD $0x4EA2D421           // FSUB V1.4S, V1.4S, V2.4S  (diff = a[i] - b[i])
+    WORD $0x4E21CC20           // FMLA V0.4S, V1.4S, V1.4S  (acc += diff * diff)
+    SUB $1, R3
+    CBNZ R3, euclid32_loop4
+
+euclid32_scalar:
+    AND $3, R2
+    CBZ R2, euclid32_sqrt
+
+    // Reduce vector FIRST before scalar ops
+    WORD $0x6E20D400           // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800           // FADDP S0, V0.2S
+
+euclid32_loop1:
+    FMOVS (R0), F1
+    FMOVS (R1), F2
+    FSUBS F2, F1, F1           // diff = a[i] - b[i]
+    FMADDS F1, F0, F1, F0      // acc += diff * diff
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R2
+    CBNZ R2, euclid32_loop1
+    FSQRTS F0, F0
+    FMOVS F0, ret+48(FP)
+    RET
+
+euclid32_sqrt:
+    WORD $0x6E20D400           // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800           // FADDP S0, V0.2S
+    FSQRTS F0, F0
+    FMOVS F0, ret+48(FP)
+    RET

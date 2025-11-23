@@ -261,3 +261,16 @@ func reciprocalNEON(dst, a []float32)
 
 //go:noescape
 func addScaledNEON(dst []float32, alpha float32, s []float32)
+
+func variance32(a []float32, mean float32) float32 {
+	if hasNEON && len(a) >= 4 {
+		return varianceNEON32(a, mean)
+	}
+	return variance32Go(a, mean)
+}
+
+//go:noescape
+func varianceNEON32(a []float32, mean float32) float32
+
+//go:noescape
+func euclideanDistanceNEON32(a, b []float32) float32
