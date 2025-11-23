@@ -11,7 +11,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
 - **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE2, NEON, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
-- **37 operations** - Arithmetic, reduction, statistical, vector, signal processing, and complex number operations
+- **40 operations** - Arithmetic, reduction, statistical, vector, signal processing, and complex number operations
 - **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2) and ARM64 (NEON) with pure Go fallback
 - **Thread-safe** - All functions are safe for concurrent use
 
@@ -80,36 +80,39 @@ fmt.Println(cpu.HasNEON())   // true/false
 
 ### `f64` - float64 Operations
 
-| Category        | Function                      | Description                 | SIMD Width                          |
-| --------------- | ----------------------------- | --------------------------- | ----------------------------------- |
-| **Arithmetic**  | `Add(dst, a, b)`              | Element-wise addition       | 8x (AVX-512) / 4x (AVX) / 2x (NEON) |
-|                 | `Sub(dst, a, b)`              | Element-wise subtraction    | 8x / 4x / 2x                        |
-|                 | `Mul(dst, a, b)`              | Element-wise multiplication | 8x / 4x / 2x                        |
-|                 | `Div(dst, a, b)`              | Element-wise division       | 8x / 4x / 2x                        |
-|                 | `Scale(dst, a, s)`            | Multiply by scalar          | 8x / 4x / 2x                        |
-|                 | `AddScalar(dst, a, s)`        | Add scalar                  | 8x / 4x / 2x                        |
-|                 | `FMA(dst, a, b, c)`           | Fused multiply-add: a\*b+c  | 8x / 4x / 2x                        |
-| **Unary**       | `Abs(dst, a)`                 | Absolute value              | 8x / 4x / 2x                        |
-|                 | `Neg(dst, a)`                 | Negation                    | 8x / 4x / 2x                        |
-|                 | `Sqrt(dst, a)`                | Square root                 | 8x / 4x / 2x                        |
-|                 | `Reciprocal(dst, a)`          | Reciprocal (1/x)            | 8x / 4x / 2x                        |
-| **Reduction**   | `DotProduct(a, b)`            | Dot product                 | 8x / 4x / 2x                        |
-|                 | `Sum(a)`                      | Sum of elements             | 8x / 4x / 2x                        |
-|                 | `Min(a)`                      | Minimum value               | 8x / 4x / 2x                        |
-|                 | `Max(a)`                      | Maximum value               | 8x / 4x / 2x                        |
-| **Statistical** | `Mean(a)`                     | Arithmetic mean             | 8x / 4x / 2x                        |
-|                 | `Variance(a)`                 | Population variance         | 8x / 4x / 2x                        |
-|                 | `StdDev(a)`                   | Standard deviation          | 8x / 4x / 2x                        |
-| **Vector**      | `EuclideanDistance(a, b)`     | L2 distance                 | 8x / 4x / 2x                        |
-|                 | `Normalize(dst, a)`           | Unit vector normalization   | 8x / 4x / 2x                        |
-|                 | `CumulativeSum(dst, a)`       | Running sum                 | Sequential                          |
-| **Range**       | `Clamp(dst, a, min, max)`     | Clamp to range              | 8x / 4x / 2x                        |
-| **Batch**       | `DotProductBatch(r, rows, v)` | Multiple dot products       | 8x / 4x / 2x                        |
-| **Signal**      | `ConvolveValid(dst, sig, k)`  | FIR filter / convolution    | 8x / 4x / 2x                        |
-|                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution | 8x / 4x / 2x                   |
-|                 | `AccumulateAdd(dst, src, off)`| Overlap-add: dst[off:] += src | 8x / 4x / 2x                      |
-| **Audio**       | `Interleave2(dst, a, b)`      | Pack stereo: [L,R,L,R,...]  | 4x / 2x                             |
-|                 | `Deinterleave2(a, b, src)`    | Unpack stereo to channels   | 4x / 2x                             |
+| Category        | Function                            | Description                   | SIMD Width                          |
+| --------------- | ----------------------------------- | ----------------------------- | ----------------------------------- |
+| **Arithmetic**  | `Add(dst, a, b)`                    | Element-wise addition         | 8x (AVX-512) / 4x (AVX) / 2x (NEON) |
+|                 | `Sub(dst, a, b)`                    | Element-wise subtraction      | 8x / 4x / 2x                        |
+|                 | `Mul(dst, a, b)`                    | Element-wise multiplication   | 8x / 4x / 2x                        |
+|                 | `Div(dst, a, b)`                    | Element-wise division         | 8x / 4x / 2x                        |
+|                 | `Scale(dst, a, s)`                  | Multiply by scalar            | 8x / 4x / 2x                        |
+|                 | `AddScalar(dst, a, s)`              | Add scalar                    | 8x / 4x / 2x                        |
+|                 | `FMA(dst, a, b, c)`                 | Fused multiply-add: a\*b+c    | 8x / 4x / 2x                        |
+|                 | `AddScaled(dst, alpha, s)`          | dst += alpha\*s (axpy)        | 8x / 4x / 2x                        |
+| **Unary**       | `Abs(dst, a)`                       | Absolute value                | 8x / 4x / 2x                        |
+|                 | `Neg(dst, a)`                       | Negation                      | 8x / 4x / 2x                        |
+|                 | `Sqrt(dst, a)`                      | Square root                   | 8x / 4x / 2x                        |
+|                 | `Reciprocal(dst, a)`                | Reciprocal (1/x)              | 8x / 4x / 2x                        |
+| **Reduction**   | `DotProduct(a, b)`                  | Dot product                   | 8x / 4x / 2x                        |
+|                 | `Sum(a)`                            | Sum of elements               | 8x / 4x / 2x                        |
+|                 | `Min(a)`                            | Minimum value                 | 8x / 4x / 2x                        |
+|                 | `Max(a)`                            | Maximum value                 | 8x / 4x / 2x                        |
+|                 | `MinIdx(a)`                         | Index of minimum value        | Pure Go                             |
+|                 | `MaxIdx(a)`                         | Index of maximum value        | Pure Go                             |
+| **Statistical** | `Mean(a)`                           | Arithmetic mean               | 8x / 4x / 2x                        |
+|                 | `Variance(a)`                       | Population variance           | 8x / 4x / 2x                        |
+|                 | `StdDev(a)`                         | Standard deviation            | 8x / 4x / 2x                        |
+| **Vector**      | `EuclideanDistance(a, b)`           | L2 distance                   | 8x / 4x / 2x                        |
+|                 | `Normalize(dst, a)`                 | Unit vector normalization     | 8x / 4x / 2x                        |
+|                 | `CumulativeSum(dst, a)`             | Running sum                   | Sequential                          |
+| **Range**       | `Clamp(dst, a, min, max)`           | Clamp to range                | 8x / 4x / 2x                        |
+| **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
+| **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
+|                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
+|                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
+| **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
+|                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
 
 ### `f32` - float32 Operations
 
@@ -126,17 +129,17 @@ Same API as `f64` but for `float32` with wider SIMD:
 
 SIMD-accelerated complex number operations for FFT-based signal processing:
 
-| Category       | Function              | Description                          | SIMD Width             |
-| -------------- | --------------------- | ------------------------------------ | ---------------------- |
-| **Arithmetic** | `Mul(dst, a, b)`      | Complex multiplication               | 4x (AVX-512) / 2x (AVX)|
-|                | `MulConj(dst, a, b)`  | Multiply by conjugate: a × conj(b)   | 4x / 2x                |
-|                | `Scale(dst, a, s)`    | Scale by complex scalar              | 4x / 2x                |
-|                | `Add(dst, a, b)`      | Complex addition                     | 4x / 2x                |
-|                | `Sub(dst, a, b)`      | Complex subtraction                  | 4x / 2x                |
-| **Unary**      | `Abs(dst, a)`         | Complex magnitude \|a + bi\|         | 4x (AVX-512) / 2x (AVX)|
-|                | `AbsSq(dst, a)`       | Magnitude squared \|a + bi\|²        | 4x / 2x                |
-|                | `Conj(dst, a)`        | Complex conjugate: a - bi            | 4x / 2x                |
-|                | `Phase(dst, a)`       | Phase angle: atan2(imag, real)       | Scalar fallback        |
+| Category       | Function             | Description                        | SIMD Width              |
+| -------------- | -------------------- | ---------------------------------- | ----------------------- |
+| **Arithmetic** | `Mul(dst, a, b)`     | Complex multiplication             | 4x (AVX-512) / 2x (AVX) |
+|                | `MulConj(dst, a, b)` | Multiply by conjugate: a × conj(b) | 4x / 2x                 |
+|                | `Scale(dst, a, s)`   | Scale by complex scalar            | 4x / 2x                 |
+|                | `Add(dst, a, b)`     | Complex addition                   | 4x / 2x                 |
+|                | `Sub(dst, a, b)`     | Complex subtraction                | 4x / 2x                 |
+| **Unary**      | `Abs(dst, a)`        | Complex magnitude \|a + bi\|       | 4x (AVX-512) / 2x (AVX) |
+|                | `AbsSq(dst, a)`      | Magnitude squared \|a + bi\|²      | 4x / 2x                 |
+|                | `Conj(dst, a)`       | Complex conjugate: a - bi          | 4x / 2x                 |
+|                | `Phase(dst, a)`      | Phase angle: atan2(imag, real)     | Scalar fallback         |
 
 These operations are designed for FFT-based signal processing pipelines:
 
@@ -166,15 +169,15 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 
 **Benchmark (1024 elements, Intel i7-1260P AVX+FMA):**
 
-| Operation | SIMD     | Pure Go  | Speedup  |
-| --------- | -------- | -------- | -------- |
-| Mul       | 341 ns   | 757 ns   | **2.2x** |
-| MulConj   | 340 ns   | 749 ns   | **2.2x** |
-| Scale     | 253 ns   | 551 ns   | **2.2x** |
-| Add       | 86 ns    | 189 ns   | **2.2x** |
-| Abs       | 1326 ns  | 2260 ns  | **1.7x** |
-| AbsSq     | 367 ns   | 504 ns   | **1.37x**|
-| Conj      | 304 ns   | 474 ns   | **1.56x**|
+| Operation | SIMD    | Pure Go | Speedup   |
+| --------- | ------- | ------- | --------- |
+| Mul       | 341 ns  | 757 ns  | **2.2x**  |
+| MulConj   | 340 ns  | 749 ns  | **2.2x**  |
+| Scale     | 253 ns  | 551 ns  | **2.2x**  |
+| Add       | 86 ns   | 189 ns  | **2.2x**  |
+| Abs       | 1326 ns | 2260 ns | **1.7x**  |
+| AbsSq     | 367 ns  | 504 ns  | **1.37x** |
+| Conj      | 304 ns  | 474 ns  | **1.56x** |
 
 ## Performance
 
@@ -230,24 +233,24 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 
 #### Batch & Signal Processing (varied sizes)
 
-| Operation               | Config             | SIMD    | Go      | Speedup  |
-| ----------------------- | ------------------ | ------- | ------- | -------- |
-| DotProductBatch (f64)   | 256 vec × 100 rows | 3.2 µs  | 20.5 µs | **6.4x** |
-| DotProductBatch (f32)   | 256 vec × 100 rows | 1.5 µs  | 9.8 µs  | **6.7x** |
-| ConvolveValid (f64)     | 4096 sig × 64 ker  | 26.6 µs | 169 µs  | **6.3x** |
-| ConvolveValid (f32)     | 4096 sig × 64 ker  | 17.9 µs | 80 µs   | **4.5x** |
-| ConvolveValidMulti (f64)| 1000 sig × 64 ker × 2 | 13.4 µs | -    | -        |
-| Interleave2 (f64)       | 1000 pairs         | 216 ns  | -       | -        |
-| Deinterleave2 (f64)     | 1000 pairs         | 216 ns  | -       | -        |
-| Interleave2 (f32)       | 1000 pairs         | 109 ns  | -       | -        |
-| Deinterleave2 (f32)     | 1000 pairs         | 216 ns  | -       | -        |
+| Operation                | Config                | SIMD    | Go      | Speedup  |
+| ------------------------ | --------------------- | ------- | ------- | -------- |
+| DotProductBatch (f64)    | 256 vec × 100 rows    | 3.2 µs  | 20.5 µs | **6.4x** |
+| DotProductBatch (f32)    | 256 vec × 100 rows    | 1.5 µs  | 9.8 µs  | **6.7x** |
+| ConvolveValid (f64)      | 4096 sig × 64 ker     | 26.6 µs | 169 µs  | **6.3x** |
+| ConvolveValid (f32)      | 4096 sig × 64 ker     | 17.9 µs | 80 µs   | **4.5x** |
+| ConvolveValidMulti (f64) | 1000 sig × 64 ker × 2 | 13.4 µs | -       | -        |
+| Interleave2 (f64)        | 1000 pairs            | 216 ns  | -       | -        |
+| Deinterleave2 (f64)      | 1000 pairs            | 216 ns  | -       | -        |
+| Interleave2 (f32)        | 1000 pairs            | 109 ns  | -       | -        |
+| Deinterleave2 (f32)      | 1000 pairs            | 216 ns  | -       | -        |
 
 #### Performance Summary
 
 | Package  | Average Speedup | Best         | Operations   |
 | -------- | --------------- | ------------ | ------------ |
-| **f32**  | **6.5x**        | 21.8x (Abs)  | 20 functions |
-| **f64**  | **3.2x**        | 7.9x (Clamp) | 28 functions |
+| **f32**  | **6.5x**        | 21.8x (Abs)  | 31 functions |
+| **f64**  | **3.2x**        | 7.9x (Clamp) | 31 functions |
 | **c128** | **1.77x**       | 2.2x (Mul)   | 9 functions  |
 
 ### ARM64 (Raspberry Pi 5, NEON)
