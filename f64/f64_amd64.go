@@ -29,6 +29,7 @@ type (
 	euclideanDistanceFunc func(a, b []float64) float64
 	interleave2Func       func(dst, a, b []float64)
 	deinterleave2Func     func(a, b, src []float64)
+	addScaledFunc         func(dst []float64, alpha float64, s []float64)
 )
 
 // Function pointers - assigned at init time based on CPU features
@@ -53,6 +54,7 @@ var (
 	euclideanDistanceImpl euclideanDistanceFunc
 	interleave2Impl       interleave2Func
 	deinterleave2Impl     deinterleave2Func
+	addScaledImpl         addScaledFunc
 )
 
 func init() {
@@ -92,6 +94,7 @@ func initAVX512() {
 	euclideanDistanceImpl = euclideanDistanceAVX512
 	interleave2Impl = interleave2AVX
 	deinterleave2Impl = deinterleave2AVX
+	addScaledImpl = addScaledAVX512
 }
 
 func initAVX() {
@@ -115,6 +118,7 @@ func initAVX() {
 	euclideanDistanceImpl = euclideanDistanceAVX
 	interleave2Impl = interleave2AVX
 	deinterleave2Impl = deinterleave2AVX
+	addScaledImpl = addScaledAVX
 }
 
 func initSSE2() {
@@ -138,6 +142,7 @@ func initSSE2() {
 	euclideanDistanceImpl = euclideanDistanceSSE2
 	interleave2Impl = interleave2SSE2
 	deinterleave2Impl = deinterleave2SSE2
+	addScaledImpl = addScaledSSE2
 }
 
 func initGo() {
@@ -161,6 +166,7 @@ func initGo() {
 	euclideanDistanceImpl = euclideanDistance64Go
 	interleave2Impl = interleave2Go
 	deinterleave2Impl = deinterleave2Go
+	addScaledImpl = addScaledGo64
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -304,6 +310,18 @@ func convolveValidMulti64(dsts [][]float64, signal []float64, kernels [][]float6
 	}
 }
 
+func minIdx64(a []float64) int {
+	return minIdxGo64(a)
+}
+
+func maxIdx64(a []float64) int {
+	return maxIdxGo64(a)
+}
+
+func addScaled64(dst []float64, alpha float64, s []float64) {
+	addScaledImpl(dst, alpha, s)
+}
+
 // AVX+FMA assembly function declarations (4x float64 per iteration)
 //
 //go:noescape
@@ -359,6 +377,9 @@ func varianceAVX(a []float64, mean float64) float64
 
 //go:noescape
 func euclideanDistanceAVX(a, b []float64) float64
+
+//go:noescape
+func addScaledAVX(dst []float64, alpha float64, s []float64)
 
 // AVX-512 assembly function declarations (8x float64 per iteration)
 //
@@ -416,6 +437,9 @@ func varianceAVX512(a []float64, mean float64) float64
 //go:noescape
 func euclideanDistanceAVX512(a, b []float64) float64
 
+//go:noescape
+func addScaledAVX512(dst []float64, alpha float64, s []float64)
+
 // SSE2 assembly function declarations (2x float64 per iteration)
 //
 //go:noescape
@@ -471,6 +495,9 @@ func varianceSSE2(a []float64, mean float64) float64
 
 //go:noescape
 func euclideanDistanceSSE2(a, b []float64) float64
+
+//go:noescape
+func addScaledSSE2(dst []float64, alpha float64, s []float64)
 
 // Interleave/Deinterleave assembly function declarations
 //

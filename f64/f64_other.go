@@ -33,3 +33,6 @@ func deinterleave2_64(a, b, src []float64)          { deinterleave2Go(a, b, src)
 func convolveValidMulti64(dsts [][]float64, signal []float64, kernels [][]float64, n, kLen int) {
 	convolveValidMultiGo(dsts, signal, kernels, n, kLen)
 }
+func minIdx64(a []float64) int                              { return minIdxGo64(a) }
+func maxIdx64(a []float64) int                              { return maxIdxGo64(a) }
+func addScaled64(dst []float64, alpha float64, s []float64) { addScaledGo64(dst, alpha, s) }

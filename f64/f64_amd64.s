@@ -2470,3 +2470,122 @@ deinterleave2_sse2_remainder:
 
 deinterleave2_sse2_done:
     RET
+
+// ============================================================================
+// ADDSCALED - dst[i] += alpha * s[i] (AXPY operation)
+// ============================================================================
+
+// func addScaledAVX(dst []float64, alpha float64, s []float64)
+TEXT ·addScaledAVX(SB), NOSPLIT, $0-56
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    VBROADCASTSD alpha+24(FP), Y2
+    MOVQ s_base+32(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   addscaled_avx_remainder
+
+addscaled_avx_loop4:
+    VMOVUPD (DX), Y0
+    VMOVUPD (SI), Y1
+    VFMADD231PD Y1, Y2, Y0    // Y0 = Y0 + Y1 * Y2
+    VMOVUPD Y0, (DX)
+    ADDQ $32, DX
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  addscaled_avx_loop4
+
+addscaled_avx_remainder:
+    ANDQ $3, CX
+    JZ   addscaled_avx_done
+
+addscaled_avx_scalar:
+    VMOVSD (DX), X0
+    VMOVSD (SI), X1
+    VFMADD231SD X1, X2, X0    // X0 = X0 + X1 * X2
+    VMOVSD X0, (DX)
+    ADDQ $8, DX
+    ADDQ $8, SI
+    DECQ CX
+    JNZ  addscaled_avx_scalar
+
+addscaled_avx_done:
+    VZEROUPPER
+    RET
+
+// func addScaledAVX512(dst []float64, alpha float64, s []float64)
+TEXT ·addScaledAVX512(SB), NOSPLIT, $0-56
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    VBROADCASTSD alpha+24(FP), Z2
+    MOVQ s_base+32(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   addscaled_avx512_remainder
+
+addscaled_avx512_loop8:
+    VMOVUPD (DX), Z0
+    VMOVUPD (SI), Z1
+    VFMADD231PD Z1, Z2, Z0    // Z0 = Z0 + Z1 * Z2
+    VMOVUPD Z0, (DX)
+    ADDQ $64, DX
+    ADDQ $64, SI
+    DECQ AX
+    JNZ  addscaled_avx512_loop8
+
+addscaled_avx512_remainder:
+    ANDQ $7, CX
+    JZ   addscaled_avx512_done
+
+addscaled_avx512_scalar:
+    VMOVSD (DX), X0
+    VMOVSD (SI), X1
+    VMOVSD alpha+24(FP), X2
+    VFMADD231SD X1, X2, X0
+    VMOVSD X0, (DX)
+    ADDQ $8, DX
+    ADDQ $8, SI
+    DECQ CX
+    JNZ  addscaled_avx512_scalar
+
+addscaled_avx512_done:
+    VZEROUPPER
+    RET
+
+// func addScaledSSE2(dst []float64, alpha float64, s []float64)
+TEXT ·addScaledSSE2(SB), NOSPLIT, $0-56
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVSD alpha+24(FP), X2
+    UNPCKLPD X2, X2           // Broadcast alpha to both lanes
+    MOVQ s_base+32(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   addscaled_sse2_remainder
+
+addscaled_sse2_loop2:
+    MOVUPD (DX), X0
+    MOVUPD (SI), X1
+    MULPD X2, X1              // X1 = s * alpha
+    ADDPD X1, X0              // X0 = dst + (s * alpha)
+    MOVUPD X0, (DX)
+    ADDQ $16, DX
+    ADDQ $16, SI
+    DECQ AX
+    JNZ  addscaled_sse2_loop2
+
+addscaled_sse2_remainder:
+    ANDQ $1, CX
+    JZ   addscaled_sse2_done
+
+    MOVSD (DX), X0
+    MOVSD (SI), X1
+    MULSD X2, X1
+    ADDSD X1, X0
+    MOVSD X0, (DX)
+
+addscaled_sse2_done:
+    RET

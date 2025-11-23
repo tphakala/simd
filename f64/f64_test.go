@@ -417,3 +417,229 @@ func BenchmarkAccumulateAdd_1000(b *testing.B) {
 		AccumulateAdd(dst, src, 250)
 	}
 }
+
+// Tests for MinIdx and MaxIdx
+
+func TestMinIdx(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []float64
+		want int
+	}{
+		{"empty", nil, -1},
+		{"single", []float64{5}, 0},
+		{"min at start", []float64{1, 2, 3, 4, 5}, 0},
+		{"min at end", []float64{5, 4, 3, 2, 1}, 4},
+		{"min in middle", []float64{5, 2, 8, 1, 9, 3}, 3},
+		{"duplicates", []float64{3, 1, 4, 1, 5}, 1}, // First occurrence
+		{"negative", []float64{-1, -5, -3, -2}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MinIdx(tt.a)
+			if got != tt.want {
+				t.Errorf("MinIdx() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMinIdx_Large(t *testing.T) {
+	// Test with large slice to exercise SIMD paths
+	n := 1000
+	a := make([]float64, n)
+	for i := range a {
+		a[i] = float64(i + 100)
+	}
+	// Put minimum at position 777
+	a[777] = -1.0
+
+	got := MinIdx(a)
+	if got != 777 {
+		t.Errorf("MinIdx(large) = %v, want 777", got)
+	}
+}
+
+func TestMaxIdx(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []float64
+		want int
+	}{
+		{"empty", nil, -1},
+		{"single", []float64{5}, 0},
+		{"max at start", []float64{9, 2, 3, 4, 5}, 0},
+		{"max at end", []float64{1, 2, 3, 4, 9}, 4},
+		{"max in middle", []float64{5, 2, 8, 1, 3}, 2},
+		{"duplicates", []float64{3, 5, 4, 5, 2}, 1}, // First occurrence
+		{"negative", []float64{-5, -1, -3, -2}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MaxIdx(tt.a)
+			if got != tt.want {
+				t.Errorf("MaxIdx() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaxIdx_Large(t *testing.T) {
+	// Test with large slice to exercise SIMD paths
+	n := 1000
+	a := make([]float64, n)
+	for i := range a {
+		a[i] = float64(i)
+	}
+	// Put maximum at position 333
+	a[333] = 99999.0
+
+	got := MaxIdx(a)
+	if got != 333 {
+		t.Errorf("MaxIdx(large) = %v, want 333", got)
+	}
+}
+
+// Tests for AddScaled
+
+func TestAddScaled(t *testing.T) {
+	dst := []float64{1, 2, 3, 4, 5, 6, 7, 8}
+	s := []float64{1, 1, 1, 1, 1, 1, 1, 1}
+	alpha := 2.0
+
+	// dst[i] += alpha * s[i] = dst[i] + 2*1 = dst[i] + 2
+	want := []float64{3, 4, 5, 6, 7, 8, 9, 10}
+
+	AddScaled(dst, alpha, s)
+
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("AddScaled()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestAddScaled_Large(t *testing.T) {
+	// Test with large slice to exercise SIMD paths
+	n := 1000
+	dst := make([]float64, n)
+	s := make([]float64, n)
+	want := make([]float64, n)
+
+	for i := range n {
+		dst[i] = float64(i)
+		s[i] = float64(i * 2)
+		want[i] = float64(i) + 0.5*float64(i*2) // dst[i] + 0.5 * s[i]
+	}
+
+	AddScaled(dst, 0.5, s)
+
+	for i := range dst {
+		if math.Abs(dst[i]-want[i]) > 1e-10 {
+			t.Errorf("AddScaled_Large()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestAddScaled_Empty(_ *testing.T) {
+	// Should not panic on empty slices
+	var dst, s []float64
+	AddScaled(dst, 2.0, s)
+}
+
+func TestAddScaled_DifferentLengths(t *testing.T) {
+	dst := []float64{1, 2, 3, 4, 5}
+	s := []float64{10, 20, 30} // Shorter
+	alpha := 1.0
+
+	AddScaled(dst, alpha, s)
+
+	// Only first 3 elements should be modified
+	want := []float64{11, 22, 33, 4, 5}
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("AddScaled_DifferentLengths()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestAddScaled_ZeroAlpha(t *testing.T) {
+	dst := []float64{1, 2, 3, 4}
+	s := []float64{10, 20, 30, 40}
+
+	AddScaled(dst, 0.0, s)
+
+	// dst should be unchanged
+	want := []float64{1, 2, 3, 4}
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("AddScaled_ZeroAlpha()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestAddScaled_NegativeAlpha(t *testing.T) {
+	dst := []float64{10, 20, 30, 40}
+	s := []float64{1, 2, 3, 4}
+
+	AddScaled(dst, -2.0, s)
+
+	// dst[i] += -2 * s[i]
+	want := []float64{8, 16, 24, 32}
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("AddScaled_NegativeAlpha()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+// Benchmarks for new functions
+
+func BenchmarkMinIdx_1000(b *testing.B) {
+	a := make([]float64, 1000)
+	for i := range a {
+		a[i] = float64(i)
+	}
+	a[500] = -1.0 // Put min in middle
+
+	b.SetBytes(1000 * 8)
+
+	var result int
+	for b.Loop() {
+		result = MinIdx(a)
+	}
+	_ = result
+}
+
+func BenchmarkMaxIdx_1000(b *testing.B) {
+	a := make([]float64, 1000)
+	for i := range a {
+		a[i] = float64(i)
+	}
+	a[500] = 99999.0 // Put max in middle
+
+	b.SetBytes(1000 * 8)
+
+	var result int
+	for b.Loop() {
+		result = MaxIdx(a)
+	}
+	_ = result
+}
+
+func BenchmarkAddScaled_1000(b *testing.B) {
+	dst := make([]float64, 1000)
+	s := make([]float64, 1000)
+	for i := range dst {
+		dst[i] = float64(i)
+		s[i] = float64(i)
+	}
+
+	b.SetBytes(1000 * 8 * 2) // read s, read+write dst
+
+	for b.Loop() {
+		AddScaled(dst, 0.5, s)
+	}
+}

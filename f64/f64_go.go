@@ -244,3 +244,39 @@ func convolveValidMultiGo(dsts [][]float64, signal []float64, kernels [][]float6
 		}
 	}
 }
+
+func minIdxGo64(a []float64) int {
+	if len(a) == 0 {
+		return -1
+	}
+	idx := 0
+	m := a[0]
+	for i, v := range a[1:] {
+		if v < m {
+			m = v
+			idx = i + 1
+		}
+	}
+	return idx
+}
+
+func maxIdxGo64(a []float64) int {
+	if len(a) == 0 {
+		return -1
+	}
+	idx := 0
+	m := a[0]
+	for i, v := range a[1:] {
+		if v > m {
+			m = v
+			idx = i + 1
+		}
+	}
+	return idx
+}
+
+func addScaledGo64(dst []float64, alpha float64, s []float64) {
+	for i := range dst {
+		dst[i] += alpha * s[i]
+	}
+}

@@ -173,3 +173,80 @@ func convolveValidMultiGo(dsts [][]float32, signal []float32, kernels [][]float3
 		}
 	}
 }
+
+func sqrt32Go(dst, a []float32) {
+	for i := range dst {
+		dst[i] = float32(math.Sqrt(float64(a[i])))
+	}
+}
+
+func reciprocal32Go(dst, a []float32) {
+	for i := range dst {
+		dst[i] = 1.0 / a[i]
+	}
+}
+
+func minIdxGo(a []float32) int {
+	if len(a) == 0 {
+		return -1
+	}
+	idx := 0
+	m := a[0]
+	for i, v := range a[1:] {
+		if v < m {
+			m = v
+			idx = i + 1
+		}
+	}
+	return idx
+}
+
+func maxIdxGo(a []float32) int {
+	if len(a) == 0 {
+		return -1
+	}
+	idx := 0
+	m := a[0]
+	for i, v := range a[1:] {
+		if v > m {
+			m = v
+			idx = i + 1
+		}
+	}
+	return idx
+}
+
+func addScaledGo(dst []float32, alpha float32, s []float32) {
+	for i := range dst {
+		dst[i] += alpha * s[i]
+	}
+}
+
+func cumulativeSum32Go(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	sum := float32(0)
+	for i := range dst {
+		sum += a[i]
+		dst[i] = sum
+	}
+}
+
+func variance32Go(a []float32, mean float32) float32 {
+	var sum float32
+	for _, v := range a {
+		diff := v - mean
+		sum += diff * diff
+	}
+	return sum / float32(len(a))
+}
+
+func euclideanDistance32Go(a, b []float32) float32 {
+	var sum float32
+	for i := range a {
+		diff := a[i] - b[i]
+		sum += diff * diff
+	}
+	return float32(math.Sqrt(float64(sum)))
+}

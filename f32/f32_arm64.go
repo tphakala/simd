@@ -216,3 +216,68 @@ func interleave2NEON(dst, a, b []float32)
 
 //go:noescape
 func deinterleave2NEON(a, b, src []float32)
+
+func sqrt32(dst, a []float32) {
+	if hasNEON && len(dst) >= 4 {
+		sqrtNEON(dst, a)
+		return
+	}
+	sqrt32Go(dst, a)
+}
+
+func reciprocal32(dst, a []float32) {
+	if hasNEON && len(dst) >= 4 {
+		reciprocalNEON(dst, a)
+		return
+	}
+	reciprocal32Go(dst, a)
+}
+
+func minIdx32(a []float32) int {
+	return minIdxGo(a)
+}
+
+func maxIdx32(a []float32) int {
+	return maxIdxGo(a)
+}
+
+func addScaled32(dst []float32, alpha float32, s []float32) {
+	if hasNEON && len(dst) >= 4 {
+		addScaledNEON(dst, alpha, s)
+		return
+	}
+	addScaledGo(dst, alpha, s)
+}
+
+func cumulativeSum32(dst, a []float32) {
+	cumulativeSum32Go(dst, a)
+}
+
+//go:noescape
+func sqrtNEON(dst, a []float32)
+
+//go:noescape
+func reciprocalNEON(dst, a []float32)
+
+//go:noescape
+func addScaledNEON(dst []float32, alpha float32, s []float32)
+
+func variance32(a []float32, mean float32) float32 {
+	if hasNEON && len(a) >= 4 {
+		return varianceNEON32(a, mean)
+	}
+	return variance32Go(a, mean)
+}
+
+func euclideanDistance32(a, b []float32) float32 {
+	if hasNEON && len(a) >= 4 {
+		return euclideanDistanceNEON32(a, b)
+	}
+	return euclideanDistance32Go(a, b)
+}
+
+//go:noescape
+func varianceNEON32(a []float32, mean float32) float32
+
+//go:noescape
+func euclideanDistanceNEON32(a, b []float32) float32

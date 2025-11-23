@@ -1878,3 +1878,370 @@ deinterleave2_avx32_scalar:
 deinterleave2_avx32_done:
     VZEROUPPER
     RET
+
+// ============================================================================
+// SQRT, RECIPROCAL, ADDSCALED IMPLEMENTATIONS
+// ============================================================================
+
+// func sqrtAVX(dst, a []float32)
+TEXT ·sqrtAVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   sqrt32_avx_remainder
+
+sqrt32_avx_loop8:
+    VMOVUPS (SI), Y0
+    VSQRTPS Y0, Y1
+    VMOVUPS Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  sqrt32_avx_loop8
+
+sqrt32_avx_remainder:
+    ANDQ $7, CX
+    JZ   sqrt32_avx_done
+
+sqrt32_avx_scalar:
+    VMOVSS (SI), X0
+    VSQRTSS X0, X0, X0
+    VMOVSS X0, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  sqrt32_avx_scalar
+
+sqrt32_avx_done:
+    VZEROUPPER
+    RET
+
+// func sqrtAVX512(dst, a []float32)
+TEXT ·sqrtAVX512(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $4, AX
+    JZ   sqrt32_avx512_remainder
+
+sqrt32_avx512_loop16:
+    VMOVUPS (SI), Z0
+    VSQRTPS Z0, Z1
+    VMOVUPS Z1, (DX)
+    ADDQ $64, SI
+    ADDQ $64, DX
+    DECQ AX
+    JNZ  sqrt32_avx512_loop16
+
+sqrt32_avx512_remainder:
+    ANDQ $15, CX
+    JZ   sqrt32_avx512_done
+
+sqrt32_avx512_scalar:
+    VMOVSS (SI), X0
+    VSQRTSS X0, X0, X0
+    VMOVSS X0, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  sqrt32_avx512_scalar
+
+sqrt32_avx512_done:
+    VZEROUPPER
+    RET
+
+// func sqrtSSE(dst, a []float32)
+TEXT ·sqrtSSE(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   sqrt32_sse_remainder
+
+sqrt32_sse_loop4:
+    MOVUPS (SI), X0
+    SQRTPS X0, X1
+    MOVUPS X1, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ  sqrt32_sse_loop4
+
+sqrt32_sse_remainder:
+    ANDQ $3, CX
+    JZ   sqrt32_sse_done
+
+sqrt32_sse_scalar:
+    MOVSS (SI), X0
+    SQRTSS X0, X0
+    MOVSS X0, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  sqrt32_sse_scalar
+
+sqrt32_sse_done:
+    RET
+
+// func reciprocalAVX(dst, a []float32)
+// Uses VDIVPS for full precision (VRCPPS is ~12-bit precision only)
+TEXT ·reciprocalAVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    // Broadcast 1.0 to Y2
+    MOVL $0x3f800000, AX      // 1.0 in float32
+    MOVD AX, X2
+    VBROADCASTSS X2, Y2
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   recip32_avx_remainder
+
+recip32_avx_loop8:
+    VMOVUPS (SI), Y0
+    VDIVPS Y0, Y2, Y1
+    VMOVUPS Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  recip32_avx_loop8
+
+recip32_avx_remainder:
+    ANDQ $7, CX
+    JZ   recip32_avx_done
+
+recip32_avx_scalar:
+    VMOVSS (SI), X0
+    VDIVSS X0, X2, X0
+    VMOVSS X0, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  recip32_avx_scalar
+
+recip32_avx_done:
+    VZEROUPPER
+    RET
+
+// func reciprocalAVX512(dst, a []float32)
+TEXT ·reciprocalAVX512(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    // Broadcast 1.0 to Z2
+    MOVL $0x3f800000, AX      // 1.0 in float32
+    VPBROADCASTD AX, Z2
+
+    MOVQ CX, AX
+    SHRQ $4, AX
+    JZ   recip32_avx512_remainder
+
+recip32_avx512_loop16:
+    VMOVUPS (SI), Z0
+    VDIVPS Z0, Z2, Z1
+    VMOVUPS Z1, (DX)
+    ADDQ $64, SI
+    ADDQ $64, DX
+    DECQ AX
+    JNZ  recip32_avx512_loop16
+
+recip32_avx512_remainder:
+    ANDQ $15, CX
+    JZ   recip32_avx512_done
+
+recip32_avx512_scalar:
+    VMOVSS (SI), X0
+    MOVL $0x3f800000, AX
+    MOVD AX, X2
+    VDIVSS X0, X2, X0
+    VMOVSS X0, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  recip32_avx512_scalar
+
+recip32_avx512_done:
+    VZEROUPPER
+    RET
+
+// func reciprocalSSE(dst, a []float32)
+TEXT ·reciprocalSSE(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    // Load 1.0 to X2
+    MOVL $0x3f800000, AX
+    MOVD AX, X2
+    SHUFPS $0, X2, X2         // Broadcast to all lanes
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   recip32_sse_remainder
+
+recip32_sse_loop4:
+    MOVUPS (SI), X0
+    MOVAPS X2, X1
+    DIVPS X0, X1
+    MOVUPS X1, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ  recip32_sse_loop4
+
+recip32_sse_remainder:
+    ANDQ $3, CX
+    JZ   recip32_sse_done
+
+recip32_sse_scalar:
+    MOVSS (SI), X0
+    MOVSS X2, X1
+    DIVSS X0, X1
+    MOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  recip32_sse_scalar
+
+recip32_sse_done:
+    RET
+
+// func addScaledAVX(dst []float32, alpha float32, s []float32)
+// dst[i] += alpha * s[i]
+// Frame: dst(24) + alpha(4 padded to 8) + s(24) = 56 bytes
+TEXT ·addScaledAVX(SB), NOSPLIT, $0-56
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVSS alpha+24(FP), X3
+    MOVQ s_base+32(FP), SI
+
+    // Broadcast alpha to Y3
+    VBROADCASTSS X3, Y3
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   addscaled32_avx_remainder
+
+addscaled32_avx_loop8:
+    VMOVUPS (SI), Y0          // s[i:i+8]
+    VMOVUPS (DX), Y1          // dst[i:i+8]
+    VFMADD231PS Y0, Y3, Y1    // dst += alpha * s
+    VMOVUPS Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  addscaled32_avx_loop8
+
+addscaled32_avx_remainder:
+    ANDQ $7, CX
+    JZ   addscaled32_avx_done
+
+addscaled32_avx_scalar:
+    VMOVSS (SI), X0
+    VMOVSS (DX), X1
+    VFMADD231SS X0, X3, X1
+    VMOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  addscaled32_avx_scalar
+
+addscaled32_avx_done:
+    VZEROUPPER
+    RET
+
+// func addScaledAVX512(dst []float32, alpha float32, s []float32)
+TEXT ·addScaledAVX512(SB), NOSPLIT, $0-56
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVSS alpha+24(FP), X3
+    MOVQ s_base+32(FP), SI
+
+    // Broadcast alpha to Z3
+    VBROADCASTSS X3, Z3
+
+    MOVQ CX, AX
+    SHRQ $4, AX
+    JZ   addscaled32_avx512_remainder
+
+addscaled32_avx512_loop16:
+    VMOVUPS (SI), Z0          // s[i:i+16]
+    VMOVUPS (DX), Z1          // dst[i:i+16]
+    VFMADD231PS Z0, Z3, Z1    // dst += alpha * s
+    VMOVUPS Z1, (DX)
+    ADDQ $64, SI
+    ADDQ $64, DX
+    DECQ AX
+    JNZ  addscaled32_avx512_loop16
+
+addscaled32_avx512_remainder:
+    ANDQ $15, CX
+    JZ   addscaled32_avx512_done
+
+addscaled32_avx512_scalar:
+    VMOVSS (SI), X0
+    VMOVSS (DX), X1
+    VFMADD231SS X0, X3, X1
+    VMOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  addscaled32_avx512_scalar
+
+addscaled32_avx512_done:
+    VZEROUPPER
+    RET
+
+// func addScaledSSE(dst []float32, alpha float32, s []float32)
+// dst[i] += alpha * s[i]
+TEXT ·addScaledSSE(SB), NOSPLIT, $0-56
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVSS alpha+24(FP), X3
+    MOVQ s_base+32(FP), SI
+
+    // Broadcast alpha to X3
+    SHUFPS $0, X3, X3
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   addscaled32_sse_remainder
+
+addscaled32_sse_loop4:
+    MOVUPS (SI), X0           // s[i:i+4]
+    MOVUPS (DX), X1           // dst[i:i+4]
+    MULPS X3, X0              // alpha * s
+    ADDPS X0, X1              // dst + alpha * s
+    MOVUPS X1, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ  addscaled32_sse_loop4
+
+addscaled32_sse_remainder:
+    ANDQ $3, CX
+    JZ   addscaled32_sse_done
+
+addscaled32_sse_scalar:
+    MOVSS (SI), X0
+    MOVSS (DX), X1
+    MULSS X3, X0
+    ADDSS X0, X1
+    MOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  addscaled32_sse_scalar
+
+addscaled32_sse_done:
+    RET

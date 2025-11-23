@@ -605,3 +605,423 @@ func BenchmarkDeinterleave2_1000(b *testing.B) {
 		Deinterleave2(a, c, src)
 	}
 }
+
+// Tests for new functions
+
+func TestSqrt(t *testing.T) {
+	a := []float32{0, 1, 4, 9, 16, 25, 36, 49, 64, 81}
+	dst := make([]float32, len(a))
+	want := []float32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+	Sqrt(dst, a)
+
+	for i := range dst {
+		if math.Abs(float64(dst[i]-want[i])) > 1e-6 {
+			t.Errorf("Sqrt()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestSqrt_Large(t *testing.T) {
+	sizes := []int{7, 8, 9, 15, 16, 17, 100}
+	for _, n := range sizes {
+		a := make([]float32, n)
+		dst := make([]float32, n)
+		for i := range a {
+			a[i] = float32(i * i)
+		}
+
+		Sqrt(dst, a)
+
+		for i := range dst {
+			want := float32(i)
+			if math.Abs(float64(dst[i]-want)) > 1e-5 {
+				t.Errorf("size=%d: Sqrt()[%d] = %v, want %v", n, i, dst[i], want)
+			}
+		}
+	}
+}
+
+func TestReciprocal(t *testing.T) {
+	a := []float32{1, 2, 4, 5, 8, 10, 20, 25}
+	dst := make([]float32, len(a))
+	want := []float32{1, 0.5, 0.25, 0.2, 0.125, 0.1, 0.05, 0.04}
+
+	Reciprocal(dst, a)
+
+	for i := range dst {
+		if math.Abs(float64(dst[i]-want[i])) > 1e-6 {
+			t.Errorf("Reciprocal()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestReciprocal_Large(t *testing.T) {
+	sizes := []int{7, 8, 9, 15, 16, 17, 100}
+	for _, n := range sizes {
+		a := make([]float32, n)
+		dst := make([]float32, n)
+		for i := range a {
+			a[i] = float32(i + 1)
+		}
+
+		Reciprocal(dst, a)
+
+		for i := range dst {
+			want := 1.0 / float32(i+1)
+			if math.Abs(float64(dst[i]-want)) > 1e-5 {
+				t.Errorf("size=%d: Reciprocal()[%d] = %v, want %v", n, i, dst[i], want)
+			}
+		}
+	}
+}
+
+func TestMinIdx(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []float32
+		want int
+	}{
+		{"empty", nil, -1},
+		{"single", []float32{5}, 0},
+		{"first", []float32{1, 2, 3, 4, 5}, 0},
+		{"last", []float32{5, 4, 3, 2, 1}, 4},
+		{"middle", []float32{5, 2, 1, 3, 4}, 2},
+		{"large", []float32{5, 2, 8, 1, 9, 3, 7, 4, 6, 10}, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MinIdx(tt.a)
+			if got != tt.want {
+				t.Errorf("MinIdx() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaxIdx(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []float32
+		want int
+	}{
+		{"empty", nil, -1},
+		{"single", []float32{5}, 0},
+		{"first", []float32{5, 4, 3, 2, 1}, 0},
+		{"last", []float32{1, 2, 3, 4, 5}, 4},
+		{"middle", []float32{1, 2, 5, 3, 4}, 2},
+		{"large", []float32{5, 2, 8, 1, 9, 3, 7, 4, 6, 10}, 9},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MaxIdx(tt.a)
+			if got != tt.want {
+				t.Errorf("MaxIdx() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddScaled(t *testing.T) {
+	dst := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+	s := []float32{1, 1, 1, 1, 1, 1, 1, 1}
+	alpha := float32(2.0)
+	want := []float32{3, 4, 5, 6, 7, 8, 9, 10}
+
+	AddScaled(dst, alpha, s)
+
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("AddScaled()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestAddScaled_Large(t *testing.T) {
+	sizes := []int{7, 8, 9, 15, 16, 17, 100}
+	for _, n := range sizes {
+		dst := make([]float32, n)
+		s := make([]float32, n)
+		for i := range dst {
+			dst[i] = float32(i)
+			s[i] = 1.0
+		}
+		alpha := float32(3.0)
+
+		AddScaled(dst, alpha, s)
+
+		for i := range dst {
+			want := float32(i) + 3.0
+			if dst[i] != want {
+				t.Errorf("size=%d: AddScaled()[%d] = %v, want %v", n, i, dst[i], want)
+			}
+		}
+	}
+}
+
+func TestCumulativeSum(t *testing.T) {
+	a := []float32{1, 2, 3, 4, 5}
+	dst := make([]float32, len(a))
+	want := []float32{1, 3, 6, 10, 15}
+
+	CumulativeSum(dst, a)
+
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("CumulativeSum()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	a := []float32{3, 4}
+	dst := make([]float32, len(a))
+
+	Normalize(dst, a)
+
+	// Magnitude of (3,4) is 5, so normalized is (0.6, 0.8)
+	want := []float32{0.6, 0.8}
+	for i := range dst {
+		if math.Abs(float64(dst[i]-want[i])) > 1e-6 {
+			t.Errorf("Normalize()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestNormalize_ZeroVector(t *testing.T) {
+	a := []float32{0, 0, 0}
+	dst := make([]float32, len(a))
+
+	Normalize(dst, a)
+
+	// Zero vector should be unchanged
+	for i := range dst {
+		if dst[i] != 0 {
+			t.Errorf("Normalize() of zero vector [%d] = %v, want 0", i, dst[i])
+		}
+	}
+}
+
+func TestMean(t *testing.T) {
+	a := []float32{1, 2, 3, 4, 5}
+	want := float32(3.0)
+
+	got := Mean(a)
+	if got != want {
+		t.Errorf("Mean() = %v, want %v", got, want)
+	}
+}
+
+func TestVariance(t *testing.T) {
+	a := []float32{2, 4, 4, 4, 5, 5, 7, 9}
+	// Mean = 5, Variance = ((2-5)^2 + (4-5)^2*3 + (5-5)^2*2 + (7-5)^2 + (9-5)^2) / 8 = 4
+	want := float32(4.0)
+
+	got := Variance(a)
+	if math.Abs(float64(got-want)) > 1e-5 {
+		t.Errorf("Variance() = %v, want %v", got, want)
+	}
+}
+
+func TestStdDev(t *testing.T) {
+	a := []float32{2, 4, 4, 4, 5, 5, 7, 9}
+	want := float32(2.0)
+
+	got := StdDev(a)
+	if math.Abs(float64(got-want)) > 1e-5 {
+		t.Errorf("StdDev() = %v, want %v", got, want)
+	}
+}
+
+// Benchmarks for new functions
+
+func BenchmarkSqrt_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	dst := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4 * 2)
+
+	for b.Loop() {
+		Sqrt(dst, a)
+	}
+}
+
+func BenchmarkReciprocal_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	dst := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4 * 2)
+
+	for b.Loop() {
+		Reciprocal(dst, a)
+	}
+}
+
+func BenchmarkMinIdx_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i)
+	}
+	a[500] = -1 // minimum in middle
+
+	b.SetBytes(1000 * 4)
+
+	var idx int
+	for b.Loop() {
+		idx = MinIdx(a)
+	}
+	_ = idx
+}
+
+func BenchmarkAddScaled_1000(b *testing.B) {
+	dst := make([]float32, 1000)
+	s := make([]float32, 1000)
+	for i := range dst {
+		dst[i] = float32(i)
+		s[i] = 1.0
+	}
+
+	b.SetBytes(1000 * 4 * 3) // read dst, read s, write dst
+
+	for b.Loop() {
+		AddScaled(dst, 2.0, s)
+	}
+}
+
+func BenchmarkNormalize_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	dst := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4 * 2)
+
+	for b.Loop() {
+		Normalize(dst, a)
+	}
+}
+
+func BenchmarkCumulativeSum_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	dst := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4 * 2)
+
+	for b.Loop() {
+		CumulativeSum(dst, a)
+	}
+}
+
+func BenchmarkMean_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4)
+
+	var result float32
+	for b.Loop() {
+		result = Mean(a)
+	}
+	_ = result
+}
+
+func BenchmarkVariance_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4)
+
+	var result float32
+	for b.Loop() {
+		result = Variance(a)
+	}
+	_ = result
+}
+
+func BenchmarkStdDev_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4)
+
+	var result float32
+	for b.Loop() {
+		result = StdDev(a)
+	}
+	_ = result
+}
+
+func TestEuclideanDistance(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []float32
+		want float32
+	}{
+		{"empty", nil, nil, 0},
+		{"same", []float32{1, 2, 3}, []float32{1, 2, 3}, 0},
+		{"2d", []float32{0, 0}, []float32{3, 4}, 5},                       // 3-4-5 triangle
+		{"3d", []float32{1, 2, 3}, []float32{4, 6, 8}, float32(math.Sqrt(50))}, // sqrt(9+16+25)
+		{"negative", []float32{-1, -2}, []float32{1, 2}, float32(math.Sqrt(20))}, // sqrt(4+16)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EuclideanDistance(tt.a, tt.b)
+			if math.Abs(float64(got-tt.want)) > 1e-5 {
+				t.Errorf("EuclideanDistance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEuclideanDistance_Large(t *testing.T) {
+	n := 1000
+	a := make([]float32, n)
+	b := make([]float32, n)
+	for i := range a {
+		a[i] = float32(i)
+		b[i] = float32(i + 1) // diff = 1 for each element
+	}
+
+	got := EuclideanDistance(a, b)
+	// Each element differs by 1, so sum of squares = n, distance = sqrt(n)
+	want := float32(math.Sqrt(float64(n)))
+	if math.Abs(float64(got-want)) > 1e-3 {
+		t.Errorf("EuclideanDistance large = %v, want %v", got, want)
+	}
+}
+
+func BenchmarkEuclideanDistance_1000(b *testing.B) {
+	a := make([]float32, 1000)
+	v := make([]float32, 1000)
+	for i := range a {
+		a[i] = float32(i)
+		v[i] = float32(i + 1)
+	}
+
+	b.SetBytes(1000 * 4 * 2)
+
+	var result float32
+	for b.Loop() {
+		result = EuclideanDistance(a, v)
+	}
+	_ = result
+}

@@ -312,6 +312,35 @@ var (
 	negInf = math.Inf(-1)
 )
 
+// MinIdx returns the index of the minimum value in the slice.
+// Returns -1 for empty slices.
+func MinIdx(a []float64) int {
+	if len(a) == 0 {
+		return -1
+	}
+	return minIdx64(a)
+}
+
+// MaxIdx returns the index of the maximum value in the slice.
+// Returns -1 for empty slices.
+func MaxIdx(a []float64) int {
+	if len(a) == 0 {
+		return -1
+	}
+	return maxIdx64(a)
+}
+
+// AddScaled adds scaled values to dst: dst[i] += alpha * s[i].
+// This is the AXPY operation from BLAS Level 1.
+// Processes min(len(dst), len(s)) elements.
+func AddScaled(dst []float64, alpha float64, s []float64) {
+	n := min(len(dst), len(s))
+	if n == 0 {
+		return
+	}
+	addScaled64(dst[:n], alpha, s[:n])
+}
+
 // Interleave2 interleaves two slices: dst[0]=a[0], dst[1]=b[0], dst[2]=a[1], dst[3]=b[1], ...
 // Processes min(len(a), len(b), len(dst)/2) pairs.
 // This is useful for converting separate channels to interleaved stereo audio.

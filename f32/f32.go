@@ -222,6 +222,125 @@ func Deinterleave2(a, b, src []float32) {
 
 const interleave2Channels = 2
 
+// Sqrt computes element-wise square root: dst[i] = sqrt(a[i]).
+// Processes min(len(dst), len(a)) elements.
+func Sqrt(dst, a []float32) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	sqrt32(dst[:n], a[:n])
+}
+
+// Reciprocal computes element-wise reciprocal: dst[i] = 1/a[i].
+// Processes min(len(dst), len(a)) elements.
+func Reciprocal(dst, a []float32) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	reciprocal32(dst[:n], a[:n])
+}
+
+// MinIdx returns the index of the minimum value in the slice.
+// Returns -1 for empty slices.
+func MinIdx(a []float32) int {
+	if len(a) == 0 {
+		return -1
+	}
+	return minIdx32(a)
+}
+
+// MaxIdx returns the index of the maximum value in the slice.
+// Returns -1 for empty slices.
+func MaxIdx(a []float32) int {
+	if len(a) == 0 {
+		return -1
+	}
+	return maxIdx32(a)
+}
+
+// AddScaled adds scaled values to dst: dst[i] += alpha * s[i].
+// This is the AXPY operation from BLAS Level 1.
+// Processes min(len(dst), len(s)) elements.
+func AddScaled(dst []float32, alpha float32, s []float32) {
+	n := min(len(dst), len(s))
+	if n == 0 {
+		return
+	}
+	addScaled32(dst[:n], alpha, s[:n])
+}
+
+// CumulativeSum computes the cumulative sum: dst[i] = sum(a[0:i+1]).
+// Processes min(len(dst), len(a)) elements.
+func CumulativeSum(dst, a []float32) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	cumulativeSum32(dst[:n], a[:n])
+}
+
+// Normalize normalizes a vector to unit length: dst = a / ||a||.
+// If the magnitude is zero or very small (< 1e-7), copies the input unchanged.
+// Processes min(len(dst), len(a)) elements.
+func Normalize(dst, a []float32) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+
+	// Compute magnitude using dot product with itself
+	mag := float32(math.Sqrt(float64(DotProduct(a[:n], a[:n]))))
+
+	// Avoid division by zero (use float32-appropriate threshold)
+	if mag < normalizeMagnitudeThreshold32 {
+		copy(dst[:n], a[:n])
+		return
+	}
+
+	// Scale by 1/magnitude
+	Scale(dst[:n], a[:n], 1.0/mag)
+}
+
+// Mean computes the arithmetic mean of a slice.
+// Returns 0 for empty slices.
+func Mean(a []float32) float32 {
+	if len(a) == 0 {
+		return 0
+	}
+	return Sum(a) / float32(len(a))
+}
+
+// Variance computes the population variance of a slice.
+// Returns 0 for empty slices.
+func Variance(a []float32) float32 {
+	n := len(a)
+	if n == 0 {
+		return 0
+	}
+	mean := Mean(a)
+	return variance32(a, mean)
+}
+
+// StdDev computes the population standard deviation of a slice.
+// Returns 0 for empty slices.
+func StdDev(a []float32) float32 {
+	return float32(math.Sqrt(float64(Variance(a))))
+}
+
+// EuclideanDistance computes the Euclidean distance between two vectors.
+// Returns sqrt(sum((a[i] - b[i])^2)) for i in 0..min(len(a), len(b)).
+func EuclideanDistance(a, b []float32) float32 {
+	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	return euclideanDistance32(a[:n], b[:n])
+}
+
+const normalizeMagnitudeThreshold32 = 1e-7
+
 // ConvolveValidMulti applies multiple kernels to the same signal in one pass.
 // dsts[k][i] = sum(signal[i+j] * kernels[k][j]) for each kernel k.
 // All kernels must have the same length.

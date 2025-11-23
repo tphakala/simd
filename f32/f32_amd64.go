@@ -23,8 +23,10 @@ type (
 	scaleFunc      func(dst, a []float32, s float32)
 	unaryOpFunc    func(dst, a []float32)
 	reduceFunc     func(a []float32) float32
+	reduceIdxFunc  func(a []float32) int
 	fmaFunc        func(dst, a, b, c []float32)
 	clampFunc      func(dst, a []float32, minVal, maxVal float32)
+	addScaledFunc  func(dst []float32, alpha float32, s []float32)
 )
 
 // Function pointers - assigned at init time based on CPU features
@@ -41,8 +43,13 @@ var (
 	maxImpl        reduceFunc
 	absImpl        unaryOpFunc
 	negImpl        unaryOpFunc
+	sqrtImpl       unaryOpFunc
+	reciprocalImpl unaryOpFunc
 	fmaImpl        fmaFunc
 	clampImpl      clampFunc
+	minIdxImpl     reduceIdxFunc
+	maxIdxImpl     reduceIdxFunc
+	addScaledImpl  addScaledFunc
 )
 
 func init() {
@@ -74,8 +81,13 @@ func initAVX512() {
 	maxImpl = maxAVX512
 	absImpl = absAVX512
 	negImpl = negAVX512
+	sqrtImpl = sqrtAVX512
+	reciprocalImpl = reciprocalAVX512
 	fmaImpl = fmaAVX512
 	clampImpl = clampAVX512
+	minIdxImpl = minIdxGo
+	maxIdxImpl = maxIdxGo
+	addScaledImpl = addScaledAVX512
 }
 
 func initAVX() {
@@ -91,8 +103,13 @@ func initAVX() {
 	maxImpl = maxAVX
 	absImpl = absAVX
 	negImpl = negAVX
+	sqrtImpl = sqrtAVX
+	reciprocalImpl = reciprocalAVX
 	fmaImpl = fmaAVX
 	clampImpl = clampAVX
+	minIdxImpl = minIdxGo
+	maxIdxImpl = maxIdxGo
+	addScaledImpl = addScaledAVX
 }
 
 func initSSE() {
@@ -108,8 +125,13 @@ func initSSE() {
 	maxImpl = maxSSE
 	absImpl = absSSE
 	negImpl = negSSE
+	sqrtImpl = sqrtSSE
+	reciprocalImpl = reciprocalSSE
 	fmaImpl = fmaSSE
 	clampImpl = clampSSE
+	minIdxImpl = minIdxGo
+	maxIdxImpl = maxIdxGo
+	addScaledImpl = addScaledSSE
 }
 
 func initGo() {
@@ -125,8 +147,13 @@ func initGo() {
 	maxImpl = maxGo
 	absImpl = absGo
 	negImpl = negGo
+	sqrtImpl = sqrt32Go
+	reciprocalImpl = reciprocal32Go
 	fmaImpl = fmaGo
 	clampImpl = clampGo
+	minIdxImpl = minIdxGo
+	maxIdxImpl = maxIdxGo
+	addScaledImpl = addScaledGo
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -195,6 +222,31 @@ func fma32(dst, a, b, c []float32) {
 
 func clamp32(dst, a []float32, minVal, maxVal float32) {
 	clampImpl(dst, a, minVal, maxVal)
+}
+
+func sqrt32(dst, a []float32) {
+	sqrtImpl(dst, a)
+}
+
+func reciprocal32(dst, a []float32) {
+	reciprocalImpl(dst, a)
+}
+
+func minIdx32(a []float32) int {
+	return minIdxImpl(a)
+}
+
+func maxIdx32(a []float32) int {
+	return maxIdxImpl(a)
+}
+
+func addScaled32(dst []float32, alpha float32, s []float32) {
+	addScaledImpl(dst, alpha, s)
+}
+
+func cumulativeSum32(dst, a []float32) {
+	// CumulativeSum is inherently sequential
+	cumulativeSum32Go(dst, a)
 }
 
 func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
@@ -291,6 +343,15 @@ func fmaAVX(dst, a, b, c []float32)
 //go:noescape
 func clampAVX(dst, a []float32, minVal, maxVal float32)
 
+//go:noescape
+func sqrtAVX(dst, a []float32)
+
+//go:noescape
+func reciprocalAVX(dst, a []float32)
+
+//go:noescape
+func addScaledAVX(dst []float32, alpha float32, s []float32)
+
 // AVX-512 assembly function declarations (16x float32 per iteration)
 //
 //go:noescape
@@ -334,6 +395,15 @@ func fmaAVX512(dst, a, b, c []float32)
 
 //go:noescape
 func clampAVX512(dst, a []float32, minVal, maxVal float32)
+
+//go:noescape
+func sqrtAVX512(dst, a []float32)
+
+//go:noescape
+func reciprocalAVX512(dst, a []float32)
+
+//go:noescape
+func addScaledAVX512(dst []float32, alpha float32, s []float32)
 
 // SSE assembly function declarations (4x float32 per iteration)
 //
@@ -379,6 +449,15 @@ func fmaSSE(dst, a, b, c []float32)
 //go:noescape
 func clampSSE(dst, a []float32, minVal, maxVal float32)
 
+//go:noescape
+func sqrtSSE(dst, a []float32)
+
+//go:noescape
+func reciprocalSSE(dst, a []float32)
+
+//go:noescape
+func addScaledSSE(dst []float32, alpha float32, s []float32)
+
 // Interleave/Deinterleave assembly function declarations
 //
 //go:noescape
@@ -386,3 +465,11 @@ func interleave2AVX(dst, a, b []float32)
 
 //go:noescape
 func deinterleave2AVX(a, b, src []float32)
+
+func variance32(a []float32, mean float32) float32 {
+	return variance32Go(a, mean)
+}
+
+func euclideanDistance32(a, b []float32) float32 {
+	return euclideanDistance32Go(a, b)
+}

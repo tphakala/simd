@@ -265,3 +265,22 @@ func interleave2NEON(dst, a, b []float64)
 
 //go:noescape
 func deinterleave2NEON(a, b, src []float64)
+
+func minIdx64(a []float64) int {
+	return minIdxGo64(a)
+}
+
+func maxIdx64(a []float64) int {
+	return maxIdxGo64(a)
+}
+
+func addScaled64(dst []float64, alpha float64, s []float64) {
+	if hasNEON && len(dst) >= 2 {
+		addScaledNEON(dst, alpha, s)
+		return
+	}
+	addScaledGo64(dst, alpha, s)
+}
+
+//go:noescape
+func addScaledNEON(dst []float64, alpha float64, s []float64)
