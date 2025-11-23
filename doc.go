@@ -1,17 +1,18 @@
 // Package simd provides high-performance SIMD-accelerated operations for Go.
 //
 // This module contains subpackages for CPU feature detection and vectorized
-// floating-point operations:
+// numeric operations:
 //
 //   - [github.com/tphakala/simd/cpu] - CPU feature detection
 //   - [github.com/tphakala/simd/f64] - float64 SIMD operations
 //   - [github.com/tphakala/simd/f32] - float32 SIMD operations
+//   - [github.com/tphakala/simd/c128] - complex128 SIMD operations
 //
 // # Architecture Support
 //
 // The library automatically selects the optimal implementation at runtime:
 //
-//   - AMD64: AVX + FMA instructions (4x float64, 8x float32)
+//   - AMD64: AVX-512 (8x float64, 16x float32), AVX+FMA (4x float64, 8x float32), or SSE2 fallback
 //   - ARM64: NEON/ASIMD instructions (2x float64, 4x float32)
 //   - Other: Pure Go fallback
 //
@@ -36,6 +37,18 @@
 //	    f64.Add(dst, a, b)
 //	    f64.Mul(dst, a, b)
 //	}
+//
+// # Available Operations
+//
+// Core arithmetic: Add, Sub, Mul, Div, Scale, AddScalar, MulAddScalar
+//
+// Reductions: Sum, DotProduct, Min, Max, Mean, Variance, Norm
+//
+// Element-wise: Abs, Neg, Sqrt, Round, Floor, Ceil, Clamp
+//
+// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti
+//
+// Complex (c128): Add, Sub, Mul, Conj, Abs, Scale, DotProduct
 //
 // # Design Principles
 //
