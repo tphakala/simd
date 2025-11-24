@@ -1091,13 +1091,10 @@ TEXT ·tanhNEON(SB), NOSPLIT, $0-48
     MOVD dst_len+8(FP), R3
     MOVD src_base+24(FP), R1
 
-    // Load constants
+    // Load constants for scalar processing
     FMOVS $1.0, F31
     FMOVS $2.5, F30
     FMOVS $-1.0, F29
-    VDUP V31.S[0], V31.S4             // V31 = {1.0, 1.0, 1.0, 1.0}
-    VDUP V30.S[0], V30.S4             // V30 = {2.5, 2.5, 2.5, 2.5}
-    VDUP V29.S[0], V29.S4             // V29 = {-1.0, -1.0, -1.0, -1.0}
 
     // Use scalar processing for all elements to avoid complex bit manipulation
     // The scalar loop handles saturation correctly and is still reasonably fast
