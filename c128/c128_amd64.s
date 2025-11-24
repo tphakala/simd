@@ -897,50 +897,61 @@ abs_sse2_done:
 // ============================================================================
 
 // func absSqAVX512(dst []float64, a []complex128)
+// Fixed: Use VHADDPD + proper packing (same approach as absAVX512)
 TEXT ·absSqAVX512(SB), NOSPLIT, $0-56
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
     MOVQ CX, AX
-    SHRQ $2, AX            // Process 4 complex128 per iteration
+    SHRQ $1, AX            // Process 2 complex128 per iteration
     JZ   abssq_avx512_remainder
 
-abssq_avx512_loop4:
-    VMOVUPD (SI), Z0       // Load 4 complex128
+abssq_avx512_loop2:
+    // Load 2 complex128 = 4 float64: [r0, i0, r1, i1]
+    VMOVUPD (SI), Y0
 
-    VMULPD Z0, Z0, Z1      // Square all elements
+    // Square all elements: [r0², i0², r1², i1²]
+    VMULPD Y0, Y0, Y0
 
-    // Shuffle to separate reals and imags squared
-    VSHUFPD $0x00, Z1, Z1, Z2     // [r0², r0², r1², r1², r2², r2², r3², r3²]
-    VSHUFPD $0xFF, Z1, Z1, Z3     // [i0², i0², i1², i1², i2², i2², i3², i3²]
+    // Horizontal add pairs within each 128-bit lane
+    // VHADDPD Y0, Y0, Y0 produces:
+    //   Lane 0: [r0²+i0², r0²+i0²]
+    //   Lane 1: [r1²+i1², r1²+i1²]
+    // Result: [r0²+i0², r0²+i0², r1²+i1², r1²+i1²]
+    VHADDPD Y0, Y0, Y0
 
-    VADDPD Z3, Z2, Z2             // r² + i²
+    // Pack results: elements 0 and 2 contain the sums we need
+    // Extract upper 128 bits: X1 = [r1²+i1², r1²+i1²]
+    VEXTRACTF128 $1, Y0, X1
+    // Unpack low elements: X0 = [r0²+i0², r1²+i1²]
+    VUNPCKLPD X1, X0, X0
 
-    // Compact result (only take one element from each pair)
-    VSHUFPD $0x00, Z2, Z2, Z3     // Keep only even indices
+    // Store 2 results (no sqrt for AbsSq)
+    VMOVUPD X0, (DX)
 
-    VMOVUPD Z3, (DX)
-
-    ADDQ $64, SI
-    ADDQ $32, DX
+    ADDQ $32, SI           // 2 complex128 = 32 bytes
+    ADDQ $16, DX           // 2 float64 = 16 bytes
     DECQ AX
-    JNZ  abssq_avx512_loop4
+    JNZ  abssq_avx512_loop2
 
 abssq_avx512_remainder:
-    ANDQ $3, CX
+    ANDQ $1, CX
     JZ   abssq_avx512_done
 
+    // Handle 1 remaining element using XMM
 abssq_avx512_remainder_loop:
-    MOVUPD (SI), X0
+    MOVUPD (SI), X0        // Load one complex128
 
-    MULPD X0, X0           // [r², i²]
+    // X0 = [real, imag]
+    VMOVDDUP X0, X1        // X1 = [real, real]
+    VSHUFPD $1, X0, X0, X2 // X2 = [imag, imag]
 
-    MOVDDUP X0, X1         // X1 = [r², r²]
-    SHUFPD $1, X0, X0      // X0 = [i², i²]
-    ADDPD X0, X1           // r² + i²
+    VMULPD X1, X1, X1      // real²
+    VMULPD X2, X2, X2      // imag²
+    VADDPD X2, X1, X1      // r² + i²
 
-    MOVSD X1, (DX)
+    VMOVSD X1, (DX)
 
     ADDQ $16, SI
     ADDQ $8, DX
