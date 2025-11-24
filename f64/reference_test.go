@@ -6,6 +6,9 @@ package f64
 import (
 	"math"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // =============================================================================
@@ -262,18 +265,14 @@ func TestDotProduct_Ref(t *testing.T) {
 		got := DotProduct(a, b)
 		want := dotProductRef(a, b)
 
-		if !refAlmostEqual64(got, want) {
-			t.Errorf("DotProduct n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDelta(t, want, got, refTolerance64, "DotProduct n=%d", n)
 	}
 
 	t.Run("mixed_signs", func(t *testing.T) {
 		a, b := makeMixedSigns64(10)
 		got := DotProduct(a, b)
 		want := dotProductRef(a, b)
-		if !refAlmostEqual64(got, want) {
-			t.Errorf("DotProduct mixed: got %v, want %v", got, want)
-		}
+		assert.InDelta(t, want, got, refTolerance64, "DotProduct mixed signs")
 	})
 }
 
@@ -287,9 +286,7 @@ func TestSum_Ref(t *testing.T) {
 		got := Sum(a)
 		want := sumRef(a)
 
-		if !refAlmostEqual64(got, want) {
-			t.Errorf("Sum n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDelta(t, want, got, refTolerance64, "Sum n=%d", n)
 	}
 }
 
@@ -302,15 +299,11 @@ func TestMinMax_Ref(t *testing.T) {
 
 		gotMin := Min(a)
 		wantMin := minRef(a)
-		if !refAlmostEqual64(gotMin, wantMin) {
-			t.Errorf("Min n=%d: got %v, want %v", n, gotMin, wantMin)
-		}
+		assert.InDelta(t, wantMin, gotMin, refTolerance64, "Min n=%d", n)
 
 		gotMax := Max(a)
 		wantMax := maxRef(a)
-		if !refAlmostEqual64(gotMax, wantMax) {
-			t.Errorf("Max n=%d: got %v, want %v", n, gotMax, wantMax)
-		}
+		assert.InDelta(t, wantMax, gotMax, refTolerance64, "Max n=%d", n)
 	}
 }
 
@@ -326,9 +319,8 @@ func TestAdd_Ref(t *testing.T) {
 		Add(got, a, b)
 		addRef(want, a, b)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Add n=%d: got %v, want %v", n, got, want)
-		}
+		require.Len(t, got, len(want), "Add n=%d length mismatch", n)
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Add n=%d", n)
 	}
 }
 
@@ -344,9 +336,7 @@ func TestSub_Ref(t *testing.T) {
 		Sub(got, a, b)
 		subRef(want, a, b)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Sub n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Sub n=%d", n)
 	}
 }
 
@@ -362,9 +352,7 @@ func TestMul_Ref(t *testing.T) {
 		Mul(got, a, b)
 		mulRef(want, a, b)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Mul n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Mul n=%d", n)
 	}
 }
 
@@ -380,9 +368,7 @@ func TestDiv_Ref(t *testing.T) {
 		Div(got, a, b)
 		divRef(want, a, b)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Div n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Div n=%d", n)
 	}
 }
 
@@ -399,9 +385,7 @@ func TestScale_Ref(t *testing.T) {
 		Scale(got, a, scalar)
 		scaleRef(want, a, scalar)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Scale n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Scale n=%d", n)
 	}
 }
 
@@ -418,9 +402,7 @@ func TestAddScalar_Ref(t *testing.T) {
 		AddScalar(got, a, scalar)
 		addScalarRef(want, a, scalar)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("AddScalar n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "AddScalar n=%d", n)
 	}
 }
 
@@ -436,9 +418,7 @@ func TestAbs_Ref(t *testing.T) {
 		Abs(got, a)
 		absRef(want, a)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Abs n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Abs n=%d", n)
 	}
 }
 
@@ -454,9 +434,7 @@ func TestNeg_Ref(t *testing.T) {
 		Neg(got, a)
 		negRef(want, a)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Neg n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Neg n=%d", n)
 	}
 }
 
@@ -472,9 +450,7 @@ func TestFMA_Ref(t *testing.T) {
 		FMA(got, a, b, c)
 		fmaRef(want, a, b, c)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("FMA n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "FMA n=%d", n)
 	}
 }
 
@@ -492,9 +468,7 @@ func TestClamp_Ref(t *testing.T) {
 		Clamp(got, a, minVal, maxVal)
 		clampRef(want, a, minVal, maxVal)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Clamp n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Clamp n=%d", n)
 	}
 }
 
@@ -510,9 +484,7 @@ func TestSqrt_Ref(t *testing.T) {
 		Sqrt(got, a)
 		sqrtRef(want, a)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Sqrt n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Sqrt n=%d", n)
 	}
 }
 
@@ -528,9 +500,7 @@ func TestReciprocal_Ref(t *testing.T) {
 		Reciprocal(got, a)
 		reciprocalRef(want, a)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Reciprocal n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Reciprocal n=%d", n)
 	}
 }
 
@@ -544,9 +514,7 @@ func TestMean_Ref(t *testing.T) {
 		got := Mean(a)
 		want := meanRef(a)
 
-		if !refAlmostEqual64(got, want) {
-			t.Errorf("Mean n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDelta(t, want, got, refTolerance64, "Mean n=%d", n)
 	}
 }
 
@@ -561,14 +529,7 @@ func TestVariance_Ref(t *testing.T) {
 		want := varianceRef(a)
 
 		// Variance can have larger numerical differences
-		tolerance := 1e-6
-		diff := got - want
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff > tolerance {
-			t.Errorf("Variance n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDelta(t, want, got, 1e-6, "Variance n=%d", n)
 	}
 }
 
@@ -582,9 +543,7 @@ func TestEuclideanDistance_Ref(t *testing.T) {
 		got := EuclideanDistance(a, b)
 		want := euclideanDistanceRef(a, b)
 
-		if !refAlmostEqual64(got, want) {
-			t.Errorf("EuclideanDistance n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDelta(t, want, got, refTolerance64, "EuclideanDistance n=%d", n)
 	}
 }
 
@@ -600,9 +559,7 @@ func TestNormalize_Ref(t *testing.T) {
 		Normalize(got, a)
 		normalizeRef(want, a)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("Normalize n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "Normalize n=%d", n)
 	}
 }
 
@@ -618,9 +575,7 @@ func TestCumulativeSum_Ref(t *testing.T) {
 		CumulativeSum(got, a)
 		cumulativeSumRef(want, a)
 
-		if !refSlicesEqual64(got, want) {
-			t.Errorf("CumulativeSum n=%d: got %v, want %v", n, got, want)
-		}
+		assert.InDeltaSlice(t, want, got, refTolerance64, "CumulativeSum n=%d", n)
 	}
 }
 
@@ -635,139 +590,134 @@ func TestEdgeCases_Empty(t *testing.T) {
 
 	t.Run("DotProduct_empty", func(t *testing.T) {
 		got := DotProduct(empty, empty)
-		if got != 0 {
-			t.Errorf("DotProduct empty: got %v, want 0", got)
-		}
+		assert.InDelta(t, 0.0, got, 1e-10, "DotProduct empty should return 0")
 	})
 
 	t.Run("Sum_empty", func(t *testing.T) {
 		got := Sum(empty)
-		if got != 0 {
-			t.Errorf("Sum empty: got %v, want 0", got)
-		}
+		assert.InDelta(t, 0.0, got, 1e-10, "Sum empty should return 0")
 	})
 
 	t.Run("Min_empty", func(t *testing.T) {
 		got := Min(empty)
-		if got != posInf {
-			t.Errorf("Min empty: got %v, want +Inf", got)
-		}
+		assert.True(t, math.IsInf(got, 1), "Min empty should return +Inf")
 	})
 
 	t.Run("Max_empty", func(t *testing.T) {
 		got := Max(empty)
-		if got != negInf {
-			t.Errorf("Max empty: got %v, want -Inf", got)
-		}
+		assert.True(t, math.IsInf(got, -1), "Max empty should return -Inf")
 	})
 
-	t.Run("Add_empty", func(_ *testing.T) {
-		Add(dst, empty, empty)
-		// Should not panic, just return
+	t.Run("Add_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Add(dst, empty, empty) })
 	})
 
-	t.Run("Sub_empty", func(_ *testing.T) {
-		Sub(dst, empty, empty)
+	t.Run("Sub_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Sub(dst, empty, empty) })
 	})
 
-	t.Run("Mul_empty", func(_ *testing.T) {
-		Mul(dst, empty, empty)
+	t.Run("Mul_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Mul(dst, empty, empty) })
 	})
 
-	t.Run("Div_empty", func(_ *testing.T) {
-		Div(dst, empty, empty)
+	t.Run("Div_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Div(dst, empty, empty) })
 	})
 
-	t.Run("Scale_empty", func(_ *testing.T) {
-		Scale(dst, empty, 2.0)
+	t.Run("Scale_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Scale(dst, empty, 2.0) })
 	})
 
-	t.Run("AddScalar_empty", func(_ *testing.T) {
-		AddScalar(dst, empty, 2.0)
+	t.Run("AddScalar_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { AddScalar(dst, empty, 2.0) })
 	})
 
-	t.Run("Abs_empty", func(_ *testing.T) {
-		Abs(dst, empty)
+	t.Run("Abs_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Abs(dst, empty) })
 	})
 
-	t.Run("Neg_empty", func(_ *testing.T) {
-		Neg(dst, empty)
+	t.Run("Neg_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Neg(dst, empty) })
 	})
 
-	t.Run("FMA_empty", func(_ *testing.T) {
-		FMA(dst, empty, empty, empty)
+	t.Run("FMA_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { FMA(dst, empty, empty, empty) })
 	})
 
-	t.Run("Clamp_empty", func(_ *testing.T) {
-		Clamp(dst, empty, 0, 1)
+	t.Run("Clamp_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Clamp(dst, empty, 0, 1) })
 	})
 
-	t.Run("Sqrt_empty", func(_ *testing.T) {
-		Sqrt(dst, empty)
+	t.Run("Sqrt_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Sqrt(dst, empty) })
 	})
 
-	t.Run("Reciprocal_empty", func(_ *testing.T) {
-		Reciprocal(dst, empty)
+	t.Run("Reciprocal_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Reciprocal(dst, empty) })
 	})
 
 	t.Run("Mean_empty", func(t *testing.T) {
 		got := Mean(empty)
-		if got != 0 {
-			t.Errorf("Mean empty: got %v, want 0", got)
-		}
+		assert.InDelta(t, 0.0, got, 1e-10, "Mean empty should return 0")
 	})
 
 	t.Run("Variance_empty", func(t *testing.T) {
 		got := Variance(empty)
-		if got != 0 {
-			t.Errorf("Variance empty: got %v, want 0", got)
-		}
+		assert.InDelta(t, 0.0, got, 1e-10, "Variance empty should return 0")
 	})
 
 	t.Run("StdDev_empty", func(t *testing.T) {
 		got := StdDev(empty)
-		if got != 0 {
-			t.Errorf("StdDev empty: got %v, want 0", got)
-		}
+		assert.InDelta(t, 0.0, got, 1e-10, "StdDev empty should return 0")
 	})
 
 	t.Run("EuclideanDistance_empty", func(t *testing.T) {
 		got := EuclideanDistance(empty, empty)
-		if got != 0 {
-			t.Errorf("EuclideanDistance empty: got %v, want 0", got)
-		}
+		assert.InDelta(t, 0.0, got, 1e-10, "EuclideanDistance empty should return 0")
 	})
 
-	t.Run("Normalize_empty", func(_ *testing.T) {
-		Normalize(dst, empty)
+	t.Run("Normalize_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { Normalize(dst, empty) })
 	})
 
-	t.Run("CumulativeSum_empty", func(_ *testing.T) {
-		CumulativeSum(dst, empty)
+	t.Run("CumulativeSum_empty", func(t *testing.T) {
+		assert.NotPanics(t, func() { CumulativeSum(dst, empty) })
 	})
 
-	t.Run("DotProductBatch_empty_results", func(_ *testing.T) {
-		DotProductBatch([]float64{}, [][]float64{{1, 2}}, []float64{1, 2})
+	t.Run("DotProductBatch_empty_results", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			DotProductBatch([]float64{}, [][]float64{{1, 2}}, []float64{1, 2})
+		})
 	})
 
-	t.Run("DotProductBatch_empty_rows", func(_ *testing.T) {
-		DotProductBatch([]float64{1}, [][]float64{}, []float64{1, 2})
+	t.Run("DotProductBatch_empty_rows", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			DotProductBatch([]float64{1}, [][]float64{}, []float64{1, 2})
+		})
 	})
 
-	t.Run("DotProductBatch_empty_vec", func(_ *testing.T) {
-		DotProductBatch([]float64{1}, [][]float64{{1, 2}}, []float64{})
+	t.Run("DotProductBatch_empty_vec", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			DotProductBatch([]float64{1}, [][]float64{{1, 2}}, []float64{})
+		})
 	})
 
-	t.Run("ConvolveValid_empty_kernel", func(_ *testing.T) {
-		ConvolveValid(dst, []float64{1, 2, 3}, []float64{})
+	t.Run("ConvolveValid_empty_kernel", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			ConvolveValid(dst, []float64{1, 2, 3}, []float64{})
+		})
 	})
 
-	t.Run("ConvolveValid_signal_smaller_than_kernel", func(_ *testing.T) {
-		ConvolveValid(dst, []float64{1}, []float64{1, 2, 3})
+	t.Run("ConvolveValid_signal_smaller_than_kernel", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			ConvolveValid(dst, []float64{1}, []float64{1, 2, 3})
+		})
 	})
 
-	t.Run("ConvolveValid_empty_dst", func(_ *testing.T) {
-		ConvolveValid([]float64{}, []float64{1, 2, 3, 4, 5}, []float64{1, 2})
+	t.Run("ConvolveValid_empty_dst", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			ConvolveValid([]float64{}, []float64{1, 2, 3, 4, 5}, []float64{1, 2})
+		})
 	})
 }
 
@@ -780,58 +730,38 @@ func TestEdgeCases_MismatchedLengths(t *testing.T) {
 	t.Run("DotProduct_mismatched", func(t *testing.T) {
 		got := DotProduct(a, b)
 		want := dotProductRef(a[:3], b)
-		if !refAlmostEqual64(got, want) {
-			t.Errorf("DotProduct mismatched: got %v, want %v", got, want)
-		}
+		assert.InDelta(t, want, got, refTolerance64, "DotProduct mismatched lengths")
 	})
 
 	t.Run("Add_dst_smaller", func(t *testing.T) {
 		dst := make([]float64, 2)
 		Add(dst, a, b)
 		want := []float64{a[0] + b[0], a[1] + b[1]}
-		if !refSlicesEqual64(dst, want) {
-			t.Errorf("Add dst_smaller: got %v, want %v", dst, want)
-		}
+		assert.InDeltaSlice(t, want, dst, refTolerance64, "Add with smaller dst")
 	})
 
 	t.Run("minLen_coverage", func(t *testing.T) {
 		// Test all branches of minLen
-		// b < a
-		n := minLen(5, 3, 10)
-		if n != 3 {
-			t.Errorf("minLen(5,3,10): got %d, want 3", n)
-		}
-		// c < a (after b >= a)
-		n = minLen(5, 6, 2)
-		if n != 2 {
-			t.Errorf("minLen(5,6,2): got %d, want 2", n)
-		}
-		// a is smallest
-		n = minLen(1, 5, 10)
-		if n != 1 {
-			t.Errorf("minLen(1,5,10): got %d, want 1", n)
-		}
+		assert.Equal(t, 3, minLen(5, 3, 10), "minLen(5,3,10) b < a")
+		assert.Equal(t, 2, minLen(5, 6, 2), "minLen(5,6,2) c < a")
+		assert.Equal(t, 1, minLen(1, 5, 10), "minLen(1,5,10) a is smallest")
 	})
 
 	t.Run("FMA_mismatched", func(t *testing.T) {
 		dst := make([]float64, 10)
 		FMA(dst, a, b, c)
 		// Should use min length of all inputs
-		want := make([]float64, 10)
+		want := make([]float64, 2)
 		for i := range 2 {
 			want[i] = a[i]*b[i] + c[i]
 		}
-		if !refSlicesEqual64(dst[:2], want[:2]) {
-			t.Errorf("FMA mismatched: got %v, want %v", dst[:2], want[:2])
-		}
+		assert.InDeltaSlice(t, want, dst[:2], refTolerance64, "FMA mismatched lengths")
 	})
 
 	t.Run("EuclideanDistance_mismatched", func(t *testing.T) {
 		got := EuclideanDistance(a, b)
 		want := euclideanDistanceRef(a[:3], b)
-		if !refAlmostEqual64(got, want) {
-			t.Errorf("EuclideanDistance mismatched: got %v, want %v", got, want)
-		}
+		assert.InDelta(t, want, got, refTolerance64, "EuclideanDistance mismatched lengths")
 	})
 }
 
@@ -844,9 +774,7 @@ func TestNormalize_ZeroMagnitude(t *testing.T) {
 	Normalize(dst, tiny)
 
 	// Should copy input unchanged
-	if !refSlicesEqual64(dst, tiny) {
-		t.Errorf("Normalize zero mag: got %v, want %v (unchanged)", dst, tiny)
-	}
+	assert.InDeltaSlice(t, tiny, dst, refTolerance64, "Normalize zero magnitude should copy input unchanged")
 }
 
 // TestDotProductBatch_Ref validates DotProductBatch against reference
@@ -863,11 +791,8 @@ func TestDotProductBatch_Ref(t *testing.T) {
 	DotProductBatch(results, rows, vec)
 
 	expected := []float64{1, 2, 10, 20}
-	if !refSlicesEqual64(results, expected) {
-		t.Errorf("DotProductBatch: got %v, want %v", results, expected)
-	}
+	assert.InDeltaSlice(t, expected, results, refTolerance64, "DotProductBatch basic")
 
-	// Test with empty row (covers ARM64 branch)
 	t.Run("with_empty_row", func(t *testing.T) {
 		rowsWithEmpty := [][]float64{
 			{1, 2, 3, 4},
@@ -877,21 +802,15 @@ func TestDotProductBatch_Ref(t *testing.T) {
 		res := make([]float64, 3)
 		DotProductBatch(res, rowsWithEmpty, vec)
 		want := []float64{30, 0, 10}
-		if !refSlicesEqual64(res, want) {
-			t.Errorf("DotProductBatch with empty: got %v, want %v", res, want)
-		}
+		assert.InDeltaSlice(t, want, res, refTolerance64, "DotProductBatch with empty row")
 	})
 
-	// Test with results smaller than rows
 	t.Run("results_smaller", func(t *testing.T) {
 		smallResults := make([]float64, 2)
 		DotProductBatch(smallResults, rows, vec)
-		if !refSlicesEqual64(smallResults, expected[:2]) {
-			t.Errorf("DotProductBatch results_smaller: got %v, want %v", smallResults, expected[:2])
-		}
+		assert.InDeltaSlice(t, expected[:2], smallResults, refTolerance64, "DotProductBatch results smaller than rows")
 	})
 
-	// Test with varying row lengths
 	t.Run("varying_row_lengths", func(t *testing.T) {
 		mixedRows := [][]float64{
 			{1, 2, 3, 4, 5}, // longer than vec
@@ -900,13 +819,8 @@ func TestDotProductBatch_Ref(t *testing.T) {
 		}
 		res := make([]float64, 3)
 		DotProductBatch(res, mixedRows, vec)
-		// Each row uses min(len(row), len(vec))
-		want0 := float64(1*1 + 2*2 + 3*3 + 4*4)
-		want1 := float64(1*1 + 2*2)
-		want2 := float64(1*1 + 2*2 + 3*3 + 4*4)
-		if !refAlmostEqual64(res[0], want0) || !refAlmostEqual64(res[1], want1) || !refAlmostEqual64(res[2], want2) {
-			t.Errorf("DotProductBatch varying: got %v, want [%v, %v, %v]", res, want0, want1, want2)
-		}
+		want := []float64{30, 5, 30} // 1*1+2*2+3*3+4*4=30, 1*1+2*2=5, 1*1+2*2+3*3+4*4=30
+		assert.InDeltaSlice(t, want, res, refTolerance64, "DotProductBatch varying row lengths")
 	})
 }
 
@@ -919,7 +833,7 @@ func TestConvolveValid_Ref(t *testing.T) {
 	dst := make([]float64, 6)
 	ConvolveValid(dst, signal, kernel)
 
-	// Compute expected
+	// Compute expected using pure Go
 	expected := make([]float64, 6)
 	for i := range 6 {
 		for j := range kernel {
@@ -927,16 +841,11 @@ func TestConvolveValid_Ref(t *testing.T) {
 		}
 	}
 
-	if !refSlicesEqual64(dst, expected) {
-		t.Errorf("ConvolveValid: got %v, want %v", dst, expected)
-	}
+	assert.InDeltaSlice(t, expected, dst, refTolerance64, "ConvolveValid basic")
 
-	// Test with dst smaller than valid output length
 	t.Run("dst_smaller", func(t *testing.T) {
 		smallDst := make([]float64, 3)
 		ConvolveValid(smallDst, signal, kernel)
-		if !refSlicesEqual64(smallDst, expected[:3]) {
-			t.Errorf("ConvolveValid dst_smaller: got %v, want %v", smallDst, expected[:3])
-		}
+		assert.InDeltaSlice(t, expected[:3], smallDst, refTolerance64, "ConvolveValid with smaller dst")
 	})
 }

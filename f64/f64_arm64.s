@@ -26,7 +26,7 @@ TEXT ·dotProductNEON(SB), NOSPLIT, $0-56
     MOVD a_len+8(FP), R2       // R2 = len(a)
     MOVD b_len+32(FP), R3      // R3 = len(b)
     CMP R3, R2
-    CSEL LT, R3, R2, R2        // R2 = min(len(a), len(b))
+    CSEL LT, R2, R3, R2        // R2 = min(len(a), len(b))
     MOVD b_base+24(FP), R1     // R1 = &b[0]
 
     // V0, V1 = dual accumulators for ILP

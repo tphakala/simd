@@ -491,4 +491,3 @@ func TestMaxIdxGo64(t *testing.T) {
 		})
 	}
 }
-
