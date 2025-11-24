@@ -39,3 +39,10 @@ func addScaled64(dst []float64, alpha float64, s []float64) { addScaledGo64(dst,
 func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 	return cubicInterpDotGo(hist, a, b, c, d, x)
 }
+func sigmoid64(dst, src []float64) { sigmoid64Go(dst, src) }
+func relu64(dst, src []float64)    { relu64Go(dst, src) }
+func clampScale64(dst, src []float64, minVal, maxVal, scale float64) {
+	clampScale64Go(dst, src, minVal, maxVal, scale)
+}
+func tanh64(dst, src []float64) { tanh64Go(dst, src) }
+func exp64(dst, src []float64)  { exp64Go(dst, src) }

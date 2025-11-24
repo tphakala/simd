@@ -11,7 +11,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
 - **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE2, NEON, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
-- **40 operations** - Arithmetic, reduction, statistical, vector, signal processing, and complex number operations
+- **45 operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, and complex number operations
 - **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2) and ARM64 (NEON) with pure Go fallback
 - **Thread-safe** - All functions are safe for concurrent use
 
@@ -107,6 +107,11 @@ fmt.Println(cpu.HasNEON())   // true/false
 |                 | `Normalize(dst, a)`                 | Unit vector normalization     | 8x / 4x / 2x                        |
 |                 | `CumulativeSum(dst, a)`             | Running sum                   | Sequential                          |
 | **Range**       | `Clamp(dst, a, min, max)`           | Clamp to range                | 8x / 4x / 2x                        |
+| **Activation**  | `Sigmoid(dst, src)`                 | Sigmoid: 1/(1+e^-x)           | 4x (AVX) / 2x (NEON)                |
+|                 | `ReLU(dst, src)`                    | Rectified Linear Unit         | 8x / 4x / 2x                        |
+|                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 8x / 4x / 2x                        |
+|                 | `Exp(dst, src)`                     | Exponential e^x               | Pure Go                             |
+|                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 8x / 4x / 2x                        |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
@@ -229,6 +234,29 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 |                | Min        | 65        | 340     | **5.2x**  |
 |                | Max        | 66        | 352     | **5.3x**  |
 | **Range**      | Clamp      | 47        | 701     | **14.8x** |
+
+#### Activation Functions - SIMD vs Pure Go
+
+**float32 (1024 elements):**
+
+| Function   | SIMD (ns) | Go (ns)  | Speedup    | SIMD Throughput |
+| ---------- | --------- | -------- | ---------- | --------------- |
+| Sigmoid    | 138       | 5906     | **43x**    | 59.3 GB/s       |
+| ReLU       | 39        | 662      | **17x**    | 211 GB/s        |
+| Tanh       | 138       | 28116    | **204x**   | 59.5 GB/s       |
+
+**float64 (1024 elements):**
+
+| Function   | SIMD (ns) | Go (ns)  | Speedup    | SIMD Throughput |
+| ---------- | --------- | -------- | ---------- | --------------- |
+| ReLU       | 68        | 646      | **9.5x**   | 240 GB/s        |
+| Tanh       | 445       | 6230     | **14x**    | 36.8 GB/s       |
+
+**Key Characteristics:**
+
+- **Tanh**: 200x+ speedup for f32 - fast approximation with saturation vs math.Tanh
+- **ReLU**: Highest throughput (211-240 GB/s) - simple max(0, x) operation
+- **Sigmoid**: 43x speedup for f32 - fast approximation with exponential
 
 #### Batch & Signal Processing (varied sizes)
 

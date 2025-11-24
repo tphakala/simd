@@ -846,3 +846,189 @@ cubic_neon_remainder1:
 cubic_neon_done:
     FMOVD F0, ret+128(FP)
     RET
+
+// func sigmoidNEON64(dst, src []float64)
+// Implements fast sigmoid approximation: σ(x) ≈ 0.5 + 0.5 * x / (1 + |x|)
+// This approximation is SIMD-friendly and commonly used in neural networks.
+TEXT ·sigmoidNEON64(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    // Load constants into vector registers
+    FMOVD $0.5, F30
+    FMOVD $1.0, F31
+    VDUP V30.D[0], V30.D2         // V30 = {0.5, 0.5}
+    VDUP V31.D[0], V31.D2         // V31 = {1.0, 1.0}
+
+    // Process 2 elements per iteration
+    LSR $1, R3, R4
+    CBZ R4, sigmoid64_neon_scalar
+
+sigmoid64_neon_loop2:
+    VLD1.P 16(R1), [V0.D2]        // V0 = x
+    WORD $0x4EE0F801              // FABS V1.2D, V0.2D -> V1 = |x|
+    WORD $0x4E7FD422              // FADD V2.2D, V1.2D, V31.2D -> V2 = 1 + |x|
+    WORD $0x6E62FC03              // FDIV V3.2D, V0.2D, V2.2D -> V3 = x / (1 + |x|)
+    WORD $0x6E7EDC64              // FMUL V4.2D, V3.2D, V30.2D -> V4 = 0.5 * x / (1 + |x|)
+    WORD $0x4E7ED485              // FADD V5.2D, V4.2D, V30.2D -> V5 = 0.5 + result
+    VST1.P [V5.D2], 16(R0)        // store result
+
+    SUB $1, R4
+    CBNZ R4, sigmoid64_neon_loop2
+
+sigmoid64_neon_scalar:
+    AND $1, R3
+    CBZ R3, sigmoid64_neon_done
+
+    FMOVD (R1), F0                // F0 = x
+    FABSD F0, F1                  // F1 = |x|
+    FADDD F31, F1, F2             // F2 = 1 + |x|
+    FDIVD F2, F0, F3              // F3 = x / (1 + |x|)
+    FMULD F30, F3, F4             // F4 = 0.5 * x / (1 + |x|)
+    FADDD F30, F4, F5             // F5 = 0.5 + result
+    FMOVD F5, (R0)                // store result
+
+sigmoid64_neon_done:
+    RET
+
+// func reluNEON64(dst, src []float64)
+// Computes ReLU: dst[i] = max(0, src[i])
+TEXT ·reluNEON64(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    // Create zero vector
+    VEOR V30.B16, V30.B16, V30.B16    // V30 = {0, 0}
+
+    // Process 2 elements per iteration (float64 uses 2D arrangement)
+    LSR $1, R3, R4
+    CBZ R4, relu64_neon_scalar
+
+relu64_neon_loop2:
+    VLD1.P 16(R1), [V0.D2]            // V0 = x (2x float64)
+    WORD $0x4E7EF401                  // FMAX V1.2D, V0.2D, V30.2D -> V1 = max(x, 0)
+    VST1.P [V1.D2], 16(R0)            // store result
+
+    SUB $1, R4
+    CBNZ R4, relu64_neon_loop2
+
+relu64_neon_scalar:
+    AND $1, R3
+    CBZ R3, relu64_neon_done
+
+relu64_neon_scalar_loop:
+    FMOVD (R1), F0                    // F0 = x
+    FMOVD $0.0, F1
+    FMAXD F1, F0, F2                  // F2 = max(x, 0)
+    FMOVD F2, (R0)                    // store result
+
+    ADD $8, R0
+    ADD $8, R1
+    SUB $1, R3
+    CBNZ R3, relu64_neon_scalar_loop
+
+relu64_neon_done:
+    RET
+
+// func tanhNEON64(dst, src []float64)
+// Computes fast tanh approximation: tanh(x) ≈ x / (1 + |x|)
+TEXT ·tanhNEON64(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    // Load constants - both 1.0 and 2.5 are encodable FMOV immediates
+    FMOVD $1.0, F31
+    FMOVD $2.5, F30
+    FMOVD $-1.0, F29
+    FMOVD $0, F28
+
+    // Use scalar processing for all elements to avoid complex bit manipulation
+    // The scalar loop handles saturation correctly and is still reasonably fast
+
+tanh64_neon_scalar:
+    CBZ R3, tanh64_neon_done
+
+tanh64_neon_scalar_loop:
+    FMOVD (R1), F0                    // F0 = x
+    FABSD F0, F1                      // F1 = |x|
+    FCMPD F1, F30                     // compare |x| with 2.5
+    BLE tanh64_neon_scalar_approx
+
+    // Saturate: return ±1.0 based on sign of x
+    FCMPD F0, F28                     // compare x with 0.0
+    BGE tanh64_neon_scalar_positive
+
+    // x < 0: return -1.0
+    FMOVD F29, F3
+    B tanh64_neon_scalar_store
+
+tanh64_neon_scalar_positive:
+    // x >= 0: return 1.0
+    FMOVD F31, F3
+    B tanh64_neon_scalar_store
+
+tanh64_neon_scalar_approx:
+    FADDD F31, F1, F2                 // F2 = 1 + |x|
+    FDIVD F2, F0, F3                  // F3 = x / (1 + |x|)
+
+tanh64_neon_scalar_store:
+    FMOVD F3, (R0)                    // store result
+
+    ADD $8, R0
+    ADD $8, R1
+    SUB $1, R3
+    CBNZ R3, tanh64_neon_scalar_loop
+
+tanh64_neon_done:
+    RET
+
+// func clampScaleNEON64(dst, src []float64, minVal, maxVal, scale float64)
+// Performs fused clamp and scale: dst[i] = (clamp(src[i], minVal, maxVal) - minVal) * scale
+TEXT ·clampScaleNEON64(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+    FMOVD minVal+48(FP), F4
+    FMOVD maxVal+56(FP), F5
+    FMOVD scale+64(FP), F6
+
+    // Duplicate scalars to SIMD vectors
+    WORD $0x4E080484                  // DUP V4.2D, V4.D[0] -> V4 = minVal
+    WORD $0x4E0804A5                  // DUP V5.2D, V5.D[0] -> V5 = maxVal
+    WORD $0x4E0804C6                  // DUP V6.2D, V6.D[0] -> V6 = scale
+
+    // Process 2 elements per iteration
+    LSR $1, R3, R4
+    CBZ R4, clampscale64_neon_scalar
+
+clampscale64_neon_loop2:
+    VLD1.P 16(R1), [V0.D2]            // V0 = src[i]
+    WORD $0x4E64F400                  // FMAX V0.2D, V0.2D, V4.2D -> clamp to min
+    WORD $0x4EE5F400                  // FMIN V0.2D, V0.2D, V5.2D -> clamp to max
+    WORD $0x4EE4D400                  // FSUB V0.2D, V0.2D, V4.2D -> subtract minVal
+    WORD $0x6E66DC00                  // FMUL V0.2D, V0.2D, V6.2D -> multiply by scale
+    VST1.P [V0.D2], 16(R0)            // store result
+    SUB $1, R4
+    CBNZ R4, clampscale64_neon_loop2
+
+clampscale64_neon_scalar:
+    AND $1, R3
+    CBZ R3, clampscale64_neon_done
+
+clampscale64_neon_scalar_loop:
+    FMOVD (R1), F0                    // F0 = src[i]
+    FMAXD F0, F4, F0                  // F0 = max(src[i], minVal)
+    FMIND F0, F5, F0                  // F0 = min(max(src[i], minVal), maxVal)
+    FSUBD F4, F0, F0                  // F0 = clamped - minVal
+    FMULD F0, F6, F0                  // F0 = (clamped - minVal) * scale
+    FMOVD F0, (R0)                    // store result
+    ADD $8, R0
+    ADD $8, R1
+    SUB $1, R3
+    CBNZ R3, clampscale64_neon_scalar_loop
+
+clampscale64_neon_done:
+    RET

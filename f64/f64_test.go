@@ -831,3 +831,157 @@ func benchmarkCubicInterpDot64(b *testing.B, n int) {
 	}
 	_ = result
 }
+
+func TestSigmoid(t *testing.T) {
+	testCases := []struct {
+		name string
+		src  []float64
+	}{
+		{"zeros", []float64{0, 0, 0, 0, 0, 0, 0, 0}},
+		{"ones", []float64{1, 1, 1, 1, 1, 1, 1, 1}},
+		{"negative", []float64{-1, -2, -3, -4, -5, -6, -7, -8}},
+		{"positive", []float64{1, 2, 3, 4, 5, 6, 7, 8}},
+		{"mixed", []float64{-3, -1, 0, 1, 3, -5, 5, -8}},
+		{"large_positive", []float64{10, 20, 30}},
+		{"large_negative", []float64{-10, -20, -30}},
+		{"nine_elements", []float64{-2, -1, 0, 1, 2, 3, 4, 5, 6}},
+		{"seventeen", make([]float64, 17)},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := make([]float64, len(tc.src))
+			Sigmoid(dst, tc.src)
+
+			// Verify all values are in [0,1]
+			for i, v := range dst {
+				if v < 0 || v > 1 {
+					t.Errorf("sigmoid(%v) = %v, want in range [0,1]", tc.src[i], v)
+				}
+			}
+
+			// Verify special values
+			if len(tc.src) > 0 && tc.src[0] == 0 {
+				want := 0.5
+				if math.Abs(dst[0]-want) > 1e-6 {
+					t.Errorf("sigmoid(0) = %v, want ~%v", dst[0], want)
+				}
+			}
+
+			// Test in-place operation consistency
+			inPlace := make([]float64, len(tc.src))
+			copy(inPlace, tc.src)
+			SigmoidInPlace(inPlace)
+			for i := range dst {
+				if math.Abs(dst[i]-inPlace[i]) > 1e-10 {
+					t.Errorf("SigmoidInPlace mismatch at %d: got %v, want %v", i, inPlace[i], dst[i])
+				}
+			}
+		})
+	}
+}
+
+func TestReLU(t *testing.T) {
+	src := []float64{-5, -2, -0.5, 0, 0.5, 2, 5}
+	want := []float64{0, 0, 0, 0, 0.5, 2, 5}
+	dst := make([]float64, len(src))
+
+	ReLU(dst, src)
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("ReLU at %d: got %v, want %v", i, dst[i], want[i])
+		}
+	}
+
+	// Test in-place
+	inPlace := make([]float64, len(src))
+	copy(inPlace, src)
+	ReLUInPlace(inPlace)
+	for i := range inPlace {
+		if inPlace[i] != want[i] {
+			t.Errorf("ReLUInPlace at %d: got %v, want %v", i, inPlace[i], want[i])
+		}
+	}
+}
+
+func TestClampScale(t *testing.T) {
+	src := []float64{-5, 0, 5, 10, 15}
+	dst := make([]float64, len(src))
+	minVal := 0.0
+	maxVal := 10.0
+	scale := 0.1
+
+	ClampScale(dst, src, minVal, maxVal, scale)
+
+	// After clamping to [0,10] and scaling by 0.1:
+	// -5 -> 0 -> 0*0.1 = 0
+	// 0 -> 0 -> 0*0.1 = 0
+	// 5 -> 5 -> 5*0.1 = 0.5
+	// 10 -> 10 -> 10*0.1 = 1.0
+	// 15 -> 10 -> 10*0.1 = 1.0
+	want := []float64{0, 0, 0.5, 1.0, 1.0}
+
+	for i := range dst {
+		if math.Abs(dst[i]-want[i]) > 1e-10 {
+			t.Errorf("ClampScale at %d: got %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestTanh(t *testing.T) {
+	src := []float64{-3, -1, 0, 1, 3}
+	dst := make([]float64, len(src))
+
+	Tanh(dst, src)
+
+	// Verify all values are in [-1,1]
+	for i, v := range dst {
+		if v < -1 || v > 1 {
+			t.Errorf("tanh(%v) = %v, want in range [-1,1]", src[i], v)
+		}
+	}
+
+	// Verify tanh(0) = 0
+	if len(dst) > 2 && math.Abs(dst[2]) > 1e-10 {
+		t.Errorf("tanh(0) = %v, want ~0", dst[2])
+	}
+
+	// Test in-place
+	inPlace := make([]float64, len(src))
+	copy(inPlace, src)
+	TanhInPlace(inPlace)
+	for i := range dst {
+		if math.Abs(dst[i]-inPlace[i]) > 1e-10 {
+			t.Errorf("TanhInPlace mismatch at %d: got %v, want %v", i, inPlace[i], dst[i])
+		}
+	}
+}
+
+func TestExp(t *testing.T) {
+	src := []float64{-2, -1, 0, 1, 2}
+	dst := make([]float64, len(src))
+
+	Exp(dst, src)
+
+	// Verify exp(0) = 1
+	if len(dst) > 2 && math.Abs(dst[2]-1.0) > 1e-10 {
+		t.Errorf("exp(0) = %v, want 1.0", dst[2])
+	}
+
+	// Verify all values are positive
+	for i, v := range dst {
+		if v <= 0 {
+			t.Errorf("exp(%v) = %v, want positive", src[i], v)
+		}
+	}
+
+	// Test in-place
+	inPlace := make([]float64, len(src))
+	copy(inPlace, src)
+	ExpInPlace(inPlace)
+	for i := range dst {
+		if math.Abs(dst[i]-inPlace[i]) > 1e-10 {
+			t.Errorf("ExpInPlace mismatch at %d: got %v, want %v", i, inPlace[i], dst[i])
+		}
+	}
+}

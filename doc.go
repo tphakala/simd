@@ -48,7 +48,9 @@
 //
 // Element-wise: Abs, Neg, Sqrt, Reciprocal, Clamp
 //
-// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, AccumulateAdd, CumulativeSum
+// Activation functions: Sigmoid, ReLU, Tanh, Exp, ClampScale
+//
+// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, AccumulateAdd, CumulativeSum, CubicInterpDot
 //
 // Complex (c128): Add, Sub, Mul, MulConj, Conj, Abs, AbsSq, Scale
 //

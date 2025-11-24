@@ -130,6 +130,170 @@ func TestClamp(t *testing.T) {
 	}
 }
 
+func TestSigmoid(t *testing.T) {
+	testCases := []struct {
+		name string
+		src  []float32
+	}{
+		{"zeros", []float32{0, 0, 0, 0, 0, 0, 0, 0}},
+		{"ones", []float32{1, 1, 1, 1, 1, 1, 1, 1}},
+		{"negative", []float32{-1, -2, -3, -4, -5, -6, -7, -8}},
+		{"positive", []float32{1, 2, 3, 4, 5, 6, 7, 8}},
+		{"mixed", []float32{-3, -1, 0, 1, 3, -5, 5, -8}},
+		{"large_positive", []float32{10, 20, 30}},
+		{"large_negative", []float32{-10, -20, -30}},
+		{"nine_elements", []float32{-2, -1, 0, 1, 2, 3, 4, 5, 6}},
+		{"seventeen", make([]float32, 17)},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := make([]float32, len(tc.src))
+
+			// Fill seventeen test case with sequential values
+			if tc.name == "seventeen" {
+				for i := range tc.src {
+					tc.src[i] = float32(i - 8)
+				}
+			}
+
+			// Test Sigmoid
+			Sigmoid(dst, tc.src)
+
+			// Verify results are in valid range (0, 1)
+			for i, v := range dst {
+				if v < 0 || v > 1 {
+					t.Errorf("Sigmoid()[%d] = %v, expected value in range (0, 1)", i, v)
+				}
+
+				// Test specific values
+				if tc.src[i] == 0 && math.Abs(float64(v-0.5)) > 0.01 {
+					t.Errorf("Sigmoid(0)[%d] = %v, expected ~0.5", i, v)
+				}
+				if tc.src[i] > 10 && v < 0.99 {
+					t.Errorf("Sigmoid(%v)[%d] = %v, expected > 0.99", tc.src[i], i, v)
+				}
+				if tc.src[i] < -10 && v > 0.01 {
+					t.Errorf("Sigmoid(%v)[%d] = %v, expected < 0.01", tc.src[i], i, v)
+				}
+			}
+
+			// Test SigmoidInPlace
+			src2 := make([]float32, len(tc.src))
+			copy(src2, tc.src)
+			SigmoidInPlace(src2)
+
+			// Verify in-place results match
+			for i, v := range src2 {
+				if math.Abs(float64(v-dst[i])) > 1e-6 {
+					t.Errorf("SigmoidInPlace()[%d] = %v, Sigmoid() = %v, expected same", i, v, dst[i])
+				}
+			}
+		})
+	}
+}
+
+func TestReLU(t *testing.T) {
+	src := []float32{-5, -2, -0.5, 0, 0.5, 2, 5}
+	dst := make([]float32, len(src))
+	want := []float32{0, 0, 0, 0, 0.5, 2, 5}
+
+	ReLU(dst, src)
+
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("ReLU()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+
+	// Test in-place
+	src2 := append([]float32(nil), src...)
+	ReLUInPlace(src2)
+	for i := range src2 {
+		if src2[i] != want[i] {
+			t.Errorf("ReLUInPlace()[%d] = %v, want %v", i, src2[i], want[i])
+		}
+	}
+}
+
+func TestClampScale(t *testing.T) {
+	src := []float32{-5, 0, 5, 10, 15, 20}
+	dst := make([]float32, len(src))
+
+	// Clamp to [0, 10] then scale by 0.1
+	ClampScale(dst, src, 0, 10, 0.1)
+
+	// Expected: (clamp(x, 0, 10) - 0) * 0.1
+	want := []float32{0, 0, 0.5, 1.0, 1.0, 1.0}
+	for i := range dst {
+		if math.Abs(float64(dst[i]-want[i])) > 1e-6 {
+			t.Errorf("ClampScale()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestTanh(t *testing.T) {
+	src := []float32{-3, -1, 0, 1, 3}
+	dst := make([]float32, len(src))
+
+	Tanh(dst, src)
+
+	// Verify results are in valid range (-1, 1)
+	for i, v := range dst {
+		if v < -1 || v > 1 {
+			t.Errorf("Tanh()[%d] = %v, expected value in range (-1, 1)", i, v)
+		}
+
+		// Test specific values
+		if src[i] == 0 && v != 0 {
+			t.Errorf("Tanh(0)[%d] = %v, expected 0", i, v)
+		}
+		if src[i] > 2.5 && v < 0.9 {
+			t.Errorf("Tanh(%v)[%d] = %v, expected ~1", src[i], i, v)
+		}
+		if src[i] < -2.5 && v > -0.9 {
+			t.Errorf("Tanh(%v)[%d] = %v, expected ~-1", src[i], i, v)
+		}
+	}
+
+	// Test in-place
+	src2 := append([]float32(nil), src...)
+	TanhInPlace(src2)
+	for i := range src2 {
+		if math.Abs(float64(src2[i]-dst[i])) > 1e-6 {
+			t.Errorf("TanhInPlace()[%d] = %v, Tanh() = %v, expected same", i, src2[i], dst[i])
+		}
+	}
+}
+
+func TestExp(t *testing.T) {
+	src := []float32{-2, -1, 0, 1, 2}
+	dst := make([]float32, len(src))
+
+	Exp(dst, src)
+
+	// Verify exp(0) = 1
+	if math.Abs(float64(dst[2]-1.0)) > 0.01 {
+		t.Errorf("Exp(0) = %v, want ~1.0", dst[2])
+	}
+
+	// Verify exp is positive
+	for i, v := range dst {
+		if v <= 0 {
+			t.Errorf("Exp()[%d] = %v, expected positive value", i, v)
+		}
+	}
+
+	// Test in-place
+	src2 := append([]float32(nil), src...)
+	ExpInPlace(src2)
+	for i := range src2 {
+		if math.Abs(float64(src2[i]-dst[i])) > 0.01 {
+			t.Errorf("ExpInPlace()[%d] = %v, Exp() = %v, expected similar", i, src2[i], dst[i])
+		}
+	}
+}
+
 // Benchmarks
 
 func BenchmarkDotProduct_100(b *testing.B) {

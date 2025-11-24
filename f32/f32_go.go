@@ -8,6 +8,13 @@ const (
 	unrollMask   = unrollFactor - 1
 )
 
+// Numerical stability thresholds
+const (
+	sigmoidClampThreshold = 20.0 // sigmoid(±20) ≈ 1.0 - 2e-9 (float precision limit)
+	tanhClampThreshold    = 2.5  // fast approximation threshold: tanh(±2.5) saturates to ±1
+	expOverflowThreshold  = 88.0 // exp(88.72) = max float32; clamp to prevent overflow
+)
+
 // Pure Go implementations
 
 func dotProductGo(a, b []float32) float32 {
@@ -279,4 +286,69 @@ func cubicInterpDotGo(hist, a, b, c, d []float32, x float32) float32 {
 	}
 
 	return sum
+}
+
+// sigmoid32Go computes sigmoid(x) = 1 / (1 + e^(-x)) using math.Exp.
+// This is accurate but slower than SIMD approximations.
+func sigmoid32Go(dst, src []float32) {
+	for i := range dst {
+		x := src[i]
+		// Clamp extreme values for numerical stability
+		switch {
+		case x > sigmoidClampThreshold:
+			dst[i] = 1.0
+		case x < -sigmoidClampThreshold:
+			dst[i] = 0.0
+		default:
+			dst[i] = float32(1.0 / (1.0 + math.Exp(float64(-x))))
+		}
+	}
+}
+
+// relu32Go computes ReLU(x) = max(0, x).
+func relu32Go(dst, src []float32) {
+	for i := range dst {
+		if src[i] > 0 {
+			dst[i] = src[i]
+		} else {
+			dst[i] = 0
+		}
+	}
+}
+
+// clampScale32Go performs fused clamp and scale operation.
+func clampScale32Go(dst, src []float32, minVal, maxVal, scale float32) {
+	for i := range dst {
+		v := src[i]
+		if v < minVal {
+			v = minVal
+		} else if v > maxVal {
+			v = maxVal
+		}
+		dst[i] = (v - minVal) * scale
+	}
+}
+
+// tanh32Go computes hyperbolic tangent using math.Tanh for accuracy.
+// This is the accurate implementation used as a fallback when SIMD is unavailable.
+func tanh32Go(dst, src []float32) {
+	for i := range dst {
+		dst[i] = float32(math.Tanh(float64(src[i])))
+	}
+}
+
+// exp32Go computes e^x using math.Exp.
+func exp32Go(dst, src []float32) {
+	for i := range dst {
+		x := src[i]
+		// Clamp extreme values
+		switch {
+		case x > expOverflowThreshold:
+			dst[i] = float32(math.Exp(expOverflowThreshold)) // Prevent overflow
+		case x < -expOverflowThreshold:
+			dst[i] = 0.0 // Prevent underflow
+		default:
+			dst[i] = float32(math.Exp(float64(x)))
+		}
+	}
 }

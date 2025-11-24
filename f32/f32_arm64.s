@@ -992,3 +992,195 @@ cubic32_neon_scalar:
 cubic32_neon_done:
     FMOVS F0, ret+128(FP)
     RET
+
+// func sigmoidNEON(dst, src []float32)
+// Implements fast sigmoid approximation: σ(x) ≈ 0.5 + 0.5 * x / (1 + |x|)
+// This approximation is SIMD-friendly and commonly used in neural networks.
+TEXT ·sigmoidNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    // Load constants into vector registers
+    FMOVS $0.5, F30
+    FMOVS $1.0, F31
+    VDUP V30.S[0], V30.S4         // V30 = {0.5, 0.5, 0.5, 0.5}
+    VDUP V31.S[0], V31.S4         // V31 = {1.0, 1.0, 1.0, 1.0}
+
+    // Process 4 elements per iteration
+    LSR $2, R3, R4
+    CBZ R4, sigmoid32_neon_scalar
+
+sigmoid32_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]        // V0 = x
+    WORD $0x4EA0F801              // FABS V1.4S, V0.4S -> V1 = |x|
+    WORD $0x4E3FD422              // FADD V2.4S, V1.4S, V31.4S -> V2 = 1 + |x|
+    WORD $0x6E22FC03              // FDIV V3.4S, V0.4S, V2.4S -> V3 = x / (1 + |x|)
+    WORD $0x6E3EDC64              // FMUL V4.4S, V3.4S, V30.4S -> V4 = 0.5 * x / (1 + |x|)
+    WORD $0x4E3ED485              // FADD V5.4S, V4.4S, V30.4S -> V5 = 0.5 + result
+    VST1.P [V5.S4], 16(R0)        // store result
+
+    SUB $1, R4
+    CBNZ R4, sigmoid32_neon_loop4
+
+sigmoid32_neon_scalar:
+    AND $3, R3
+    CBZ R3, sigmoid32_neon_done
+
+sigmoid32_neon_scalar_loop:
+    FMOVS (R1), F0                // F0 = x
+    FABSS F0, F1                  // F1 = |x|
+    FADDS F31, F1, F2             // F2 = 1 + |x|
+    FDIVS F2, F0, F3              // F3 = x / (1 + |x|)
+    FMULS F30, F3, F4             // F4 = 0.5 * x / (1 + |x|)
+    FADDS F30, F4, F5             // F5 = 0.5 + result
+    FMOVS F5, (R0)                // store result
+
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R3
+    CBNZ R3, sigmoid32_neon_scalar_loop
+
+sigmoid32_neon_done:
+    RET
+
+// func reluNEON(dst, src []float32)
+// Computes ReLU: dst[i] = max(0, src[i])
+TEXT ·reluNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    // Create zero vector
+    VEOR V30.B16, V30.B16, V30.B16    // V30 = {0, 0, 0, 0}
+
+    // Process 4 elements per iteration
+    LSR $2, R3, R4
+    CBZ R4, relu32_neon_scalar
+
+relu32_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]            // V0 = x
+    WORD $0x4E3EF401                  // FMAX V1.4S, V0.4S, V30.4S -> V1 = max(x, 0)
+    VST1.P [V1.S4], 16(R0)            // store result
+
+    SUB $1, R4
+    CBNZ R4, relu32_neon_loop4
+
+relu32_neon_scalar:
+    AND $3, R3
+    CBZ R3, relu32_neon_done
+
+relu32_neon_scalar_loop:
+    FMOVS (R1), F0                    // F0 = x
+    FMOVS $0.0, F1
+    FMAXS F1, F0, F2                  // F2 = max(x, 0)
+    FMOVS F2, (R0)                    // store result
+
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R3
+    CBNZ R3, relu32_neon_scalar_loop
+
+relu32_neon_done:
+    RET
+
+// func tanhNEON(dst, src []float32)
+// Computes fast tanh approximation: tanh(x) ≈ x / (1 + |x|)
+TEXT ·tanhNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    // Load constants - both 1.0 and 2.5 are encodable FMOV immediates
+    FMOVS $1.0, F31
+    FMOVS $2.5, F30
+    FMOVS $-1.0, F29
+    FMOVS $0, F28
+
+    // Use scalar processing for all elements to avoid complex bit manipulation
+    // The scalar loop handles saturation correctly and is still reasonably fast
+
+tanh32_neon_scalar:
+    CBZ R3, tanh32_neon_done
+
+tanh32_neon_scalar_loop:
+    FMOVS (R1), F0                    // F0 = x
+    FABSS F0, F1                      // F1 = |x|
+    FCMPS F1, F30                     // compare |x| with 2.5
+    BLE tanh32_neon_scalar_approx
+
+    // Saturate: return ±1.0 based on sign of x
+    FCMPS F0, F28                     // compare x with 0.0
+    BGE tanh32_neon_scalar_positive
+
+    // x < 0: return -1.0
+    FMOVS F29, F3
+    B tanh32_neon_scalar_store
+
+tanh32_neon_scalar_positive:
+    // x >= 0: return 1.0
+    FMOVS F31, F3
+    B tanh32_neon_scalar_store
+
+tanh32_neon_scalar_approx:
+    FADDS F31, F1, F2                 // F2 = 1 + |x|
+    FDIVS F2, F0, F3                  // F3 = x / (1 + |x|)
+
+tanh32_neon_scalar_store:
+    FMOVS F3, (R0)                    // store result
+
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R3
+    CBNZ R3, tanh32_neon_scalar_loop
+
+tanh32_neon_done:
+    RET
+
+// func clampScaleNEON(dst, src []float32, minVal, maxVal, scale float32)
+// Performs fused clamp and scale: dst[i] = (clamp(src[i], minVal, maxVal) - minVal) * scale
+TEXT ·clampScaleNEON(SB), NOSPLIT, $0-60
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+    FMOVS minVal+48(FP), F4
+    FMOVS maxVal+52(FP), F5
+    FMOVS scale+56(FP), F6
+
+    // Duplicate scalars to SIMD vectors
+    WORD $0x4E040484                  // DUP V4.4S, V4.S[0] -> V4 = minVal
+    WORD $0x4E0404A5                  // DUP V5.4S, V5.S[0] -> V5 = maxVal
+    WORD $0x4E0404C6                  // DUP V6.4S, V6.S[0] -> V6 = scale
+
+    // Process 4 elements per iteration
+    LSR $2, R3, R4
+    CBZ R4, clampscale32_neon_scalar
+
+clampscale32_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]            // V0 = src[i]
+    WORD $0x4E24F400                  // FMAX V0.4S, V0.4S, V4.4S -> clamp to min
+    WORD $0x4EA5F400                  // FMIN V0.4S, V0.4S, V5.4S -> clamp to max
+    WORD $0x4EA4D400                  // FSUB V0.4S, V0.4S, V4.4S -> subtract minVal
+    WORD $0x6E26DC00                  // FMUL V0.4S, V0.4S, V6.4S -> multiply by scale
+    VST1.P [V0.S4], 16(R0)            // store result
+    SUB $1, R4
+    CBNZ R4, clampscale32_neon_loop4
+
+clampscale32_neon_scalar:
+    AND $3, R3
+    CBZ R3, clampscale32_neon_done
+
+clampscale32_neon_scalar_loop:
+    FMOVS (R1), F0                    // F0 = src[i]
+    FMAXS F0, F4, F0                  // F0 = max(src[i], minVal)
+    FMINS F0, F5, F0                  // F0 = min(max(src[i], minVal), maxVal)
+    FSUBS F4, F0, F0                  // F0 = clamped - minVal
+    FMULS F0, F6, F0                  // F0 = (clamped - minVal) * scale
+    FMOVS F0, (R0)                    // store result
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R3
+    CBNZ R3, clampscale32_neon_scalar_loop
+
+clampscale32_neon_done:
+    RET

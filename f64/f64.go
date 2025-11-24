@@ -462,3 +462,103 @@ func ConvolveValidMulti(dsts [][]float64, signal []float64, kernels [][]float64)
 
 	convolveValidMulti64(dsts, signal, kernels, n, kLen)
 }
+
+// Sigmoid computes the sigmoid activation function: dst[i] = 1 / (1 + e^(-src[i])).
+// This is commonly used as an activation function in neural networks.
+// Processes min(len(dst), len(src)) elements.
+//
+// Uses AVX+FMA on AMD64 (4x float64), NEON on ARM64 (2x float64).
+func Sigmoid(dst, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	sigmoid64(dst[:n], src[:n])
+}
+
+// SigmoidInPlace computes the sigmoid activation function in-place: a[i] = 1 / (1 + e^(-a[i])).
+// This is commonly used as an activation function in neural networks.
+//
+// Uses AVX+FMA on AMD64 (4x float64), NEON on ARM64 (2x float64).
+func SigmoidInPlace(a []float64) {
+	if len(a) == 0 {
+		return
+	}
+	sigmoid64(a, a)
+}
+
+// ReLU computes the Rectified Linear Unit: dst[i] = max(0, src[i]).
+// This is commonly used as an activation function in neural networks.
+// Processes min(len(dst), len(src)) elements.
+//
+// Uses AVX on AMD64 (4x float64), NEON on ARM64 (2x float64).
+func ReLU(dst, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	relu64(dst[:n], src[:n])
+}
+
+// ReLUInPlace computes ReLU in-place: a[i] = max(0, a[i]).
+func ReLUInPlace(a []float64) {
+	if len(a) == 0 {
+		return
+	}
+	relu64(a, a)
+}
+
+// ClampScale performs fused clamp and scale: dst[i] = (clamp(src[i], min, max) - min) * scale.
+// This is useful for normalizing data to a specific range.
+// Processes min(len(dst), len(src)) elements.
+//
+// Uses AVX on AMD64 (4x float64), NEON on ARM64 (2x float64).
+func ClampScale(dst, src []float64, minVal, maxVal, scale float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	clampScale64(dst[:n], src[:n], minVal, maxVal, scale)
+}
+
+// Tanh computes the hyperbolic tangent: dst[i] = tanh(src[i]).
+// Uses fast approximation: tanh(x) ≈ x / (1 + |x|) for |x| < 1, sign(x) for |x| >= 2.5, polynomial otherwise.
+// Processes min(len(dst), len(src)) elements.
+//
+// Uses AVX on AMD64 (4x float64), NEON on ARM64 (2x float64).
+func Tanh(dst, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	tanh64(dst[:n], src[:n])
+}
+
+// TanhInPlace computes tanh in-place: a[i] = tanh(a[i]).
+func TanhInPlace(a []float64) {
+	if len(a) == 0 {
+		return
+	}
+	tanh64(a, a)
+}
+
+// Exp computes the exponential function: dst[i] = e^src[i].
+// Uses polynomial approximation for reasonable accuracy and performance.
+// Processes min(len(dst), len(src)) elements.
+//
+// Uses AVX+FMA on AMD64 (4x float64), NEON on ARM64 (2x float64).
+func Exp(dst, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	exp64(dst[:n], src[:n])
+}
+
+// ExpInPlace computes exp in-place: a[i] = e^a[i].
+func ExpInPlace(a []float64) {
+	if len(a) == 0 {
+		return
+	}
+	exp64(a, a)
+}

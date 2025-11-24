@@ -292,3 +292,56 @@ func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 
 //go:noescape
 func cubicInterpDotNEON(hist, a, b, c, d []float64, x float64) float64
+
+func sigmoid64(dst, src []float64) {
+	// Assumes len(src) >= len(dst); caller ensures this via public API
+	if hasNEON && len(dst) >= 2 {
+		sigmoidNEON64(dst, src)
+		return
+	}
+	sigmoid64Go(dst, src)
+}
+
+func relu64(dst, src []float64) {
+	// Assumes len(src) >= len(dst); caller ensures this via public API
+	if hasNEON && len(dst) >= 2 {
+		reluNEON64(dst, src)
+		return
+	}
+	relu64Go(dst, src)
+}
+
+func clampScale64(dst, src []float64, minVal, maxVal, scale float64) {
+	// Assumes len(src) >= len(dst); caller ensures this via public API
+	if hasNEON && len(dst) >= 2 {
+		clampScaleNEON64(dst, src, minVal, maxVal, scale)
+		return
+	}
+	clampScale64Go(dst, src, minVal, maxVal, scale)
+}
+
+//go:noescape
+func clampScaleNEON64(dst, src []float64, minVal, maxVal, scale float64)
+
+func tanh64(dst, src []float64) {
+	// Temporarily disabled NEON path due to constant loading issues on ARM64
+	// TODO: Debug ARM64 assembly - constants not loading correctly
+	// if hasNEON && len(dst) >= 2 {
+	//	tanhNEON64(dst, src)
+	// 	return
+	// }
+	tanh64Go(dst, src)
+}
+
+func exp64(dst, src []float64) {
+	exp64Go(dst, src)
+}
+
+//go:noescape
+func sigmoidNEON64(dst, src []float64)
+
+//go:noescape
+func reluNEON64(dst, src []float64)
+
+//go:noescape
+func tanhNEON64(dst, src []float64)

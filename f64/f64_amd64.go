@@ -327,6 +327,54 @@ func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 	return cubicInterpDotGo(hist, a, b, c, d, x)
 }
 
+func sigmoid64(dst, src []float64) {
+	// Use AVX+FMA if available and have enough elements
+	if cpu.X86.AVX && cpu.X86.FMA && len(dst) >= minAVXElements {
+		sigmoidAVX(dst, src)
+		return
+	}
+	sigmoid64Go(dst, src)
+}
+
+func relu64(dst, src []float64) {
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
+		reluAVX(dst, src)
+		return
+	}
+	relu64Go(dst, src)
+}
+
+//go:noescape
+func reluAVX(dst, src []float64)
+
+func clampScale64(dst, src []float64, minVal, maxVal, scale float64) {
+	if cpu.X86.AVX && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+		clampScaleAVX(dst, src, minVal, maxVal, scale)
+		return
+	}
+	clampScale64Go(dst, src, minVal, maxVal, scale)
+}
+
+func tanh64(dst, src []float64) {
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
+		tanhAVX(dst, src)
+		return
+	}
+	tanh64Go(dst, src)
+}
+
+//go:noescape
+func tanhAVX(dst, src []float64)
+
+func exp64(dst, src []float64) {
+	// Exp is complex, use Go implementation with math.Exp for now
+	// Can be optimized with AVX polynomial approximation later
+	exp64Go(dst, src)
+}
+
+//go:noescape
+func sigmoidAVX(dst, src []float64)
+
 // AVX+FMA assembly function declarations (4x float64 per iteration)
 //
 //go:noescape
@@ -370,6 +418,9 @@ func fmaAVX(dst, a, b, c []float64)
 
 //go:noescape
 func clampAVX(dst, a []float64, minVal, maxVal float64)
+
+//go:noescape
+func clampScaleAVX(dst, src []float64, minVal, maxVal, scale float64)
 
 //go:noescape
 func sqrtAVX(dst, a []float64)

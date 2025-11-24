@@ -37,3 +37,10 @@ func euclideanDistance32(a, b []float32) float32   { return euclideanDistance32G
 func cubicInterpDot32(hist, a, b, c, d []float32, x float32) float32 {
 	return cubicInterpDotGo(hist, a, b, c, d, x)
 }
+func sigmoid32(dst, src []float32) { sigmoid32Go(dst, src) }
+func relu32(dst, src []float32)    { relu32Go(dst, src) }
+func clampScale32(dst, src []float32, minVal, maxVal, scale float32) {
+	clampScale32Go(dst, src, minVal, maxVal, scale)
+}
+func tanh32(dst, src []float32) { tanh32Go(dst, src) }
+func exp32(dst, src []float32)  { exp32Go(dst, src) }

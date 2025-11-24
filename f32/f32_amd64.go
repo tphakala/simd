@@ -342,6 +342,9 @@ func fmaAVX(dst, a, b, c []float32)
 func clampAVX(dst, a []float32, minVal, maxVal float32)
 
 //go:noescape
+func clampScaleAVX(dst, src []float32, minVal, maxVal, scale float32)
+
+//go:noescape
 func sqrtAVX(dst, a []float32)
 
 //go:noescape
@@ -484,3 +487,53 @@ func cubicInterpDot32(hist, a, b, c, d []float32, x float32) float32 {
 //
 //go:noescape
 func cubicInterpDotAVX(hist, a, b, c, d []float32, x float32) float32
+
+func sigmoid32(dst, src []float32) {
+	// Use AVX+FMA if available and have enough elements on both slices
+	if cpu.X86.AVX && cpu.X86.FMA && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+		sigmoidAVX(dst, src)
+		return
+	}
+	sigmoid32Go(dst, src)
+}
+
+// Sigmoid assembly function declaration
+//
+//go:noescape
+func sigmoidAVX(dst, src []float32)
+
+func relu32(dst, src []float32) {
+	if cpu.X86.AVX && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+		reluAVX(dst, src)
+		return
+	}
+	relu32Go(dst, src)
+}
+
+//go:noescape
+func reluAVX(dst, src []float32)
+
+func clampScale32(dst, src []float32, minVal, maxVal, scale float32) {
+	if cpu.X86.AVX && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+		clampScaleAVX(dst, src, minVal, maxVal, scale)
+		return
+	}
+	clampScale32Go(dst, src, minVal, maxVal, scale)
+}
+
+func tanh32(dst, src []float32) {
+	if cpu.X86.AVX && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+		tanhAVX(dst, src)
+		return
+	}
+	tanh32Go(dst, src)
+}
+
+//go:noescape
+func tanhAVX(dst, src []float32)
+
+func exp32(dst, src []float32) {
+	// Exp is complex, use Go implementation with math.Exp for now
+	// Can be optimized with AVX polynomial approximation later
+	exp32Go(dst, src)
+}
