@@ -755,5 +755,13 @@ func generateTestName(op string, param1, param2 int) string {
 }
 
 func itoa(i int) string {
-	return string('0' + byte(i%10))
+	if i == 0 {
+		return "0"
+	}
+	result := ""
+	for i > 0 {
+		result = string('0'+byte(i%10)) + result
+		i /= 10
+	}
+	return result
 }

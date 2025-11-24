@@ -578,7 +578,7 @@ func TestEdgeCases_MismatchedLengths(t *testing.T) {
 		for i := range 2 {
 			want[i] = a[i]*b[i] + c[i]
 		}
-		assertFloat32SlicesEqual(t, want, dst[:2], refTolerance32, "FMA mismatched lengths")
+		assertFloat32SlicesEqual(t, want, dst[:2], "FMA mismatched lengths")
 	})
 }
 
