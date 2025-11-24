@@ -514,7 +514,7 @@ func relu32(dst, src []float32) {
 func reluAVX(dst, src []float32)
 
 func clampScale32(dst, src []float32, minVal, maxVal, scale float32) {
-	if cpu.X86.AVX && len(dst) >= minAVXElements {
+	if cpu.X86.AVX && len(dst) >= minAVXElements && len(src) >= minAVXElements {
 		clampScaleAVX(dst, src, minVal, maxVal, scale)
 		return
 	}

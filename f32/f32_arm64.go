@@ -315,6 +315,7 @@ func relu32(dst, src []float32) {
 func reluNEON(dst, src []float32)
 
 func clampScale32(dst, src []float32, minVal, maxVal, scale float32) {
+	// Assumes len(src) >= len(dst); caller ensures this via public API
 	if hasNEON && len(dst) >= 4 {
 		clampScaleNEON(dst, src, minVal, maxVal, scale)
 		return

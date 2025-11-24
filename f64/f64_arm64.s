@@ -847,10 +847,10 @@ cubic_neon_done:
     FMOVD F0, ret+128(FP)
     RET
 
-// func sigmoidNEON(dst, src []float64)
+// func sigmoidNEON64(dst, src []float64)
 // Implements fast sigmoid approximation: σ(x) ≈ 0.5 + 0.5 * x / (1 + |x|)
 // This approximation is SIMD-friendly and commonly used in neural networks.
-TEXT ·sigmoidNEON(SB), NOSPLIT, $0-48
+TEXT ·sigmoidNEON64(SB), NOSPLIT, $0-48
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
     MOVD src_base+24(FP), R1
