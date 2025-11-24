@@ -934,31 +934,20 @@ relu64_neon_done:
 
 // func tanhNEON64(dst, src []float64)
 // Computes fast tanh approximation: tanh(x) ≈ x / (1 + |x|)
-// Constants for tanh64
-DATA tanh64_const_one<>+0(SB)/8, $0x3ff0000000000000  // 1.0
-DATA tanh64_const_threshold<>+0(SB)/8, $0x4004000000000000  // 2.5
-DATA tanh64_const_neg_one<>+0(SB)/8, $0xbff0000000000000  // -1.0
-DATA tanh64_const_zero<>+0(SB)/8, $0x0000000000000000  // 0.0
-
-GLOBL tanh64_const_one<>(SB), RODATA|NOPTR, $8
-GLOBL tanh64_const_threshold<>(SB), RODATA|NOPTR, $8
-GLOBL tanh64_const_neg_one<>(SB), RODATA|NOPTR, $8
-GLOBL tanh64_const_zero<>(SB), RODATA|NOPTR, $8
-
 TEXT ·tanhNEON64(SB), NOSPLIT, $0-48
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
     MOVD src_base+24(FP), R1
 
-    // Load constants from data section
-    MOVD $tanh64_const_one<>(SB), R4
-    FMOVD (R4), F31                   // F31 = 1.0
-    MOVD $tanh64_const_threshold<>(SB), R4
-    FMOVD (R4), F30                   // F30 = 2.5
-    MOVD $tanh64_const_neg_one<>(SB), R4
-    FMOVD (R4), F29                   // F29 = -1.0
-    MOVD $tanh64_const_zero<>(SB), R4
-    FMOVD (R4), F28                   // F28 = 0.0
+    // Load constants by moving bit patterns from integer registers
+    MOVD $0x3ff0000000000000, R4      // 1.0 in IEEE 754
+    FMOVD R4, F31
+    MOVD $0x4004000000000000, R4      // 2.5 in IEEE 754
+    FMOVD R4, F30
+    MOVD $0xbff0000000000000, R4      // -1.0 in IEEE 754
+    FMOVD R4, F29
+    MOVD $0x0000000000000000, R4      // 0.0 in IEEE 754
+    FMOVD R4, F28
 
     // Use scalar processing for all elements to avoid complex bit manipulation
     // The scalar loop handles saturation correctly and is still reasonably fast
