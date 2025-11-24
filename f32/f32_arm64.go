@@ -328,10 +328,12 @@ func clampScaleNEON(dst, src []float32, minVal, maxVal, scale float32)
 
 func tanh32(dst, src []float32) {
 	// Assumes len(src) >= len(dst); caller ensures this via public API
-	if hasNEON && len(dst) >= 4 {
-		tanhNEON(dst, src)
-		return
-	}
+	// Temporarily disabled NEON path due to constant loading issues on ARM64
+	// TODO: Debug ARM64 assembly - constants not loading correctly
+	// if hasNEON && len(dst) >= 4 {
+	//	tanhNEON(dst, src)
+	// 	return
+	// }
 	tanh32Go(dst, src)
 }
 
