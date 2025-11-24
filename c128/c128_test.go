@@ -619,4 +619,3 @@ func TestMinLen(t *testing.T) {
 		}
 	}
 }
-
