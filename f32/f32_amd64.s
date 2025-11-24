@@ -2948,7 +2948,8 @@ relu32_done:
     RET
 
 // func tanhAVX(dst, src []float32)
-// Computes fast tanh approximation: tanh(x) ≈ x / (1 + |x|)
+// Computes fast tanh approximation with saturation:
+// tanh(x) ≈ x / (1 + |x|) for |x| <= 2.5, else ±1.0
 TEXT ·tanhAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
@@ -2958,6 +2959,16 @@ TEXT ·tanhAVX(SB), NOSPLIT, $0-48
     VMOVUPS sigmoid_one<>(SB), Y2      // Y2 = 1.0 (reuse existing constant)
     VMOVUPS absf32mask<>(SB), Y3       // Y3 = abs mask
 
+    // Create 2.5 threshold
+    MOVL $0x40200000, AX               // 2.5 in float32
+    VMOVD AX, X4
+    VBROADCASTSS X4, Y4                // Y4 = {2.5, 2.5, ..., 2.5}
+
+    // Create sign mask (0x80000000)
+    MOVL $0x80000000, AX
+    VMOVD AX, X5
+    VBROADCASTSS X5, Y5                // Y5 = sign mask
+
     // Process 8 elements per iteration
     MOVQ CX, AX
     SHRQ $3, AX                        // len / 8
@@ -2966,8 +2977,19 @@ TEXT ·tanhAVX(SB), NOSPLIT, $0-48
 tanh32_loop8:
     VMOVUPS (SI), Y0                   // Y0 = x
     VANDPS Y3, Y0, Y1                  // Y1 = |x|
-    VADDPS Y2, Y1, Y1                  // Y1 = 1 + |x|
-    VDIVPS Y1, Y0, Y0                  // Y0 = x / (1 + |x|)
+
+    // Compute approximation
+    VADDPS Y2, Y1, Y6                  // Y6 = 1 + |x|
+    VDIVPS Y6, Y0, Y7                  // Y7 = x / (1 + |x|) (approximation)
+
+    // Create saturated value: copysign(1.0, x)
+    VANDPS Y5, Y0, Y6                  // Y6 = sign bit of x
+    VORPS Y2, Y6, Y6                   // Y6 = 1.0 with sign of x (saturated value)
+
+    // Compare |x| > 2.5 and select
+    VCMPPS $0x1E, Y4, Y1, Y1           // Y1 = mask (|x| > 2.5), using NLE (not less or equal)
+    VBLENDVPS Y1, Y6, Y7, Y0           // Y0 = blend(approx, saturated, mask)
+
     VMOVUPS Y0, (DX)                   // store result
     ADDQ $32, SI
     ADDQ $32, DX
@@ -2981,8 +3003,21 @@ tanh32_remainder:
 tanh32_scalar:
     VMOVSS (SI), X0                    // X0 = x
     VANDPS X3, X0, X1                  // X1 = |x|
+
+    // Compare |x| with 2.5
+    VUCOMISS X4, X1
+    JBE tanh32_scalar_approx
+
+    // Saturate: return ±1.0
+    VANDPS X5, X0, X6                  // X6 = sign bit of x
+    VORPS X2, X6, X0                   // X0 = 1.0 with sign of x
+    JMP tanh32_scalar_store
+
+tanh32_scalar_approx:
     VADDSS X2, X1, X1                  // X1 = 1 + |x|
     VDIVSS X1, X0, X0                  // X0 = x / (1 + |x|)
+
+tanh32_scalar_store:
     VMOVSS X0, (DX)                    // store result
     ADDQ $4, SI
     ADDQ $4, DX

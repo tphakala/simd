@@ -3336,7 +3336,8 @@ relu64_done:
     RET
 
 // func tanhAVX(dst, src []float64)
-// Computes fast tanh approximation: tanh(x) ≈ x / (1 + |x|)
+// Computes fast tanh approximation with saturation:
+// tanh(x) ≈ x / (1 + |x|) for |x| <= 2.5, else ±1.0
 TEXT ·tanhAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
@@ -3346,6 +3347,16 @@ TEXT ·tanhAVX(SB), NOSPLIT, $0-48
     VMOVUPD sigmoid_one64<>(SB), Y2    // Y2 = 1.0 (reuse existing constant)
     VMOVUPD absf64mask<>(SB), Y3       // Y3 = abs mask
 
+    // Create 2.5 threshold
+    MOVQ $0x4004000000000000, AX       // 2.5 in float64
+    VMOVQ AX, X4
+    VBROADCASTSD X4, Y4                // Y4 = {2.5, 2.5, 2.5, 2.5}
+
+    // Create sign mask (0x8000000000000000)
+    MOVQ $0x8000000000000000, AX
+    VMOVQ AX, X5
+    VBROADCASTSD X5, Y5                // Y5 = sign mask
+
     // Process 4 elements per iteration
     MOVQ CX, AX
     SHRQ $2, AX                        // len / 4
@@ -3354,8 +3365,19 @@ TEXT ·tanhAVX(SB), NOSPLIT, $0-48
 tanh64_loop4:
     VMOVUPD (SI), Y0                   // Y0 = x
     VANDPD Y3, Y0, Y1                  // Y1 = |x|
-    VADDPD Y2, Y1, Y1                  // Y1 = 1 + |x|
-    VDIVPD Y1, Y0, Y0                  // Y0 = x / (1 + |x|)
+
+    // Compute approximation
+    VADDPD Y2, Y1, Y6                  // Y6 = 1 + |x|
+    VDIVPD Y6, Y0, Y7                  // Y7 = x / (1 + |x|) (approximation)
+
+    // Create saturated value: copysign(1.0, x)
+    VANDPD Y5, Y0, Y6                  // Y6 = sign bit of x
+    VORPD Y2, Y6, Y6                   // Y6 = 1.0 with sign of x (saturated value)
+
+    // Compare |x| > 2.5 and select
+    VCMPPD $0x1E, Y4, Y1, Y1           // Y1 = mask (|x| > 2.5), using NLE (not less or equal)
+    VBLENDVPD Y1, Y6, Y7, Y0           // Y0 = blend(approx, saturated, mask)
+
     VMOVUPD Y0, (DX)                   // store result
     ADDQ $32, SI
     ADDQ $32, DX
@@ -3369,8 +3391,21 @@ tanh64_remainder:
 tanh64_scalar:
     VMOVSD (SI), X0                    // X0 = x
     VANDPD X3, X0, X1                  // X1 = |x|
+
+    // Compare |x| with 2.5
+    VUCOMISD X4, X1
+    JBE tanh64_scalar_approx
+
+    // Saturate: return ±1.0
+    VANDPD X5, X0, X6                  // X6 = sign bit of x
+    VORPD X2, X6, X0                   // X0 = 1.0 with sign of x
+    JMP tanh64_scalar_store
+
+tanh64_scalar_approx:
     VADDSD X2, X1, X1                  // X1 = 1 + |x|
     VDIVSD X1, X0, X0                  // X0 = x / (1 + |x|)
+
+tanh64_scalar_store:
     VMOVSD X0, (DX)                    // store result
     ADDQ $8, SI
     ADDQ $8, DX

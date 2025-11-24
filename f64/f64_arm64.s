@@ -939,9 +939,13 @@ TEXT ·tanhNEON64(SB), NOSPLIT, $0-48
     MOVD dst_len+8(FP), R3
     MOVD src_base+24(FP), R1
 
-    // Load constant
+    // Load constants
     FMOVD $1.0, F31
+    FMOVD $2.5, F30
+    FMOVD $-1.0, F29
     VDUP V31.D[0], V31.D2             // V31 = {1.0, 1.0}
+    VDUP V30.D[0], V30.D2             // V30 = {2.5, 2.5}
+    VDUP V29.D[0], V29.D2             // V29 = {-1.0, -1.0}
 
     // Process 2 elements per iteration
     LSR $1, R3, R4
@@ -951,8 +955,21 @@ tanh64_neon_loop2:
     VLD1.P 16(R1), [V0.D2]            // V0 = x
     WORD $0x4EE0F801                  // FABS V1.2D, V0.2D -> V1 = |x|
     WORD $0x4E7FD422                  // FADD V2.2D, V1.2D, V31.2D -> V2 = 1 + |x|
-    WORD $0x6E62FC03                  // FDIV V3.2D, V0.2D, V2.2D -> V3 = x / (1 + |x|)
+    WORD $0x6E62FC03                  // FDIV V3.2D, V0.2D, V2.2D -> V3 = x / (1 + |x|) (approximation)
+
+    // If |x| > 2.5, saturate to ±1
+    WORD $0x4E7EE424                  // FCMGT V4.2D, V1.2D, V30.2D -> V4 = mask (|x| > 2.5)
+    // Create saturated value: copysign(1.0, x)
+    WORD $0x2EE03C05                  // FCMLT V5.2D, V0.2D, #0 -> V5 = mask (x < 0)
+    WORD $0x6EA51C9F                  // BSL V31.16B, V29.16B, V5.16B -> saturated = (x < 0) ? -1.0 : 1.0
+    // Select: result = (|x| > 2.5) ? saturated : approximation
+    WORD $0x6E831C83                  // BSL V3.16B, V31.16B, V4.16B
+
     VST1.P [V3.D2], 16(R0)            // store result
+
+    // Restore V31 for next iteration
+    FMOVD $1.0, F31
+    VDUP V31.D[0], V31.D2
 
     SUB $1, R4
     CBNZ R4, tanh64_neon_loop2
@@ -964,8 +981,28 @@ tanh64_neon_scalar:
 tanh64_neon_scalar_loop:
     FMOVD (R1), F0                    // F0 = x
     FABSD F0, F1                      // F1 = |x|
+    FCMPD F1, F30                     // compare |x| with 2.5
+    BLE tanh64_neon_scalar_approx
+
+    // Saturate: return ±1.0 based on sign of x
+    FMOVD $0, F7                      // F7 = 0.0
+    FCMPD F0, F7                      // compare x with 0
+    BGE tanh64_neon_scalar_positive
+
+    // x < 0: return -1.0
+    FMOVD F29, F3
+    B tanh64_neon_scalar_store
+
+tanh64_neon_scalar_positive:
+    // x >= 0: return 1.0
+    FMOVD F31, F3
+    B tanh64_neon_scalar_store
+
+tanh64_neon_scalar_approx:
     FADDD F31, F1, F2                 // F2 = 1 + |x|
     FDIVD F2, F0, F3                  // F3 = x / (1 + |x|)
+
+tanh64_neon_scalar_store:
     FMOVD F3, (R0)                    // store result
 
     ADD $8, R0
