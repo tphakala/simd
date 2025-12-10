@@ -1764,6 +1764,8 @@ butterfly_neon_loop4:
     // Store results (need to rewind pointers since we post-incremented during load)
     SUB $16, R0
     SUB $16, R1
+    SUB $16, R4
+    SUB $16, R5
     VST1.P [V8.S4], 16(R0)           // Store new upperRe
     VST1.P [V9.S4], 16(R1)           // Store new upperIm
     VST1.P [V10.S4], 16(R4)          // Store new lowerRe
