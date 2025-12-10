@@ -635,3 +635,23 @@ func AbsSqComplex(dst, aRe, aIm []float32) {
 func minLen6(a, b, c, d, e, f int) int {
 	return min(a, b, c, d, e, f)
 }
+
+// ButterflyComplex performs the FFT butterfly operation with twiddle factor multiply:
+//
+//	temp_re = lower_re[i]*tw_re[i] - lower_im[i]*tw_im[i]
+//	temp_im = lower_re[i]*tw_im[i] + lower_im[i]*tw_re[i]
+//	upper_re[i], lower_re[i] = upper_re[i]+temp_re, upper_re[i]-temp_re
+//	upper_im[i], lower_im[i] = upper_im[i]+temp_im, upper_im[i]-temp_im
+//
+// This fused operation avoids intermediate memory writes, keeping temp values
+// in registers for significant speedup in FFT inner loops.
+//
+// Processes min(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm)) elements.
+// All slices are modified in-place: upper receives upper+temp, lower receives upper-temp.
+func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
+	n := minLen6(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm))
+	if n == 0 {
+		return
+	}
+	butterflyComplex32(upperRe[:n], upperIm[:n], lowerRe[:n], lowerIm[:n], twRe[:n], twIm[:n])
+}

@@ -417,3 +417,24 @@ func absSqComplex32Go(dst, aRe, aIm []float32) {
 		dst[i] = r*r + im*im
 	}
 }
+
+// butterflyComplex32Go performs FFT butterfly with twiddle multiply:
+//
+//	temp = lower * twiddle (complex multiply)
+//	upper, lower = upper + temp, upper - temp
+func butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
+	for i := range upperRe {
+		// Complex multiply: temp = lower * twiddle
+		lr, li := lowerRe[i], lowerIm[i]
+		tr, ti := twRe[i], twIm[i]
+		tempRe := lr*tr - li*ti
+		tempIm := lr*ti + li*tr
+
+		// Butterfly: upper' = upper + temp, lower' = upper - temp
+		ur, ui := upperRe[i], upperIm[i]
+		upperRe[i] = ur + tempRe
+		upperIm[i] = ui + tempIm
+		lowerRe[i] = ur - tempRe
+		lowerIm[i] = ui - tempIm
+	}
+}

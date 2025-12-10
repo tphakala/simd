@@ -1715,3 +1715,106 @@ abssqcplx_neon_scalar_loop:
 
 abssqcplx_neon_done:
     RET
+
+// func butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32)
+// Computes FFT butterfly with twiddle factor multiply using split arrays:
+//   temp_re = lower_re[i]*tw_re[i] - lower_im[i]*tw_im[i]
+//   temp_im = lower_re[i]*tw_im[i] + lower_im[i]*tw_re[i]
+//   upper_re[i], lower_re[i] = upper_re[i]+temp_re, upper_re[i]-temp_re
+//   upper_im[i], lower_im[i] = upper_im[i]+temp_im, upper_im[i]-temp_im
+// Frame: upperRe(24) + upperIm(24) + lowerRe(24) + lowerIm(24) + twRe(24) + twIm(24) = 144 bytes
+TEXT ·butterflyComplexNEON(SB), NOSPLIT, $0-144
+    MOVD upperRe_base+0(FP), R0      // R0 = upperRe pointer
+    MOVD upperRe_len+8(FP), R3       // R3 = length
+    MOVD upperIm_base+24(FP), R1     // R1 = upperIm pointer
+    MOVD lowerRe_base+48(FP), R4     // R4 = lowerRe pointer
+    MOVD lowerIm_base+72(FP), R5     // R5 = lowerIm pointer
+    MOVD twRe_base+96(FP), R6        // R6 = twRe pointer
+    MOVD twIm_base+120(FP), R7       // R7 = twIm pointer
+
+    // Process 4 elements per iteration
+    LSR $2, R3, R8
+    CBZ R8, butterfly_neon_scalar
+
+butterfly_neon_loop4:
+    // Load inputs
+    VLD1.P 16(R0), [V0.S4]           // V0 = upperRe[0:4]
+    VLD1.P 16(R1), [V1.S4]           // V1 = upperIm[0:4]
+    VLD1.P 16(R4), [V2.S4]           // V2 = lowerRe[0:4]
+    VLD1.P 16(R5), [V3.S4]           // V3 = lowerIm[0:4]
+    VLD1.P 16(R6), [V4.S4]           // V4 = twRe[0:4]
+    VLD1.P 16(R7), [V5.S4]           // V5 = twIm[0:4]
+
+    // tempRe = lowerRe*twRe - lowerIm*twIm
+    WORD $0x6E24DC46                  // FMUL V6.4S, V2.4S, V4.4S  (lowerRe * twRe)
+    WORD $0x4EA5CC66                  // FMLS V6.4S, V3.4S, V5.4S  (V6 -= lowerIm * twIm)
+
+    // tempIm = lowerRe*twIm + lowerIm*twRe
+    WORD $0x6E25DC47                  // FMUL V7.4S, V2.4S, V5.4S  (lowerRe * twIm)
+    WORD $0x4E24CC67                  // FMLA V7.4S, V3.4S, V4.4S  (V7 += lowerIm * twRe)
+
+    // new upperRe = upperRe + tempRe, new lowerRe = upperRe - tempRe
+    WORD $0x4E26D408                  // FADD V8.4S, V0.4S, V6.4S  (upperRe + tempRe)
+    WORD $0x4EA6D40A                  // FSUB V10.4S, V0.4S, V6.4S (upperRe - tempRe)
+
+    // new upperIm = upperIm + tempIm, new lowerIm = upperIm - tempIm
+    WORD $0x4E27D429                  // FADD V9.4S, V1.4S, V7.4S  (upperIm + tempIm)
+    WORD $0x4EA7D42B                  // FSUB V11.4S, V1.4S, V7.4S (upperIm - tempIm)
+
+    // Store results (need to rewind pointers since we post-incremented during load)
+    SUB $16, R0
+    SUB $16, R1
+    VST1.P [V8.S4], 16(R0)           // Store new upperRe
+    VST1.P [V9.S4], 16(R1)           // Store new upperIm
+    VST1.P [V10.S4], 16(R4)          // Store new lowerRe
+    VST1.P [V11.S4], 16(R5)          // Store new lowerIm
+
+    SUB $1, R8
+    CBNZ R8, butterfly_neon_loop4
+
+butterfly_neon_scalar:
+    AND $3, R3
+    CBZ R3, butterfly_neon_done
+
+butterfly_neon_scalar_loop:
+    // Load scalar values
+    FMOVS (R0), F0                   // F0 = upperRe
+    FMOVS (R1), F1                   // F1 = upperIm
+    FMOVS (R4), F2                   // F2 = lowerRe
+    FMOVS (R5), F3                   // F3 = lowerIm
+    FMOVS (R6), F4                   // F4 = twRe
+    FMOVS (R7), F5                   // F5 = twIm
+
+    // tempRe = lowerRe*twRe - lowerIm*twIm
+    FMULS F2, F4, F6                 // F6 = lowerRe * twRe
+    FMULS F3, F5, F7                 // F7 = lowerIm * twIm
+    FSUBS F7, F6, F6                 // F6 = tempRe (F6 - F7)
+
+    // tempIm = lowerRe*twIm + lowerIm*twRe
+    FMULS F2, F5, F7                 // F7 = lowerRe * twIm
+    FMULS F3, F4, F8                 // F8 = lowerIm * twRe
+    FADDS F7, F8, F7                 // F7 = tempIm
+
+    // Butterfly: upper' = upper + temp, lower' = upper - temp
+    FADDS F0, F6, F8                 // F8 = new upperRe
+    FSUBS F6, F0, F9                 // F9 = new lowerRe (F0 - F6)
+    FADDS F1, F7, F10                // F10 = new upperIm
+    FSUBS F7, F1, F11                // F11 = new lowerIm (F1 - F7)
+
+    // Store results
+    FMOVS F8, (R0)
+    FMOVS F10, (R1)
+    FMOVS F9, (R4)
+    FMOVS F11, (R5)
+
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R4
+    ADD $4, R5
+    ADD $4, R6
+    ADD $4, R7
+    SUB $1, R3
+    CBNZ R3, butterfly_neon_scalar_loop
+
+butterfly_neon_done:
+    RET
