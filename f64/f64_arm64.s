@@ -1002,7 +1002,7 @@ tanh64_neon_loop2:
     WORD $0x6E73DC00                  // FMUL V0.2D, V0.2D, V19.2D   V0 = -2x
 
     // Clamp -2x to [-20, 20]
-    WORD $0x4EBBF400                  // FMIN V0.2D, V0.2D, V27.2D   clamp upper to 20
+    WORD $0x4EFBF400                  // FMIN V0.2D, V0.2D, V27.2D   clamp upper to 20
     WORD $0x4E7CF400                  // FMAX V0.2D, V0.2D, V28.2D   clamp lower to -20
 
     // Range reduction: k = round(-2x * log2e), r = -2x - k * ln2
