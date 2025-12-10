@@ -929,32 +929,89 @@ func TestClampScale(t *testing.T) {
 }
 
 func TestTanh(t *testing.T) {
-	src := []float64{-3, -1, 0, 1, 3}
-	dst := make([]float64, len(src))
+	// Test cases with various input ranges including extreme values that trigger clamping
+	testCases := []struct {
+		name string
+		src  []float64
+	}{
+		{"zeros", []float64{0, 0, 0, 0, 0, 0, 0, 0}},
+		{"ones", []float64{1, 1, 1, 1, 1, 1, 1, 1}},
+		{"negative", []float64{-1, -2, -3, -4, -5, -6, -7, -8}},
+		{"positive", []float64{1, 2, 3, 4, 5, 6, 7, 8}},
+		{"mixed", []float64{-3, -1, 0, 1, 3, -5, 5, -8}},
+		// Extreme values that MUST trigger clamping (clamp range is ±20 for -2x)
+		// These values test the FMIN/FMAX instructions - critical for validating
+		// correct instruction encodings (.2D vs .4S)
+		{"extreme_positive", []float64{15, 20, 50, 100}},
+		{"extreme_negative", []float64{-15, -20, -50, -100}},
+		{"extreme_mixed", []float64{-100, -50, -20, -10, 0, 10, 20, 50, 100}},
+		// Various sizes to test NEON vectorized path (2-wide for f64) and scalar remainder
+		{"size_1", []float64{2.5}},
+		{"size_2", []float64{-1, 1}},          // exact NEON width for f64
+		{"size_3", []float64{-1, 0, 1}},       // NEON + 1 scalar
+		{"size_4", []float64{-2, -1, 1, 2}},   // 2x NEON
+		{"size_5", []float64{-2, -1, 0, 1, 2}},
+		{"size_7", []float64{-3, -2, -1, 0, 1, 2, 3}},
+		{"size_9", []float64{-4, -3, -2, -1, 0, 1, 2, 3, 4}},
+		{"size_17", make([]float64, 17)},
+	}
 
-	Tanh(dst, src)
+	// Fill size_17 with values including extremes
+	for i := 0; i < 17; i++ {
+		testCases[len(testCases)-1].src[i] = float64(i-8) * 10 // -80 to +80
+	}
 
-	// Verify all values are in [-1,1]
-	for i, v := range dst {
-		if v < -1 || v > 1 {
-			t.Errorf("tanh(%v) = %v, want in range [-1,1]", src[i], v)
+	// Note: The NEON exp polynomial approximation (5-term Horner) provides ~5 significant
+	// digits of accuracy. This is sufficient for neural network activation functions.
+	// For higher precision, more polynomial terms would be needed.
+	const epsilon = 1e-4 // Acceptable relative error for polynomial approximation
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := make([]float64, len(tc.src))
+			Tanh(dst, tc.src)
+
+			for i, v := range dst {
+				// Verify results are in valid range [-1, 1]
+				if v < -1 || v > 1 {
+					t.Errorf("Tanh(%v)[%d] = %v, expected value in range [-1, 1]", tc.src[i], i, v)
+				}
+
+				// Verify accuracy against math.Tanh
+				expected := math.Tanh(tc.src[i])
+				diff := math.Abs(v - expected)
+
+				// Use relative error for values away from zero, absolute for near-zero
+				var relErr float64
+				if math.Abs(expected) > 1e-10 {
+					relErr = diff / math.Abs(expected)
+				} else {
+					relErr = diff
+				}
+
+				if relErr > epsilon {
+					t.Errorf("Tanh(%v)[%d] = %v, want %v (error: %v)", tc.src[i], i, v, expected, relErr)
+				}
+			}
+		})
+	}
+
+	// Test in-place operation
+	t.Run("in_place", func(t *testing.T) {
+		src := []float64{-100, -50, -10, -1, 0, 1, 10, 50, 100}
+		dst := make([]float64, len(src))
+		Tanh(dst, src)
+
+		inPlace := make([]float64, len(src))
+		copy(inPlace, src)
+		TanhInPlace(inPlace)
+
+		for i := range dst {
+			if math.Abs(dst[i]-inPlace[i]) > 1e-10 {
+				t.Errorf("TanhInPlace()[%d] = %v, Tanh() = %v, expected same", i, inPlace[i], dst[i])
+			}
 		}
-	}
-
-	// Verify tanh(0) = 0
-	if len(dst) > 2 && math.Abs(dst[2]) > 1e-10 {
-		t.Errorf("tanh(0) = %v, want ~0", dst[2])
-	}
-
-	// Test in-place
-	inPlace := make([]float64, len(src))
-	copy(inPlace, src)
-	TanhInPlace(inPlace)
-	for i := range dst {
-		if math.Abs(dst[i]-inPlace[i]) > 1e-10 {
-			t.Errorf("TanhInPlace mismatch at %d: got %v, want %v", i, inPlace[i], dst[i])
-		}
-	}
+	})
 }
 
 func TestExp(t *testing.T) {
