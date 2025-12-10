@@ -414,10 +414,10 @@ func accumulateAddGo(dst, src []Float16) {
 
 // convolveValidGo computes valid convolution.
 func convolveValidGo(dst, signal, kernel []Float16) {
-	kLen := len(kernel)
+	kernelLen := len(kernel)
 	for i := range dst {
 		var sum float32
-		for j := range kLen {
+		for j := range kernelLen {
 			sum += toFloat32Go(signal[i+j]) * toFloat32Go(kernel[j])
 		}
 		dst[i] = fromFloat32Go(sum)

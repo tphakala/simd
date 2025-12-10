@@ -4,15 +4,16 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/simd)](https://goreportcard.com/report/github.com/tphakala/simd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, and complex128 slices.
+A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, and complex128 slices.
 
 ## Features
 
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
-- **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE2, NEON, or pure Go)
+- **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE2, NEON, NEON+FP16, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
-- **46 operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, and complex number operations
-- **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2) and ARM64 (NEON) with pure Go fallback
+- **80+ operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, and complex number operations
+- **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2) and ARM64 (NEON/NEON+FP16) with pure Go fallback
+- **Half-precision support** - Native FP16 SIMD on ARM64 with FP16 extension (Apple Silicon, Cortex-A55+)
 - **Thread-safe** - All functions are safe for concurrent use
 
 ## Installation
@@ -76,6 +77,7 @@ fmt.Println(cpu.Info())      // "AMD64 AVX-512", "AMD64 AVX+FMA", "AMD64 SSE2", 
 fmt.Println(cpu.HasAVX())    // true/false
 fmt.Println(cpu.HasAVX512()) // true/false
 fmt.Println(cpu.HasNEON())   // true/false
+fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 ```
 
 ### `f64` - float64 Operations
@@ -131,6 +133,86 @@ Same API as `f64` but for `float32` with wider SIMD:
 | AMD64 (AVX+FMA) | 8x float32  |
 | AMD64 (SSE2)    | 4x float32  |
 | ARM64 (NEON)    | 4x float32  |
+
+### `f16` - float16 (Half-Precision) Operations
+
+IEEE 754 half-precision floating-point operations, optimized for ML inference, audio DSP, and memory-bandwidth-bound workloads.
+
+```go
+import "github.com/tphakala/simd/f16"
+
+// Convert between float32 and float16
+h := f16.FromFloat32(3.14)
+f := f16.ToFloat32(h)
+
+// Vector operations (same API as f32/f64)
+a := make([]f16.Float16, 1024)
+b := make([]f16.Float16, 1024)
+dst := make([]f16.Float16, 1024)
+
+f16.Add(dst, a, b)           // Element-wise addition
+dot := f16.DotProduct(a, b)  // Dot product (returns float32)
+f16.ReLU(dst, a)             // Activation functions
+```
+
+| Category        | Function                            | Description                   | SIMD Width       |
+| --------------- | ----------------------------------- | ----------------------------- | ---------------- |
+| **Conversion**  | `ToFloat32(h)`                      | FP16 → float32                | Scalar           |
+|                 | `FromFloat32(f)`                    | float32 → FP16                | Scalar           |
+|                 | `ToFloat32Slice(dst, src)`          | Batch FP16 → float32          | 8x (NEON+FP16)   |
+|                 | `FromFloat32Slice(dst, src)`        | Batch float32 → FP16          | 8x (NEON+FP16)   |
+| **Arithmetic**  | `Add(dst, a, b)`                    | Element-wise addition         | 8x (NEON+FP16)   |
+|                 | `Sub(dst, a, b)`                    | Element-wise subtraction      | 8x (NEON+FP16)   |
+|                 | `Mul(dst, a, b)`                    | Element-wise multiplication   | 8x (NEON+FP16)   |
+|                 | `Div(dst, a, b)`                    | Element-wise division         | 8x (NEON+FP16)   |
+|                 | `Scale(dst, a, s)`                  | Multiply by scalar            | 8x (NEON+FP16)   |
+|                 | `AddScalar(dst, a, s)`              | Add scalar                    | 8x (NEON+FP16)   |
+|                 | `FMA(dst, a, b, c)`                 | Fused multiply-add: a*b+c     | 8x (NEON+FP16)   |
+|                 | `AddScaled(dst, alpha, s)`          | dst += alpha*s (AXPY)         | 8x (NEON+FP16)   |
+| **Unary**       | `Abs(dst, a)`                       | Absolute value                | 8x (NEON+FP16)   |
+|                 | `Neg(dst, a)`                       | Negation                      | 8x (NEON+FP16)   |
+|                 | `Sqrt(dst, a)`                      | Square root                   | 8x (NEON+FP16)   |
+|                 | `Reciprocal(dst, a)`                | Reciprocal (1/x)              | 8x (NEON+FP16)   |
+| **Reduction**   | `DotProduct(a, b)` → float32        | Dot product                   | 8x (NEON+FP16)   |
+|                 | `Sum(a)` → float32                  | Sum of elements               | 8x (NEON+FP16)   |
+|                 | `Min(a)`                            | Minimum value                 | 8x (NEON+FP16)   |
+|                 | `Max(a)`                            | Maximum value                 | 8x (NEON+FP16)   |
+|                 | `MinIdx(a)`                         | Index of minimum              | Pure Go          |
+|                 | `MaxIdx(a)`                         | Index of maximum              | Pure Go          |
+| **Statistical** | `Mean(a)` → float32                 | Arithmetic mean               | 8x (NEON+FP16)   |
+|                 | `Variance(a)` → float32             | Population variance           | Pure Go          |
+|                 | `StdDev(a)` → float32               | Standard deviation            | Pure Go          |
+| **Vector**      | `EuclideanDistance(a, b)` → float32 | L2 distance                   | Pure Go          |
+|                 | `Normalize(dst, a)`                 | Unit vector normalization     | 8x (NEON+FP16)   |
+|                 | `CumulativeSum(dst, a)`             | Running sum                   | Sequential       |
+| **Range**       | `Clamp(dst, a, min, max)`           | Clamp to range                | 8x (NEON+FP16)   |
+|                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | Pure Go          |
+| **Activation**  | `ReLU(dst, src)`                    | Rectified Linear Unit         | 8x (NEON+FP16)   |
+|                 | `Sigmoid(dst, src)`                 | Sigmoid: 1/(1+e^-x)           | Pure Go          |
+|                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | Pure Go          |
+|                 | `Exp(dst, src)`                     | Exponential e^x               | Pure Go          |
+| **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x (NEON+FP16)   |
+| **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | Pure Go          |
+|                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x (NEON+FP16)   |
+| **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | Pure Go          |
+|                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | Pure Go          |
+
+**Key characteristics:**
+
+- **Storage**: IEEE 754 half-precision (1 sign, 5 exponent, 10 mantissa bits)
+- **Precision**: ~3.3 decimal digits, range ~6×10⁻⁸ to 65504
+- **Reductions**: Accumulate in float32 for numerical stability
+- **Memory efficiency**: 2x bandwidth vs float32 (8 elements per 128-bit NEON vector)
+
+**Hardware requirements:**
+
+- **Native FP16 SIMD**: ARM64 with FEAT_FP16 (ARMv8.2-A+)
+  - Apple Silicon (M1/M2/M3/M4) ✅
+  - Cortex-A55, A75, A76, A77, A78, X1, X2, X3 ✅
+  - Raspberry Pi 5 (Cortex-A76) ✅
+- **Pure Go fallback**: All other platforms
+  - Raspberry Pi 3/4 (Cortex-A53/A72 - ARMv8.0) - works but no SIMD acceleration
+  - AMD64 - works but no SIMD acceleration
 
 ### `c128` - complex128 Operations
 
@@ -346,13 +428,25 @@ The Go fallback for small slices is intentional and likely optimal - SIMD setup 
 
 ## Architecture Support
 
-| Architecture | Instruction Set | Status            |
-| ------------ | --------------- | ----------------- |
-| AMD64        | AVX-512         | Full SIMD support |
-| AMD64        | AVX + FMA       | Full SIMD support |
-| AMD64        | SSE2            | Full SIMD support |
-| ARM64        | NEON/ASIMD      | Full SIMD support |
-| Other        | -               | Pure Go fallback  |
+| Architecture | Instruction Set | f64/f32/c128      | f16               |
+| ------------ | --------------- | ----------------- | ----------------- |
+| AMD64        | AVX-512         | Full SIMD support | Pure Go fallback  |
+| AMD64        | AVX + FMA       | Full SIMD support | Pure Go fallback  |
+| AMD64        | SSE2            | Full SIMD support | Pure Go fallback  |
+| ARM64        | NEON + FP16     | Full SIMD support | Full SIMD support |
+| ARM64        | NEON only       | Full SIMD support | Pure Go fallback  |
+| Other        | -               | Pure Go fallback  | Pure Go fallback  |
+
+**ARM64 FP16 support by device:**
+
+| Device / SoC              | Core(s)       | Architecture | FP16 SIMD |
+| ------------------------- | ------------- | ------------ | --------- |
+| Apple Silicon (M1-M4)     | Firestorm+    | ARMv8.4-A    | ✅ Yes    |
+| Raspberry Pi 5            | Cortex-A76    | ARMv8.2-A    | ✅ Yes    |
+| Raspberry Pi 4            | Cortex-A72    | ARMv8.0-A    | ❌ No     |
+| Raspberry Pi 3            | Cortex-A53    | ARMv8.0-A    | ❌ No     |
+| AWS Graviton 2/3          | Neoverse N1/V1| ARMv8.2-A+   | ✅ Yes    |
+| Ampere Altra              | Neoverse N1   | ARMv8.2-A    | ✅ Yes    |
 
 ## Design Principles
 
