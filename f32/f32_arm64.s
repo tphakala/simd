@@ -1891,7 +1891,6 @@ realfft_neon_loop4:
     // Compute even = 0.5 * (Z[k] + conj(Z[n-k]))
     // evenRe = 0.5 * (zkRe + znkRe)
     WORD $0x4E22D404                 // FADD V4.4S, V0.4S, V2.4S  (zkRe + znkRe)
-    WORD $0x6E3EDE04                 // FMUL V4.4S, V16.4S, V30.4S  -- wrong, redo
     WORD $0x6E3EDC84                 // FMUL V4.4S, V4.4S, V30.4S  (evenRe)
 
     // evenIm = 0.5 * (zkIm + znkIm)
