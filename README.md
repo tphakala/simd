@@ -4,15 +4,15 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/simd)](https://goreportcard.com/report/github.com/tphakala/simd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, and complex128 slices.
+A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, complex128, and complex64 slices.
 
 ## Features
 
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
-- **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE2, NEON, NEON+FP16, or pure Go)
+- **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE4.1, NEON, NEON+FP16, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
 - **80+ operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, and complex number operations
-- **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2) and ARM64 (NEON/NEON+FP16) with pure Go fallback
+- **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
 - **Half-precision support** - Native FP16 SIMD on ARM64 with FP16 extension (Apple Silicon, Cortex-A55+)
 - **Thread-safe** - All functions are safe for concurrent use
 
@@ -133,6 +133,14 @@ Same API as `f64` but for `float32` with wider SIMD:
 | AMD64 (AVX+FMA) | 8x float32  |
 | AMD64 (SSE2)    | 4x float32  |
 | ARM64 (NEON)    | 4x float32  |
+
+**Additional split-format complex operations** (for FFT pipelines with separate real/imag arrays):
+
+| Category   | Function                              | Description                        | SIMD Width       |
+| ---------- | ------------------------------------- | ---------------------------------- | ---------------- |
+| **Complex**| `MulComplex(dstRe,dstIm,aRe,aIm,bRe,bIm)` | Split-format complex multiply  | 8x (AVX) / 4x (NEON) |
+|            | `MulConjComplex(dstRe,dstIm,aRe,aIm,bRe,bIm)` | Multiply by conjugate      | 8x / 4x          |
+|            | `AbsSqComplex(dst,aRe,aIm)`           | Magnitude squared                  | 8x / 4x          |
 
 ### `f16` - float16 (Half-Precision) Operations
 
@@ -266,6 +274,37 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 | AbsSq     | 367 ns  | 504 ns  | **1.37x** |
 | Conj      | 304 ns  | 474 ns  | **1.56x** |
 
+### `c64` - complex64 Operations
+
+SIMD-accelerated single-precision complex number operations:
+
+| Category       | Function             | Description                        | SIMD Width                        |
+| -------------- | -------------------- | ---------------------------------- | --------------------------------- |
+| **Arithmetic** | `Mul(dst, a, b)`     | Complex multiplication             | 8x (AVX-512) / 4x (AVX) / 2x (NEON) |
+|                | `MulConj(dst, a, b)` | Multiply by conjugate: a × conj(b) | 8x / 4x / 2x                      |
+|                | `Scale(dst, a, s)`   | Scale by complex scalar            | 8x / 4x / 2x                      |
+|                | `Add(dst, a, b)`     | Complex addition                   | 8x / 4x / 2x                      |
+|                | `Sub(dst, a, b)`     | Complex subtraction                | 8x / 4x / 2x                      |
+| **Unary**      | `Abs(dst, a)`        | Complex magnitude \|a + bi\|       | 8x / 4x / 2x                      |
+|                | `AbsSq(dst, a)`      | Magnitude squared \|a + bi\|²      | 8x / 4x / 2x                      |
+|                | `Conj(dst, a)`       | Complex conjugate: a - bi          | 8x / 4x / 2x                      |
+| **Conversion** | `FromReal(dst, src)` | Real to complex: src → src+0i      | 8x / 4x / 2x                      |
+
+Same API as `c128` but for `complex64` with 2x wider SIMD (8 bytes vs 16 bytes per element):
+
+```go
+import "github.com/tphakala/simd/c64"
+
+// Single-precision FFT processing
+signalFFT := make([]complex64, n)
+kernelFFT := make([]complex64, n)
+result := make([]complex64, n)
+magnitude := make([]float32, n)
+
+c64.Mul(result, signalFFT, kernelFFT)     // Complex multiply
+c64.Abs(magnitude, signalFFT)              // Extract magnitude
+```
+
 ## Performance
 
 ### AMD64 (Intel Core i7-1260P, AVX+FMA)
@@ -363,9 +402,10 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 
 | Package  | Average Speedup | Best         | Operations   |
 | -------- | --------------- | ------------ | ------------ |
-| **f32**  | **6.5x**        | 21.8x (Abs)  | 32 functions |
+| **f32**  | **6.5x**        | 21.8x (Abs)  | 35 functions |
 | **f64**  | **3.2x**        | 7.9x (Clamp) | 32 functions |
 | **c128** | **1.77x**       | 2.2x (Mul)   | 8 functions  |
+| **c64**  | **~2x**         | ~3x (Mul)    | 9 functions  |
 
 ### ARM64 (Raspberry Pi 5, NEON)
 
@@ -428,11 +468,11 @@ The Go fallback for small slices is intentional and likely optimal - SIMD setup 
 
 ## Architecture Support
 
-| Architecture | Instruction Set | f64/f32/c128      | f16               |
+| Architecture | Instruction Set | f64/f32/c128/c64  | f16               |
 | ------------ | --------------- | ----------------- | ----------------- |
 | AMD64        | AVX-512         | Full SIMD support | Pure Go fallback  |
 | AMD64        | AVX + FMA       | Full SIMD support | Pure Go fallback  |
-| AMD64        | SSE2            | Full SIMD support | Pure Go fallback  |
+| AMD64        | SSE4.1          | Full SIMD support | Pure Go fallback  |
 | ARM64        | NEON + FP16     | Full SIMD support | Full SIMD support |
 | ARM64        | NEON only       | Full SIMD support | Pure Go fallback  |
 | Other        | -               | Pure Go fallback  | Pure Go fallback  |
