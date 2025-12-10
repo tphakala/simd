@@ -324,12 +324,11 @@ func clampScale64(dst, src []float64, minVal, maxVal, scale float64) {
 func clampScaleNEON64(dst, src []float64, minVal, maxVal, scale float64)
 
 func tanh64(dst, src []float64) {
-	// Temporarily disabled NEON path due to constant loading issues on ARM64
-	// TODO: Debug ARM64 assembly - constants not loading correctly
-	// if hasNEON && len(dst) >= 2 {
-	//	tanhNEON64(dst, src)
-	// 	return
-	// }
+	// Assumes len(src) >= len(dst); caller ensures this via public API
+	if hasNEON && len(dst) >= 2 {
+		tanhNEON64(dst, src)
+		return
+	}
 	tanh64Go(dst, src)
 }
 

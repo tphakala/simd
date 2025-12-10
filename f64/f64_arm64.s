@@ -933,49 +933,180 @@ relu64_neon_done:
     RET
 
 // func tanhNEON64(dst, src []float64)
-// Computes fast tanh approximation: tanh(x) ≈ x / (1 + |x|)
+// Computes accurate tanh: tanh(x) = (1 - e^(-2x)) / (1 + e^(-2x))
+// Uses range reduction and polynomial approximation for exp.
 TEXT ·tanhNEON64(SB), NOSPLIT, $0-48
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
     MOVD src_base+24(FP), R1
 
-    // Load constants - both 1.0 and 2.5 are encodable FMOV immediates
-    FMOVD $1.0, F31
-    FMOVD $2.5, F30
-    FMOVD $-1.0, F29
-    FMOVD $0, F28
+    // Load constants into vector registers
+    // 2.0 = 0x4000000000000000
+    MOVD $0x4000000000000000, R10
+    VMOV R10, V19.D[0]
+    VDUP V19.D[0], V19.D2             // V19 = 2.0
 
-    // Use scalar processing for all elements to avoid complex bit manipulation
-    // The scalar loop handles saturation correctly and is still reasonably fast
+    // log2(e) = 1.4426950408889634 = 0x3FF71547652B82FE
+    MOVD $0x3FF71547652B82FE, R10
+    VMOV R10, V20.D[0]
+    VDUP V20.D[0], V20.D2             // V20 = log2(e)
+
+    // ln(2) = 0.6931471805599453 = 0x3FE62E42FEFA39EF
+    MOVD $0x3FE62E42FEFA39EF, R10
+    VMOV R10, V21.D[0]
+    VDUP V21.D[0], V21.D2             // V21 = ln(2)
+
+    // 1.0 = 0x3FF0000000000000
+    FMOVD $1.0, F22
+    VDUP V22.D[0], V22.D2             // V22 = 1.0
+
+    // Polynomial coefficients: c2=0.5, c3=1/6, c4=1/24, c5=1/120
+    FMOVD $0.5, F23
+    VDUP V23.D[0], V23.D2             // V23 = c2 = 0.5
+
+    // c3 = 1/6 = 0x3FC5555555555555
+    MOVD $0x3FC5555555555555, R10
+    VMOV R10, V24.D[0]
+    VDUP V24.D[0], V24.D2             // V24 = c3 = 1/6
+
+    // c4 = 1/24 = 0x3FA5555555555555
+    MOVD $0x3FA5555555555555, R10
+    VMOV R10, V25.D[0]
+    VDUP V25.D[0], V25.D2             // V25 = c4 = 1/24
+
+    // c5 = 1/120 = 0x3F81111111111111
+    MOVD $0x3F81111111111111, R10
+    VMOV R10, V26.D[0]
+    VDUP V26.D[0], V26.D2             // V26 = c5 = 1/120
+
+    // Clamp thresholds for -2x: ±20.0 (tanh saturates at ~±10)
+    // 20.0 = 0x4034000000000000
+    MOVD $0x4034000000000000, R10
+    VMOV R10, V27.D[0]
+    VDUP V27.D[0], V27.D2             // V27 = 20.0 (clamp_hi)
+
+    // -20.0 = 0xC034000000000000
+    MOVD $0xC034000000000000, R10
+    VMOV R10, V28.D[0]
+    VDUP V28.D[0], V28.D2             // V28 = -20.0 (clamp_lo)
+
+    // Process 2 elements per iteration (float64 uses D2 arrangement)
+    LSR $1, R3, R4
+    CBZ R4, tanh64_neon_scalar
+
+tanh64_neon_loop2:
+    VLD1.P 16(R1), [V0.D2]            // V0 = x
+
+    // Compute -2x: negate then multiply by 2
+    WORD $0x6EE0F800                  // FNEG V0.2D, V0.2D           V0 = -x
+    WORD $0x6E73DC00                  // FMUL V0.2D, V0.2D, V19.2D   V0 = -2x
+
+    // Clamp -2x to [-20, 20]
+    WORD $0x4EBBF400                  // FMIN V0.2D, V0.2D, V27.2D   clamp upper to 20
+    WORD $0x4E7CF400                  // FMAX V0.2D, V0.2D, V28.2D   clamp lower to -20
+
+    // Range reduction: k = round(-2x * log2e), r = -2x - k * ln2
+    WORD $0x6E74DC01                  // FMUL V1.2D, V0.2D, V20.2D   V1 = -2x * log2e
+    WORD $0x4E619822                  // FRINTN V2.2D, V1.2D         V2 = k = round(V1)
+    WORD $0x6E75DC44                  // FMUL V4.2D, V2.2D, V21.2D   V4 = k * ln2
+    WORD $0x4EE4D403                  // FSUB V3.2D, V0.2D, V4.2D    V3 = r = -2x - k * ln2
+
+    // Polynomial: exp(r) ≈ 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
+    // Horner's method
+    WORD $0x6E7ADC64                  // FMUL V4.2D, V3.2D, V26.2D   V4 = r * c5
+    WORD $0x4E79D484                  // FADD V4.2D, V4.2D, V25.2D   V4 = c4 + r*c5
+    WORD $0x6E63DC84                  // FMUL V4.2D, V4.2D, V3.2D    V4 = r*(c4 + r*c5)
+    WORD $0x4E78D484                  // FADD V4.2D, V4.2D, V24.2D   V4 = c3 + r*(...)
+    WORD $0x6E63DC84                  // FMUL V4.2D, V4.2D, V3.2D    V4 = r*(c3 + ...)
+    WORD $0x4E77D484                  // FADD V4.2D, V4.2D, V23.2D   V4 = c2 + r*(...)
+    WORD $0x6E63DC84                  // FMUL V4.2D, V4.2D, V3.2D    V4 = r*(c2 + ...)
+    WORD $0x4E76D484                  // FADD V4.2D, V4.2D, V22.2D   V4 = 1 + r*(...)
+    WORD $0x6E63DC84                  // FMUL V4.2D, V4.2D, V3.2D    V4 = r*(1 + ...)
+    WORD $0x4E76D484                  // FADD V4.2D, V4.2D, V22.2D   V4 = exp(r)
+
+    // Reconstruct: exp(-2x) = exp(r) * 2^k
+    // For float64: shift by 52 bits (mantissa size), add 0x3FF0... (1.0's bits)
+    WORD $0x4EE1B841                  // FCVTZS V1.2D, V2.2D         V1 = int(k)
+    WORD $0x4F745421                  // SHL V1.2D, V1.2D, #52       V1 = k << 52
+    WORD $0x4EF68421                  // ADD V1.2D, V1.2D, V22.2D    V1 = 2^k (add 1.0's bits)
+    WORD $0x6E61DC84                  // FMUL V4.2D, V4.2D, V1.2D    V4 = e^(-2x)
+
+    // tanh(x) = (1 - e^(-2x)) / (1 + e^(-2x))
+    WORD $0x4EE4D6C5                  // FSUB V5.2D, V22.2D, V4.2D   V5 = 1 - e^(-2x)
+    WORD $0x4E64D6C6                  // FADD V6.2D, V22.2D, V4.2D   V6 = 1 + e^(-2x)
+    WORD $0x6E66FCA0                  // FDIV V0.2D, V5.2D, V6.2D    V0 = tanh(x)
+
+    VST1.P [V0.D2], 16(R0)            // store result
+
+    SUB $1, R4
+    CBNZ R4, tanh64_neon_loop2
 
 tanh64_neon_scalar:
+    AND $1, R3
     CBZ R3, tanh64_neon_done
 
 tanh64_neon_scalar_loop:
+    // Scalar path for remaining element
     FMOVD (R1), F0                    // F0 = x
-    FABSD F0, F1                      // F1 = |x|
-    FCMPD F1, F30                     // compare |x| with 2.5
-    BLE tanh64_neon_scalar_approx
+    FNEGD F0, F0                      // F0 = -x
 
-    // Saturate: return ±1.0 based on sign of x
-    FCMPD F0, F28                     // compare x with 0.0
-    BGE tanh64_neon_scalar_positive
+    // Multiply by 2: -2x
+    FMOVD $2.0, F7
+    FMULD F7, F0, F0                  // F0 = -2x
 
-    // x < 0: return -1.0
-    FMOVD F29, F3
-    B tanh64_neon_scalar_store
+    // Clamp
+    FMOVD $20.0, F1
+    FMOVD $-20.0, F2
+    FMIND F1, F0, F0
+    FMAXD F2, F0, F0
 
-tanh64_neon_scalar_positive:
-    // x >= 0: return 1.0
-    FMOVD F31, F3
-    B tanh64_neon_scalar_store
+    // Range reduction
+    MOVD $0x3FF71547652B82FE, R10     // log2(e)
+    FMOVD R10, F8
+    FMULD F8, F0, F1                  // F1 = -2x * log2e
+    FRINTND F1, F2                    // F2 = k = round(F1)
 
-tanh64_neon_scalar_approx:
-    FADDD F31, F1, F2                 // F2 = 1 + |x|
-    FDIVD F2, F0, F3                  // F3 = x / (1 + |x|)
+    MOVD $0x3FE62E42FEFA39EF, R10     // ln(2)
+    FMOVD R10, F9
+    FMULD F9, F2, F3                  // F3 = k * ln2
+    FSUBD F3, F0, F0                  // F0 = r = -2x - k * ln2
 
-tanh64_neon_scalar_store:
-    FMOVD F3, (R0)                    // store result
+    // Polynomial coefficients
+    FMOVD $1.0, F10                   // c1 = 1.0
+    FMOVD $0.5, F11                   // c2 = 0.5
+    MOVD $0x3FC5555555555555, R10     // c3 = 1/6
+    FMOVD R10, F12
+    MOVD $0x3FA5555555555555, R10     // c4 = 1/24
+    FMOVD R10, F13
+    MOVD $0x3F81111111111111, R10     // c5 = 1/120
+    FMOVD R10, F14
+
+    // Horner's method
+    FMULD F0, F14, F4                 // F4 = r * c5
+    FADDD F13, F4, F4                 // F4 = c4 + r*c5
+    FMULD F0, F4, F4
+    FADDD F12, F4, F4                 // F4 = c3 + r*(...)
+    FMULD F0, F4, F4
+    FADDD F11, F4, F4                 // F4 = c2 + r*(...)
+    FMULD F0, F4, F4
+    FADDD F10, F4, F4                 // F4 = 1 + r*(...)
+    FMULD F0, F4, F4
+    FADDD F10, F4, F4                 // F4 = exp(r)
+
+    // Reconstruct 2^k (float64: shift by 52, add 0x3FF0000000000000)
+    FCVTZSD F2, R10
+    LSL $52, R10, R10
+    MOVD $0x3FF0000000000000, R11
+    ADD R11, R10, R10
+    FMOVD R10, F5
+    FMULD F5, F4, F4                  // F4 = e^(-2x)
+
+    // tanh(x) = (1 - e^(-2x)) / (1 + e^(-2x))
+    FSUBD F4, F10, F5                 // F5 = 1 - e^(-2x)
+    FADDD F4, F10, F6                 // F6 = 1 + e^(-2x)
+    FDIVD F6, F5, F0                  // F0 = tanh(x)
+
+    FMOVD F0, (R0)                    // store result
 
     ADD $8, R0
     ADD $8, R1
