@@ -3369,3 +3369,232 @@ i32tof32_scalar:
 i32tof32_done:
     VZEROUPPER
     RET
+
+// ============================================================================
+// SPLIT-FORMAT COMPLEX OPERATIONS
+// ============================================================================
+//
+// These operate on split real/imag arrays - much simpler than interleaved
+// because we can load real and imag values directly without shuffling.
+
+// func mulComplexAVX(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+// Computes element-wise complex multiplication using split arrays:
+//   dstRe[i] = aRe[i]*bRe[i] - aIm[i]*bIm[i]
+//   dstIm[i] = aRe[i]*bIm[i] + aIm[i]*bRe[i]
+// Uses FMA for efficiency.
+// Frame: dstRe(24) + dstIm(24) + aRe(24) + aIm(24) + bRe(24) + bIm(24) = 144 bytes
+TEXT ·mulComplexAVX(SB), NOSPLIT, $0-144
+    MOVQ dstRe_base+0(FP), DX      // DX = dstRe pointer
+    MOVQ dstRe_len+8(FP), CX       // CX = length
+    MOVQ dstIm_base+24(FP), R8     // R8 = dstIm pointer
+    MOVQ aRe_base+48(FP), SI       // SI = aRe pointer
+    MOVQ aIm_base+72(FP), DI       // DI = aIm pointer
+    MOVQ bRe_base+96(FP), R9       // R9 = bRe pointer
+    MOVQ bIm_base+120(FP), R10     // R10 = bIm pointer
+
+    // Process 8 elements per iteration (AVX 256-bit = 8x float32)
+    MOVQ CX, AX
+    SHRQ $3, AX                    // len / 8
+    JZ   mulcplx_remainder
+
+mulcplx_loop8:
+    // Load inputs
+    VMOVUPS (SI), Y0               // Y0 = aRe[0:8]
+    VMOVUPS (DI), Y1               // Y1 = aIm[0:8]
+    VMOVUPS (R9), Y2               // Y2 = bRe[0:8]
+    VMOVUPS (R10), Y3              // Y3 = bIm[0:8]
+
+    // dstRe = aRe*bRe - aIm*bIm
+    VMULPS Y0, Y2, Y4              // Y4 = aRe * bRe
+    VFNMADD231PS Y1, Y3, Y4        // Y4 = Y4 - aIm*bIm = aRe*bRe - aIm*bIm
+
+    // dstIm = aRe*bIm + aIm*bRe
+    VMULPS Y0, Y3, Y5              // Y5 = aRe * bIm
+    VFMADD231PS Y1, Y2, Y5         // Y5 = Y5 + aIm*bRe = aRe*bIm + aIm*bRe
+
+    // Store results
+    VMOVUPS Y4, (DX)               // dstRe[0:8]
+    VMOVUPS Y5, (R8)               // dstIm[0:8]
+
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, R9
+    ADDQ $32, R10
+    ADDQ $32, DX
+    ADDQ $32, R8
+    DECQ AX
+    JNZ  mulcplx_loop8
+
+mulcplx_remainder:
+    ANDQ $7, CX
+    JZ   mulcplx_done
+
+mulcplx_scalar:
+    // Load single elements
+    VMOVSS (SI), X0                // X0 = aRe
+    VMOVSS (DI), X1                // X1 = aIm
+    VMOVSS (R9), X2                // X2 = bRe
+    VMOVSS (R10), X3               // X3 = bIm
+
+    // dstRe = aRe*bRe - aIm*bIm
+    VMULSS X0, X2, X4              // X4 = aRe * bRe
+    VFNMADD231SS X1, X3, X4        // X4 = X4 - aIm*bIm
+
+    // dstIm = aRe*bIm + aIm*bRe
+    VMULSS X0, X3, X5              // X5 = aRe * bIm
+    VFMADD231SS X1, X2, X5         // X5 = X5 + aIm*bRe
+
+    // Store results
+    VMOVSS X4, (DX)
+    VMOVSS X5, (R8)
+
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $4, R9
+    ADDQ $4, R10
+    ADDQ $4, DX
+    ADDQ $4, R8
+    DECQ CX
+    JNZ  mulcplx_scalar
+
+mulcplx_done:
+    VZEROUPPER
+    RET
+
+// func mulConjComplexAVX(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+// Computes element-wise multiplication by conjugate using split arrays:
+//   dstRe[i] = aRe[i]*bRe[i] + aIm[i]*bIm[i]
+//   dstIm[i] = aIm[i]*bRe[i] - aRe[i]*bIm[i]
+// Frame: dstRe(24) + dstIm(24) + aRe(24) + aIm(24) + bRe(24) + bIm(24) = 144 bytes
+TEXT ·mulConjComplexAVX(SB), NOSPLIT, $0-144
+    MOVQ dstRe_base+0(FP), DX      // DX = dstRe pointer
+    MOVQ dstRe_len+8(FP), CX       // CX = length
+    MOVQ dstIm_base+24(FP), R8     // R8 = dstIm pointer
+    MOVQ aRe_base+48(FP), SI       // SI = aRe pointer
+    MOVQ aIm_base+72(FP), DI       // DI = aIm pointer
+    MOVQ bRe_base+96(FP), R9       // R9 = bRe pointer
+    MOVQ bIm_base+120(FP), R10     // R10 = bIm pointer
+
+    // Process 8 elements per iteration
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   mulconjcplx_remainder
+
+mulconjcplx_loop8:
+    // Load inputs
+    VMOVUPS (SI), Y0               // Y0 = aRe[0:8]
+    VMOVUPS (DI), Y1               // Y1 = aIm[0:8]
+    VMOVUPS (R9), Y2               // Y2 = bRe[0:8]
+    VMOVUPS (R10), Y3              // Y3 = bIm[0:8]
+
+    // dstRe = aRe*bRe + aIm*bIm
+    VMULPS Y0, Y2, Y4              // Y4 = aRe * bRe
+    VFMADD231PS Y1, Y3, Y4         // Y4 = Y4 + aIm*bIm = aRe*bRe + aIm*bIm
+
+    // dstIm = aIm*bRe - aRe*bIm
+    VMULPS Y1, Y2, Y5              // Y5 = aIm * bRe
+    VFNMADD231PS Y0, Y3, Y5        // Y5 = Y5 - aRe*bIm = aIm*bRe - aRe*bIm
+
+    // Store results
+    VMOVUPS Y4, (DX)
+    VMOVUPS Y5, (R8)
+
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, R9
+    ADDQ $32, R10
+    ADDQ $32, DX
+    ADDQ $32, R8
+    DECQ AX
+    JNZ  mulconjcplx_loop8
+
+mulconjcplx_remainder:
+    ANDQ $7, CX
+    JZ   mulconjcplx_done
+
+mulconjcplx_scalar:
+    VMOVSS (SI), X0
+    VMOVSS (DI), X1
+    VMOVSS (R9), X2
+    VMOVSS (R10), X3
+
+    // dstRe = aRe*bRe + aIm*bIm
+    VMULSS X0, X2, X4
+    VFMADD231SS X1, X3, X4
+
+    // dstIm = aIm*bRe - aRe*bIm
+    VMULSS X1, X2, X5
+    VFNMADD231SS X0, X3, X5
+
+    VMOVSS X4, (DX)
+    VMOVSS X5, (R8)
+
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $4, R9
+    ADDQ $4, R10
+    ADDQ $4, DX
+    ADDQ $4, R8
+    DECQ CX
+    JNZ  mulconjcplx_scalar
+
+mulconjcplx_done:
+    VZEROUPPER
+    RET
+
+// func absSqComplexAVX(dst, aRe, aIm []float32)
+// Computes element-wise magnitude squared using split arrays:
+//   dst[i] = aRe[i]^2 + aIm[i]^2
+// Frame: dst(24) + aRe(24) + aIm(24) = 72 bytes
+TEXT ·absSqComplexAVX(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX        // DX = dst pointer
+    MOVQ dst_len+8(FP), CX         // CX = length
+    MOVQ aRe_base+24(FP), SI       // SI = aRe pointer
+    MOVQ aIm_base+48(FP), DI       // DI = aIm pointer
+
+    // Process 8 elements per iteration
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   abssqcplx_remainder
+
+abssqcplx_loop8:
+    // Load inputs
+    VMOVUPS (SI), Y0               // Y0 = aRe[0:8]
+    VMOVUPS (DI), Y1               // Y1 = aIm[0:8]
+
+    // dst = aRe^2 + aIm^2
+    VMULPS Y0, Y0, Y2              // Y2 = aRe^2
+    VFMADD231PS Y1, Y1, Y2         // Y2 = Y2 + aIm^2 = aRe^2 + aIm^2
+
+    // Store result
+    VMOVUPS Y2, (DX)
+
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  abssqcplx_loop8
+
+abssqcplx_remainder:
+    ANDQ $7, CX
+    JZ   abssqcplx_done
+
+abssqcplx_scalar:
+    VMOVSS (SI), X0                // X0 = aRe
+    VMOVSS (DI), X1                // X1 = aIm
+
+    // dst = aRe^2 + aIm^2
+    VMULSS X0, X0, X2              // X2 = aRe^2
+    VFMADD231SS X1, X1, X2         // X2 = X2 + aIm^2
+
+    VMOVSS X2, (DX)
+
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  abssqcplx_scalar
+
+abssqcplx_done:
+    VZEROUPPER
+    RET

@@ -45,3 +45,12 @@ func clampScale32(dst, src []float32, minVal, maxVal, scale float32) {
 func tanh32(dst, src []float32)                                 { tanh32Go(dst, src) }
 func exp32(dst, src []float32)                                  { exp32Go(dst, src) }
 func int32ToFloat32Scale(dst []float32, src []int32, s float32) { int32ToFloat32ScaleGo(dst, src, s) }
+
+// Split-format complex operations
+func mulComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
+}
+func mulConjComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	mulConjComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
+}
+func absSqComplex32(dst, aRe, aIm []float32) { absSqComplex32Go(dst, aRe, aIm) }

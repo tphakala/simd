@@ -377,3 +377,43 @@ func int32ToFloat32ScaleGo(dst []float32, src []int32, scale float32) {
 		dst[i] = float32(src[i]) * scale
 	}
 }
+
+// ============================================================================
+// SPLIT-FORMAT COMPLEX OPERATIONS (Pure Go)
+// ============================================================================
+
+// mulComplex32Go computes element-wise complex multiplication:
+//
+//	dstRe[i] = aRe[i]*bRe[i] - aIm[i]*bIm[i]
+//	dstIm[i] = aRe[i]*bIm[i] + aIm[i]*bRe[i]
+func mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	for i := range dstRe {
+		ar, ai := aRe[i], aIm[i]
+		br, bi := bRe[i], bIm[i]
+		dstRe[i] = ar*br - ai*bi
+		dstIm[i] = ar*bi + ai*br
+	}
+}
+
+// mulConjComplex32Go computes element-wise multiplication by conjugate:
+//
+//	dstRe[i] = aRe[i]*bRe[i] + aIm[i]*bIm[i]
+//	dstIm[i] = aIm[i]*bRe[i] - aRe[i]*bIm[i]
+func mulConjComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	for i := range dstRe {
+		ar, ai := aRe[i], aIm[i]
+		br, bi := bRe[i], bIm[i]
+		dstRe[i] = ar*br + ai*bi
+		dstIm[i] = ai*br - ar*bi
+	}
+}
+
+// absSqComplex32Go computes element-wise magnitude squared:
+//
+//	dst[i] = aRe[i]^2 + aIm[i]^2
+func absSqComplex32Go(dst, aRe, aIm []float32) {
+	for i := range dst {
+		r, im := aRe[i], aIm[i]
+		dst[i] = r*r + im*im
+	}
+}

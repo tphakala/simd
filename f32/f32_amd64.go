@@ -549,3 +549,45 @@ func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 
 //go:noescape
 func int32ToFloat32ScaleAVX(dst []float32, src []int32, scale float32)
+
+// ============================================================================
+// SPLIT-FORMAT COMPLEX OPERATIONS
+// ============================================================================
+
+func mulComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	// Use AVX+FMA if available and have enough elements
+	if cpu.X86.AVX && cpu.X86.FMA && len(dstRe) >= minAVXElements {
+		mulComplexAVX(dstRe, dstIm, aRe, aIm, bRe, bIm)
+		return
+	}
+	mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
+}
+
+func mulConjComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	// Use AVX+FMA if available and have enough elements
+	if cpu.X86.AVX && cpu.X86.FMA && len(dstRe) >= minAVXElements {
+		mulConjComplexAVX(dstRe, dstIm, aRe, aIm, bRe, bIm)
+		return
+	}
+	mulConjComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
+}
+
+func absSqComplex32(dst, aRe, aIm []float32) {
+	// Use AVX+FMA if available and have enough elements
+	if cpu.X86.AVX && cpu.X86.FMA && len(dst) >= minAVXElements {
+		absSqComplexAVX(dst, aRe, aIm)
+		return
+	}
+	absSqComplex32Go(dst, aRe, aIm)
+}
+
+// Split-format complex assembly function declarations
+//
+//go:noescape
+func mulComplexAVX(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+
+//go:noescape
+func mulConjComplexAVX(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+
+//go:noescape
+func absSqComplexAVX(dst, aRe, aIm []float32)

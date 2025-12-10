@@ -1689,3 +1689,291 @@ func TestInt32ToFloat32ScaleUnsafe(t *testing.T) {
 		}
 	}
 }
+
+// =============================================================================
+// Split-Format Complex Operations Tests
+// =============================================================================
+
+// mulComplexRef computes complex multiplication using reference implementation
+func mulComplexRef(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	for i := range dstRe {
+		dstRe[i] = aRe[i]*bRe[i] - aIm[i]*bIm[i]
+		dstIm[i] = aRe[i]*bIm[i] + aIm[i]*bRe[i]
+	}
+}
+
+// mulConjComplexRef computes multiply-by-conjugate using reference implementation
+func mulConjComplexRef(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	for i := range dstRe {
+		dstRe[i] = aRe[i]*bRe[i] + aIm[i]*bIm[i]
+		dstIm[i] = aIm[i]*bRe[i] - aRe[i]*bIm[i]
+	}
+}
+
+// absSqComplexRef computes magnitude squared using reference implementation
+func absSqComplexRef(dst, aRe, aIm []float32) {
+	for i := range dst {
+		dst[i] = aRe[i]*aRe[i] + aIm[i]*aIm[i]
+	}
+}
+
+// complexMulTestCase defines a test case for complex multiplication operations
+type complexMulTestCase struct {
+	name    string
+	fn      func(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+	emptyFn func()
+	ref     func(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+}
+
+func TestMulComplex(t *testing.T) {
+	testComplexMul(t, complexMulTestCase{
+		name:    "MulComplex",
+		fn:      MulComplex,
+		emptyFn: func() { MulComplex(nil, nil, nil, nil, nil, nil) },
+		ref:     mulComplexRef,
+	})
+}
+
+func TestMulConjComplex(t *testing.T) {
+	testComplexMul(t, complexMulTestCase{
+		name:    "MulConjComplex",
+		fn:      MulConjComplex,
+		emptyFn: func() { MulConjComplex(nil, nil, nil, nil, nil, nil) },
+		ref:     mulConjComplexRef,
+	})
+}
+
+func testComplexMul(t *testing.T, tc complexMulTestCase) {
+	t.Helper()
+	sizes := []int{0, 1, 4, 8, 9, 16, 1000}
+
+	for _, n := range sizes {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			if n == 0 {
+				tc.emptyFn()
+				return
+			}
+
+			aRe, aIm := make([]float32, n), make([]float32, n)
+			bRe, bIm := make([]float32, n), make([]float32, n)
+			dstRe, dstIm := make([]float32, n), make([]float32, n)
+			wantRe, wantIm := make([]float32, n), make([]float32, n)
+
+			for i := range n {
+				aRe[i], aIm[i] = float32(i+1)*0.1, float32(i+2)*0.2
+				bRe[i], bIm[i] = float32(i+3)*0.3, float32(i+4)*0.4
+			}
+
+			tc.fn(dstRe, dstIm, aRe, aIm, bRe, bIm)
+			tc.ref(wantRe, wantIm, aRe, aIm, bRe, bIm)
+
+			for i := range n {
+				reErr := math.Abs(float64(dstRe[i]-wantRe[i])) / (math.Abs(float64(wantRe[i])) + 1e-10)
+				imErr := math.Abs(float64(dstIm[i]-wantIm[i])) / (math.Abs(float64(wantIm[i])) + 1e-10)
+				if reErr > 1e-6 {
+					t.Errorf("Re[%d] = %v, want %v (relErr=%v)", i, dstRe[i], wantRe[i], reErr)
+				}
+				if imErr > 1e-6 {
+					t.Errorf("Im[%d] = %v, want %v (relErr=%v)", i, dstIm[i], wantIm[i], imErr)
+				}
+			}
+		})
+	}
+}
+
+func TestAbsSqComplex(t *testing.T) {
+	testCases := []struct {
+		name string
+		n    int
+	}{
+		{"empty", 0},
+		{"single", 1},
+		{"four", 4},
+		{"eight", 8},
+		{"nine", 9},
+		{"sixteen", 16},
+		{"large", 1000},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.n == 0 {
+				AbsSqComplex(nil, nil, nil)
+				return
+			}
+
+			aRe := make([]float32, tc.n)
+			aIm := make([]float32, tc.n)
+			dst := make([]float32, tc.n)
+			want := make([]float32, tc.n)
+
+			for i := range tc.n {
+				aRe[i] = float32(i+1) * 0.1
+				aIm[i] = float32(i+2) * 0.2
+			}
+
+			AbsSqComplex(dst, aRe, aIm)
+			absSqComplexRef(want, aRe, aIm)
+
+			for i := range tc.n {
+				// Use relative tolerance (1e-6) for FMA vs separate mul+add precision differences
+				relErr := math.Abs(float64(dst[i]-want[i])) / (math.Abs(float64(want[i])) + 1e-10)
+				if relErr > 1e-6 {
+					t.Errorf("AbsSqComplex()[%d] = %v, want %v (relErr=%v)", i, dst[i], want[i], relErr)
+				}
+			}
+		})
+	}
+}
+
+func TestMulComplex_KnownValues(t *testing.T) {
+	// Test with known complex multiplication results
+	// (1 + 2i) * (3 + 4i) = (1*3 - 2*4) + (1*4 + 2*3)i = -5 + 10i
+	aRe := []float32{1}
+	aIm := []float32{2}
+	bRe := []float32{3}
+	bIm := []float32{4}
+	dstRe := make([]float32, 1)
+	dstIm := make([]float32, 1)
+
+	MulComplex(dstRe, dstIm, aRe, aIm, bRe, bIm)
+
+	if dstRe[0] != -5 {
+		t.Errorf("MulComplex() Re = %v, want -5", dstRe[0])
+	}
+	if dstIm[0] != 10 {
+		t.Errorf("MulComplex() Im = %v, want 10", dstIm[0])
+	}
+}
+
+func TestMulConjComplex_KnownValues(t *testing.T) {
+	// Test with known complex conjugate multiplication results
+	// (1 + 2i) * conj(3 + 4i) = (1 + 2i) * (3 - 4i)
+	// = (1*3 + 2*4) + (2*3 - 1*4)i = 11 + 2i
+	aRe := []float32{1}
+	aIm := []float32{2}
+	bRe := []float32{3}
+	bIm := []float32{4}
+	dstRe := make([]float32, 1)
+	dstIm := make([]float32, 1)
+
+	MulConjComplex(dstRe, dstIm, aRe, aIm, bRe, bIm)
+
+	if dstRe[0] != 11 {
+		t.Errorf("MulConjComplex() Re = %v, want 11", dstRe[0])
+	}
+	if dstIm[0] != 2 {
+		t.Errorf("MulConjComplex() Im = %v, want 2", dstIm[0])
+	}
+}
+
+func TestAbsSqComplex_KnownValues(t *testing.T) {
+	// |3 + 4i|^2 = 3^2 + 4^2 = 25
+	aRe := []float32{3}
+	aIm := []float32{4}
+	dst := make([]float32, 1)
+
+	AbsSqComplex(dst, aRe, aIm)
+
+	if dst[0] != 25 {
+		t.Errorf("AbsSqComplex() = %v, want 25", dst[0])
+	}
+}
+
+// =============================================================================
+// Split-Format Complex Benchmarks
+// =============================================================================
+
+func BenchmarkMulComplex(b *testing.B) {
+	sizes := []int{64, 256, 1024, 4096}
+
+	for _, n := range sizes {
+		b.Run(fmt.Sprintf("SIMD_%d", n), func(b *testing.B) {
+			aRe := make([]float32, n)
+			aIm := make([]float32, n)
+			bRe := make([]float32, n)
+			bIm := make([]float32, n)
+			dstRe := make([]float32, n)
+			dstIm := make([]float32, n)
+
+			for i := range n {
+				aRe[i] = float32(i) * 0.1
+				aIm[i] = float32(i) * 0.2
+				bRe[i] = float32(i) * 0.3
+				bIm[i] = float32(i) * 0.4
+			}
+
+			b.ResetTimer()
+			b.SetBytes(int64(n * 4 * 6)) // 6 slices of float32
+
+			for i := 0; i < b.N; i++ {
+				MulComplex(dstRe, dstIm, aRe, aIm, bRe, bIm)
+			}
+		})
+
+		b.Run(fmt.Sprintf("Go_%d", n), func(b *testing.B) {
+			aRe := make([]float32, n)
+			aIm := make([]float32, n)
+			bRe := make([]float32, n)
+			bIm := make([]float32, n)
+			dstRe := make([]float32, n)
+			dstIm := make([]float32, n)
+
+			for i := range n {
+				aRe[i] = float32(i) * 0.1
+				aIm[i] = float32(i) * 0.2
+				bRe[i] = float32(i) * 0.3
+				bIm[i] = float32(i) * 0.4
+			}
+
+			b.ResetTimer()
+			b.SetBytes(int64(n * 4 * 6))
+
+			for i := 0; i < b.N; i++ {
+				mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
+			}
+		})
+	}
+}
+
+func BenchmarkAbsSqComplex(b *testing.B) {
+	sizes := []int{64, 256, 1024, 4096}
+
+	for _, n := range sizes {
+		b.Run(fmt.Sprintf("SIMD_%d", n), func(b *testing.B) {
+			aRe := make([]float32, n)
+			aIm := make([]float32, n)
+			dst := make([]float32, n)
+
+			for i := range n {
+				aRe[i] = float32(i) * 0.1
+				aIm[i] = float32(i) * 0.2
+			}
+
+			b.ResetTimer()
+			b.SetBytes(int64(n * 4 * 3)) // 3 slices of float32
+
+			for i := 0; i < b.N; i++ {
+				AbsSqComplex(dst, aRe, aIm)
+			}
+		})
+
+		b.Run(fmt.Sprintf("Go_%d", n), func(b *testing.B) {
+			aRe := make([]float32, n)
+			aIm := make([]float32, n)
+			dst := make([]float32, n)
+
+			for i := range n {
+				aRe[i] = float32(i) * 0.1
+				aIm[i] = float32(i) * 0.2
+			}
+
+			b.ResetTimer()
+			b.SetBytes(int64(n * 4 * 3))
+
+			for i := 0; i < b.N; i++ {
+				absSqComplex32Go(dst, aRe, aIm)
+			}
+		})
+	}
+}

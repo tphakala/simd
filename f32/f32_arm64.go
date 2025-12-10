@@ -352,3 +352,40 @@ func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 
 //go:noescape
 func int32ToFloat32ScaleNEON(dst []float32, src []int32, scale float32)
+
+// ============================================================================
+// SPLIT-FORMAT COMPLEX OPERATIONS
+// ============================================================================
+
+func mulComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	if hasNEON && len(dstRe) >= 4 {
+		mulComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm)
+		return
+	}
+	mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
+}
+
+func mulConjComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	if hasNEON && len(dstRe) >= 4 {
+		mulConjComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm)
+		return
+	}
+	mulConjComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
+}
+
+func absSqComplex32(dst, aRe, aIm []float32) {
+	if hasNEON && len(dst) >= 4 {
+		absSqComplexNEON(dst, aRe, aIm)
+		return
+	}
+	absSqComplex32Go(dst, aRe, aIm)
+}
+
+//go:noescape
+func mulComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+
+//go:noescape
+func mulConjComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+
+//go:noescape
+func absSqComplexNEON(dst, aRe, aIm []float32)

@@ -1484,3 +1484,234 @@ i32tof32_neon_scalar_loop:
 
 i32tof32_neon_done:
     RET
+
+// ============================================================================
+// SPLIT-FORMAT COMPLEX OPERATIONS
+// ============================================================================
+//
+// These operate on split real/imag arrays - much simpler than interleaved
+// because we can load real and imag values directly without shuffling.
+//
+// NEON opcodes used:
+// FMUL Vd.4S, Vn.4S, Vm.4S: 0x6E20DC00 | (Vm << 16) | (Vn << 5) | Vd
+// FSUB Vd.4S, Vn.4S, Vm.4S: 0x4EA0D400 | (Vm << 16) | (Vn << 5) | Vd
+// FADD Vd.4S, Vn.4S, Vm.4S: 0x4E20D400 | (Vm << 16) | (Vn << 5) | Vd
+// FMLA Vd.4S, Vn.4S, Vm.4S: 0x4E20CC00 | (Vm << 16) | (Vn << 5) | Vd (Vd += Vn * Vm)
+// FMLS Vd.4S, Vn.4S, Vm.4S: 0x4EA0CC00 | (Vm << 16) | (Vn << 5) | Vd (Vd -= Vn * Vm)
+
+// func mulComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+// Computes element-wise complex multiplication using split arrays:
+//   dstRe[i] = aRe[i]*bRe[i] - aIm[i]*bIm[i]
+//   dstIm[i] = aRe[i]*bIm[i] + aIm[i]*bRe[i]
+// Frame: dstRe(24) + dstIm(24) + aRe(24) + aIm(24) + bRe(24) + bIm(24) = 144 bytes
+TEXT ·mulComplexNEON(SB), NOSPLIT, $0-144
+    MOVD dstRe_base+0(FP), R0      // R0 = dstRe pointer
+    MOVD dstRe_len+8(FP), R3       // R3 = length
+    MOVD dstIm_base+24(FP), R1     // R1 = dstIm pointer
+    MOVD aRe_base+48(FP), R4       // R4 = aRe pointer
+    MOVD aIm_base+72(FP), R5       // R5 = aIm pointer
+    MOVD bRe_base+96(FP), R6       // R6 = bRe pointer
+    MOVD bIm_base+120(FP), R7      // R7 = bIm pointer
+
+    // Process 4 elements per iteration
+    LSR $2, R3, R8                 // R8 = len / 4
+    CBZ R8, mulcplx_neon_scalar
+
+mulcplx_neon_loop4:
+    // Load inputs
+    VLD1.P 16(R4), [V0.S4]         // V0 = aRe[0:4]
+    VLD1.P 16(R5), [V1.S4]         // V1 = aIm[0:4]
+    VLD1.P 16(R6), [V2.S4]         // V2 = bRe[0:4]
+    VLD1.P 16(R7), [V3.S4]         // V3 = bIm[0:4]
+
+    // dstRe = aRe*bRe - aIm*bIm
+    // V4 = aRe * bRe
+    WORD $0x6E22DC04               // FMUL V4.4S, V0.4S, V2.4S
+    // V4 = V4 - aIm*bIm (FMLS: Vd -= Vn*Vm)
+    WORD $0x4EA3CC24               // FMLS V4.4S, V1.4S, V3.4S
+
+    // dstIm = aRe*bIm + aIm*bRe
+    // V5 = aRe * bIm
+    WORD $0x6E23DC05               // FMUL V5.4S, V0.4S, V3.4S
+    // V5 = V5 + aIm*bRe (FMLA: Vd += Vn*Vm)
+    WORD $0x4E22CC25               // FMLA V5.4S, V1.4S, V2.4S
+
+    // Store results
+    VST1.P [V4.S4], 16(R0)         // dstRe[0:4]
+    VST1.P [V5.S4], 16(R1)         // dstIm[0:4]
+
+    SUB $1, R8
+    CBNZ R8, mulcplx_neon_loop4
+
+mulcplx_neon_scalar:
+    AND $3, R3                     // remainder
+    CBZ R3, mulcplx_neon_done
+
+mulcplx_neon_scalar_loop:
+    // Load single elements
+    FMOVS (R4), F0                 // F0 = aRe
+    FMOVS (R5), F1                 // F1 = aIm
+    FMOVS (R6), F2                 // F2 = bRe
+    FMOVS (R7), F3                 // F3 = bIm
+
+    // dstRe = aRe*bRe - aIm*bIm (avoid FMA for clarity)
+    // Go ARM64: FSUBS Fa, Fb, Fd → Fd = Fb - Fa
+    FMULS F0, F2, F4               // F4 = aRe * bRe
+    FMULS F1, F3, F5               // F5 = aIm * bIm
+    FSUBS F5, F4, F4               // F4 = F4 - F5 = aRe*bRe - aIm*bIm
+
+    // dstIm = aRe*bIm + aIm*bRe (avoid FMA for clarity)
+    FMULS F0, F3, F5               // F5 = aRe * bIm
+    FMULS F1, F2, F6               // F6 = aIm * bRe
+    FADDS F5, F6, F5               // F5 = F5 + F6 = aRe*bIm + aIm*bRe
+
+    // Store results
+    FMOVS F4, (R0)
+    FMOVS F5, (R1)
+
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R4
+    ADD $4, R5
+    ADD $4, R6
+    ADD $4, R7
+    SUB $1, R3
+    CBNZ R3, mulcplx_neon_scalar_loop
+
+mulcplx_neon_done:
+    RET
+
+// func mulConjComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
+// Computes element-wise multiplication by conjugate using split arrays:
+//   dstRe[i] = aRe[i]*bRe[i] + aIm[i]*bIm[i]
+//   dstIm[i] = aIm[i]*bRe[i] - aRe[i]*bIm[i]
+// Frame: dstRe(24) + dstIm(24) + aRe(24) + aIm(24) + bRe(24) + bIm(24) = 144 bytes
+TEXT ·mulConjComplexNEON(SB), NOSPLIT, $0-144
+    MOVD dstRe_base+0(FP), R0      // R0 = dstRe pointer
+    MOVD dstRe_len+8(FP), R3       // R3 = length
+    MOVD dstIm_base+24(FP), R1     // R1 = dstIm pointer
+    MOVD aRe_base+48(FP), R4       // R4 = aRe pointer
+    MOVD aIm_base+72(FP), R5       // R5 = aIm pointer
+    MOVD bRe_base+96(FP), R6       // R6 = bRe pointer
+    MOVD bIm_base+120(FP), R7      // R7 = bIm pointer
+
+    // Process 4 elements per iteration
+    LSR $2, R3, R8
+    CBZ R8, mulconjcplx_neon_scalar
+
+mulconjcplx_neon_loop4:
+    // Load inputs
+    VLD1.P 16(R4), [V0.S4]         // V0 = aRe[0:4]
+    VLD1.P 16(R5), [V1.S4]         // V1 = aIm[0:4]
+    VLD1.P 16(R6), [V2.S4]         // V2 = bRe[0:4]
+    VLD1.P 16(R7), [V3.S4]         // V3 = bIm[0:4]
+
+    // dstRe = aRe*bRe + aIm*bIm
+    // V4 = aRe * bRe
+    WORD $0x6E22DC04               // FMUL V4.4S, V0.4S, V2.4S
+    // V4 = V4 + aIm*bIm (FMLA)
+    WORD $0x4E23CC24               // FMLA V4.4S, V1.4S, V3.4S
+
+    // dstIm = aIm*bRe - aRe*bIm
+    // V5 = aIm * bRe
+    WORD $0x6E22DC25               // FMUL V5.4S, V1.4S, V2.4S
+    // V5 = V5 - aRe*bIm (FMLS)
+    WORD $0x4EA3CC05               // FMLS V5.4S, V0.4S, V3.4S
+
+    // Store results
+    VST1.P [V4.S4], 16(R0)
+    VST1.P [V5.S4], 16(R1)
+
+    SUB $1, R8
+    CBNZ R8, mulconjcplx_neon_loop4
+
+mulconjcplx_neon_scalar:
+    AND $3, R3
+    CBZ R3, mulconjcplx_neon_done
+
+mulconjcplx_neon_scalar_loop:
+    FMOVS (R4), F0                 // F0 = aRe
+    FMOVS (R5), F1                 // F1 = aIm
+    FMOVS (R6), F2                 // F2 = bRe
+    FMOVS (R7), F3                 // F3 = bIm
+
+    // dstRe = aRe*bRe + aIm*bIm (avoid FMA for clarity)
+    FMULS F0, F2, F4               // F4 = aRe * bRe
+    FMULS F1, F3, F5               // F5 = aIm * bIm
+    FADDS F4, F5, F4               // F4 = aRe*bRe + aIm*bIm
+
+    // dstIm = aIm*bRe - aRe*bIm (avoid FMA for clarity)
+    // Go ARM64: FSUBS Fa, Fb, Fd → Fd = Fb - Fa
+    FMULS F1, F2, F5               // F5 = aIm * bRe
+    FMULS F0, F3, F6               // F6 = aRe * bIm
+    FSUBS F6, F5, F5               // F5 = F5 - F6 = aIm*bRe - aRe*bIm
+
+    FMOVS F4, (R0)
+    FMOVS F5, (R1)
+
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R4
+    ADD $4, R5
+    ADD $4, R6
+    ADD $4, R7
+    SUB $1, R3
+    CBNZ R3, mulconjcplx_neon_scalar_loop
+
+mulconjcplx_neon_done:
+    RET
+
+// func absSqComplexNEON(dst, aRe, aIm []float32)
+// Computes element-wise magnitude squared using split arrays:
+//   dst[i] = aRe[i]^2 + aIm[i]^2
+// Frame: dst(24) + aRe(24) + aIm(24) = 72 bytes
+TEXT ·absSqComplexNEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0        // R0 = dst pointer
+    MOVD dst_len+8(FP), R3         // R3 = length
+    MOVD aRe_base+24(FP), R4       // R4 = aRe pointer
+    MOVD aIm_base+48(FP), R5       // R5 = aIm pointer
+
+    // Process 4 elements per iteration
+    LSR $2, R3, R8
+    CBZ R8, abssqcplx_neon_scalar
+
+abssqcplx_neon_loop4:
+    // Load inputs
+    VLD1.P 16(R4), [V0.S4]         // V0 = aRe[0:4]
+    VLD1.P 16(R5), [V1.S4]         // V1 = aIm[0:4]
+
+    // dst = aRe^2 + aIm^2
+    // V2 = aRe * aRe
+    WORD $0x6E20DC02               // FMUL V2.4S, V0.4S, V0.4S
+    // V2 = V2 + aIm*aIm (FMLA)
+    WORD $0x4E21CC22               // FMLA V2.4S, V1.4S, V1.4S
+
+    // Store result
+    VST1.P [V2.S4], 16(R0)
+
+    SUB $1, R8
+    CBNZ R8, abssqcplx_neon_loop4
+
+abssqcplx_neon_scalar:
+    AND $3, R3
+    CBZ R3, abssqcplx_neon_done
+
+abssqcplx_neon_scalar_loop:
+    FMOVS (R4), F0                 // F0 = aRe
+    FMOVS (R5), F1                 // F1 = aIm
+
+    // dst = aRe^2 + aIm^2 (avoid FMA for clarity)
+    FMULS F0, F0, F2               // F2 = aRe^2
+    FMULS F1, F1, F3               // F3 = aIm^2
+    FADDS F2, F3, F2               // F2 = aRe^2 + aIm^2
+
+    FMOVS F2, (R0)
+
+    ADD $4, R0
+    ADD $4, R4
+    ADD $4, R5
+    SUB $1, R3
+    CBNZ R3, abssqcplx_neon_scalar_loop
+
+abssqcplx_neon_done:
+    RET

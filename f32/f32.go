@@ -570,3 +570,68 @@ func Int32ToFloat32ScaleUnsafe(dst []float32, src []int32, scale float32) {
 	// Slice dst to len(src) to ensure SIMD implementations don't read past src
 	int32ToFloat32Scale(dst[:len(src)], src, scale)
 }
+
+// ============================================================================
+// SPLIT-FORMAT COMPLEX OPERATIONS
+// ============================================================================
+//
+// These functions operate on complex numbers stored in split format (separate
+// real and imaginary arrays) rather than interleaved format ([]complex64).
+// Split format is more SIMD-friendly because it allows direct vector loads
+// without shuffle/deinterleave operations.
+//
+// Use these for FFT implementations and other DSP pipelines where performance
+// is critical.
+
+// MulComplex computes element-wise complex multiplication using split arrays:
+//
+//	dstRe[i] = aRe[i]*bRe[i] - aIm[i]*bIm[i]
+//	dstIm[i] = aRe[i]*bIm[i] + aIm[i]*bRe[i]
+//
+// Processes min(len(dstRe), len(dstIm), len(aRe), len(aIm), len(bRe), len(bIm)) elements.
+//
+// This is the core operation for FFT-based convolution in frequency domain.
+// Split format allows direct SIMD loads without deinterleaving overhead.
+func MulComplex(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	n := minLen6(len(dstRe), len(dstIm), len(aRe), len(aIm), len(bRe), len(bIm))
+	if n == 0 {
+		return
+	}
+	mulComplex32(dstRe[:n], dstIm[:n], aRe[:n], aIm[:n], bRe[:n], bIm[:n])
+}
+
+// MulConjComplex computes element-wise multiplication by conjugate using split arrays:
+//
+//	dstRe[i] = aRe[i]*bRe[i] + aIm[i]*bIm[i]
+//	dstIm[i] = aIm[i]*bRe[i] - aRe[i]*bIm[i]
+//
+// Processes min(len(dstRe), len(dstIm), len(aRe), len(aIm), len(bRe), len(bIm)) elements.
+//
+// This is used for cross-correlation in frequency domain.
+func MulConjComplex(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	n := minLen6(len(dstRe), len(dstIm), len(aRe), len(aIm), len(bRe), len(bIm))
+	if n == 0 {
+		return
+	}
+	mulConjComplex32(dstRe[:n], dstIm[:n], aRe[:n], aIm[:n], bRe[:n], bIm[:n])
+}
+
+// AbsSqComplex computes element-wise magnitude squared using split arrays:
+//
+//	dst[i] = aRe[i]^2 + aIm[i]^2
+//
+// Processes min(len(dst), len(aRe), len(aIm)) elements.
+//
+// This is faster than computing the full magnitude (no sqrt) and is the
+// core operation for power spectrum computation in spectrograms.
+func AbsSqComplex(dst, aRe, aIm []float32) {
+	n := minLen(len(dst), len(aRe), len(aIm))
+	if n == 0 {
+		return
+	}
+	absSqComplex32(dst[:n], aRe[:n], aIm[:n])
+}
+
+func minLen6(a, b, c, d, e, f int) int {
+	return min(a, b, c, d, e, f)
+}
