@@ -3387,85 +3387,98 @@ relu64_done:
 // func tanhAVX(dst, src []float64)
 // Computes accurate tanh: tanh(x) = (1 - e^(-2x)) / (1 + e^(-2x))
 // Uses range reduction and polynomial approximation for exp.
+// Processes 2 elements at a time (XMM registers) due to Go assembler limitations.
 TEXT ·tanhAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ src_base+24(FP), SI
 
-    // Load constants into Y8-Y15
-    VMOVUPD tanh64_two<>(SB), Y8       // Y8 = 2.0
-    VMOVUPD tanh64_log2e<>(SB), Y9     // Y9 = log2(e)
-    VMOVUPD tanh64_ln2<>(SB), Y10      // Y10 = ln(2)
-    VMOVUPD sigmoid_one64<>(SB), Y11   // Y11 = 1.0
-    VMOVUPD sigmoid_half64<>(SB), Y12  // Y12 = 0.5 (c2)
-    VMOVUPD tanh64_c3<>(SB), Y13       // Y13 = 1/6 (c3)
-    VMOVUPD tanh64_c4<>(SB), Y14       // Y14 = 1/24 (c4)
-    VMOVUPD tanh64_c5<>(SB), Y15       // Y15 = 1/120 (c5)
+    // Load constants into XMM registers (using low 128-bits of YMM loads)
+    VMOVUPD tanh64_two<>(SB), X8       // X8 = 2.0
+    VMOVUPD tanh64_log2e<>(SB), X9     // X9 = log2(e)
+    VMOVUPD tanh64_ln2<>(SB), X10      // X10 = ln(2)
+    VMOVUPD sigmoid_one64<>(SB), X11   // X11 = 1.0
+    VMOVUPD sigmoid_half64<>(SB), X12  // X12 = 0.5 (c2)
+    VMOVUPD tanh64_c3<>(SB), X13       // X13 = 1/6 (c3)
+    VMOVUPD tanh64_c4<>(SB), X14       // X14 = 1/24 (c4)
+    VMOVUPD tanh64_c5<>(SB), X15       // X15 = 1/120 (c5)
 
-    // Process 4 elements per iteration
+    // Process 2 elements per iteration (XMM = 128 bits = 2 x float64)
     MOVQ CX, AX
-    SHRQ $2, AX                        // len / 4
+    SHRQ $1, AX                        // len / 2
     JZ   tanh64_remainder
 
-tanh64_loop4:
-    VMOVUPD (SI), Y0                   // Y0 = x
+tanh64_loop2:
+    VMOVUPD (SI), X0                   // X0 = 2 x float64
 
     // Compute z = -2x
-    VXORPD Y1, Y1, Y1                  // Y1 = 0
-    VSUBPD Y0, Y1, Y0                  // Y0 = -x
-    VMULPD Y8, Y0, Y0                  // Y0 = -2x = z
+    VXORPD X1, X1, X1                  // X1 = 0
+    VSUBPD X0, X1, X0                  // X0 = -x
+    VMULPD X8, X0, X0                  // X0 = -2x = z
 
     // Clamp z to [-20, 20]
-    VMOVUPD tanh64_clamp_hi<>(SB), Y1  // Y1 = 20.0
-    VMOVUPD tanh64_clamp_lo<>(SB), Y2  // Y2 = -20.0
-    VMINPD Y1, Y0, Y0                  // Y0 = min(z, 20)
-    VMAXPD Y2, Y0, Y0                  // Y0 = max(min(z, 20), -20)
+    VMOVUPD tanh64_clamp_hi<>(SB), X1  // X1 = 20.0
+    VMOVUPD tanh64_clamp_lo<>(SB), X2  // X2 = -20.0
+    VMINPD X1, X0, X0                  // X0 = min(z, 20)
+    VMAXPD X2, X0, X0                  // X0 = max(min(z, 20), -20)
 
     // Range reduction: k = round(z * log2e), r = z - k * ln2
-    VMULPD Y9, Y0, Y1                  // Y1 = z * log2e
-    VROUNDPD $0, Y1, Y2                // Y2 = k = round(Y1) (nearest)
-    VMULPD Y10, Y2, Y3                 // Y3 = k * ln2
-    VSUBPD Y3, Y0, Y3                  // Y3 = r = z - k * ln2
+    VMULPD X9, X0, X1                  // X1 = z * log2e
+    VROUNDPD $0, X1, X2                // X2 = k = round(X1) (nearest)
+    VMULPD X10, X2, X3                 // X3 = k * ln2
+    VSUBPD X3, X0, X3                  // X3 = r = z - k * ln2
 
     // Polynomial: exp(r) ≈ 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
-    // Horner's method: start from innermost
-    VMULPD Y3, Y15, Y4                 // Y4 = r * c5
-    VADDPD Y14, Y4, Y4                 // Y4 = c4 + r*c5
-    VMULPD Y3, Y4, Y4                  // Y4 = r*(c4 + r*c5)
-    VADDPD Y13, Y4, Y4                 // Y4 = c3 + r*(...)
-    VMULPD Y3, Y4, Y4                  // Y4 = r*(c3 + ...)
-    VADDPD Y12, Y4, Y4                 // Y4 = c2 + r*(...)
-    VMULPD Y3, Y4, Y4                  // Y4 = r*(c2 + ...)
-    VADDPD Y11, Y4, Y4                 // Y4 = 1 + r*(...)
-    VMULPD Y3, Y4, Y4                  // Y4 = r*(1 + ...)
-    VADDPD Y11, Y4, Y4                 // Y4 = exp(r)
+    // Horner's method
+    VMULPD X3, X15, X4                 // X4 = r * c5
+    VADDPD X14, X4, X4                 // X4 = c4 + r*c5
+    VMULPD X3, X4, X4                  // X4 = r*(c4 + r*c5)
+    VADDPD X13, X4, X4                 // X4 = c3 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(c3 + ...)
+    VADDPD X12, X4, X4                 // X4 = c2 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(c2 + ...)
+    VADDPD X11, X4, X4                 // X4 = 1 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(1 + ...)
+    VADDPD X11, X4, X4                 // X4 = exp(r)
 
-    // Reconstruct exp(z) = exp(r) * 2^k
-    // For float64: convert k to int, shift left by 52, add to 1.0's bits
-    VCVTTPD2DQ Y2, X5                  // X5 = int32(k) (4 values packed in 128 bits)
-    // Expand int32 to int64 and shift
-    VPMOVSXDQ X5, Y5                   // Y5 = int64(k)
-    VPSLLQ $52, Y5, Y5                 // Y5 = k << 52
-    VPADDQ Y11, Y5, Y5                 // Y5 = 2^k (add 1.0's bit pattern)
-    VMULPD Y5, Y4, Y4                  // Y4 = exp(z) = exp(-2x)
+    // Reconstruct exp(z) = exp(r) * 2^k for 2 elements
+    // Process each k value separately via scalar conversion
+    // Element 0:
+    VCVTTSD2SI X2, AX                  // AX = int64(k[0])
+    SHLQ $52, AX                       // k[0] << 52
+    MOVQ $0x3FF0000000000000, BX
+    ADDQ BX, AX                        // 2^k[0] bits
+    VMOVQ AX, X5                       // X5[0] = 2^k[0]
+
+    // Element 1:
+    VPSRLDQ $8, X2, X6                 // X6 = k[1] (shift right by 8 bytes)
+    VCVTTSD2SI X6, AX                  // AX = int64(k[1])
+    SHLQ $52, AX
+    MOVQ $0x3FF0000000000000, BX
+    ADDQ BX, AX
+    VMOVQ AX, X6                       // X6[0] = 2^k[1]
+
+    // Combine: X5 = {2^k[0], 2^k[1]}
+    VPUNPCKLQDQ X6, X5, X5             // X5 = {2^k[0], 2^k[1]}
+    VMULPD X5, X4, X4                  // X4 = exp(z) = exp(-2x)
 
     // tanh(x) = (1 - exp(-2x)) / (1 + exp(-2x))
-    VSUBPD Y4, Y11, Y5                 // Y5 = 1 - exp(-2x)
-    VADDPD Y4, Y11, Y6                 // Y6 = 1 + exp(-2x)
-    VDIVPD Y6, Y5, Y0                  // Y0 = tanh(x)
+    VSUBPD X4, X11, X5                 // X5 = 1 - exp(-2x)
+    VADDPD X4, X11, X6                 // X6 = 1 + exp(-2x)
+    VDIVPD X6, X5, X0                  // X0 = tanh(x)
 
-    VMOVUPD Y0, (DX)                   // store result
-    ADDQ $32, SI
-    ADDQ $32, DX
+    VMOVUPD X0, (DX)                   // store 2 results
+    ADDQ $16, SI
+    ADDQ $16, DX
     DECQ AX
-    JNZ  tanh64_loop4
+    JNZ  tanh64_loop2
 
 tanh64_remainder:
-    ANDQ $3, CX                        // remainder = len % 4
+    ANDQ $1, CX                        // remainder = len % 2
     JZ   tanh64_done
 
 tanh64_scalar:
-    // Scalar path for remaining elements using XMM registers
+    // Scalar path for remaining element
     VMOVSD (SI), X0                    // X0 = x
 
     // z = -2x
