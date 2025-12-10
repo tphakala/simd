@@ -1977,3 +1977,458 @@ func BenchmarkAbsSqComplex(b *testing.B) {
 		})
 	}
 }
+
+// =============================================================================
+// FFT BUTTERFLY SIMULATION TESTS
+// These tests specifically target bugs that manifest in FFT butterfly operations
+// =============================================================================
+
+// complexMulSIMDvsGoHelper tests SIMD vs Go implementations for complex multiplication.
+func complexMulSIMDvsGoHelper(t *testing.T, sizes []int,
+	simdFn func(dstRe, dstIm, aRe, aIm, bRe, bIm []float32),
+	goFn func(dstRe, dstIm, aRe, aIm, bRe, bIm []float32),
+) {
+	t.Helper()
+	for _, n := range sizes {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			aRe, aIm := make([]float32, n), make([]float32, n)
+			bRe, bIm := make([]float32, n), make([]float32, n)
+
+			for i := range n {
+				angle := 2 * math.Pi * float64(i) / float64(n)
+				aRe[i] = float32(math.Cos(angle))
+				aIm[i] = float32(math.Sin(angle))
+				bRe[i] = float32(math.Cos(2 * angle))
+				bIm[i] = float32(math.Sin(2 * angle))
+			}
+
+			simdRe, simdIm := make([]float32, n), make([]float32, n)
+			simdFn(simdRe, simdIm, aRe, aIm, bRe, bIm)
+
+			goRe, goIm := make([]float32, n), make([]float32, n)
+			goFn(goRe, goIm, aRe, aIm, bRe, bIm)
+
+			for i := range n {
+				reErr := math.Abs(float64(simdRe[i] - goRe[i]))
+				imErr := math.Abs(float64(simdIm[i] - goIm[i]))
+				if reErr > 1e-6 {
+					t.Errorf("Re[%d]: SIMD=%v, Go=%v, diff=%v", i, simdRe[i], goRe[i], reErr)
+				}
+				if imErr > 1e-6 {
+					t.Errorf("Im[%d]: SIMD=%v, Go=%v, diff=%v", i, simdIm[i], goIm[i], imErr)
+				}
+			}
+		})
+	}
+}
+
+// TestMulComplex_SIMDvsGo explicitly compares SIMD and pure Go implementations
+// to identify bugs that only appear in the SIMD path.
+func TestMulComplex_SIMDvsGo(t *testing.T) {
+	sizes := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33, 63, 64, 65, 128, 256, 512, 1024}
+	complexMulSIMDvsGoHelper(t, sizes, MulComplex, mulComplex32Go)
+}
+
+// TestMulComplex_FFTButterflyPattern simulates the exact access pattern used in
+// FFT butterfly operations to identify bugs in strided twiddle factor application.
+func TestMulComplex_FFTButterflyPattern(t *testing.T) {
+	// Simulate FFT sizes
+	fftSizes := []int{8, 16, 32, 64, 128, 256, 512, 1024}
+
+	for _, fftSize := range fftSizes {
+		t.Run(fmt.Sprintf("fft=%d", fftSize), func(t *testing.T) {
+			// Precompute twiddle factors like an FFT would
+			twRe := make([]float32, fftSize/2)
+			twIm := make([]float32, fftSize/2)
+			for k := range fftSize / 2 {
+				angle := -2 * math.Pi * float64(k) / float64(fftSize)
+				twRe[k] = float32(math.Cos(angle))
+				twIm[k] = float32(math.Sin(angle))
+			}
+
+			// Simulate butterfly at different stages
+			for stage := 0; (1 << stage) < fftSize; stage++ {
+				halfSize := 1 << stage
+				fullSize := halfSize * 2
+				twStep := fftSize / fullSize
+
+				t.Run(fmt.Sprintf("stage=%d", stage), func(t *testing.T) {
+					// Create sample data and butterfly data
+					dataRe := make([]float32, halfSize)
+					dataIm := make([]float32, halfSize)
+
+					// Gather twiddle factors with stride (this is where bugs can occur)
+					gatheredTwRe := make([]float32, halfSize)
+					gatheredTwIm := make([]float32, halfSize)
+
+					for k := range halfSize {
+						twIdx := k * twStep
+						if twIdx >= len(twRe) {
+							t.Fatalf("twiddle index %d out of bounds (len=%d) at k=%d, twStep=%d",
+								twIdx, len(twRe), k, twStep)
+						}
+						gatheredTwRe[k] = twRe[twIdx]
+						gatheredTwIm[k] = twIm[twIdx]
+
+						// Sample data (use twiddle-like values)
+						angle := 2 * math.Pi * float64(k) / float64(halfSize)
+						dataRe[k] = float32(math.Cos(angle))
+						dataIm[k] = float32(math.Sin(angle))
+					}
+
+					// Perform complex multiplication (butterfly core operation)
+					simdRe := make([]float32, halfSize)
+					simdIm := make([]float32, halfSize)
+					MulComplex(simdRe, simdIm, dataRe, dataIm, gatheredTwRe, gatheredTwIm)
+
+					// Compute reference
+					refRe := make([]float32, halfSize)
+					refIm := make([]float32, halfSize)
+					mulComplex32Go(refRe, refIm, dataRe, dataIm, gatheredTwRe, gatheredTwIm)
+
+					// Compare
+					for k := range halfSize {
+						reErr := math.Abs(float64(simdRe[k] - refRe[k]))
+						imErr := math.Abs(float64(simdIm[k] - refIm[k]))
+						if reErr > 1e-5 {
+							t.Errorf("stage=%d k=%d Re: SIMD=%v, ref=%v, diff=%v",
+								stage, k, simdRe[k], refRe[k], reErr)
+						}
+						if imErr > 1e-5 {
+							t.Errorf("stage=%d k=%d Im: SIMD=%v, ref=%v, diff=%v",
+								stage, k, simdIm[k], refIm[k], imErr)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestMulComplex_InPlaceLike tests patterns where inputs and outputs may overlap
+// or share underlying memory, which can reveal aliasing bugs.
+func TestMulComplex_InPlaceLike(t *testing.T) {
+	sizes := []int{8, 16, 32, 64}
+
+	for _, n := range sizes {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			// Create a larger buffer and use overlapping slices
+			bufRe := make([]float32, n*2)
+			bufIm := make([]float32, n*2)
+
+			// Initialize with test data
+			for i := range len(bufRe) {
+				bufRe[i] = float32(i + 1)
+				bufIm[i] = float32(i + 2)
+			}
+
+			// Use first half as input A, second half as input B, first half as output
+			aRe := bufRe[:n]
+			aIm := bufIm[:n]
+			bRe := bufRe[n:]
+			bIm := bufIm[n:]
+
+			// Save copies for reference computation
+			aReCopy := make([]float32, n)
+			aImCopy := make([]float32, n)
+			copy(aReCopy, aRe)
+			copy(aImCopy, aIm)
+
+			// Compute reference first (before any overwrites)
+			refRe := make([]float32, n)
+			refIm := make([]float32, n)
+			mulComplex32Go(refRe, refIm, aReCopy, aImCopy, bRe, bIm)
+
+			// Compute with SIMD (output overwrites input A)
+			MulComplex(aRe, aIm, aReCopy, aImCopy, bRe, bIm)
+
+			// Compare
+			for i := range n {
+				if math.Abs(float64(aRe[i]-refRe[i])) > 1e-5 {
+					t.Errorf("Re[%d]: got=%v, want=%v", i, aRe[i], refRe[i])
+				}
+				if math.Abs(float64(aIm[i]-refIm[i])) > 1e-5 {
+					t.Errorf("Im[%d]: got=%v, want=%v", i, aIm[i], refIm[i])
+				}
+			}
+		})
+	}
+}
+
+// TestMulComplex_ZeroAndExtreme tests edge cases with zeros and extreme values
+// that might reveal numerical issues in SIMD implementations.
+func TestMulComplex_ZeroAndExtreme(t *testing.T) {
+	testCases := []struct {
+		name string
+		aRe  []float32
+		aIm  []float32
+		bRe  []float32
+		bIm  []float32
+	}{
+		{
+			"zeros_times_nonzero",
+			[]float32{0, 0, 0, 0, 0, 0, 0, 0},
+			[]float32{0, 0, 0, 0, 0, 0, 0, 0},
+			[]float32{1, 2, 3, 4, 5, 6, 7, 8},
+			[]float32{8, 7, 6, 5, 4, 3, 2, 1},
+		},
+		{
+			"nonzero_times_zeros",
+			[]float32{1, 2, 3, 4, 5, 6, 7, 8},
+			[]float32{8, 7, 6, 5, 4, 3, 2, 1},
+			[]float32{0, 0, 0, 0, 0, 0, 0, 0},
+			[]float32{0, 0, 0, 0, 0, 0, 0, 0},
+		},
+		{
+			"identity_real",
+			[]float32{1, 2, 3, 4, 5, 6, 7, 8},
+			[]float32{0, 0, 0, 0, 0, 0, 0, 0},
+			[]float32{1, 1, 1, 1, 1, 1, 1, 1},
+			[]float32{0, 0, 0, 0, 0, 0, 0, 0},
+		},
+		{
+			"identity_imag",
+			[]float32{0, 0, 0, 0, 0, 0, 0, 0},
+			[]float32{1, 2, 3, 4, 5, 6, 7, 8},
+			[]float32{0, 0, 0, 0, 0, 0, 0, 0},
+			[]float32{1, 1, 1, 1, 1, 1, 1, 1},
+		},
+		{
+			"alternating_signs",
+			[]float32{1, -1, 1, -1, 1, -1, 1, -1},
+			[]float32{-1, 1, -1, 1, -1, 1, -1, 1},
+			[]float32{1, 1, 1, 1, 1, 1, 1, 1},
+			[]float32{1, 1, 1, 1, 1, 1, 1, 1},
+		},
+		{
+			"unit_circle_quadrants",
+			[]float32{1, 0, -1, 0, 1, 0, -1, 0},
+			[]float32{0, 1, 0, -1, 0, 1, 0, -1},
+			[]float32{0, 1, 0, -1, 0, 1, 0, -1},
+			[]float32{1, 0, -1, 0, 1, 0, -1, 0},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := len(tc.aRe)
+
+			simdRe := make([]float32, n)
+			simdIm := make([]float32, n)
+			MulComplex(simdRe, simdIm, tc.aRe, tc.aIm, tc.bRe, tc.bIm)
+
+			refRe := make([]float32, n)
+			refIm := make([]float32, n)
+			mulComplex32Go(refRe, refIm, tc.aRe, tc.aIm, tc.bRe, tc.bIm)
+
+			for i := range n {
+				if math.Abs(float64(simdRe[i]-refRe[i])) > 1e-6 {
+					t.Errorf("Re[%d]: SIMD=%v, Go=%v", i, simdRe[i], refRe[i])
+				}
+				if math.Abs(float64(simdIm[i]-refIm[i])) > 1e-6 {
+					t.Errorf("Im[%d]: SIMD=%v, Go=%v", i, simdIm[i], refIm[i])
+				}
+			}
+		})
+	}
+}
+
+// TestMulComplex_TwiddleGathering tests the exact pattern used when gathering
+// twiddle factors with a stride, which is where the FFT butterfly bug occurred.
+func TestMulComplex_TwiddleGathering(t *testing.T) {
+	// This test simulates what happens in butterflyStageVectorized:
+	// for k := 0; k < halfSize; k++ {
+	//     twBufRe[k] = twRe[k*twStep]
+	//     twBufIm[k] = twIm[k*twStep]
+	// }
+
+	n := 256 // Full FFT size
+	twRe := make([]float32, n/2)
+	twIm := make([]float32, n/2)
+
+	// Initialize twiddle factors
+	for k := range n / 2 {
+		angle := -2 * math.Pi * float64(k) / float64(n)
+		twRe[k] = float32(math.Cos(angle))
+		twIm[k] = float32(math.Sin(angle))
+	}
+
+	// Test at different stages with different twStep values
+	stages := []struct {
+		halfSize int
+		twStep   int
+	}{
+		{1, 128}, // stage 0: twStep = 256/2 = 128
+		{2, 64},  // stage 1: twStep = 256/4 = 64
+		{4, 32},  // stage 2: twStep = 256/8 = 32
+		{8, 16},  // stage 3: twStep = 256/16 = 16
+		{16, 8},  // stage 4: twStep = 256/32 = 8
+		{32, 4},  // stage 5: twStep = 256/64 = 4
+		{64, 2},  // stage 6: twStep = 256/128 = 2
+		{128, 1}, // stage 7: twStep = 256/256 = 1
+	}
+
+	for _, s := range stages {
+		t.Run(fmt.Sprintf("halfSize=%d_twStep=%d", s.halfSize, s.twStep), func(t *testing.T) {
+			// Gather twiddle factors
+			gatheredRe := make([]float32, s.halfSize)
+			gatheredIm := make([]float32, s.halfSize)
+			for k := range s.halfSize {
+				gatheredRe[k] = twRe[k*s.twStep]
+				gatheredIm[k] = twIm[k*s.twStep]
+			}
+
+			// Create data to multiply
+			dataRe := make([]float32, s.halfSize)
+			dataIm := make([]float32, s.halfSize)
+			for k := range s.halfSize {
+				dataRe[k] = float32(k + 1)
+				dataIm[k] = float32(k + 2)
+			}
+
+			// SIMD computation
+			simdRe := make([]float32, s.halfSize)
+			simdIm := make([]float32, s.halfSize)
+			MulComplex(simdRe, simdIm, dataRe, dataIm, gatheredRe, gatheredIm)
+
+			// Go reference computation
+			refRe := make([]float32, s.halfSize)
+			refIm := make([]float32, s.halfSize)
+			mulComplex32Go(refRe, refIm, dataRe, dataIm, gatheredRe, gatheredIm)
+
+			// Compare - use relative tolerance for larger values
+			for k := range s.halfSize {
+				reErr := math.Abs(float64(simdRe[k] - refRe[k]))
+				imErr := math.Abs(float64(simdIm[k] - refIm[k]))
+				// Use relative tolerance for larger values, absolute for small values
+				reTol := max(1e-5, math.Abs(float64(refRe[k]))*1e-5)
+				imTol := max(1e-5, math.Abs(float64(refIm[k]))*1e-5)
+				if reErr > reTol {
+					t.Errorf("k=%d Re: SIMD=%v, ref=%v, diff=%v", k, simdRe[k], refRe[k], reErr)
+				}
+				if imErr > imTol {
+					t.Errorf("k=%d Im: SIMD=%v, ref=%v, diff=%v", k, simdIm[k], refIm[k], imErr)
+				}
+			}
+		})
+	}
+}
+
+// TestAbsSqComplex_SIMDvsGo explicitly compares SIMD and pure Go implementations.
+func TestAbsSqComplex_SIMDvsGo(t *testing.T) {
+	sizes := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 128, 256}
+
+	for _, n := range sizes {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			aRe := make([]float32, n)
+			aIm := make([]float32, n)
+
+			for i := range n {
+				angle := 2 * math.Pi * float64(i) / float64(n)
+				aRe[i] = float32(math.Cos(angle))
+				aIm[i] = float32(math.Sin(angle))
+			}
+
+			simdDst := make([]float32, n)
+			AbsSqComplex(simdDst, aRe, aIm)
+
+			goDst := make([]float32, n)
+			absSqComplex32Go(goDst, aRe, aIm)
+
+			for i := range n {
+				err := math.Abs(float64(simdDst[i] - goDst[i]))
+				if err > 1e-6 {
+					t.Errorf("[%d]: SIMD=%v, Go=%v, diff=%v", i, simdDst[i], goDst[i], err)
+				}
+			}
+		})
+	}
+}
+
+// TestMulConjComplex_SIMDvsGo explicitly compares SIMD and pure Go implementations.
+func TestMulConjComplex_SIMDvsGo(t *testing.T) {
+	sizes := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 128, 256}
+	complexMulSIMDvsGoHelper(t, sizes, MulConjComplex, mulConjComplex32Go)
+}
+
+// fftButterflyStages performs FFT butterfly stages using the provided complex multiplication function.
+func fftButterflyStages(dataRe, dataIm, twRe, twIm []float32, n int,
+	mulFn func(dstRe, dstIm, aRe, aIm, bRe, bIm []float32),
+) {
+	for stage := 0; (1 << stage) < n; stage++ {
+		halfSize := 1 << stage
+		fullSize := halfSize * 2
+		twStep := n / fullSize
+
+		for group := 0; group < n; group += fullSize {
+			gatheredRe := make([]float32, halfSize)
+			gatheredIm := make([]float32, halfSize)
+			for k := range halfSize {
+				gatheredRe[k] = twRe[k*twStep]
+				gatheredIm[k] = twIm[k*twStep]
+			}
+
+			topRe := dataRe[group : group+halfSize]
+			topIm := dataIm[group : group+halfSize]
+			botRe := dataRe[group+halfSize : group+fullSize]
+			botIm := dataIm[group+halfSize : group+fullSize]
+
+			tempRe := make([]float32, halfSize)
+			tempIm := make([]float32, halfSize)
+			mulFn(tempRe, tempIm, botRe, botIm, gatheredRe, gatheredIm)
+
+			for k := range halfSize {
+				tr, ti := topRe[k], topIm[k]
+				topRe[k] = tr + tempRe[k]
+				topIm[k] = ti + tempIm[k]
+				botRe[k] = tr - tempRe[k]
+				botIm[k] = ti - tempIm[k]
+			}
+		}
+	}
+}
+
+// TestMulComplex_FullFFTSimulation performs a complete FFT-like computation
+// to ensure SIMD operations work correctly in the full butterfly context.
+func TestMulComplex_FullFFTSimulation(t *testing.T) {
+	for _, n := range []int{8, 16, 32, 64, 128, 256} {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			dataRe, dataIm := make([]float32, n), make([]float32, n)
+			dataRe[0] = 1.0 // Impulse - FFT should give all 1s
+
+			twRe, twIm := make([]float32, n/2), make([]float32, n/2)
+			for k := range n / 2 {
+				angle := -2 * math.Pi * float64(k) / float64(n)
+				twRe[k] = float32(math.Cos(angle))
+				twIm[k] = float32(math.Sin(angle))
+			}
+
+			dataReGo, dataImGo := make([]float32, n), make([]float32, n)
+			copy(dataReGo, dataRe)
+			copy(dataImGo, dataIm)
+
+			fftButterflyStages(dataRe, dataIm, twRe, twIm, n, MulComplex)
+			fftButterflyStages(dataReGo, dataImGo, twRe, twIm, n, mulComplex32Go)
+
+			for i := range n {
+				reErr := math.Abs(float64(dataRe[i] - dataReGo[i]))
+				imErr := math.Abs(float64(dataIm[i] - dataImGo[i]))
+				if reErr > 1e-4 {
+					t.Errorf("bin %d Re: SIMD=%v, Go=%v, diff=%v", i, dataRe[i], dataReGo[i], reErr)
+				}
+				if imErr > 1e-4 {
+					t.Errorf("bin %d Im: SIMD=%v, Go=%v, diff=%v", i, dataIm[i], dataImGo[i], imErr)
+				}
+			}
+
+			for i := range n {
+				if math.Abs(float64(dataRe[i]-1.0)) > 1e-4 {
+					t.Errorf("FFT[%d] Re = %v, want 1.0 (impulse response)", i, dataRe[i])
+				}
+				if math.Abs(float64(dataIm[i])) > 1e-4 {
+					t.Errorf("FFT[%d] Im = %v, want 0.0 (impulse response)", i, dataIm[i])
+				}
+			}
+		})
+	}
+}
