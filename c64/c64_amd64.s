@@ -1150,8 +1150,8 @@ DATA signmask64<>+0x08(SB)/4, $0x00000000
 DATA signmask64<>+0x0c(SB)/4, $0x80000000
 DATA signmask64<>+0x10(SB)/4, $0x00000000
 DATA signmask64<>+0x14(SB)/4, $0x80000000
-DATA signmask64<>+0x18(SB)/4, $0x80000000
-DATA signmask64<>+0x1c(SB)/4, $0x00000000
+DATA signmask64<>+0x18(SB)/4, $0x00000000
+DATA signmask64<>+0x1c(SB)/4, $0x80000000
 GLOBL signmask64<>(SB), RODATA|NOPTR, $32
 
 // func conjAVX512(dst, a []complex64)

@@ -4,12 +4,10 @@ package c64
 
 import "github.com/tphakala/simd/cpu"
 
-var (
-	hasNEON = cpu.ARM64.NEON
-)
+var hasNEON = cpu.ARM64.NEON
 
 func mul64(dst, a, b []complex64) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		mulNEON(dst, a, b)
 		return
 	}
@@ -17,7 +15,7 @@ func mul64(dst, a, b []complex64) {
 }
 
 func mulConj64(dst, a, b []complex64) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		mulConjNEON(dst, a, b)
 		return
 	}
@@ -25,7 +23,7 @@ func mulConj64(dst, a, b []complex64) {
 }
 
 func scale64(dst, a []complex64, s complex64) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		scaleNEON(dst, a, s)
 		return
 	}
@@ -33,7 +31,7 @@ func scale64(dst, a []complex64, s complex64) {
 }
 
 func add64(dst, a, b []complex64) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		addNEON(dst, a, b)
 		return
 	}
@@ -41,7 +39,7 @@ func add64(dst, a, b []complex64) {
 }
 
 func sub64(dst, a, b []complex64) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		subNEON(dst, a, b)
 		return
 	}
@@ -49,7 +47,7 @@ func sub64(dst, a, b []complex64) {
 }
 
 func abs64(dst []float32, a []complex64) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		absNEON(dst, a)
 		return
 	}
@@ -57,7 +55,7 @@ func abs64(dst []float32, a []complex64) {
 }
 
 func absSq64(dst []float32, a []complex64) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		absSqNEON(dst, a)
 		return
 	}
@@ -65,7 +63,7 @@ func absSq64(dst []float32, a []complex64) {
 }
 
 func conj64(dst, a []complex64) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		conjNEON(dst, a)
 		return
 	}
@@ -73,7 +71,7 @@ func conj64(dst, a []complex64) {
 }
 
 func fromReal64(dst []complex64, src []float32) {
-	if hasNEON && len(dst) >= 1 {
+	if hasNEON {
 		fromRealNEON(dst, src)
 		return
 	}

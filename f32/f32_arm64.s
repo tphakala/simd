@@ -1555,9 +1555,10 @@ mulcplx_neon_scalar_loop:
     FMOVS (R7), F3                 // F3 = bIm
 
     // dstRe = aRe*bRe - aIm*bIm (avoid FMA for clarity)
+    // Go ARM64: FSUBS Fa, Fb, Fd → Fd = Fb - Fa
     FMULS F0, F2, F4               // F4 = aRe * bRe
     FMULS F1, F3, F5               // F5 = aIm * bIm
-    FSUBS F4, F5, F4               // F4 = F4 - F5 = aRe*bRe - aIm*bIm
+    FSUBS F5, F4, F4               // F4 = F4 - F5 = aRe*bRe - aIm*bIm
 
     // dstIm = aRe*bIm + aIm*bRe (avoid FMA for clarity)
     FMULS F0, F3, F5               // F5 = aRe * bIm
@@ -1640,9 +1641,10 @@ mulconjcplx_neon_scalar_loop:
     FADDS F4, F5, F4               // F4 = aRe*bRe + aIm*bIm
 
     // dstIm = aIm*bRe - aRe*bIm (avoid FMA for clarity)
+    // Go ARM64: FSUBS Fa, Fb, Fd → Fd = Fb - Fa
     FMULS F1, F2, F5               // F5 = aIm * bRe
     FMULS F0, F3, F6               // F6 = aRe * bIm
-    FSUBS F5, F6, F5               // F5 = aIm*bRe - aRe*bIm
+    FSUBS F6, F5, F5               // F5 = F5 - F6 = aIm*bRe - aRe*bIm
 
     FMOVS F4, (R0)
     FMOVS F5, (R1)

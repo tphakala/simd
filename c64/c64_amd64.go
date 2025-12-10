@@ -4,14 +4,6 @@ package c64
 
 import "github.com/tphakala/simd/cpu"
 
-// Minimum number of complex64 elements required for SIMD operations.
-// AVX processes 4 complex64 values per 256-bit register (8 float32).
-// AVX-512 processes 8 complex64 values per 512-bit register (16 float32).
-const (
-	minAVXElements    = 4
-	minAVX512Elements = 8
-)
-
 // Function pointer types for SIMD operations
 type (
 	binaryOpFunc  func(dst, a, b []complex64)
@@ -36,14 +28,15 @@ var (
 
 func init() {
 	// Select optimal implementation based on CPU features
-	// Priority: AVX-512 > AVX+FMA > SSE2 > Go
+	// Priority: AVX-512 > AVX+FMA > SSE4.1 > Go
+	// Note: "SSE2" routines use BLENDPS which requires SSE4.1
 	switch {
 	case cpu.X86.AVX512F && cpu.X86.AVX512VL:
 		initAVX512()
 	case cpu.X86.AVX && cpu.X86.FMA:
 		initAVX()
-	case cpu.X86.SSE2:
-		initSSE2()
+	case cpu.X86.SSE41:
+		initSSE2() // Misnamed - actually uses SSE4.1 (BLENDPS)
 	default:
 		initGo()
 	}

@@ -1,6 +1,7 @@
 package c64
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -176,7 +177,7 @@ func TestSub(t *testing.T) {
 // Test various sizes to exercise SIMD remainder handling
 func TestMul_Sizes(t *testing.T) {
 	for size := 1; size <= 17; size++ {
-		t.Run("", func(t *testing.T) {
+		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
 			a := make([]complex64, size)
 			b := make([]complex64, size)
 			for i := range size {
