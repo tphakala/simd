@@ -581,6 +581,15 @@ func absSqComplex32(dst, aRe, aIm []float32) {
 	absSqComplex32Go(dst, aRe, aIm)
 }
 
+func butterflyComplex32(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
+	// Use AVX+FMA if available and have enough elements
+	if cpu.X86.AVX && cpu.X86.FMA && len(upperRe) >= minAVXElements {
+		butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+		return
+	}
+	butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+}
+
 // Split-format complex assembly function declarations
 //
 //go:noescape
@@ -591,3 +600,6 @@ func mulConjComplexAVX(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
 
 //go:noescape
 func absSqComplexAVX(dst, aRe, aIm []float32)
+
+//go:noescape
+func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32)

@@ -381,6 +381,14 @@ func absSqComplex32(dst, aRe, aIm []float32) {
 	absSqComplex32Go(dst, aRe, aIm)
 }
 
+func butterflyComplex32(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
+	if hasNEON && len(upperRe) >= 4 {
+		butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+		return
+	}
+	butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+}
+
 //go:noescape
 func mulComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
 
@@ -389,3 +397,6 @@ func mulConjComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
 
 //go:noescape
 func absSqComplexNEON(dst, aRe, aIm []float32)
+
+//go:noescape
+func butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32)

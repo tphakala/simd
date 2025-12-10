@@ -54,3 +54,6 @@ func mulConjComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 	mulConjComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
 }
 func absSqComplex32(dst, aRe, aIm []float32) { absSqComplex32Go(dst, aRe, aIm) }
+func butterflyComplex32(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
+	butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+}

@@ -2432,3 +2432,313 @@ func TestMulComplex_FullFFTSimulation(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// BUTTERFLY COMPLEX TESTS
+// =============================================================================
+
+// butterflyComplexRef is a reference implementation of the fused butterfly operation.
+func butterflyComplexRef(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
+	for i := range upperRe {
+		// Complex multiply: temp = lower * twiddle
+		lr, li := lowerRe[i], lowerIm[i]
+		tr, ti := twRe[i], twIm[i]
+		tempRe := lr*tr - li*ti
+		tempIm := lr*ti + li*tr
+
+		// Butterfly: upper' = upper + temp, lower' = upper - temp
+		ur, ui := upperRe[i], upperIm[i]
+		upperRe[i] = ur + tempRe
+		upperIm[i] = ui + tempIm
+		lowerRe[i] = ur - tempRe
+		lowerIm[i] = ui - tempIm
+	}
+}
+
+func TestButterflyComplex(t *testing.T) {
+	sizes := []int{0, 1, 4, 8, 9, 16, 17, 31, 32, 33, 63, 64, 65, 128, 256, 512, 1000}
+
+	for _, n := range sizes {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			if n == 0 {
+				ButterflyComplex(nil, nil, nil, nil, nil, nil)
+				return
+			}
+
+			upperRe := make([]float32, n)
+			upperIm := make([]float32, n)
+			lowerRe := make([]float32, n)
+			lowerIm := make([]float32, n)
+			twRe := make([]float32, n)
+			twIm := make([]float32, n)
+
+			// Reference copies
+			upperReRef := make([]float32, n)
+			upperImRef := make([]float32, n)
+			lowerReRef := make([]float32, n)
+			lowerImRef := make([]float32, n)
+
+			// Initialize with test data
+			for i := range n {
+				angle := 2 * math.Pi * float64(i) / float64(n)
+				upperRe[i] = float32(i+1) * 0.1
+				upperIm[i] = float32(i+2) * 0.2
+				lowerRe[i] = float32(i+3) * 0.3
+				lowerIm[i] = float32(i+4) * 0.4
+				twRe[i] = float32(math.Cos(angle))
+				twIm[i] = float32(math.Sin(angle))
+			}
+
+			// Copy for reference
+			copy(upperReRef, upperRe)
+			copy(upperImRef, upperIm)
+			copy(lowerReRef, lowerRe)
+			copy(lowerImRef, lowerIm)
+
+			// Apply SIMD version
+			ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+
+			// Apply reference
+			butterflyComplexRef(upperReRef, upperImRef, lowerReRef, lowerImRef, twRe, twIm)
+
+			// Compare results - use relative tolerance for FMA vs separate mul+add precision differences
+			for i := range n {
+				relTol := func(got, want float32) bool {
+					diff := math.Abs(float64(got - want))
+					return diff <= 2e-4 || diff <= math.Abs(float64(want))*1e-5
+				}
+				if !relTol(upperRe[i], upperReRef[i]) {
+					t.Errorf("upperRe[%d] = %v, want %v", i, upperRe[i], upperReRef[i])
+				}
+				if !relTol(upperIm[i], upperImRef[i]) {
+					t.Errorf("upperIm[%d] = %v, want %v", i, upperIm[i], upperImRef[i])
+				}
+				if !relTol(lowerRe[i], lowerReRef[i]) {
+					t.Errorf("lowerRe[%d] = %v, want %v", i, lowerRe[i], lowerReRef[i])
+				}
+				if !relTol(lowerIm[i], lowerImRef[i]) {
+					t.Errorf("lowerIm[%d] = %v, want %v", i, lowerIm[i], lowerImRef[i])
+				}
+			}
+		})
+	}
+}
+
+func TestButterflyComplex_KnownValues(t *testing.T) {
+	// Test with known values:
+	// upper = 1+2i, lower = 3+4i, twiddle = cos(π/4)+i*sin(π/4) ≈ 0.707+0.707i
+	// temp = lower * twiddle = (3+4i) * (0.707+0.707i)
+	//      = (3*0.707 - 4*0.707) + (3*0.707 + 4*0.707)i
+	//      ≈ -0.707 + 4.95i
+	// upper' = upper + temp = (1-0.707) + (2+4.95)i ≈ 0.293 + 6.95i
+	// lower' = upper - temp = (1+0.707) + (2-4.95)i ≈ 1.707 - 2.95i
+	cos45 := float32(math.Cos(math.Pi / 4))
+	sin45 := float32(math.Sin(math.Pi / 4))
+
+	upperRe := []float32{1}
+	upperIm := []float32{2}
+	lowerRe := []float32{3}
+	lowerIm := []float32{4}
+	twRe := []float32{cos45}
+	twIm := []float32{sin45}
+
+	ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+
+	// Expected values computed manually
+	tempRe := 3*cos45 - 4*sin45 // ≈ -0.707
+	tempIm := 3*sin45 + 4*cos45 // ≈ 4.95
+	wantUpperRe := 1 + tempRe   // ≈ 0.293
+	wantUpperIm := 2 + tempIm   // ≈ 6.95
+	wantLowerRe := 1 - tempRe   // ≈ 1.707
+	wantLowerIm := 2 - tempIm   // ≈ -2.95
+
+	if math.Abs(float64(upperRe[0]-wantUpperRe)) > 1e-5 {
+		t.Errorf("upperRe = %v, want %v", upperRe[0], wantUpperRe)
+	}
+	if math.Abs(float64(upperIm[0]-wantUpperIm)) > 1e-5 {
+		t.Errorf("upperIm = %v, want %v", upperIm[0], wantUpperIm)
+	}
+	if math.Abs(float64(lowerRe[0]-wantLowerRe)) > 1e-5 {
+		t.Errorf("lowerRe = %v, want %v", lowerRe[0], wantLowerRe)
+	}
+	if math.Abs(float64(lowerIm[0]-wantLowerIm)) > 1e-5 {
+		t.Errorf("lowerIm = %v, want %v", lowerIm[0], wantLowerIm)
+	}
+}
+
+func TestButterflyComplex_SIMDvsGo(t *testing.T) {
+	sizes := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 128, 256, 512, 1024}
+
+	for _, n := range sizes {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			upperRe := make([]float32, n)
+			upperIm := make([]float32, n)
+			lowerRe := make([]float32, n)
+			lowerIm := make([]float32, n)
+			twRe := make([]float32, n)
+			twIm := make([]float32, n)
+
+			// Go copies
+			upperReGo := make([]float32, n)
+			upperImGo := make([]float32, n)
+			lowerReGo := make([]float32, n)
+			lowerImGo := make([]float32, n)
+
+			// Initialize with varied data to catch bugs
+			for i := range n {
+				angle := 2 * math.Pi * float64(i) / float64(n)
+				upperRe[i] = float32(math.Sin(float64(i) * 0.123))
+				upperIm[i] = float32(math.Cos(float64(i) * 0.456))
+				lowerRe[i] = float32(math.Sin(float64(i) * 0.789))
+				lowerIm[i] = float32(math.Cos(float64(i) * 0.012))
+				twRe[i] = float32(math.Cos(angle))
+				twIm[i] = float32(math.Sin(angle))
+			}
+
+			copy(upperReGo, upperRe)
+			copy(upperImGo, upperIm)
+			copy(lowerReGo, lowerRe)
+			copy(lowerImGo, lowerIm)
+
+			// SIMD version
+			ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+
+			// Pure Go version
+			butterflyComplex32Go(upperReGo, upperImGo, lowerReGo, lowerImGo, twRe, twIm)
+
+			// Compare
+			for i := range n {
+				if math.Abs(float64(upperRe[i]-upperReGo[i])) > 1e-5 {
+					t.Errorf("upperRe[%d]: SIMD=%v, Go=%v", i, upperRe[i], upperReGo[i])
+				}
+				if math.Abs(float64(upperIm[i]-upperImGo[i])) > 1e-5 {
+					t.Errorf("upperIm[%d]: SIMD=%v, Go=%v", i, upperIm[i], upperImGo[i])
+				}
+				if math.Abs(float64(lowerRe[i]-lowerReGo[i])) > 1e-5 {
+					t.Errorf("lowerRe[%d]: SIMD=%v, Go=%v", i, lowerRe[i], lowerReGo[i])
+				}
+				if math.Abs(float64(lowerIm[i]-lowerImGo[i])) > 1e-5 {
+					t.Errorf("lowerIm[%d]: SIMD=%v, Go=%v", i, lowerIm[i], lowerImGo[i])
+				}
+			}
+		})
+	}
+}
+
+func TestButterflyComplex_FFTPattern(t *testing.T) {
+	// Test exact FFT butterfly pattern at different stages
+	fftSizes := []int{8, 16, 32, 64, 128, 256, 512, 1024}
+
+	for _, fftSize := range fftSizes {
+		t.Run(fmt.Sprintf("fft=%d", fftSize), func(t *testing.T) {
+			// Precompute twiddle factors
+			twRe := make([]float32, fftSize/2)
+			twIm := make([]float32, fftSize/2)
+			for k := range fftSize / 2 {
+				angle := -2 * math.Pi * float64(k) / float64(fftSize)
+				twRe[k] = float32(math.Cos(angle))
+				twIm[k] = float32(math.Sin(angle))
+			}
+
+			// Test at different stages
+			for stage := 0; (1 << stage) < fftSize; stage++ {
+				halfSize := 1 << stage
+				fullSize := halfSize * 2
+				twStep := fftSize / fullSize
+
+				t.Run(fmt.Sprintf("stage=%d", stage), func(t *testing.T) {
+					// Create test data
+					upperRe := make([]float32, halfSize)
+					upperIm := make([]float32, halfSize)
+					lowerRe := make([]float32, halfSize)
+					lowerIm := make([]float32, halfSize)
+					gatheredTwRe := make([]float32, halfSize)
+					gatheredTwIm := make([]float32, halfSize)
+
+					// Copy data for reference
+					upperReRef := make([]float32, halfSize)
+					upperImRef := make([]float32, halfSize)
+					lowerReRef := make([]float32, halfSize)
+					lowerImRef := make([]float32, halfSize)
+
+					for k := range halfSize {
+						angle := 2 * math.Pi * float64(k) / float64(halfSize)
+						upperRe[k] = float32(math.Cos(angle))
+						upperIm[k] = float32(math.Sin(angle))
+						lowerRe[k] = float32(math.Sin(angle * 2))
+						lowerIm[k] = float32(math.Cos(angle * 2))
+						gatheredTwRe[k] = twRe[k*twStep]
+						gatheredTwIm[k] = twIm[k*twStep]
+					}
+
+					copy(upperReRef, upperRe)
+					copy(upperImRef, upperIm)
+					copy(lowerReRef, lowerRe)
+					copy(lowerImRef, lowerIm)
+
+					// Apply SIMD butterfly
+					ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, gatheredTwRe, gatheredTwIm)
+
+					// Apply reference butterfly
+					butterflyComplex32Go(upperReRef, upperImRef, lowerReRef, lowerImRef, gatheredTwRe, gatheredTwIm)
+
+					// Compare
+					for k := range halfSize {
+						if math.Abs(float64(upperRe[k]-upperReRef[k])) > 1e-5 {
+							t.Errorf("stage=%d k=%d upperRe: SIMD=%v, ref=%v", stage, k, upperRe[k], upperReRef[k])
+						}
+						if math.Abs(float64(upperIm[k]-upperImRef[k])) > 1e-5 {
+							t.Errorf("stage=%d k=%d upperIm: SIMD=%v, ref=%v", stage, k, upperIm[k], upperImRef[k])
+						}
+						if math.Abs(float64(lowerRe[k]-lowerReRef[k])) > 1e-5 {
+							t.Errorf("stage=%d k=%d lowerRe: SIMD=%v, ref=%v", stage, k, lowerRe[k], lowerReRef[k])
+						}
+						if math.Abs(float64(lowerIm[k]-lowerImRef[k])) > 1e-5 {
+							t.Errorf("stage=%d k=%d lowerIm: SIMD=%v, ref=%v", stage, k, lowerIm[k], lowerImRef[k])
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkButterflyComplex(b *testing.B) {
+	sizes := []int{64, 128, 256, 512, 1024, 4096}
+
+	benchFn := func(b *testing.B, n int, fn func(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32)) {
+		b.Helper()
+		upperRe := make([]float32, n)
+		upperIm := make([]float32, n)
+		lowerRe := make([]float32, n)
+		lowerIm := make([]float32, n)
+		twRe := make([]float32, n)
+		twIm := make([]float32, n)
+
+		for i := range n {
+			angle := 2 * math.Pi * float64(i) / float64(n)
+			upperRe[i] = float32(i) * 0.1
+			upperIm[i] = float32(i) * 0.2
+			lowerRe[i] = float32(i) * 0.3
+			lowerIm[i] = float32(i) * 0.4
+			twRe[i] = float32(math.Cos(angle))
+			twIm[i] = float32(math.Sin(angle))
+		}
+
+		b.ResetTimer()
+		b.SetBytes(int64(n * 4 * 6)) // 6 slices of float32
+
+		for i := 0; i < b.N; i++ {
+			fn(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+		}
+	}
+
+	for _, n := range sizes {
+		b.Run(fmt.Sprintf("SIMD_%d", n), func(b *testing.B) {
+			benchFn(b, n, ButterflyComplex)
+		})
+		b.Run(fmt.Sprintf("Go_%d", n), func(b *testing.B) {
+			benchFn(b, n, butterflyComplex32Go)
+		})
+	}
+}
