@@ -234,37 +234,84 @@ func TestClampScale(t *testing.T) {
 }
 
 func TestTanh(t *testing.T) {
-	src := []float32{-3, -1, 0, 1, 3}
-	dst := make([]float32, len(src))
-
-	Tanh(dst, src)
-
-	// Verify results are in valid range (-1, 1)
-	for i, v := range dst {
-		if v < -1 || v > 1 {
-			t.Errorf("Tanh()[%d] = %v, expected value in range (-1, 1)", i, v)
-		}
-
-		// Test specific values
-		if src[i] == 0 && v != 0 {
-			t.Errorf("Tanh(0)[%d] = %v, expected 0", i, v)
-		}
-		if src[i] > 2.5 && v < 0.9 {
-			t.Errorf("Tanh(%v)[%d] = %v, expected ~1", src[i], i, v)
-		}
-		if src[i] < -2.5 && v > -0.9 {
-			t.Errorf("Tanh(%v)[%d] = %v, expected ~-1", src[i], i, v)
-		}
+	// Test cases with various input ranges including extreme values that trigger clamping
+	testCases := []struct {
+		name string
+		src  []float32
+	}{
+		{"zeros", []float32{0, 0, 0, 0, 0, 0, 0, 0}},
+		{"ones", []float32{1, 1, 1, 1, 1, 1, 1, 1}},
+		{"negative", []float32{-1, -2, -3, -4, -5, -6, -7, -8}},
+		{"positive", []float32{1, 2, 3, 4, 5, 6, 7, 8}},
+		{"mixed", []float32{-3, -1, 0, 1, 3, -5, 5, -8}},
+		// Extreme values that MUST trigger clamping (clamp range is ±20 for -2x)
+		// These values test the FMIN/FMAX instructions
+		{"extreme_positive", []float32{15, 20, 50, 100}},
+		{"extreme_negative", []float32{-15, -20, -50, -100}},
+		{"extreme_mixed", []float32{-100, -50, -20, -10, 0, 10, 20, 50, 100}},
+		// Various sizes to test NEON vectorized path and scalar remainder
+		{"size_1", []float32{2.5}},
+		{"size_3", []float32{-1, 0, 1}},
+		{"size_4", []float32{-2, -1, 1, 2}},    // exact NEON width for f32
+		{"size_5", []float32{-2, -1, 0, 1, 2}}, // NEON + 1 scalar
+		{"size_7", []float32{-3, -2, -1, 0, 1, 2, 3}},
+		{"size_9", []float32{-4, -3, -2, -1, 0, 1, 2, 3, 4}},
+		{"size_17", make([]float32, 17)},
 	}
 
-	// Test in-place
-	src2 := append([]float32(nil), src...)
-	TanhInPlace(src2)
-	for i := range src2 {
-		if math.Abs(float64(src2[i]-dst[i])) > 1e-6 {
-			t.Errorf("TanhInPlace()[%d] = %v, Tanh() = %v, expected same", i, src2[i], dst[i])
-		}
+	// Fill size_17 with values including extremes
+	for i := range 17 {
+		testCases[len(testCases)-1].src[i] = float32(i-8) * 10 // -80 to +80
 	}
+
+	const epsilon = 1e-5 // Acceptable relative error for f32
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := make([]float32, len(tc.src))
+			Tanh(dst, tc.src)
+
+			for i, v := range dst {
+				// Verify results are in valid range [-1, 1]
+				if v < -1 || v > 1 {
+					t.Errorf("Tanh(%v)[%d] = %v, expected value in range [-1, 1]", tc.src[i], i, v)
+				}
+
+				// Verify accuracy against math.Tanh
+				expected := float32(math.Tanh(float64(tc.src[i])))
+				diff := math.Abs(float64(v - expected))
+
+				// Use relative error for values away from zero, absolute for near-zero
+				var relErr float64
+				if math.Abs(float64(expected)) > 1e-6 {
+					relErr = diff / math.Abs(float64(expected))
+				} else {
+					relErr = diff
+				}
+
+				if relErr > epsilon {
+					t.Errorf("Tanh(%v)[%d] = %v, want %v (error: %v)", tc.src[i], i, v, expected, relErr)
+				}
+			}
+		})
+	}
+
+	// Test in-place operation
+	t.Run("in_place", func(t *testing.T) {
+		src := []float32{-100, -50, -10, -1, 0, 1, 10, 50, 100}
+		dst := make([]float32, len(src))
+		Tanh(dst, src)
+
+		inPlace := make([]float32, len(src))
+		copy(inPlace, src)
+		TanhInPlace(inPlace)
+
+		for i := range dst {
+			if math.Abs(float64(dst[i]-inPlace[i])) > 1e-6 {
+				t.Errorf("TanhInPlace()[%d] = %v, Tanh() = %v, expected same", i, inPlace[i], dst[i])
+			}
+		}
+	})
 }
 
 func TestExp(t *testing.T) {

@@ -3187,6 +3187,55 @@ DATA sigmoid_one64<>+0x10(SB)/8, $0x3FF0000000000000
 DATA sigmoid_one64<>+0x18(SB)/8, $0x3FF0000000000000
 GLOBL sigmoid_one64<>(SB), RODATA|NOPTR, $32
 
+// Constants for exp-based tanh (float64)
+DATA tanh64_two<>+0x00(SB)/8, $0x4000000000000000  // 2.0
+DATA tanh64_two<>+0x08(SB)/8, $0x4000000000000000
+DATA tanh64_two<>+0x10(SB)/8, $0x4000000000000000
+DATA tanh64_two<>+0x18(SB)/8, $0x4000000000000000
+GLOBL tanh64_two<>(SB), RODATA|NOPTR, $32
+
+DATA tanh64_log2e<>+0x00(SB)/8, $0x3FF71547652B82FE  // log2(e) = 1.4426950408889634
+DATA tanh64_log2e<>+0x08(SB)/8, $0x3FF71547652B82FE
+DATA tanh64_log2e<>+0x10(SB)/8, $0x3FF71547652B82FE
+DATA tanh64_log2e<>+0x18(SB)/8, $0x3FF71547652B82FE
+GLOBL tanh64_log2e<>(SB), RODATA|NOPTR, $32
+
+DATA tanh64_ln2<>+0x00(SB)/8, $0x3FE62E42FEFA39EF  // ln(2) = 0.6931471805599453
+DATA tanh64_ln2<>+0x08(SB)/8, $0x3FE62E42FEFA39EF
+DATA tanh64_ln2<>+0x10(SB)/8, $0x3FE62E42FEFA39EF
+DATA tanh64_ln2<>+0x18(SB)/8, $0x3FE62E42FEFA39EF
+GLOBL tanh64_ln2<>(SB), RODATA|NOPTR, $32
+
+DATA tanh64_c3<>+0x00(SB)/8, $0x3FC5555555555555  // c3 = 1/6
+DATA tanh64_c3<>+0x08(SB)/8, $0x3FC5555555555555
+DATA tanh64_c3<>+0x10(SB)/8, $0x3FC5555555555555
+DATA tanh64_c3<>+0x18(SB)/8, $0x3FC5555555555555
+GLOBL tanh64_c3<>(SB), RODATA|NOPTR, $32
+
+DATA tanh64_c4<>+0x00(SB)/8, $0x3FA5555555555555  // c4 = 1/24
+DATA tanh64_c4<>+0x08(SB)/8, $0x3FA5555555555555
+DATA tanh64_c4<>+0x10(SB)/8, $0x3FA5555555555555
+DATA tanh64_c4<>+0x18(SB)/8, $0x3FA5555555555555
+GLOBL tanh64_c4<>(SB), RODATA|NOPTR, $32
+
+DATA tanh64_c5<>+0x00(SB)/8, $0x3F81111111111111  // c5 = 1/120
+DATA tanh64_c5<>+0x08(SB)/8, $0x3F81111111111111
+DATA tanh64_c5<>+0x10(SB)/8, $0x3F81111111111111
+DATA tanh64_c5<>+0x18(SB)/8, $0x3F81111111111111
+GLOBL tanh64_c5<>(SB), RODATA|NOPTR, $32
+
+DATA tanh64_clamp_hi<>+0x00(SB)/8, $0x4034000000000000  // 20.0
+DATA tanh64_clamp_hi<>+0x08(SB)/8, $0x4034000000000000
+DATA tanh64_clamp_hi<>+0x10(SB)/8, $0x4034000000000000
+DATA tanh64_clamp_hi<>+0x18(SB)/8, $0x4034000000000000
+GLOBL tanh64_clamp_hi<>(SB), RODATA|NOPTR, $32
+
+DATA tanh64_clamp_lo<>+0x00(SB)/8, $0xC034000000000000  // -20.0
+DATA tanh64_clamp_lo<>+0x08(SB)/8, $0xC034000000000000
+DATA tanh64_clamp_lo<>+0x10(SB)/8, $0xC034000000000000
+DATA tanh64_clamp_lo<>+0x18(SB)/8, $0xC034000000000000
+GLOBL tanh64_clamp_lo<>(SB), RODATA|NOPTR, $32
+
 // Note: absf64mask is already defined at top of file
 
 // func sigmoidAVX(dst, src []float64)
@@ -3336,77 +3385,147 @@ relu64_done:
     RET
 
 // func tanhAVX(dst, src []float64)
-// Computes fast tanh approximation with saturation:
-// tanh(x) ≈ x / (1 + |x|) for |x| <= 2.5, else ±1.0
+// Computes accurate tanh: tanh(x) = (1 - e^(-2x)) / (1 + e^(-2x))
+// Uses range reduction and polynomial approximation for exp.
+// Processes 2 elements at a time (XMM registers) due to Go assembler limitations.
 TEXT ·tanhAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ src_base+24(FP), SI
 
-    // Load constants (use unaligned loads to avoid alignment faults)
-    VMOVUPD sigmoid_one64<>(SB), Y2    // Y2 = 1.0 (reuse existing constant)
-    VMOVUPD absf64mask<>(SB), Y3       // Y3 = abs mask
+    // Load constants into XMM registers (using low 128-bits of YMM loads)
+    VMOVUPD tanh64_two<>(SB), X8       // X8 = 2.0
+    VMOVUPD tanh64_log2e<>(SB), X9     // X9 = log2(e)
+    VMOVUPD tanh64_ln2<>(SB), X10      // X10 = ln(2)
+    VMOVUPD sigmoid_one64<>(SB), X11   // X11 = 1.0
+    VMOVUPD sigmoid_half64<>(SB), X12  // X12 = 0.5 (c2)
+    VMOVUPD tanh64_c3<>(SB), X13       // X13 = 1/6 (c3)
+    VMOVUPD tanh64_c4<>(SB), X14       // X14 = 1/24 (c4)
+    VMOVUPD tanh64_c5<>(SB), X15       // X15 = 1/120 (c5)
 
-    // Create 2.5 threshold
-    MOVQ $0x4004000000000000, AX       // 2.5 in float64
-    VMOVQ AX, X4
-    VBROADCASTSD X4, Y4                // Y4 = {2.5, 2.5, 2.5, 2.5}
-
-    // Create sign mask (0x8000000000000000)
-    MOVQ $0x8000000000000000, AX
-    VMOVQ AX, X5
-    VBROADCASTSD X5, Y5                // Y5 = sign mask
-
-    // Process 4 elements per iteration
-    MOVQ CX, AX
-    SHRQ $2, AX                        // len / 4
+    // Process 2 elements per iteration (XMM = 128 bits = 2 x float64)
+    MOVQ CX, R8
+    SHRQ $1, R8                        // len / 2
     JZ   tanh64_remainder
 
-tanh64_loop4:
-    VMOVUPD (SI), Y0                   // Y0 = x
-    VANDPD Y3, Y0, Y1                  // Y1 = |x|
+tanh64_loop2:
+    VMOVUPD (SI), X0                   // X0 = 2 x float64
 
-    // Compute approximation
-    VADDPD Y2, Y1, Y6                  // Y6 = 1 + |x|
-    VDIVPD Y6, Y0, Y7                  // Y7 = x / (1 + |x|) (approximation)
+    // Compute z = -2x
+    VXORPD X1, X1, X1                  // X1 = 0
+    VSUBPD X0, X1, X0                  // X0 = -x
+    VMULPD X8, X0, X0                  // X0 = -2x = z
 
-    // Create saturated value: copysign(1.0, x)
-    VANDPD Y5, Y0, Y6                  // Y6 = sign bit of x
-    VORPD Y2, Y6, Y6                   // Y6 = 1.0 with sign of x (saturated value)
+    // Clamp z to [-20, 20]
+    VMOVUPD tanh64_clamp_hi<>(SB), X1  // X1 = 20.0
+    VMOVUPD tanh64_clamp_lo<>(SB), X2  // X2 = -20.0
+    VMINPD X1, X0, X0                  // X0 = min(z, 20)
+    VMAXPD X2, X0, X0                  // X0 = max(min(z, 20), -20)
 
-    // Compare |x| > 2.5 and select
-    VCMPPD $0x1E, Y4, Y1, Y1           // Y1 = mask (|x| > 2.5), using NLE (not less or equal)
-    VBLENDVPD Y1, Y6, Y7, Y0           // Y0 = blend(approx, saturated, mask)
+    // Range reduction: k = round(z * log2e), r = z - k * ln2
+    VMULPD X9, X0, X1                  // X1 = z * log2e
+    VROUNDPD $0, X1, X2                // X2 = k = round(X1) (nearest)
+    VMULPD X10, X2, X3                 // X3 = k * ln2
+    VSUBPD X3, X0, X3                  // X3 = r = z - k * ln2
 
-    VMOVUPD Y0, (DX)                   // store result
-    ADDQ $32, SI
-    ADDQ $32, DX
-    DECQ AX
-    JNZ  tanh64_loop4
+    // Polynomial: exp(r) ≈ 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
+    // Horner's method
+    VMULPD X3, X15, X4                 // X4 = r * c5
+    VADDPD X14, X4, X4                 // X4 = c4 + r*c5
+    VMULPD X3, X4, X4                  // X4 = r*(c4 + r*c5)
+    VADDPD X13, X4, X4                 // X4 = c3 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(c3 + ...)
+    VADDPD X12, X4, X4                 // X4 = c2 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(c2 + ...)
+    VADDPD X11, X4, X4                 // X4 = 1 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(1 + ...)
+    VADDPD X11, X4, X4                 // X4 = exp(r)
+
+    // Reconstruct exp(z) = exp(r) * 2^k for 2 elements
+    // Process each k value separately via scalar conversion
+    // Element 0:
+    VCVTTSD2SI X2, AX                  // AX = int64(k[0])
+    SHLQ $52, AX                       // k[0] << 52
+    MOVQ $0x3FF0000000000000, BX
+    ADDQ BX, AX                        // 2^k[0] bits
+    VMOVQ AX, X5                       // X5[0] = 2^k[0]
+
+    // Element 1:
+    VPSRLDQ $8, X2, X6                 // X6 = k[1] (shift right by 8 bytes)
+    VCVTTSD2SI X6, AX                  // AX = int64(k[1])
+    SHLQ $52, AX
+    MOVQ $0x3FF0000000000000, BX
+    ADDQ BX, AX
+    VMOVQ AX, X6                       // X6[0] = 2^k[1]
+
+    // Combine: X5 = {2^k[0], 2^k[1]}
+    VPUNPCKLQDQ X6, X5, X5             // X5 = {2^k[0], 2^k[1]}
+    VMULPD X5, X4, X4                  // X4 = exp(z) = exp(-2x)
+
+    // tanh(x) = (1 - exp(-2x)) / (1 + exp(-2x))
+    VSUBPD X4, X11, X5                 // X5 = 1 - exp(-2x)
+    VADDPD X4, X11, X6                 // X6 = 1 + exp(-2x)
+    VDIVPD X6, X5, X0                  // X0 = tanh(x)
+
+    VMOVUPD X0, (DX)                   // store 2 results
+    ADDQ $16, SI
+    ADDQ $16, DX
+    DECQ R8
+    JNZ  tanh64_loop2
 
 tanh64_remainder:
-    ANDQ $3, CX                        // remainder = len % 4
+    ANDQ $1, CX                        // remainder = len % 2
     JZ   tanh64_done
 
 tanh64_scalar:
+    // Scalar path for remaining element
     VMOVSD (SI), X0                    // X0 = x
-    VANDPD X3, X0, X1                  // X1 = |x|
 
-    // Compare |x| with 2.5
-    VUCOMISD X4, X1
-    JBE tanh64_scalar_approx
+    // z = -2x
+    VXORPD X1, X1, X1
+    VSUBSD X0, X1, X0                  // X0 = -x
+    VMULSD X8, X0, X0                  // X0 = -2x
 
-    // Saturate: return ±1.0
-    VANDPD X5, X0, X6                  // X6 = sign bit of x
-    VORPD X2, X6, X0                   // X0 = 1.0 with sign of x
-    JMP tanh64_scalar_store
+    // Clamp to [-20, 20]
+    MOVQ $0x4034000000000000, AX       // 20.0
+    VMOVQ AX, X1
+    MOVQ $0xC034000000000000, AX       // -20.0
+    VMOVQ AX, X2
+    VMINSD X1, X0, X0
+    VMAXSD X2, X0, X0
 
-tanh64_scalar_approx:
-    VADDSD X2, X1, X1                  // X1 = 1 + |x|
-    VDIVSD X1, X0, X0                  // X0 = x / (1 + |x|)
+    // Range reduction
+    VMULSD X9, X0, X1                  // X1 = z * log2e
+    VROUNDSD $0, X1, X1, X2            // X2 = k = round(X1)
+    VMULSD X10, X2, X3                 // X3 = k * ln2
+    VSUBSD X3, X0, X3                  // X3 = r = z - k * ln2
 
-tanh64_scalar_store:
-    VMOVSD X0, (DX)                    // store result
+    // Horner's polynomial
+    VMULSD X3, X15, X4                 // X4 = r * c5
+    VADDSD X14, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X13, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X12, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X11, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X11, X4, X4                 // X4 = exp(r)
+
+    // Reconstruct 2^k
+    VCVTTSD2SI X2, AX                  // AX = int64(k)
+    SHLQ $52, AX                       // AX = k << 52
+    MOVQ $0x3FF0000000000000, BX       // 1.0's bits
+    ADDQ BX, AX                        // AX = 2^k bits
+    VMOVQ AX, X5
+    VMULSD X5, X4, X4                  // X4 = exp(-2x)
+
+    // tanh = (1 - exp) / (1 + exp)
+    VSUBSD X4, X11, X5                 // X5 = 1 - exp
+    VADDSD X4, X11, X6                 // X6 = 1 + exp
+    VDIVSD X6, X5, X0                  // X0 = tanh
+
+    VMOVSD X0, (DX)
     ADDQ $8, SI
     ADDQ $8, DX
     DECQ CX

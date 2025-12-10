@@ -2916,6 +2916,37 @@ DATA exp_bias<>+0x18(SB)/4, $0x3f800000
 DATA exp_bias<>+0x1c(SB)/4, $0x3f800000
 GLOBL exp_bias<>(SB), RODATA|NOPTR, $32
 
+// Constants for exp-based tanh (float32)
+DATA tanh32_two<>+0x00(SB)/4, $0x40000000  // 2.0
+DATA tanh32_two<>+0x04(SB)/4, $0x40000000
+DATA tanh32_two<>+0x08(SB)/4, $0x40000000
+DATA tanh32_two<>+0x0c(SB)/4, $0x40000000
+DATA tanh32_two<>+0x10(SB)/4, $0x40000000
+DATA tanh32_two<>+0x14(SB)/4, $0x40000000
+DATA tanh32_two<>+0x18(SB)/4, $0x40000000
+DATA tanh32_two<>+0x1c(SB)/4, $0x40000000
+GLOBL tanh32_two<>(SB), RODATA|NOPTR, $32
+
+DATA tanh32_clamp_hi<>+0x00(SB)/4, $0x41a00000  // 20.0
+DATA tanh32_clamp_hi<>+0x04(SB)/4, $0x41a00000
+DATA tanh32_clamp_hi<>+0x08(SB)/4, $0x41a00000
+DATA tanh32_clamp_hi<>+0x0c(SB)/4, $0x41a00000
+DATA tanh32_clamp_hi<>+0x10(SB)/4, $0x41a00000
+DATA tanh32_clamp_hi<>+0x14(SB)/4, $0x41a00000
+DATA tanh32_clamp_hi<>+0x18(SB)/4, $0x41a00000
+DATA tanh32_clamp_hi<>+0x1c(SB)/4, $0x41a00000
+GLOBL tanh32_clamp_hi<>(SB), RODATA|NOPTR, $32
+
+DATA tanh32_clamp_lo<>+0x00(SB)/4, $0xc1a00000  // -20.0
+DATA tanh32_clamp_lo<>+0x04(SB)/4, $0xc1a00000
+DATA tanh32_clamp_lo<>+0x08(SB)/4, $0xc1a00000
+DATA tanh32_clamp_lo<>+0x0c(SB)/4, $0xc1a00000
+DATA tanh32_clamp_lo<>+0x10(SB)/4, $0xc1a00000
+DATA tanh32_clamp_lo<>+0x14(SB)/4, $0xc1a00000
+DATA tanh32_clamp_lo<>+0x18(SB)/4, $0xc1a00000
+DATA tanh32_clamp_lo<>+0x1c(SB)/4, $0xc1a00000
+GLOBL tanh32_clamp_lo<>(SB), RODATA|NOPTR, $32
+
 // func sigmoidAVX(dst, src []float32)
 // Computes accurate sigmoid: σ(x) = 1 / (1 + exp(-x))
 // Uses range reduction and polynomial approximation for exp.
@@ -3159,77 +3190,132 @@ relu32_done:
     RET
 
 // func tanhAVX(dst, src []float32)
-// Computes fast tanh approximation with saturation:
-// tanh(x) ≈ x / (1 + |x|) for |x| <= 2.5, else ±1.0
+// Computes accurate tanh: tanh(x) = (1 - e^(-2x)) / (1 + e^(-2x))
+// Uses range reduction and polynomial approximation for exp.
 TEXT ·tanhAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ src_base+24(FP), SI
 
-    // Load constants (use unaligned loads to avoid alignment faults)
-    VMOVUPS exp_one<>(SB), Y2          // Y2 = 1.0
-    VMOVUPS absf32mask<>(SB), Y3       // Y3 = abs mask
-
-    // Create 2.5 threshold
-    MOVL $0x40200000, AX               // 2.5 in float32
-    VMOVD AX, X4
-    VBROADCASTSS X4, Y4                // Y4 = {2.5, 2.5, ..., 2.5}
-
-    // Create sign mask (0x80000000)
-    MOVL $0x80000000, AX
-    VMOVD AX, X5
-    VBROADCASTSS X5, Y5                // Y5 = sign mask
+    // Load constants into Y8-Y15
+    VMOVUPS tanh32_two<>(SB), Y8        // Y8 = 2.0
+    VMOVUPS exp_log2e<>(SB), Y9         // Y9 = log2(e)
+    VMOVUPS exp_ln2<>(SB), Y10          // Y10 = ln(2)
+    VMOVUPS exp_one<>(SB), Y11          // Y11 = 1.0
+    VMOVUPS exp_c2<>(SB), Y12           // Y12 = c2 = 0.5
+    VMOVUPS exp_c3<>(SB), Y13           // Y13 = c3 = 1/6
+    VMOVUPS exp_c4<>(SB), Y14           // Y14 = c4 = 1/24
+    VMOVUPS exp_c5<>(SB), Y15           // Y15 = c5 = 1/120
 
     // Process 8 elements per iteration
     MOVQ CX, AX
-    SHRQ $3, AX                        // len / 8
+    SHRQ $3, AX                         // len / 8
     JZ   tanh32_remainder
 
 tanh32_loop8:
-    VMOVUPS (SI), Y0                   // Y0 = x
-    VANDPS Y3, Y0, Y1                  // Y1 = |x|
+    VMOVUPS (SI), Y0                    // Y0 = x
 
-    // Compute approximation
-    VADDPS Y2, Y1, Y6                  // Y6 = 1 + |x|
-    VDIVPS Y6, Y0, Y7                  // Y7 = x / (1 + |x|) (approximation)
+    // Compute z = -2x
+    VXORPS Y1, Y1, Y1                   // Y1 = 0
+    VSUBPS Y0, Y1, Y0                   // Y0 = -x
+    VMULPS Y8, Y0, Y0                   // Y0 = -2x = z
 
-    // Create saturated value: copysign(1.0, x)
-    VANDPS Y5, Y0, Y6                  // Y6 = sign bit of x
-    VORPS Y2, Y6, Y6                   // Y6 = 1.0 with sign of x (saturated value)
+    // Clamp z to [-20, 20]
+    VMOVUPS tanh32_clamp_hi<>(SB), Y1   // Y1 = 20.0
+    VMOVUPS tanh32_clamp_lo<>(SB), Y2   // Y2 = -20.0
+    VMINPS Y1, Y0, Y0                   // Y0 = min(z, 20)
+    VMAXPS Y2, Y0, Y0                   // Y0 = max(min(z, 20), -20)
 
-    // Compare |x| > 2.5 and select
-    VCMPPS $0x1E, Y4, Y1, Y1           // Y1 = mask (|x| > 2.5), using NLE (not less or equal)
-    VBLENDVPS Y1, Y6, Y7, Y0           // Y0 = blend(approx, saturated, mask)
+    // Range reduction: k = round(z * log2e), r = z - k * ln2
+    VMULPS Y9, Y0, Y1                   // Y1 = z * log2e
+    VROUNDPS $0, Y1, Y2                 // Y2 = k = round(Y1) (nearest)
+    VMULPS Y10, Y2, Y3                  // Y3 = k * ln2
+    VSUBPS Y3, Y0, Y3                   // Y3 = r = z - k * ln2
 
-    VMOVUPS Y0, (DX)                   // store result
+    // Polynomial: exp(r) ≈ 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
+    // Horner's method
+    VMULPS Y3, Y15, Y4                  // Y4 = r * c5
+    VADDPS Y14, Y4, Y4                  // Y4 = c4 + r*c5
+    VMULPS Y3, Y4, Y4                   // Y4 = r*(c4 + r*c5)
+    VADDPS Y13, Y4, Y4                  // Y4 = c3 + r*(...)
+    VMULPS Y3, Y4, Y4                   // Y4 = r*(c3 + ...)
+    VADDPS Y12, Y4, Y4                  // Y4 = c2 + r*(...)
+    VMULPS Y3, Y4, Y4                   // Y4 = r*(c2 + ...)
+    VADDPS Y11, Y4, Y4                  // Y4 = 1 + r*(...)
+    VMULPS Y3, Y4, Y4                   // Y4 = r*(1 + ...)
+    VADDPS Y11, Y4, Y4                  // Y4 = exp(r)
+
+    // Reconstruct exp(z) = exp(r) * 2^k
+    // For float32: convert k to int, shift left by 23, add to 1.0's bits
+    VCVTTPS2DQ Y2, Y5                   // Y5 = int32(k)
+    VPSLLD $23, Y5, Y5                  // Y5 = k << 23
+    VPADDD Y11, Y5, Y5                  // Y5 = 2^k (add 1.0's bit pattern)
+    VMULPS Y5, Y4, Y4                   // Y4 = exp(z) = exp(-2x)
+
+    // tanh(x) = (1 - exp(-2x)) / (1 + exp(-2x))
+    VSUBPS Y4, Y11, Y5                  // Y5 = 1 - exp(-2x)
+    VADDPS Y4, Y11, Y6                  // Y6 = 1 + exp(-2x)
+    VDIVPS Y6, Y5, Y0                   // Y0 = tanh(x)
+
+    VMOVUPS Y0, (DX)                    // store result
     ADDQ $32, SI
     ADDQ $32, DX
     DECQ AX
     JNZ  tanh32_loop8
 
 tanh32_remainder:
-    ANDQ $7, CX                        // remainder = len % 8
+    ANDQ $7, CX                         // remainder = len % 8
     JZ   tanh32_done
 
 tanh32_scalar:
-    VMOVSS (SI), X0                    // X0 = x
-    VANDPS X3, X0, X1                  // X1 = |x|
+    // Scalar path for remaining elements
+    VMOVSS (SI), X0                     // X0 = x
 
-    // Compare |x| with 2.5
-    VUCOMISS X4, X1
-    JBE tanh32_scalar_approx
+    // z = -2x
+    VXORPS X1, X1, X1
+    VSUBSS X0, X1, X0                   // X0 = -x
+    VMULSS X8, X0, X0                   // X0 = -2x
 
-    // Saturate: return ±1.0
-    VANDPS X5, X0, X6                  // X6 = sign bit of x
-    VORPS X2, X6, X0                   // X0 = 1.0 with sign of x
-    JMP tanh32_scalar_store
+    // Clamp to [-20, 20]
+    MOVL $0x41a00000, AX                // 20.0
+    VMOVD AX, X1
+    MOVL $0xc1a00000, AX                // -20.0
+    VMOVD AX, X2
+    VMINSS X1, X0, X0
+    VMAXSS X2, X0, X0
 
-tanh32_scalar_approx:
-    VADDSS X2, X1, X1                  // X1 = 1 + |x|
-    VDIVSS X1, X0, X0                  // X0 = x / (1 + |x|)
+    // Range reduction
+    VMULSS X9, X0, X1                   // X1 = z * log2e
+    VROUNDSS $0, X1, X1, X2             // X2 = k = round(X1)
+    VMULSS X10, X2, X3                  // X3 = k * ln2
+    VSUBSS X3, X0, X3                   // X3 = r = z - k * ln2
 
-tanh32_scalar_store:
-    VMOVSS X0, (DX)                    // store result
+    // Horner's polynomial
+    VMULSS X3, X15, X4                  // X4 = r * c5
+    VADDSS X14, X4, X4
+    VMULSS X3, X4, X4
+    VADDSS X13, X4, X4
+    VMULSS X3, X4, X4
+    VADDSS X12, X4, X4
+    VMULSS X3, X4, X4
+    VADDSS X11, X4, X4
+    VMULSS X3, X4, X4
+    VADDSS X11, X4, X4                  // X4 = exp(r)
+
+    // Reconstruct 2^k
+    VCVTTSS2SI X2, AX                   // AX = int32(k)
+    SHLL $23, AX                        // AX = k << 23
+    MOVL $0x3f800000, BX                // 1.0's bits
+    ADDL BX, AX                         // AX = 2^k bits
+    VMOVD AX, X5
+    VMULSS X5, X4, X4                   // X4 = exp(-2x)
+
+    // tanh = (1 - exp) / (1 + exp)
+    VSUBSS X4, X11, X5                  // X5 = 1 - exp
+    VADDSS X4, X11, X6                  // X6 = 1 + exp
+    VDIVSS X6, X5, X0                   // X0 = tanh
+
+    VMOVSS X0, (DX)
     ADDQ $4, SI
     ADDQ $4, DX
     DECQ CX
