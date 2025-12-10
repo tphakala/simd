@@ -356,10 +356,10 @@ func clampScale64(dst, src []float64, minVal, maxVal, scale float64) {
 }
 
 func tanh64(dst, src []float64) {
-	// Note: tanhAVX uses fast approximation x/(1+|x|) which is inaccurate
-	// (e.g., tanh(1) = 0.5 instead of 0.7616). Use accurate Go implementation
-	// with math.Tanh until proper exp-based AVX implementation is added.
-	// TODO: Implement exp-based tanh like ARM64 NEON version for better performance.
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
+		tanhAVX(dst, src)
+		return
+	}
 	tanh64Go(dst, src)
 }
 
