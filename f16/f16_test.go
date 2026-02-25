@@ -34,7 +34,7 @@ func TestToFloat32(t *testing.T) {
 		{"neg_one", 0xBC00, -1.0},
 		{"two", 0x4000, 2.0},
 		{"half", 0x3800, 0.5},
-		{"max_normal", 0x7BFF, 65504.0},  // Largest FP16 normal
+		{"max_normal", 0x7BFF, 65504.0},          // Largest FP16 normal
 		{"min_normal", 0x0400, 0.00006103515625}, // Smallest positive normal
 		{"inf", 0x7C00, float32(math.Inf(1))},
 		{"neg_inf", 0xFC00, float32(math.Inf(-1))},
@@ -206,6 +206,25 @@ func TestDotProduct_Large(t *testing.T) {
 		if !almostEqual32(got, want, tol) {
 			t.Errorf("DotProduct(n=%d) = %v, want %v", n, got, want)
 		}
+	}
+}
+
+func TestDotProduct_WidenBeforeMultiply(t *testing.T) {
+	// 300*300 = 90000, which overflows FP16 but is finite in FP32.
+	a := make([]Float16, 8)
+	b := make([]Float16, 8)
+	for i := range a {
+		a[i] = FromFloat32(300)
+		b[i] = FromFloat32(300)
+	}
+
+	got := DotProduct(a, b)
+	want := float32(8 * 300 * 300)
+	if math.IsInf(float64(got), 0) || math.IsNaN(float64(got)) {
+		t.Fatalf("DotProduct() produced non-finite result: %v", got)
+	}
+	if !almostEqual32(got, want, want*0.01) {
+		t.Fatalf("DotProduct() = %v, want %v", got, want)
 	}
 }
 

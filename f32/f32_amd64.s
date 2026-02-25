@@ -2674,30 +2674,31 @@ TEXT ·cubicInterpDotAVX(SB), NOSPLIT, $0-132
     JZ   cubic32_avx_loop8_check
 
 cubic32_avx_loop16:
-    // First vector (8 elements)
-    VMOVUPS (R10), Y1          // Y1 = d[i:i+8]
-    VMOVUPS (R9), Y2           // Y2 = c[i:i+8]
-    VMOVUPS (R8), Y3           // Y3 = b[i:i+8]
-    VMOVUPS (DI), Y4           // Y4 = a[i:i+8]
-    VMOVUPS (SI), Y5           // Y5 = hist[i:i+8]
+    // Stage 1: p = c + x*d (2 independent vectors)
+    VMOVUPS 0(R9), Y1
+    VMOVUPS 32(R9), Y2
+    VMOVUPS 0(R10), Y5
+    VFMADD231PS Y5, Y7, Y1
+    VMOVUPS 32(R10), Y5
+    VFMADD231PS Y5, Y7, Y2
 
-    // Horner's method: coef = a + x*(b + x*(c + x*d))
-    VFMADD231PS Y1, Y7, Y2     // Y2 = d*x + c
-    VFMADD231PS Y2, Y7, Y3     // Y3 = (d*x+c)*x + b
-    VFMADD231PS Y3, Y7, Y4     // Y4 = coef
-    VFMADD231PS Y5, Y4, Y0     // acc0 += hist * coef
+    // Stage 2: p = b + x*p
+    VMOVUPS 0(R8), Y5
+    VFMADD213PS Y7, Y5, Y1
+    VMOVUPS 32(R8), Y5
+    VFMADD213PS Y7, Y5, Y2
 
-    // Second vector (8 elements)
-    VMOVUPS 32(R10), Y1        // Y1 = d[i+8:i+16]
-    VMOVUPS 32(R9), Y2         // Y2 = c[i+8:i+16]
-    VMOVUPS 32(R8), Y3         // Y3 = b[i+8:i+16]
-    VMOVUPS 32(DI), Y4         // Y4 = a[i+8:i+16]
-    VMOVUPS 32(SI), Y5         // Y5 = hist[i+8:i+16]
+    // Stage 3: coef = a + x*p
+    VMOVUPS 0(DI), Y3
+    VFMADD213PS Y7, Y3, Y1
+    VMOVUPS 32(DI), Y4
+    VFMADD213PS Y7, Y4, Y2
 
-    VFMADD231PS Y1, Y7, Y2     // Y2 = d*x + c
-    VFMADD231PS Y2, Y7, Y3     // Y3 = (d*x+c)*x + b
-    VFMADD231PS Y3, Y7, Y4     // Y4 = coef
-    VFMADD231PS Y5, Y4, Y6     // acc1 += hist * coef
+    // Accumulate with independent accumulators.
+    VMOVUPS 0(SI), Y5
+    VFMADD231PS Y5, Y1, Y0
+    VMOVUPS 32(SI), Y5
+    VFMADD231PS Y5, Y2, Y6
 
     // Advance pointers
     ADDQ $64, SI

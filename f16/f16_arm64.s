@@ -97,8 +97,8 @@ TEXT ·dotProductNEON(SB), NOSPLIT, $0-52
     MOVD b_base+24(FP), R1
 
     // Zero accumulators (4 FP32 each)
-    VEOR V4.B16, V4.B16, V4.B16
-    VEOR V5.B16, V5.B16, V5.B16
+    VEOR V6.B16, V6.B16, V6.B16
+    VEOR V7.B16, V7.B16, V7.B16
 
     LSR $3, R2, R3
     CBZ R3, dot16_reduce
@@ -109,28 +109,27 @@ dot16_loop8:
     VLD1 (R1), [V1.H8]          // Load 8 FP16 from b
     ADD $16, R1
 
-    // Multiply in FP16: V2 = V0 * V1
-    WORD $0x6E411C02            // FMUL V2.8H, V0.8H, V1.8H
+    // Widen to FP32 first to avoid FP16 overflow in products.
+    WORD $0x0E217802            // FCVTL V2.4S, V0.4H
+    WORD $0x4E217803            // FCVTL2 V3.4S, V0.8H
+    WORD $0x0E217824            // FCVTL V4.4S, V1.4H
+    WORD $0x4E217825            // FCVTL2 V5.4S, V1.8H
 
-    // Convert products to FP32 and accumulate
-    WORD $0x0E217843            // FCVTL V3.4S, V2.4H (lower 4)
-    WORD $0x4E217842            // FCVTL2 V2.4S, V2.8H (upper 4, reuse V2)
-
-    // Accumulate in FP32
-    WORD $0x4E23D484            // FADD V4.4S, V4.4S, V3.4S
-    WORD $0x4E22D4A5            // FADD V5.4S, V5.4S, V2.4S
+    // Accumulate products in FP32.
+    WORD $0x4E24CC46            // FMLA V6.4S, V2.4S, V4.4S
+    WORD $0x4E25CC67            // FMLA V7.4S, V3.4S, V5.4S
 
     SUB $1, R3
     CBNZ R3, dot16_loop8
 
     // Combine accumulators
-    WORD $0x4E25D484            // FADD V4.4S, V4.4S, V5.4S
+    WORD $0x4E27D4C6            // FADD V6.4S, V6.4S, V7.4S
 
 dot16_reduce:
-    // Horizontal sum of V4.4S -> S4
-    WORD $0x6E24D484            // FADDP V4.4S, V4.4S, V4.4S
-    WORD $0x7E30D884            // FADDP S4, V4.2S
-    FMOVS F4, ret+48(FP)
+    // Horizontal sum of V6.4S -> S6
+    WORD $0x6E26D4C6            // FADDP V6.4S, V6.4S, V6.4S
+    WORD $0x7E30D8C6            // FADDP S6, V6.2S
+    FMOVS F6, ret+48(FP)
     RET
 
 // func addNEON(dst, a, b []Float16)

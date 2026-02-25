@@ -20,6 +20,11 @@ const (
 func dotProductGo(a, b []float32) float32 {
 	var sum float32
 	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	_ = a[n-1]
+	_ = b[n-1]
 	n8 := n &^ unrollMask
 
 	for i := 0; i < n8; i += 8 {
@@ -40,36 +45,64 @@ func dotProductGo(a, b []float32) float32 {
 }
 
 func addGo(dst, a, b []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + b[i]
 	}
 }
 
 func subGo(dst, a, b []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] - b[i]
 	}
 }
 
 func mulGo(dst, a, b []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * b[i]
 	}
 }
 
 func divGo(dst, a, b []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] / b[i]
 	}
 }
 
 func scaleGo(dst, a []float32, s float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * s
 	}
 }
 
 func addScalarGo(dst, a []float32, s float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + s
 	}
@@ -104,24 +137,42 @@ func maxGo(a []float32) float32 {
 }
 
 func absGo(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = float32(math.Abs(float64(a[i])))
 	}
 }
 
 func negGo(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = -a[i]
 	}
 }
 
 func fmaGo(dst, a, b, c []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
+	_ = c[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i]*b[i] + c[i]
 	}
 }
 
 func clampGo(dst, a []float32, minVal, maxVal float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		v := a[i]
 		if v < minVal {
@@ -135,6 +186,10 @@ func clampGo(dst, a []float32, minVal, maxVal float32) {
 
 func dotProductBatch32Go(results []float32, rows [][]float32, vec []float32) {
 	vecLen := len(vec)
+	if len(rows) == 0 {
+		return
+	}
+	_ = results[len(rows)-1]
 	for i, row := range rows {
 		n := min(len(row), vecLen)
 		if n == 0 {
@@ -146,19 +201,36 @@ func dotProductBatch32Go(results []float32, rows [][]float32, vec []float32) {
 }
 
 func convolveValid32Go(dst, signal, kernel []float32) {
+	if len(dst) == 0 {
+		return
+	}
 	kLen := len(kernel)
+	if kLen == 0 {
+		return
+	}
+	_ = signal[len(dst)+kLen-2]
+	_ = kernel[kLen-1]
 	for i := range dst {
 		dst[i] = dotProductGo(signal[i:i+kLen], kernel)
 	}
 }
 
 func accumulateAdd32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] += src[i]
 	}
 }
 
 func interleave2Go(dst, a, b []float32) {
+	if len(a) == 0 {
+		return
+	}
+	_ = b[len(a)-1]
+	_ = dst[2*len(a)-1]
 	for i := range a {
 		dst[i*2] = a[i]
 		dst[i*2+1] = b[i]
@@ -166,6 +238,11 @@ func interleave2Go(dst, a, b []float32) {
 }
 
 func deinterleave2Go(a, b, src []float32) {
+	if len(a) == 0 {
+		return
+	}
+	_ = b[len(a)-1]
+	_ = src[2*len(a)-1]
 	for i := range a {
 		a[i] = src[i*2]
 		b[i] = src[i*2+1]
@@ -180,12 +257,20 @@ func convolveValidMultiGo(dsts [][]float32, signal []float32, kernels [][]float3
 }
 
 func sqrt32Go(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = float32(math.Sqrt(float64(a[i])))
 	}
 }
 
 func reciprocal32Go(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = 1.0 / a[i]
 	}
@@ -222,6 +307,10 @@ func maxIdxGo(a []float32) int {
 }
 
 func addScaledGo(dst []float32, alpha float32, s []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = s[len(dst)-1]
 	for i := range dst {
 		dst[i] += alpha * s[i]
 	}
@@ -231,6 +320,7 @@ func cumulativeSum32Go(dst, a []float32) {
 	if len(dst) == 0 {
 		return
 	}
+	_ = a[len(dst)-1]
 	sum := float32(0)
 	for i := range dst {
 		sum += a[i]
@@ -249,6 +339,10 @@ func variance32Go(a []float32, mean float32) float32 {
 
 func euclideanDistance32Go(a, b []float32) float32 {
 	var sum float32
+	if len(a) == 0 {
+		return 0
+	}
+	_ = b[len(a)-1]
 	for i := range a {
 		diff := a[i] - b[i]
 		sum += diff * diff
@@ -261,6 +355,13 @@ func euclideanDistance32Go(a, b []float32) float32 {
 func cubicInterpDotGo(hist, a, b, c, d []float32, x float32) float32 {
 	var sum float32
 	n := len(hist)
+	if n == 0 {
+		return 0
+	}
+	_ = a[n-1]
+	_ = b[n-1]
+	_ = c[n-1]
+	_ = d[n-1]
 	n8 := n &^ unrollMask // Round down to multiple of 8
 
 	// Unrolled loop: 8 elements per iteration (match AVX width)
@@ -291,6 +392,10 @@ func cubicInterpDotGo(hist, a, b, c, d []float32, x float32) float32 {
 // sigmoid32Go computes sigmoid(x) = 1 / (1 + e^(-x)) using math.Exp.
 // This is accurate but slower than SIMD approximations.
 func sigmoid32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		x := src[i]
 		// Clamp extreme values for numerical stability
@@ -307,6 +412,10 @@ func sigmoid32Go(dst, src []float32) {
 
 // relu32Go computes ReLU(x) = max(0, x).
 func relu32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		if src[i] > 0 {
 			dst[i] = src[i]
@@ -318,6 +427,10 @@ func relu32Go(dst, src []float32) {
 
 // clampScale32Go performs fused clamp and scale operation.
 func clampScale32Go(dst, src []float32, minVal, maxVal, scale float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		v := src[i]
 		if v < minVal {
@@ -332,6 +445,10 @@ func clampScale32Go(dst, src []float32, minVal, maxVal, scale float32) {
 // tanh32Go computes hyperbolic tangent using math.Tanh for accuracy.
 // This is the accurate implementation used as a fallback when SIMD is unavailable.
 func tanh32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = float32(math.Tanh(float64(src[i])))
 	}
@@ -339,6 +456,10 @@ func tanh32Go(dst, src []float32) {
 
 // exp32Go computes e^x using math.Exp.
 func exp32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		x := src[i]
 		// Clamp extreme values
@@ -358,6 +479,11 @@ func exp32Go(dst, src []float32) {
 // Uses loop unrolling for better performance.
 func int32ToFloat32ScaleGo(dst []float32, src []int32, scale float32) {
 	n := len(src)
+	if n == 0 {
+		return
+	}
+	_ = dst[n-1]
+	_ = src[n-1]
 	n8 := n &^ unrollMask // Round down to multiple of 8
 
 	// Unrolled loop: 8 elements per iteration
@@ -387,6 +513,14 @@ func int32ToFloat32ScaleGo(dst []float32, src []int32, scale float32) {
 //	dstRe[i] = aRe[i]*bRe[i] - aIm[i]*bIm[i]
 //	dstIm[i] = aRe[i]*bIm[i] + aIm[i]*bRe[i]
 func mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	if len(dstRe) == 0 {
+		return
+	}
+	_ = dstIm[len(dstRe)-1]
+	_ = aRe[len(dstRe)-1]
+	_ = aIm[len(dstRe)-1]
+	_ = bRe[len(dstRe)-1]
+	_ = bIm[len(dstRe)-1]
 	for i := range dstRe {
 		ar, ai := aRe[i], aIm[i]
 		br, bi := bRe[i], bIm[i]
@@ -400,6 +534,14 @@ func mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 //	dstRe[i] = aRe[i]*bRe[i] + aIm[i]*bIm[i]
 //	dstIm[i] = aIm[i]*bRe[i] - aRe[i]*bIm[i]
 func mulConjComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
+	if len(dstRe) == 0 {
+		return
+	}
+	_ = dstIm[len(dstRe)-1]
+	_ = aRe[len(dstRe)-1]
+	_ = aIm[len(dstRe)-1]
+	_ = bRe[len(dstRe)-1]
+	_ = bIm[len(dstRe)-1]
 	for i := range dstRe {
 		ar, ai := aRe[i], aIm[i]
 		br, bi := bRe[i], bIm[i]
@@ -412,6 +554,11 @@ func mulConjComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 //
 //	dst[i] = aRe[i]^2 + aIm[i]^2
 func absSqComplex32Go(dst, aRe, aIm []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = aRe[len(dst)-1]
+	_ = aIm[len(dst)-1]
 	for i := range dst {
 		r, im := aRe[i], aIm[i]
 		dst[i] = r*r + im*im
@@ -423,6 +570,14 @@ func absSqComplex32Go(dst, aRe, aIm []float32) {
 //	temp = lower * twiddle (complex multiply)
 //	upper, lower = upper + temp, upper - temp
 func butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
+	if len(upperRe) == 0 {
+		return
+	}
+	_ = upperIm[len(upperRe)-1]
+	_ = lowerRe[len(upperRe)-1]
+	_ = lowerIm[len(upperRe)-1]
+	_ = twRe[len(upperRe)-1]
+	_ = twIm[len(upperRe)-1]
 	for i := range upperRe {
 		// Complex multiply: temp = lower * twiddle
 		lr, li := lowerRe[i], lowerIm[i]
@@ -447,6 +602,15 @@ const realFFTUnpackHalf = 0.5
 //
 //	X[k] = 0.5*(Z[k] + conj(Z[n-k])) + W[k]*(-0.5i)*(Z[k] - conj(Z[n-k]))
 func realFFTUnpack32Go(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
+	if n <= 1 {
+		return
+	}
+	_ = outRe[n-1]
+	_ = outIm[n-1]
+	_ = zRe[n-1]
+	_ = zIm[n-1]
+	_ = twRe[n-2]
+	_ = twIm[n-2]
 	// Process k from 1 to n-1
 	// For each k, we need Z[k] and Z[n-k] (mirrored)
 	for k := 1; k < n; k++ {
@@ -483,6 +647,11 @@ func realFFTUnpack32Go(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 // dst[i] = src[n-1-i] for i in [0, n)
 func reverse32Go(dst, src []float32) {
 	n := len(src)
+	if n == 0 {
+		return
+	}
+	_ = dst[n-1]
+	_ = src[n-1]
 	// Check for in-place operation
 	if &dst[0] == &src[0] {
 		// In-place reversal: swap elements from both ends
@@ -511,6 +680,12 @@ func reverse32Go(dst, src []float32) {
 // sumDst[i] = a[i] + b[i], diffDst[i] = a[i] - b[i]
 func addSub32Go(sumDst, diffDst, a, b []float32) {
 	n := len(a)
+	if n == 0 {
+		return
+	}
+	_ = b[n-1]
+	_ = sumDst[n-1]
+	_ = diffDst[n-1]
 	// Process 4 elements at a time for better performance
 	i := 0
 	for ; i+3 < n; i += 4 {

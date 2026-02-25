@@ -5,38 +5,38 @@ import "math"
 // IEEE 754 half-precision format constants.
 const (
 	// FP16 bit layout
-	fp16SignShift     = 15
-	fp16ExpShift      = 10
-	fp16ExpMask       = 0x1F
-	fp16MantMask      = 0x3FF
-	fp16MantHighBit   = 0x400
-	fp16ExpMax        = 31
-	fp16ExpBias       = 15
-	fp16Infinity      = 0x7C00
-	fp16SignMask      = 0x8000
-	fp16AbsMask       = 0x7FFF
-	fp16NormExpMax    = 30
+	fp16SignShift   = 15
+	fp16ExpShift    = 10
+	fp16ExpMask     = 0x1F
+	fp16MantMask    = 0x3FF
+	fp16MantHighBit = 0x400
+	fp16ExpMax      = 31
+	fp16ExpBias     = 15
+	fp16Infinity    = 0x7C00
+	fp16SignMask    = 0x8000
+	fp16AbsMask     = 0x7FFF
+	fp16NormExpMax  = 30
 
 	// FP32 bit layout
-	fp32SignShift     = 31
-	fp32ExpShift      = 23
-	fp32ExpMask       = 0xFF
-	fp32MantMask      = 0x7FFFFF
-	fp32Infinity      = 0x7F800000
-	fp32ExpBias       = 127
-	fp32SignMask      = 0x8000
-	fp32MantHighBit   = 0x800000
+	fp32SignShift   = 31
+	fp32ExpShift    = 23
+	fp32ExpMask     = 0xFF
+	fp32MantMask    = 0x7FFFFF
+	fp32Infinity    = 0x7F800000
+	fp32ExpBias     = 127
+	fp32SignMask    = 0x8000
+	fp32MantHighBit = 0x800000
 
 	// Conversion constants
-	fp32MantShift     = 13                             // FP32 mantissa bits to shift for FP16
-	fp32SignExtract   = 16                             // Shift to extract sign from FP32 to FP16 position
-	fp32RoundBit      = 0x1000                         // Bit 12 for rounding
-	fp32RoundMask     = 0xFFF                          // Bits below round bit
-	fp32RoundCheck    = 0x2000                         // Bit 13 for round-to-even check
-	expBiasDiff       = fp32ExpBias - fp16ExpBias      // 112
-	expOverflow       = fp32ExpBias + fp16ExpBias      // 142 - overflow threshold
-	expUnderflow      = fp32ExpBias - 24               // 103 - underflow threshold
-	expDenormThresh   = fp32ExpBias - fp16ExpBias + 1  // 113 - denormalized threshold
+	fp32MantShift   = 13                            // FP32 mantissa bits to shift for FP16
+	fp32SignExtract = 16                            // Shift to extract sign from FP32 to FP16 position
+	fp32RoundBit    = 0x1000                        // Bit 12 for rounding
+	fp32RoundMask   = 0xFFF                         // Bits below round bit
+	fp32RoundCheck  = 0x2000                        // Bit 13 for round-to-even check
+	expBiasDiff     = fp32ExpBias - fp16ExpBias     // 112
+	expOverflow     = fp32ExpBias + fp16ExpBias     // 142 - overflow threshold
+	expUnderflow    = fp32ExpBias - 24              // 103 - underflow threshold
+	expDenormThresh = fp32ExpBias - fp16ExpBias + 1 // 113 - denormalized threshold
 )
 
 // toFloat32Go converts Float16 to float32 using pure Go.
@@ -144,6 +144,10 @@ func fromFloat32Go(f float32) Float16 {
 
 // toFloat32SliceGo converts a slice of Float16 to float32.
 func toFloat32SliceGo(dst []float32, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = toFloat32Go(src[i])
 	}
@@ -151,6 +155,10 @@ func toFloat32SliceGo(dst []float32, src []Float16) {
 
 // fromFloat32SliceGo converts a slice of float32 to Float16.
 func fromFloat32SliceGo(dst []Float16, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(src[i])
 	}
@@ -159,6 +167,11 @@ func fromFloat32SliceGo(dst []Float16, src []float32) {
 // dotProductGo computes dot product using pure Go (converts to float32).
 func dotProductGo(a, b []Float16) float32 {
 	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	_ = a[n-1]
+	_ = b[n-1]
 	var sum float32
 	for i := range n {
 		sum += toFloat32Go(a[i]) * toFloat32Go(b[i])
@@ -168,6 +181,11 @@ func dotProductGo(a, b []Float16) float32 {
 
 // addGo computes element-wise addition.
 func addGo(dst, a, b []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) + toFloat32Go(b[i]))
 	}
@@ -175,6 +193,11 @@ func addGo(dst, a, b []Float16) {
 
 // subGo computes element-wise subtraction.
 func subGo(dst, a, b []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) - toFloat32Go(b[i]))
 	}
@@ -182,6 +205,11 @@ func subGo(dst, a, b []Float16) {
 
 // mulGo computes element-wise multiplication.
 func mulGo(dst, a, b []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) * toFloat32Go(b[i]))
 	}
@@ -189,6 +217,10 @@ func mulGo(dst, a, b []Float16) {
 
 // scaleGo multiplies each element by a scalar.
 func scaleGo(dst, a []Float16, s Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	sf := toFloat32Go(s)
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) * sf)
@@ -197,6 +229,12 @@ func scaleGo(dst, a []Float16, s Float16) {
 
 // fmaGo computes fused multiply-add.
 func fmaGo(dst, a, b, c []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
+	_ = c[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i])*toFloat32Go(b[i]) + toFloat32Go(c[i]))
 	}
@@ -213,6 +251,10 @@ func sumGo(a []Float16) float32 {
 
 // absGo computes element-wise absolute value.
 func absGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		// Clear sign bit
 		dst[i] = a[i] & fp16AbsMask
@@ -221,6 +263,10 @@ func absGo(dst, a []Float16) {
 
 // negGo computes element-wise negation.
 func negGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		// Flip sign bit
 		dst[i] = a[i] ^ fp16SignMask
@@ -229,6 +275,10 @@ func negGo(dst, a []Float16) {
 
 // reluGo computes ReLU activation.
 func reluGo(dst, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		if src[i]&0x8000 != 0 { // negative (sign bit set)
 			dst[i] = 0
@@ -240,6 +290,10 @@ func reluGo(dst, src []Float16) {
 
 // sigmoidGo computes sigmoid activation.
 func sigmoidGo(dst, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		x := toFloat32Go(src[i])
 		// sigmoid(x) = 1 / (1 + exp(-x))
@@ -277,6 +331,11 @@ func maxGo(a []Float16) Float16 {
 
 // divGo computes element-wise division.
 func divGo(dst, a, b []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) / toFloat32Go(b[i]))
 	}
@@ -284,6 +343,10 @@ func divGo(dst, a, b []Float16) {
 
 // addScalarGo adds a scalar to each element.
 func addScalarGo(dst, a []Float16, s Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	sf := toFloat32Go(s)
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) + sf)
@@ -292,6 +355,10 @@ func addScalarGo(dst, a []Float16, s Float16) {
 
 // clampGo clamps each element to [minVal, maxVal].
 func clampGo(dst, a []Float16, minVal, maxVal Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	minF := toFloat32Go(minVal)
 	maxF := toFloat32Go(maxVal)
 	for i := range dst {
@@ -307,6 +374,10 @@ func clampGo(dst, a []Float16, minVal, maxVal Float16) {
 
 // sqrtGo computes element-wise square root.
 func sqrtGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(float32(math.Sqrt(float64(toFloat32Go(a[i])))))
 	}
@@ -314,6 +385,10 @@ func sqrtGo(dst, a []Float16) {
 
 // reciprocalGo computes element-wise reciprocal.
 func reciprocalGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(1.0 / toFloat32Go(a[i]))
 	}
@@ -321,6 +396,10 @@ func reciprocalGo(dst, a []Float16) {
 
 // expGo computes element-wise exponential.
 func expGo(dst, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(float32(math.Exp(float64(toFloat32Go(src[i])))))
 	}
@@ -328,6 +407,10 @@ func expGo(dst, src []Float16) {
 
 // tanhGo computes element-wise hyperbolic tangent.
 func tanhGo(dst, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(float32(math.Tanh(float64(toFloat32Go(src[i])))))
 	}
@@ -363,6 +446,10 @@ func maxIdxGo(a []Float16) int {
 
 // addScaledGo computes dst[i] += alpha * s[i].
 func addScaledGo(dst []Float16, alpha Float16, s []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = s[len(dst)-1]
 	alphaF := toFloat32Go(alpha)
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(dst[i]) + alphaF*toFloat32Go(s[i]))
@@ -372,6 +459,10 @@ func addScaledGo(dst []Float16, alpha Float16, s []Float16) {
 // euclideanDistanceGo computes Euclidean distance.
 func euclideanDistanceGo(a, b []Float16) float32 {
 	var sum float32
+	if len(a) == 0 {
+		return 0
+	}
+	_ = b[len(a)-1]
 	for i := range a {
 		d := toFloat32Go(a[i]) - toFloat32Go(b[i])
 		sum += d * d
@@ -391,6 +482,10 @@ func varianceGo(a []Float16, mean float32) float32 {
 
 // cumulativeSumGo computes cumulative sum.
 func cumulativeSumGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	var sum float32
 	for i := range dst {
 		sum += toFloat32Go(a[i])
@@ -400,6 +495,10 @@ func cumulativeSumGo(dst, a []Float16) {
 
 // dotProductBatchGo computes batch dot products.
 func dotProductBatchGo(results []float32, rows [][]Float16, vec []Float16) {
+	if len(rows) == 0 {
+		return
+	}
+	_ = results[len(rows)-1]
 	for i, row := range rows {
 		results[i] = dotProductGo(row, vec)
 	}
@@ -407,6 +506,10 @@ func dotProductBatchGo(results []float32, rows [][]Float16, vec []Float16) {
 
 // accumulateAddGo adds src to dst[offset:].
 func accumulateAddGo(dst, src []Float16) {
+	if len(src) == 0 {
+		return
+	}
+	_ = dst[len(src)-1]
 	for i := range src {
 		dst[i] = fromFloat32Go(toFloat32Go(dst[i]) + toFloat32Go(src[i]))
 	}
@@ -414,7 +517,15 @@ func accumulateAddGo(dst, src []Float16) {
 
 // convolveValidGo computes valid convolution.
 func convolveValidGo(dst, signal, kernel []Float16) {
+	if len(dst) == 0 {
+		return
+	}
 	kernelLen := len(kernel)
+	if kernelLen == 0 {
+		return
+	}
+	_ = signal[len(dst)+kernelLen-2]
+	_ = kernel[kernelLen-1]
 	for i := range dst {
 		var sum float32
 		for j := range kernelLen {
@@ -426,6 +537,11 @@ func convolveValidGo(dst, signal, kernel []Float16) {
 
 // interleave2Go interleaves two slices.
 func interleave2Go(dst, a, b []Float16) {
+	if len(a) == 0 {
+		return
+	}
+	_ = b[len(a)-1]
+	_ = dst[2*len(a)-1]
 	for i := range a {
 		dst[i*2] = a[i]
 		dst[i*2+1] = b[i]
@@ -434,6 +550,11 @@ func interleave2Go(dst, a, b []Float16) {
 
 // deinterleave2Go deinterleaves a slice.
 func deinterleave2Go(a, b, src []Float16) {
+	if len(a) == 0 {
+		return
+	}
+	_ = b[len(a)-1]
+	_ = src[2*len(a)-1]
 	for i := range a {
 		a[i] = src[i*2]
 		b[i] = src[i*2+1]
@@ -442,6 +563,10 @@ func deinterleave2Go(a, b, src []Float16) {
 
 // clampScaleGo performs fused clamp and scale.
 func clampScaleGo(dst, src []Float16, minVal, maxVal, scale Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	minF := toFloat32Go(minVal)
 	maxF := toFloat32Go(maxVal)
 	scaleF := toFloat32Go(scale)

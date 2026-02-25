@@ -974,22 +974,20 @@ cubic_neon_loop4:
     VLD1.P 16(R1), [V13.D2]    // V13 = a[i+2:i+4]
     VLD1.P 16(R0), [V14.D2]    // V14 = hist[i+2:i+4]
 
-    // Horner's method for first pair: coef = a + x*(b + x*(c + x*d))
-    // FMLA Vd.2D, Vn.2D, Vm.2D: Vd = Vd + Vn * Vm
-    // Step 1: V3 = c + d*x
+    // Horner stage 1 for both vectors: p = c + x*d
     WORD $0x4E7FCC43           // FMLA V3.2D, V2.2D, V31.2D
-    // Step 2: V4 = b + (c + d*x)*x
-    WORD $0x4E7FCC64           // FMLA V4.2D, V3.2D, V31.2D
-    // Step 3: V5 = a + (b + (c + d*x)*x)*x = coef
-    WORD $0x4E7FCC85           // FMLA V5.2D, V4.2D, V31.2D
-    // Accumulate: acc0 += hist * coef
-    WORD $0x4E65CCC0           // FMLA V0.2D, V6.2D, V5.2D
-
-    // Horner's method for second pair
     WORD $0x4E7FCD4B           // FMLA V11.2D, V10.2D, V31.2D
+
+    // Horner stage 2 for both vectors: p = b + x*p
+    WORD $0x4E7FCC64           // FMLA V4.2D, V3.2D, V31.2D
     WORD $0x4E7FCD6C           // FMLA V12.2D, V11.2D, V31.2D
+
+    // Horner stage 3 for both vectors: coef = a + x*p
+    WORD $0x4E7FCC85           // FMLA V5.2D, V4.2D, V31.2D
     WORD $0x4E7FCD8D           // FMLA V13.2D, V12.2D, V31.2D
-    // Accumulate: acc1 += hist * coef
+
+    // Accumulate: acc += hist * coef
+    WORD $0x4E65CCC0           // FMLA V0.2D, V6.2D, V5.2D
     WORD $0x4E6DCDC1           // FMLA V1.2D, V14.2D, V13.2D
 
     SUB $1, R5

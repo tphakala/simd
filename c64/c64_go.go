@@ -7,6 +7,11 @@ import "math"
 // mulGo computes element-wise complex multiplication.
 // (a + bi)(c + di) = (ac - bd) + (ad + bc)i
 func mulGo(dst, a, b []complex64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * b[i]
 	}
@@ -15,6 +20,11 @@ func mulGo(dst, a, b []complex64) {
 // mulConjGo computes element-wise multiplication by conjugate.
 // (a + bi)(c - di) = (ac + bd) + (bc - ad)i
 func mulConjGo(dst, a, b []complex64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		ar, ai := real(a[i]), imag(a[i])
 		br, bi := real(b[i]), imag(b[i])
@@ -27,6 +37,10 @@ func mulConjGo(dst, a, b []complex64) {
 
 // scaleGo multiplies each element by a complex scalar.
 func scaleGo(dst, a []complex64, s complex64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * s
 	}
@@ -34,6 +48,11 @@ func scaleGo(dst, a []complex64, s complex64) {
 
 // addGo computes element-wise complex addition.
 func addGo(dst, a, b []complex64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + b[i]
 	}
@@ -41,6 +60,11 @@ func addGo(dst, a, b []complex64) {
 
 // subGo computes element-wise complex subtraction.
 func subGo(dst, a, b []complex64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] - b[i]
 	}
@@ -48,6 +72,10 @@ func subGo(dst, a, b []complex64) {
 
 // absGo computes element-wise complex magnitude: |a + bi| = sqrt(a^2 + b^2).
 func absGo(dst []float32, a []complex64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		r := float64(real(a[i]))
 		im := float64(imag(a[i]))
@@ -57,6 +85,10 @@ func absGo(dst []float32, a []complex64) {
 
 // absSqGo computes element-wise magnitude squared: |a + bi|^2 = a^2 + b^2.
 func absSqGo(dst []float32, a []complex64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		r := real(a[i])
 		im := imag(a[i])
@@ -66,6 +98,10 @@ func absSqGo(dst []float32, a []complex64) {
 
 // conjGo computes element-wise complex conjugate: conj(a + bi) = a - bi.
 func conjGo(dst, a []complex64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = complex(real(a[i]), -imag(a[i]))
 	}
@@ -73,6 +109,10 @@ func conjGo(dst, a []complex64) {
 
 // fromRealGo converts real float32 values to complex64.
 func fromRealGo(dst []complex64, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = complex(src[i], 0)
 	}
