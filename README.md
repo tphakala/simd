@@ -100,7 +100,7 @@ fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 |                 | `Round(dst, src)`                   | Round half away from zero     | 4x (AVX) / 2x (NEON) / Go fallback  |
 | **Trigonometric**| `Sin(dst, src)`                     | Element-wise sine             | Accelerate (darwin/arm64/cgo), SIMD poly (amd64/arm64), Go fallback |
 |                 | `Cos(dst, src)`                     | Element-wise cosine           | Accelerate (darwin/arm64/cgo), SIMD poly (amd64/arm64), Go fallback |
-|                 | `SinCos(sinDst, cosDst, src)`       | Combined sine and cosine      | Accelerate (darwin/arm64/cgo), fused asm (amd64 finite-range), SIMD poly fallback |
+|                 | `SinCos(sinDst, cosDst, src)`       | Combined sine and cosine      | Accelerate (darwin/arm64/cgo), SIMD poly with per-element fallback |
 | **Reduction**   | `DotProduct(a, b)`                  | Dot product                   | 8x / 4x / 2x                        |
 |                 | `WeightedSum(w, src)`               | Weighted sum Σ(wᵢ·srcᵢ)       | 8x / 4x / 2x                        |
 |                 | `SumOfSquares(src)`                 | Sum of squares Σ(srcᵢ²)       | 8x / 4x / 2x                        |
@@ -116,9 +116,9 @@ fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 |                 | `Normalize(dst, a)`                 | Unit vector normalization     | 8x / 4x / 2x                        |
 |                 | `CumulativeSum(dst, a)`             | Running sum                   | Sequential                          |
 | **Range**       | `Clamp(dst, a, min, max)`           | Clamp to range                | 8x / 4x / 2x                        |
-| **Activation**  | `Sigmoid(dst, src)`                 | Sigmoid: 1/(1+e^-x)           | 4x (AVX) / 2x (NEON)                |
+| **Activation**  | `Sigmoid(dst, src)`                 | Sigmoid activation            | 4x (AVX) / 2x (NEON), fast approx on SIMD paths |
 |                 | `ReLU(dst, src)`                    | Rectified Linear Unit         | 8x / 4x / 2x                        |
-|                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 8x / 4x / 2x                        |
+|                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 8x / 4x / 2x, fast approx on SIMD paths |
 |                 | `Exp(dst, src)`                     | Exponential e^x               | Pure Go                             |
 |                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 8x / 4x / 2x                        |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |

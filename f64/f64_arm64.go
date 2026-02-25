@@ -147,10 +147,8 @@ func sinCos64(sinDst, cosDst, src []float64) {
 	if accelerate.SinCos64(sinDst, cosDst, src) {
 		return
 	}
-	if hasNEON && len(src) > 0 && trigAllFiniteInRange(src) {
-		sinCosNEON(sinDst, cosDst, src)
-		return
-	}
+	// Avoid a full pre-validation pass over src; SIMD core handles fast-path
+	// and per-element fallback for NaN/Inf/large magnitudes.
 	sinCos64SIMD(sinDst, cosDst, src)
 }
 

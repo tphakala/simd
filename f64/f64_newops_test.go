@@ -71,6 +71,33 @@ func TestSinCos_DifferentLengths(t *testing.T) {
 	}
 }
 
+func TestSinCos_SpecialValues(t *testing.T) {
+	src := []float64{0, 1e7, -1e7, math.NaN(), math.Inf(1), math.Inf(-1)}
+	sinDst := make([]float64, len(src))
+	cosDst := make([]float64, len(src))
+
+	SinCos(sinDst, cosDst, src)
+
+	for i := range src {
+		wantSin, wantCos := math.Sincos(src[i])
+		if math.IsNaN(wantSin) {
+			if !math.IsNaN(sinDst[i]) {
+				t.Errorf("SinCos() sin[%d] = %v, want NaN", i, sinDst[i])
+			}
+		} else if math.Abs(sinDst[i]-wantSin) > trigApproxTol {
+			t.Errorf("SinCos() sin[%d] = %v, want %v", i, sinDst[i], wantSin)
+		}
+
+		if math.IsNaN(wantCos) {
+			if !math.IsNaN(cosDst[i]) {
+				t.Errorf("SinCos() cos[%d] = %v, want NaN", i, cosDst[i])
+			}
+		} else if math.Abs(cosDst[i]-wantCos) > trigApproxTol {
+			t.Errorf("SinCos() cos[%d] = %v, want %v", i, cosDst[i], wantCos)
+		}
+	}
+}
+
 func TestSubFromScalar(t *testing.T) {
 	src := []float64{1, -2, 3.5, 10}
 	dst := make([]float64, len(src))

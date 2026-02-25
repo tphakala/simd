@@ -60,12 +60,14 @@ var (
 
 func init() {
 	// Select optimal implementation based on CPU features
-	// Priority: AVX-512 > AVX+FMA > SSE2 > Go
+	// Priority: AVX-512 > AVX+FMA > AVX > SSE2 > Go
 	switch {
 	case cpu.X86.AVX512F && cpu.X86.AVX512VL:
 		initAVX512()
 	case cpu.X86.AVX && cpu.X86.FMA:
 		initAVX()
+	case cpu.X86.AVX:
+		initAVXNoFMA()
 	case cpu.X86.SSE2:
 		initSSE2()
 	default:
@@ -100,6 +102,7 @@ func initAVX512() {
 }
 
 func initAVX() {
+	minSIMDElements = minAVXElements
 	dotProductImpl = dotProductAVX
 	addImpl = addAVX
 	subImpl = subAVX
@@ -124,7 +127,34 @@ func initAVX() {
 	addScaledImpl = addScaledAVX
 }
 
+func initAVXNoFMA() {
+	minSIMDElements = minAVXElements
+	dotProductImpl = dotProductSSE2
+	addImpl = addAVX
+	subImpl = subAVX
+	mulImpl = mulAVX
+	divImpl = divAVX
+	scaleImpl = scaleAVX
+	addScalarImpl = addScalarAVX
+	sumImpl = sumAVX
+	minImpl = minAVX
+	maxImpl = maxAVX
+	absImpl = absAVX
+	negImpl = negAVX
+	sqrtImpl = sqrtAVX
+	reciprocalImpl = reciprocalAVX
+	roundImpl = roundAVX
+	fmaImpl = fmaSSE2
+	clampImpl = clampAVX
+	varianceImpl = varianceSSE2
+	euclideanDistanceImpl = euclideanDistanceSSE2
+	interleave2Impl = interleave2AVX
+	deinterleave2Impl = deinterleave2AVX
+	addScaledImpl = addScaledSSE2
+}
+
 func initSSE2() {
+	minSIMDElements = minAVXElements
 	dotProductImpl = dotProductSSE2
 	addImpl = addSSE2
 	subImpl = subSSE2
@@ -261,10 +291,8 @@ func cos64(dst, src []float64) {
 }
 
 func sinCos64(sinDst, cosDst, src []float64) {
-	if cpu.X86.AVX && len(src) >= 2 && trigAllFiniteInRange(src) {
-		sinCosAVX(sinDst, cosDst, src)
-		return
-	}
+	// Avoid a full pre-validation pass over src; SIMD core handles fast-path
+	// and per-element fallback for NaN/Inf/large magnitudes.
 	sinCos64SIMD(sinDst, cosDst, src)
 }
 
@@ -378,8 +406,7 @@ func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 }
 
 func sigmoid64(dst, src []float64) {
-	// Use AVX+FMA if available and have enough elements
-	if cpu.X86.AVX && cpu.X86.FMA && len(dst) >= minAVXElements {
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
 		sigmoidAVX(dst, src)
 		return
 	}

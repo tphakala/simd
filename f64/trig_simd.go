@@ -28,15 +28,6 @@ const (
 	trigFallbackAbsLimit = 1.0e6
 )
 
-func trigAllFiniteInRange(src []float64) bool {
-	for _, v := range src {
-		if math.IsNaN(v) || math.IsInf(v, 0) || math.Abs(v) > trigFallbackAbsLimit {
-			return false
-		}
-	}
-	return true
-}
-
 func sin64SIMD(dst, src []float64) {
 	sinCos64SIMDCore(dst, nil, src)
 }

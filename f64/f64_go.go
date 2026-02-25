@@ -11,7 +11,6 @@ const (
 // Numerical stability thresholds
 const (
 	sigmoidClampThreshold = 20.0  // sigmoid(±20) ≈ 1.0 - 2e-9 (float64 precision limit)
-	tanhClampThreshold    = 2.5   // fast approximation threshold: tanh(±2.5) saturates to ±1
 	expOverflowThreshold  = 709.0 // exp(709.78) = max float64; clamp to prevent overflow
 )
 
@@ -20,6 +19,11 @@ const (
 func dotProductGo(a, b []float64) float64 {
 	var sum float64
 	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	_ = a[n-1]
+	_ = b[n-1]
 	n4 := n &^ unrollMask // Round down to multiple of 4
 
 	// Unrolled loop: 4 FMAs per iteration
@@ -38,42 +42,74 @@ func dotProductGo(a, b []float64) float64 {
 }
 
 func addGo(dst, a, b []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + b[i]
 	}
 }
 
 func subGo(dst, a, b []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] - b[i]
 	}
 }
 
 func mulGo(dst, a, b []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * b[i]
 	}
 }
 
 func divGo(dst, a, b []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] / b[i]
 	}
 }
 
 func scaleGo(dst, a []float64, s float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * s
 	}
 }
 
 func addScalarGo(dst, a []float64, s float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + s
 	}
 }
 
 func subFromScalarGo(dst, a []float64, s float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = s - a[i]
 	}
@@ -90,9 +126,7 @@ func sumGo(a []float64) float64 {
 func minGo(a []float64) float64 {
 	m := a[0]
 	for _, v := range a[1:] {
-		if v < m {
-			m = v
-		}
+		m = math.Min(m, v)
 	}
 	return m
 }
@@ -100,32 +134,48 @@ func minGo(a []float64) float64 {
 func maxGo(a []float64) float64 {
 	m := a[0]
 	for _, v := range a[1:] {
-		if v > m {
-			m = v
-		}
+		m = math.Max(m, v)
 	}
 	return m
 }
 
 func absGo(dst, a []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = math.Abs(a[i])
 	}
 }
 
 func negGo(dst, a []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = -a[i]
 	}
 }
 
 func fmaGo(dst, a, b, c []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
+	_ = c[len(dst)-1]
 	for i := range dst {
 		dst[i] = math.FMA(a[i], b[i], c[i])
 	}
 }
 
 func clampGo(dst, a []float64, minVal, maxVal float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		v := a[i]
 		if v < minVal {

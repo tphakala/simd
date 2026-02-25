@@ -129,6 +129,8 @@ func Sum(a []float64) float64 {
 
 // Min returns the minimum value in the slice.
 // Returns +Inf for empty slices.
+// If any element is NaN, Min returns NaN.
+// Signed zeros follow IEEE-754 rules: Min(+0, -0) = -0.
 func Min(a []float64) float64 {
 	if len(a) == 0 {
 		return posInf
@@ -138,6 +140,8 @@ func Min(a []float64) float64 {
 
 // Max returns the maximum value in the slice.
 // Returns -Inf for empty slices.
+// If any element is NaN, Max returns NaN.
+// Signed zeros follow IEEE-754 rules: Max(+0, -0) = +0.
 func Max(a []float64) float64 {
 	if len(a) == 0 {
 		return negInf
@@ -542,11 +546,11 @@ func ConvolveValidMulti(dsts [][]float64, signal []float64, kernels [][]float64)
 	convolveValidMulti64(dsts, signal, kernels, n, kLen)
 }
 
-// Sigmoid computes the sigmoid activation function: dst[i] = 1 / (1 + e^(-src[i])).
-// This is commonly used as an activation function in neural networks.
+// Sigmoid computes the sigmoid activation function for each element.
+// SIMD paths may use a fast approximation; Go fallback uses math.Exp-based evaluation.
 // Processes min(len(dst), len(src)) elements.
 //
-// Uses AVX+FMA on AMD64 (4x float64), NEON on ARM64 (2x float64).
+// Uses AVX on AMD64 (4x float64), NEON on ARM64 (2x float64).
 func Sigmoid(dst, src []float64) {
 	n := min(len(dst), len(src))
 	if n == 0 {
@@ -555,10 +559,9 @@ func Sigmoid(dst, src []float64) {
 	sigmoid64(dst[:n], src[:n])
 }
 
-// SigmoidInPlace computes the sigmoid activation function in-place: a[i] = 1 / (1 + e^(-a[i])).
-// This is commonly used as an activation function in neural networks.
+// SigmoidInPlace computes sigmoid in-place.
 //
-// Uses AVX+FMA on AMD64 (4x float64), NEON on ARM64 (2x float64).
+// Uses AVX on AMD64 (4x float64), NEON on ARM64 (2x float64).
 func SigmoidInPlace(a []float64) {
 	if len(a) == 0 {
 		return
@@ -601,7 +604,7 @@ func ClampScale(dst, src []float64, minVal, maxVal, scale float64) {
 }
 
 // Tanh computes the hyperbolic tangent: dst[i] = tanh(src[i]).
-// Uses fast approximation: tanh(x) ≈ x / (1 + |x|) for |x| < 1, sign(x) for |x| >= 2.5, polynomial otherwise.
+// SIMD paths use a fast approximation with relaxed precision compared to math.Tanh.
 // Processes min(len(dst), len(src)) elements.
 //
 // Uses AVX on AMD64 (4x float64), NEON on ARM64 (2x float64).
@@ -622,10 +625,10 @@ func TanhInPlace(a []float64) {
 }
 
 // Exp computes the exponential function: dst[i] = e^src[i].
-// Uses polynomial approximation for reasonable accuracy and performance.
+// Uses math.Exp with overflow/underflow clamping for numerical stability.
 // Processes min(len(dst), len(src)) elements.
 //
-// Uses AVX+FMA on AMD64 (4x float64), NEON on ARM64 (2x float64).
+// Uses pure Go implementation on all architectures.
 func Exp(dst, src []float64) {
 	n := min(len(dst), len(src))
 	if n == 0 {

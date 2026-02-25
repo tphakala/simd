@@ -76,3 +76,35 @@ func TestInitAVX512(t *testing.T) {
 	dotProductImpl = savedDotProduct
 	minSIMDElements = savedMinSIMD
 }
+
+func TestInitAVXNoFMA(t *testing.T) {
+	savedDotProduct := dotProductImpl
+	savedMinSIMD := minSIMDElements
+
+	initAVXNoFMA()
+
+	a := []float64{1, 2, 3, 4}
+	b := []float64{4, 3, 2, 1}
+	dst := make([]float64, len(a))
+
+	// dotProduct should remain functional via SSE2 fallback in AVX-without-FMA mode
+	gotDot := dotProductImpl(a, b)
+	if gotDot != 20 {
+		t.Errorf("After initAVXNoFMA, dotProduct = %v, want 20", gotDot)
+	}
+
+	// Non-FMA arithmetic paths should still use AVX implementations
+	addImpl(dst, a, b)
+	for i, want := range []float64{5, 5, 5, 5} {
+		if dst[i] != want {
+			t.Errorf("After initAVXNoFMA, add[%d] = %v, want %v", i, dst[i], want)
+		}
+	}
+
+	if minSIMDElements != minAVXElements {
+		t.Errorf("initAVXNoFMA didn't set minSIMDElements correctly")
+	}
+
+	dotProductImpl = savedDotProduct
+	minSIMDElements = savedMinSIMD
+}
