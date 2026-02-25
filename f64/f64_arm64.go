@@ -2,7 +2,10 @@
 
 package f64
 
-import "github.com/tphakala/simd/cpu"
+import (
+	"github.com/tphakala/simd/cpu"
+	"github.com/tphakala/simd/internal/accelerate"
+)
 
 var (
 	hasNEON = cpu.ARM64.NEON
@@ -63,6 +66,16 @@ func addScalar(dst, a []float64, s float64) {
 	addScalarGo(dst, a, s)
 }
 
+func subFromScalar64(dst, a []float64, s float64) {
+	if hasNEON && len(dst) >= 2 {
+		// SIMD composition: (s - a) == (-(a)) + s
+		neg64(dst, a)
+		addScalar(dst, dst, s)
+		return
+	}
+	subFromScalarGo(dst, a, s)
+}
+
 func sum(a []float64) float64 {
 	if hasNEON && len(a) >= 2 {
 		return sumNEON(a)
@@ -114,6 +127,54 @@ func clamp64(dst, a []float64, minVal, maxVal float64) {
 		return
 	}
 	clampGo(dst, a, minVal, maxVal)
+}
+
+func sin64(dst, src []float64) {
+	if accelerate.Sin64(dst, src) {
+		return
+	}
+	sin64SIMD(dst, src)
+}
+
+func cos64(dst, src []float64) {
+	if accelerate.Cos64(dst, src) {
+		return
+	}
+	cos64SIMD(dst, src)
+}
+
+func sinCos64(sinDst, cosDst, src []float64) {
+	if accelerate.SinCos64(sinDst, cosDst, src) {
+		return
+	}
+	if hasNEON && len(src) > 0 && trigAllFiniteInRange(src) {
+		sinCosNEON(sinDst, cosDst, src)
+		return
+	}
+	sinCos64SIMD(sinDst, cosDst, src)
+}
+
+func round64(dst, src []float64) {
+	if hasNEON && len(dst) >= 2 {
+		roundNEON(dst, src)
+		return
+	}
+	round64Go(dst, src)
+}
+
+func gather64(dst, src []float64, indices []int) {
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(src) {
+			panic("simd: gather index out of range")
+		}
+	}
+
+	if hasNEON && len(dst) >= 2 {
+		gatherNEON(dst, src, indices)
+		return
+	}
+
+	gatherUncheckedGo(dst, src, indices)
 }
 
 func sqrt64(dst, a []float64) {
@@ -228,6 +289,15 @@ func sqrtNEON(dst, a []float64)
 
 //go:noescape
 func reciprocalNEON(dst, a []float64)
+
+//go:noescape
+func roundNEON(dst, src []float64)
+
+//go:noescape
+func gatherNEON(dst, src []float64, indices []int)
+
+//go:noescape
+func sinCosNEON(sinDst, cosDst, src []float64)
 
 //go:noescape
 func varianceNEON(a []float64, mean float64) float64

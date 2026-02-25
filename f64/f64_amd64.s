@@ -13,6 +13,90 @@ DATA absf64mask<>+0x30(SB)/8, $0x7fffffffffffffff
 DATA absf64mask<>+0x38(SB)/8, $0x7fffffffffffffff
 GLOBL absf64mask<>(SB), RODATA|NOPTR, $64
 
+// Constants for Round (half away from zero): trunc(abs(x)+0.5) with sign restore.
+DATA roundf64_signmask<>+0x00(SB)/8, $0x8000000000000000
+DATA roundf64_signmask<>+0x08(SB)/8, $0x8000000000000000
+DATA roundf64_signmask<>+0x10(SB)/8, $0x8000000000000000
+DATA roundf64_signmask<>+0x18(SB)/8, $0x8000000000000000
+GLOBL roundf64_signmask<>(SB), RODATA|NOPTR, $32
+
+DATA roundf64_absmask<>+0x00(SB)/8, $0x7fffffffffffffff
+DATA roundf64_absmask<>+0x08(SB)/8, $0x7fffffffffffffff
+DATA roundf64_absmask<>+0x10(SB)/8, $0x7fffffffffffffff
+DATA roundf64_absmask<>+0x18(SB)/8, $0x7fffffffffffffff
+GLOBL roundf64_absmask<>(SB), RODATA|NOPTR, $32
+
+DATA roundf64_half<>+0x00(SB)/8, $0x3fe0000000000000
+DATA roundf64_half<>+0x08(SB)/8, $0x3fe0000000000000
+DATA roundf64_half<>+0x10(SB)/8, $0x3fe0000000000000
+DATA roundf64_half<>+0x18(SB)/8, $0x3fe0000000000000
+GLOBL roundf64_half<>(SB), RODATA|NOPTR, $32
+
+// Constants for sin/cos AVX polynomial path (two float64 lanes).
+DATA trig_invpio2_avx<>+0x00(SB)/8, $0x3fe45f306dc9c883
+DATA trig_invpio2_avx<>+0x08(SB)/8, $0x3fe45f306dc9c883
+GLOBL trig_invpio2_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_pio2_hi_avx<>+0x00(SB)/8, $0x3ff921fb54442d18
+DATA trig_pio2_hi_avx<>+0x08(SB)/8, $0x3ff921fb54442d18
+GLOBL trig_pio2_hi_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_pio2_lo_avx<>+0x00(SB)/8, $0x3c91a62633145c07
+DATA trig_pio2_lo_avx<>+0x08(SB)/8, $0x3c91a62633145c07
+GLOBL trig_pio2_lo_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_sin_c3_avx<>+0x00(SB)/8, $0xbfc5555555555555
+DATA trig_sin_c3_avx<>+0x08(SB)/8, $0xbfc5555555555555
+GLOBL trig_sin_c3_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_sin_c5_avx<>+0x00(SB)/8, $0x3f81111111111111
+DATA trig_sin_c5_avx<>+0x08(SB)/8, $0x3f81111111111111
+GLOBL trig_sin_c5_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_sin_c7_avx<>+0x00(SB)/8, $0xbf2a01a01a01a01a
+DATA trig_sin_c7_avx<>+0x08(SB)/8, $0xbf2a01a01a01a01a
+GLOBL trig_sin_c7_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_sin_c9_avx<>+0x00(SB)/8, $0x3ec71de3a556c734
+DATA trig_sin_c9_avx<>+0x08(SB)/8, $0x3ec71de3a556c734
+GLOBL trig_sin_c9_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_sin_c11_avx<>+0x00(SB)/8, $0xbe5ae64567f544e4
+DATA trig_sin_c11_avx<>+0x08(SB)/8, $0xbe5ae64567f544e4
+GLOBL trig_sin_c11_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_sin_c13_avx<>+0x00(SB)/8, $0x3de6124613a86d09
+DATA trig_sin_c13_avx<>+0x08(SB)/8, $0x3de6124613a86d09
+GLOBL trig_sin_c13_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_cos_c2_avx<>+0x00(SB)/8, $0xbfe0000000000000
+DATA trig_cos_c2_avx<>+0x08(SB)/8, $0xbfe0000000000000
+GLOBL trig_cos_c2_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_cos_c4_avx<>+0x00(SB)/8, $0x3fa555555555554b
+DATA trig_cos_c4_avx<>+0x08(SB)/8, $0x3fa555555555554b
+GLOBL trig_cos_c4_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_cos_c6_avx<>+0x00(SB)/8, $0xbf56c16c16c14f91
+DATA trig_cos_c6_avx<>+0x08(SB)/8, $0xbf56c16c16c14f91
+GLOBL trig_cos_c6_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_cos_c8_avx<>+0x00(SB)/8, $0x3efa01a019cb1590
+DATA trig_cos_c8_avx<>+0x08(SB)/8, $0x3efa01a019cb1590
+GLOBL trig_cos_c8_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_cos_c10_avx<>+0x00(SB)/8, $0xbe927e4f809c52ad
+DATA trig_cos_c10_avx<>+0x08(SB)/8, $0xbe927e4f809c52ad
+GLOBL trig_cos_c10_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_cos_c12_avx<>+0x00(SB)/8, $0x3e21ee9ebdb4b1c4
+DATA trig_cos_c12_avx<>+0x08(SB)/8, $0x3e21ee9ebdb4b1c4
+GLOBL trig_cos_c12_avx<>(SB), RODATA|NOPTR, $16
+
+DATA trig_one_avx<>+0x00(SB)/8, $0x3ff0000000000000
+DATA trig_one_avx<>+0x08(SB)/8, $0x3ff0000000000000
+GLOBL trig_one_avx<>(SB), RODATA|NOPTR, $16
+
 // ============================================================================
 // AVX+FMA IMPLEMENTATIONS (256-bit, 4x float64 per iteration)
 // ============================================================================
@@ -397,6 +481,345 @@ addsc_avx_scalar:
     JNZ  addsc_avx_scalar
 
 addsc_avx_done:
+    VZEROUPPER
+    RET
+
+// func roundAVX(dst, src []float64)
+// Round half away from zero:
+//   round(x) = copysign(trunc(abs(x)+0.5), x)
+TEXT ·roundAVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    VMOVUPD roundf64_absmask<>(SB), Y3
+    VMOVUPD roundf64_signmask<>(SB), Y4
+    VMOVUPD roundf64_half<>(SB), Y5
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   round_avx_remainder
+
+round_avx_loop4:
+    VMOVUPD (SI), Y0                  // Y0 = x
+    VANDPD Y3, Y0, Y1                 // Y1 = abs(x)
+    VADDPD Y5, Y1, Y1                 // Y1 = abs(x) + 0.5
+    VROUNDPD $3, Y1, Y1               // Y1 = trunc(abs(x)+0.5)
+    VANDPD Y4, Y0, Y2                 // Y2 = signbit(x)
+    VORPD Y2, Y1, Y1                  // Y1 = apply sign
+    VMOVUPD Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  round_avx_loop4
+
+round_avx_remainder:
+    ANDQ $3, CX
+    JZ   round_avx_done
+
+    VMOVSD roundf64_absmask<>(SB), X3
+    VMOVSD roundf64_signmask<>(SB), X4
+    VMOVSD roundf64_half<>(SB), X5
+
+round_avx_scalar:
+    VMOVSD (SI), X0                   // X0 = x
+    VANDPD X3, X0, X1                 // X1 = abs(x)
+    VADDSD X5, X1, X1                 // X1 = abs(x)+0.5
+    VROUNDSD $3, X1, X1, X1           // X1 = trunc(abs(x)+0.5)
+    VANDPD X4, X0, X2                 // X2 = signbit(x)
+    VORPD X2, X1, X1                  // X1 = apply sign
+    VMOVSD X1, (DX)
+    ADDQ $8, SI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  round_avx_scalar
+
+round_avx_done:
+    VZEROUPPER
+    RET
+
+// func gatherAVX(dst, src []float64, indices []int)
+// Gathers scattered values into contiguous dst. Indices are pre-validated.
+TEXT ·gatherAVX(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+    MOVQ indices_base+48(FP), DI
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   gather_avx_remainder
+
+gather_avx_loop4:
+    VMOVDQU (DI), Y2                  // Y2 = 4x int64 indices
+    VPCMPEQQ Y3, Y3, Y3               // Y3 = all-ones gather mask
+    VXORPD Y0, Y0, Y0
+    VGATHERQPD Y3, (SI)(Y2*8), Y0     // Y0 = src[indices[*]]
+    VMOVUPD Y0, (DX)
+
+    ADDQ $32, DX
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  gather_avx_loop4
+
+gather_avx_remainder:
+    ANDQ $3, CX
+    JZ   gather_avx_done
+
+gather_avx_scalar:
+    MOVQ (DI), AX
+    VMOVSD (SI)(AX*8), X0
+    VMOVSD X0, (DX)
+    ADDQ $8, DI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  gather_avx_scalar
+
+gather_avx_done:
+    VZEROUPPER
+    RET
+
+// func sinCosAVX(sinDst, cosDst, src []float64)
+// Fused sin/cos kernel using shared range reduction + polynomial approximation.
+// Preconditions (validated by Go caller):
+//   - len(src) == len(sinDst) == len(cosDst)
+//   - src values are finite and |src[i]| <= trigFallbackAbsLimit
+TEXT ·sinCosAVX(SB), NOSPLIT, $0-72
+    MOVQ sinDst_base+0(FP), R8
+    MOVQ cosDst_base+24(FP), R9
+    MOVQ src_base+48(FP), SI
+    MOVQ src_len+56(FP), CX
+    MOVQ $0x8000000000000000, R15     // sign-bit mask for negation
+
+    MOVQ CX, AX
+    SHRQ $1, AX                        // pairs
+    JZ   sincos_avx_remainder
+
+sincos_avx_loop2:
+    VMOVUPD (SI), X0                   // x
+
+    // q = round(x * 2/pi), r = x - q*(pi/2_hi) - q*(pi/2_lo)
+    VMULPD trig_invpio2_avx<>(SB), X0, X1
+    VROUNDPD $0, X1, X2                // nearest integer
+    VMULPD trig_pio2_hi_avx<>(SB), X2, X3
+    VSUBPD X3, X0, X3
+    VMULPD trig_pio2_lo_avx<>(SB), X2, X4
+    VSUBPD X4, X3, X3                  // r
+    VMULPD X3, X3, X4                  // r2
+
+    // sin(r) = r * P(r^2)
+    VMOVUPD trig_sin_c13_avx<>(SB), X5
+    VMULPD X4, X5, X5
+    VADDPD trig_sin_c11_avx<>(SB), X5, X5
+    VMULPD X4, X5, X5
+    VADDPD trig_sin_c9_avx<>(SB), X5, X5
+    VMULPD X4, X5, X5
+    VADDPD trig_sin_c7_avx<>(SB), X5, X5
+    VMULPD X4, X5, X5
+    VADDPD trig_sin_c5_avx<>(SB), X5, X5
+    VMULPD X4, X5, X5
+    VADDPD trig_sin_c3_avx<>(SB), X5, X5
+    VMULPD X4, X5, X5
+    VADDPD trig_one_avx<>(SB), X5, X5
+    VMULPD X3, X5, X6                  // X6 = sin(r)
+
+    // cos(r) = Q(r^2)
+    VMOVUPD trig_cos_c12_avx<>(SB), X7
+    VMULPD X4, X7, X7
+    VADDPD trig_cos_c10_avx<>(SB), X7, X7
+    VMULPD X4, X7, X7
+    VADDPD trig_cos_c8_avx<>(SB), X7, X7
+    VMULPD X4, X7, X7
+    VADDPD trig_cos_c6_avx<>(SB), X7, X7
+    VMULPD X4, X7, X7
+    VADDPD trig_cos_c4_avx<>(SB), X7, X7
+    VMULPD X4, X7, X7
+    VADDPD trig_cos_c2_avx<>(SB), X7, X7
+    VMULPD X4, X7, X7
+    VADDPD trig_one_avx<>(SB), X7, X7  // X7 = cos(r)
+
+    // Lane 0 quadrant mapping
+    VCVTTSD2SI X2, R10
+    MOVQ R10, R11
+    ANDQ $3, R11
+    VMOVQ X6, R12                       // sin lane 0 bits
+    VMOVQ X7, R13                       // cos lane 0 bits
+
+    CMPQ R11, $0
+    JE   sincos_avx_lane0_q0
+    CMPQ R11, $1
+    JE   sincos_avx_lane0_q1
+    CMPQ R11, $2
+    JE   sincos_avx_lane0_q2
+    // q=3: sin=-c, cos=s
+    MOVQ R13, R14
+    XORQ R15, R14
+    MOVQ R12, BX
+    JMP  sincos_avx_lane0_store
+
+sincos_avx_lane0_q2:
+    // q=2: sin=-s, cos=-c
+    MOVQ R12, R14
+    XORQ R15, R14
+    MOVQ R13, BX
+    XORQ R15, BX
+    JMP  sincos_avx_lane0_store
+
+sincos_avx_lane0_q1:
+    // q=1: sin=c, cos=-s
+    MOVQ R13, R14
+    MOVQ R12, BX
+    XORQ R15, BX
+    JMP  sincos_avx_lane0_store
+
+sincos_avx_lane0_q0:
+    // q=0: sin=s, cos=c
+    MOVQ R12, R14
+    MOVQ R13, BX
+
+sincos_avx_lane0_store:
+    MOVQ R14, (R8)
+    MOVQ BX, (R9)
+
+    // Lane 1 quadrant mapping
+    VPSRLDQ $8, X2, X1
+    VCVTTSD2SI X1, R10
+    MOVQ R10, R11
+    ANDQ $3, R11
+    VPSRLDQ $8, X6, X1
+    VMOVQ X1, R12                       // sin lane 1 bits
+    VPSRLDQ $8, X7, X1
+    VMOVQ X1, R13                       // cos lane 1 bits
+
+    CMPQ R11, $0
+    JE   sincos_avx_lane1_q0
+    CMPQ R11, $1
+    JE   sincos_avx_lane1_q1
+    CMPQ R11, $2
+    JE   sincos_avx_lane1_q2
+    // q=3: sin=-c, cos=s
+    MOVQ R13, R14
+    XORQ R15, R14
+    MOVQ R12, BX
+    JMP  sincos_avx_lane1_store
+
+sincos_avx_lane1_q2:
+    // q=2: sin=-s, cos=-c
+    MOVQ R12, R14
+    XORQ R15, R14
+    MOVQ R13, BX
+    XORQ R15, BX
+    JMP  sincos_avx_lane1_store
+
+sincos_avx_lane1_q1:
+    // q=1: sin=c, cos=-s
+    MOVQ R13, R14
+    MOVQ R12, BX
+    XORQ R15, BX
+    JMP  sincos_avx_lane1_store
+
+sincos_avx_lane1_q0:
+    // q=0: sin=s, cos=c
+    MOVQ R12, R14
+    MOVQ R13, BX
+
+sincos_avx_lane1_store:
+    MOVQ R14, 8(R8)
+    MOVQ BX, 8(R9)
+
+    ADDQ $16, SI
+    ADDQ $16, R8
+    ADDQ $16, R9
+    DECQ AX
+    JNZ  sincos_avx_loop2
+
+sincos_avx_remainder:
+    ANDQ $1, CX
+    JZ   sincos_avx_done
+
+    // Scalar remainder: same range reduction + polynomial path.
+    VMOVSD (SI), X0
+    VMULSD trig_invpio2_avx<>(SB), X0, X1
+    VROUNDSD $0, X1, X1, X2
+    VMULSD trig_pio2_hi_avx<>(SB), X2, X3
+    VSUBSD X3, X0, X3
+    VMULSD trig_pio2_lo_avx<>(SB), X2, X4
+    VSUBSD X4, X3, X3
+    VMULSD X3, X3, X4                    // r2
+
+    // sin(r)
+    VMOVSD trig_sin_c13_avx<>(SB), X5
+    VMULSD X4, X5, X5
+    VADDSD trig_sin_c11_avx<>(SB), X5, X5
+    VMULSD X4, X5, X5
+    VADDSD trig_sin_c9_avx<>(SB), X5, X5
+    VMULSD X4, X5, X5
+    VADDSD trig_sin_c7_avx<>(SB), X5, X5
+    VMULSD X4, X5, X5
+    VADDSD trig_sin_c5_avx<>(SB), X5, X5
+    VMULSD X4, X5, X5
+    VADDSD trig_sin_c3_avx<>(SB), X5, X5
+    VMULSD X4, X5, X5
+    VADDSD trig_one_avx<>(SB), X5, X5
+    VMULSD X3, X5, X6
+
+    // cos(r)
+    VMOVSD trig_cos_c12_avx<>(SB), X7
+    VMULSD X4, X7, X7
+    VADDSD trig_cos_c10_avx<>(SB), X7, X7
+    VMULSD X4, X7, X7
+    VADDSD trig_cos_c8_avx<>(SB), X7, X7
+    VMULSD X4, X7, X7
+    VADDSD trig_cos_c6_avx<>(SB), X7, X7
+    VMULSD X4, X7, X7
+    VADDSD trig_cos_c4_avx<>(SB), X7, X7
+    VMULSD X4, X7, X7
+    VADDSD trig_cos_c2_avx<>(SB), X7, X7
+    VMULSD X4, X7, X7
+    VADDSD trig_one_avx<>(SB), X7, X7
+
+    VCVTTSD2SI X2, R10
+    ANDQ $3, R10
+    VMOVQ X6, R12
+    VMOVQ X7, R13
+
+    CMPQ R10, $0
+    JE   sincos_avx_scalar_q0
+    CMPQ R10, $1
+    JE   sincos_avx_scalar_q1
+    CMPQ R10, $2
+    JE   sincos_avx_scalar_q2
+    // q=3: sin=-c, cos=s
+    MOVQ R13, R14
+    XORQ R15, R14
+    MOVQ R12, BX
+    JMP  sincos_avx_scalar_store
+
+sincos_avx_scalar_q2:
+    // q=2: sin=-s, cos=-c
+    MOVQ R12, R14
+    XORQ R15, R14
+    MOVQ R13, BX
+    XORQ R15, BX
+    JMP  sincos_avx_scalar_store
+
+sincos_avx_scalar_q1:
+    // q=1: sin=c, cos=-s
+    MOVQ R13, R14
+    MOVQ R12, BX
+    XORQ R15, BX
+    JMP  sincos_avx_scalar_store
+
+sincos_avx_scalar_q0:
+    // q=0: sin=s, cos=c
+    MOVQ R12, R14
+    MOVQ R13, BX
+
+sincos_avx_scalar_store:
+    MOVQ R14, (R8)
+    MOVQ BX, (R9)
+
+sincos_avx_done:
     VZEROUPPER
     RET
 

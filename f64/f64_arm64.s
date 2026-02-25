@@ -256,6 +256,203 @@ addsc_scalar:
 addsc_done:
     RET
 
+// func roundNEON(dst, src []float64)
+// Round half away from zero using FRINTA.
+TEXT ·roundNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R2
+    MOVD src_base+24(FP), R1
+
+    LSR $1, R2, R3
+    CBZ R3, round_scalar
+
+round_loop2:
+    VLD1.P 16(R1), [V0.D2]
+    WORD $0x6E618800           // FRINTA V0.2D, V0.2D
+    VST1.P [V0.D2], 16(R0)
+    SUB $1, R3
+    CBNZ R3, round_loop2
+
+round_scalar:
+    AND $1, R2
+    CBZ R2, round_done
+    FMOVD (R1), F0
+    WORD $0x1E664000           // FRINTA D0, D0
+    FMOVD F0, (R0)
+
+round_done:
+    RET
+
+// func gatherNEON(dst, src []float64, indices []int)
+// Indices are pre-validated in Go before this function is called.
+TEXT ·gatherNEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+    MOVD indices_base+48(FP), R2
+
+    LSR $1, R3, R4
+    CBZ R4, gather_scalar
+
+gather_loop2:
+    MOVD (R2), R5
+    MOVD 8(R2), R6
+    MOVD (R1)(R5<<3), R7
+    MOVD (R1)(R6<<3), R8
+    WORD $0x4E081CE0           // INS V0.D[0], R7
+    WORD $0x4E181D00           // INS V0.D[1], R8
+    VST1.P [V0.D2], 16(R0)
+    ADD $16, R2
+    SUB $1, R4
+    CBNZ R4, gather_loop2
+
+gather_scalar:
+    AND $1, R3
+    CBZ R3, gather_done
+    MOVD (R2), R5
+    FMOVD (R1)(R5<<3), F0
+    FMOVD F0, (R0)
+
+gather_done:
+    RET
+
+// func sinCosNEON(sinDst, cosDst, src []float64)
+// Fused scalar-assembly sin/cos kernel with shared range reduction.
+// Preconditions (validated by Go caller):
+//   - len(src) == len(sinDst) == len(cosDst)
+//   - src values are finite and |src[i]| <= trigFallbackAbsLimit
+TEXT ·sinCosNEON(SB), NOSPLIT, $0-72
+    MOVD sinDst_base+0(FP), R0
+    MOVD cosDst_base+24(FP), R1
+    MOVD src_base+48(FP), R2
+    MOVD src_len+56(FP), R3
+
+    // Load constants into FP registers
+    MOVD $0x3fe45f306dc9c883, R10      // 2/pi
+    FMOVD R10, F16
+    MOVD $0x3ff921fb54442d18, R10      // pi/2 high
+    FMOVD R10, F17
+    MOVD $0x3c91a62633145c07, R10      // pi/2 low
+    FMOVD R10, F18
+    MOVD $0x3ff0000000000000, R10      // 1.0
+    FMOVD R10, F19
+
+    MOVD $0x3de6124613a86d09, R10      // sin c13
+    FMOVD R10, F20
+    MOVD $0xbe5ae64567f544e4, R10      // sin c11
+    FMOVD R10, F21
+    MOVD $0x3ec71de3a556c734, R10      // sin c9
+    FMOVD R10, F22
+    MOVD $0xbf2a01a01a01a01a, R10      // sin c7
+    FMOVD R10, F23
+    MOVD $0x3f81111111111111, R10      // sin c5
+    FMOVD R10, F24
+    MOVD $0xbfc5555555555555, R10      // sin c3
+    FMOVD R10, F25
+
+    MOVD $0x3e21ee9ebdb4b1c4, R10      // cos c12
+    FMOVD R10, F26
+    MOVD $0xbe927e4f809c52ad, R10      // cos c10
+    FMOVD R10, F27
+    MOVD $0x3efa01a019cb1590, R10      // cos c8
+    FMOVD R10, F28
+    MOVD $0xbf56c16c16c14f91, R10      // cos c6
+    FMOVD R10, F29
+    MOVD $0x3fa555555555554b, R10      // cos c4
+    FMOVD R10, F30
+    MOVD $0xbfe0000000000000, R10      // cos c2
+    FMOVD R10, F31
+
+sincos_neon_loop:
+    CBZ R3, sincos_neon_done
+
+    FMOVD (R2), F0                     // x
+
+    // q = round(x * 2/pi)
+    FMULD F0, F16, F1
+    FRINTAD F1, F1
+
+    // r = x - q*(pi/2_hi) - q*(pi/2_lo)
+    FMULD F1, F17, F2
+    FSUBD F2, F0, F3
+    FMULD F1, F18, F2
+    FSUBD F2, F3, F3
+    FMULD F3, F3, F4                   // r2
+
+    // sin(r) = r * P(r^2)
+    FMULD F4, F20, F5
+    FADDD F21, F5, F5
+    FMULD F4, F5, F5
+    FADDD F22, F5, F5
+    FMULD F4, F5, F5
+    FADDD F23, F5, F5
+    FMULD F4, F5, F5
+    FADDD F24, F5, F5
+    FMULD F4, F5, F5
+    FADDD F25, F5, F5
+    FMULD F4, F5, F5
+    FADDD F19, F5, F5
+    FMULD F3, F5, F6                   // sinr
+
+    // cos(r) = Q(r^2)
+    FMULD F4, F26, F7
+    FADDD F27, F7, F7
+    FMULD F4, F7, F7
+    FADDD F28, F7, F7
+    FMULD F4, F7, F7
+    FADDD F29, F7, F7
+    FMULD F4, F7, F7
+    FADDD F30, F7, F7
+    FMULD F4, F7, F7
+    FADDD F31, F7, F7
+    FMULD F4, F7, F7
+    FADDD F19, F7, F7                  // cosr
+
+    FCVTZSD F1, R4                     // integer quadrant source
+    AND $3, R4, R5
+
+    // Default q=0: sin=s, cos=c
+    FMOVD F6, F10
+    FMOVD F7, F11
+
+    CMP $1, R5
+    BEQ sincos_neon_q1
+    CMP $2, R5
+    BEQ sincos_neon_q2
+    CMP $3, R5
+    BEQ sincos_neon_q3
+    B sincos_neon_store
+
+sincos_neon_q1:
+    // q=1: sin=c, cos=-s
+    FMOVD F7, F10
+    FNEGD F6, F11
+    B sincos_neon_store
+
+sincos_neon_q2:
+    // q=2: sin=-s, cos=-c
+    FNEGD F6, F10
+    FNEGD F7, F11
+    B sincos_neon_store
+
+sincos_neon_q3:
+    // q=3: sin=-c, cos=s
+    FNEGD F7, F10
+    FMOVD F6, F11
+
+sincos_neon_store:
+    FMOVD F10, (R0)
+    FMOVD F11, (R1)
+
+    ADD $8, R2
+    ADD $8, R0
+    ADD $8, R1
+    SUB $1, R3
+    B sincos_neon_loop
+
+sincos_neon_done:
+    RET
+
 // func sumNEON(a []float64) float64
 TEXT ·sumNEON(SB), NOSPLIT, $0-32
     MOVD a_base+0(FP), R0

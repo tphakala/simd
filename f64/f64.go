@@ -21,6 +21,20 @@ func DotProduct(a, b []float64) float64 {
 	return dotProduct(a, b)
 }
 
+// WeightedSum computes the weighted sum Σ(weights[i] * src[i]).
+// This is equivalent to DotProduct(weights, src).
+func WeightedSum(weights, src []float64) float64 {
+	return DotProduct(weights, src)
+}
+
+// SumOfSquares computes Σ(src[i] * src[i]).
+func SumOfSquares(src []float64) float64 {
+	if len(src) == 0 {
+		return 0
+	}
+	return dotProduct(src, src)
+}
+
 // DotProductUnsafe computes the dot product without length validation.
 // This is a low-overhead variant for performance-critical code paths.
 //
@@ -95,6 +109,16 @@ func AddScalar(dst, a []float64, s float64) {
 	addScalar(dst[:n], a[:n], s)
 }
 
+// SubFromScalar subtracts each element from a scalar: dst[i] = s - a[i].
+// Processes min(len(dst), len(a)) elements.
+func SubFromScalar(dst, a []float64, s float64) {
+	n := min(len(a), len(dst))
+	if n == 0 {
+		return
+	}
+	subFromScalar64(dst[:n], a[:n], s)
+}
+
 // Sum returns the sum of all elements in the slice.
 func Sum(a []float64) float64 {
 	if len(a) == 0 {
@@ -158,6 +182,48 @@ func Clamp(dst, a []float64, minVal, maxVal float64) {
 		return
 	}
 	clamp64(dst[:n], a[:n], minVal, maxVal)
+}
+
+// Sin computes element-wise sine: dst[i] = sin(src[i]).
+// Processes min(len(dst), len(src)) elements.
+func Sin(dst, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	sin64(dst[:n], src[:n])
+}
+
+// Cos computes element-wise cosine: dst[i] = cos(src[i]).
+// Processes min(len(dst), len(src)) elements.
+func Cos(dst, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	cos64(dst[:n], src[:n])
+}
+
+// SinCos computes sine and cosine for each input element:
+// sinDst[i] = sin(src[i]), cosDst[i] = cos(src[i]).
+// Processes min(len(sinDst), len(cosDst), len(src)) elements.
+func SinCos(sinDst, cosDst, src []float64) {
+	n := min(len(src), len(sinDst), len(cosDst))
+	if n == 0 {
+		return
+	}
+	sinCos64(sinDst[:n], cosDst[:n], src[:n])
+}
+
+// Round computes element-wise rounding to nearest integer, half away from zero:
+// dst[i] = round(src[i]).
+// Processes min(len(dst), len(src)) elements.
+func Round(dst, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	round64(dst[:n], src[:n])
 }
 
 func minLen(a, b, c int) int {
@@ -311,6 +377,19 @@ func AccumulateAdd(dst, src []float64, offset int) {
 		panic("simd: offset+len(src) exceeds len(dst)")
 	}
 	accumulateAdd64(dst[offset:offset+n], src)
+}
+
+// Gather collects elements from src by index:
+// dst[i] = src[indices[i]].
+//
+// Processes min(len(dst), len(indices)) elements.
+// Panics if any selected index is out of range for src.
+func Gather(dst, src []float64, indices []int) {
+	n := min(len(dst), len(indices))
+	if n == 0 {
+		return
+	}
+	gather64(dst[:n], src, indices[:n])
 }
 
 const (

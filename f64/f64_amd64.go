@@ -48,6 +48,7 @@ var (
 	negImpl               unaryOpFunc
 	sqrtImpl              unaryOpFunc
 	reciprocalImpl        unaryOpFunc
+	roundImpl             unaryOpFunc
 	fmaImpl               fmaFunc
 	clampImpl             clampFunc
 	varianceImpl          varianceFunc
@@ -88,6 +89,7 @@ func initAVX512() {
 	negImpl = negAVX512
 	sqrtImpl = sqrtAVX512
 	reciprocalImpl = reciprocalAVX512
+	roundImpl = roundAVX
 	fmaImpl = fmaAVX512
 	clampImpl = clampAVX512
 	varianceImpl = varianceAVX512
@@ -112,6 +114,7 @@ func initAVX() {
 	negImpl = negAVX
 	sqrtImpl = sqrtAVX
 	reciprocalImpl = reciprocalAVX
+	roundImpl = roundAVX
 	fmaImpl = fmaAVX
 	clampImpl = clampAVX
 	varianceImpl = varianceAVX
@@ -136,6 +139,7 @@ func initSSE2() {
 	negImpl = negSSE2
 	sqrtImpl = sqrtSSE2
 	reciprocalImpl = reciprocalSSE2
+	roundImpl = round64Go
 	fmaImpl = fmaSSE2
 	clampImpl = clampSSE2
 	varianceImpl = varianceSSE2
@@ -160,6 +164,7 @@ func initGo() {
 	negImpl = negGo
 	sqrtImpl = sqrt64Go
 	reciprocalImpl = reciprocal64Go
+	roundImpl = round64Go
 	fmaImpl = fmaGo
 	clampImpl = clampGo
 	varianceImpl = variance64Go
@@ -199,6 +204,16 @@ func addScalar(dst, a []float64, s float64) {
 	addScalarImpl(dst, a, s)
 }
 
+func subFromScalar64(dst, a []float64, s float64) {
+	if cpu.X86.AVX || cpu.X86.SSE2 {
+		// SIMD composition: (s - a) == (-(a)) + s
+		neg64(dst, a)
+		addScalar(dst, dst, s)
+		return
+	}
+	subFromScalarGo(dst, a, s)
+}
+
 func sum(a []float64) float64 {
 	return sumImpl(a)
 }
@@ -235,6 +250,41 @@ func fma64(dst, a, b, c []float64) {
 
 func clamp64(dst, a []float64, minVal, maxVal float64) {
 	clampImpl(dst, a, minVal, maxVal)
+}
+
+func sin64(dst, src []float64) {
+	sin64SIMD(dst, src)
+}
+
+func cos64(dst, src []float64) {
+	cos64SIMD(dst, src)
+}
+
+func sinCos64(sinDst, cosDst, src []float64) {
+	if cpu.X86.AVX && len(src) >= 2 && trigAllFiniteInRange(src) {
+		sinCosAVX(sinDst, cosDst, src)
+		return
+	}
+	sinCos64SIMD(sinDst, cosDst, src)
+}
+
+func round64(dst, src []float64) {
+	roundImpl(dst, src)
+}
+
+func gather64(dst, src []float64, indices []int) {
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(src) {
+			panic("simd: gather index out of range")
+		}
+	}
+
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements {
+		gatherAVX(dst, src, indices)
+		return
+	}
+
+	gatherUncheckedGo(dst, src, indices)
 }
 
 func sqrt64(dst, a []float64) {
@@ -427,6 +477,15 @@ func sqrtAVX(dst, a []float64)
 
 //go:noescape
 func reciprocalAVX(dst, a []float64)
+
+//go:noescape
+func roundAVX(dst, src []float64)
+
+//go:noescape
+func gatherAVX(dst, src []float64, indices []int)
+
+//go:noescape
+func sinCosAVX(sinDst, cosDst, src []float64)
 
 //go:noescape
 func varianceAVX(a []float64, mean float64) float64

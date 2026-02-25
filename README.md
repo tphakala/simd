@@ -90,13 +90,20 @@ fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 |                 | `Div(dst, a, b)`                    | Element-wise division         | 8x / 4x / 2x                        |
 |                 | `Scale(dst, a, s)`                  | Multiply by scalar            | 8x / 4x / 2x                        |
 |                 | `AddScalar(dst, a, s)`              | Add scalar                    | 8x / 4x / 2x                        |
+|                 | `SubFromScalar(dst, a, s)`          | Scalar minus vector           | 8x / 4x / 2x (composed SIMD)        |
 |                 | `FMA(dst, a, b, c)`                 | Fused multiply-add: a\*b+c    | 8x / 4x / 2x                        |
 |                 | `AddScaled(dst, alpha, s)`          | dst += alpha\*s (axpy)        | 8x / 4x / 2x                        |
 | **Unary**       | `Abs(dst, a)`                       | Absolute value                | 8x / 4x / 2x                        |
 |                 | `Neg(dst, a)`                       | Negation                      | 8x / 4x / 2x                        |
 |                 | `Sqrt(dst, a)`                      | Square root                   | 8x / 4x / 2x                        |
 |                 | `Reciprocal(dst, a)`                | Reciprocal (1/x)              | 8x / 4x / 2x                        |
+|                 | `Round(dst, src)`                   | Round half away from zero     | 4x (AVX) / 2x (NEON) / Go fallback  |
+| **Trigonometric**| `Sin(dst, src)`                     | Element-wise sine             | Accelerate (darwin/arm64/cgo), SIMD poly (amd64/arm64), Go fallback |
+|                 | `Cos(dst, src)`                     | Element-wise cosine           | Accelerate (darwin/arm64/cgo), SIMD poly (amd64/arm64), Go fallback |
+|                 | `SinCos(sinDst, cosDst, src)`       | Combined sine and cosine      | Accelerate (darwin/arm64/cgo), fused asm (amd64 finite-range), SIMD poly fallback |
 | **Reduction**   | `DotProduct(a, b)`                  | Dot product                   | 8x / 4x / 2x                        |
+|                 | `WeightedSum(w, src)`               | Weighted sum Σ(wᵢ·srcᵢ)       | 8x / 4x / 2x                        |
+|                 | `SumOfSquares(src)`                 | Sum of squares Σ(srcᵢ²)       | 8x / 4x / 2x                        |
 |                 | `Sum(a)`                            | Sum of elements               | 8x / 4x / 2x                        |
 |                 | `Min(a)`                            | Minimum value                 | 8x / 4x / 2x                        |
 |                 | `Max(a)`                            | Maximum value                 | 8x / 4x / 2x                        |
@@ -118,6 +125,7 @@ fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
+| **Data Movement**| `Gather(dst, src, indices)`         | Indexed gather                | 4x hardware gather (AVX2) / 2x pack (NEON) / Go fallback |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
 |                 | `CubicInterpDot(hist,a,b,c,d,x)`    | Fused cubic interp dot product| 4x / 2x                             |

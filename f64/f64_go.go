@@ -73,6 +73,12 @@ func addScalarGo(dst, a []float64, s float64) {
 	}
 }
 
+func subFromScalarGo(dst, a []float64, s float64) {
+	for i := range dst {
+		dst[i] = s - a[i]
+	}
+}
+
 func sumGo(a []float64) float64 {
 	var sum float64
 	for _, v := range a {
@@ -128,6 +134,47 @@ func clampGo(dst, a []float64, minVal, maxVal float64) {
 			v = maxVal
 		}
 		dst[i] = v
+	}
+}
+
+func sin64Go(dst, src []float64) {
+	for i := range dst {
+		dst[i] = math.Sin(src[i])
+	}
+}
+
+func cos64Go(dst, src []float64) {
+	for i := range dst {
+		dst[i] = math.Cos(src[i])
+	}
+}
+
+func sinCos64Go(sinDst, cosDst, src []float64) {
+	for i := range src {
+		sinDst[i], cosDst[i] = math.Sincos(src[i])
+	}
+}
+
+func round64Go(dst, src []float64) {
+	for i := range dst {
+		dst[i] = math.Round(src[i])
+	}
+}
+
+func gatherGo(dst, src []float64, indices []int) {
+	for i := range dst {
+		idx := indices[i]
+		if idx < 0 || idx >= len(src) {
+			panic("simd: gather index out of range")
+		}
+	}
+	gatherUncheckedGo(dst, src, indices)
+}
+
+func gatherUncheckedGo(dst, src []float64, indices []int) {
+	for i := range dst {
+		idx := indices[i]
+		dst[i] = src[idx]
 	}
 }
 

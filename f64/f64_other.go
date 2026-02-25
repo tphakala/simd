@@ -11,6 +11,7 @@ func mul(dst, a, b []float64)                          { mulGo(dst, a, b) }
 func div(dst, a, b []float64)                          { divGo(dst, a, b) }
 func scale(dst, a []float64, s float64)                { scaleGo(dst, a, s) }
 func addScalar(dst, a []float64, s float64)            { addScalarGo(dst, a, s) }
+func subFromScalar64(dst, a []float64, s float64)      { subFromScalarGo(dst, a, s) }
 func sum(a []float64) float64                          { return sumGo(a) }
 func min64(a []float64) float64                        { return minGo(a) }
 func max64(a []float64) float64                        { return maxGo(a) }
@@ -18,6 +19,11 @@ func abs64(dst, a []float64)                           { absGo(dst, a) }
 func neg64(dst, a []float64)                           { negGo(dst, a) }
 func fma64(dst, a, b, c []float64)                     { fmaGo(dst, a, b, c) }
 func clamp64(dst, a []float64, minVal, maxVal float64) { clampGo(dst, a, minVal, maxVal) }
+func sin64(dst, src []float64)                         { sin64Go(dst, src) }
+func cos64(dst, src []float64)                         { cos64Go(dst, src) }
+func sinCos64(sinDst, cosDst, src []float64)           { sinCos64Go(sinDst, cosDst, src) }
+func round64(dst, src []float64)                       { round64Go(dst, src) }
+func gather64(dst, src []float64, indices []int)       { gatherGo(dst, src, indices) }
 func sqrt64(dst, a []float64)                          { sqrt64Go(dst, a) }
 func reciprocal64(dst, a []float64)                    { reciprocal64Go(dst, a) }
 func variance64(a []float64, mean float64) float64     { return variance64Go(a, mean) }
