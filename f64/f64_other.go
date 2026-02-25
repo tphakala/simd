@@ -24,6 +24,7 @@ func cos64(dst, src []float64)                         { cos64Go(dst, src) }
 func sinCos64(sinDst, cosDst, src []float64)           { sinCos64Go(sinDst, cosDst, src) }
 func round64(dst, src []float64)                       { round64Go(dst, src) }
 func gather64(dst, src []float64, indices []int)       { gatherGo(dst, src, indices) }
+func scatter64(dst, src []float64, indices []int)      { scatterGo(dst, src, indices) }
 func sqrt64(dst, a []float64)                          { sqrt64Go(dst, a) }
 func reciprocal64(dst, a []float64)                    { reciprocal64Go(dst, a) }
 func variance64(a []float64, mean float64) float64     { return variance64Go(a, mean) }

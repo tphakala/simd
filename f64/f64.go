@@ -396,6 +396,19 @@ func Gather(dst, src []float64, indices []int) {
 	gather64(dst[:n], src, indices[:n])
 }
 
+// Scatter writes elements from src to indexed positions in dst:
+// dst[indices[i]] = src[i].
+//
+// Processes min(len(src), len(indices)) elements.
+// Panics if any selected index is out of range for dst.
+func Scatter(dst, src []float64, indices []int) {
+	n := min(len(src), len(indices))
+	if n == 0 {
+		return
+	}
+	scatter64(dst, src[:n], indices[:n])
+}
+
 const (
 	// normalizeMagnitudeThreshold is the minimum magnitude for normalization.
 	// Vectors with magnitude below this are left unchanged to avoid division by zero.

@@ -175,6 +175,16 @@ func gather64(dst, src []float64, indices []int) {
 	gatherUncheckedGo(dst, src, indices)
 }
 
+func scatter64(dst, src []float64, indices []int) {
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(dst) {
+			panic("simd: scatter index out of range")
+		}
+	}
+
+	scatterUncheckedGo(dst, src, indices)
+}
+
 func sqrt64(dst, a []float64) {
 	if hasNEON && len(dst) >= 2 {
 		sqrtNEON(dst, a)

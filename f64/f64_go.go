@@ -228,6 +228,22 @@ func gatherUncheckedGo(dst, src []float64, indices []int) {
 	}
 }
 
+func scatterGo(dst, src []float64, indices []int) {
+	for i := range src {
+		idx := indices[i]
+		if idx < 0 || idx >= len(dst) {
+			panic("simd: scatter index out of range")
+		}
+	}
+	scatterUncheckedGo(dst, src, indices)
+}
+
+func scatterUncheckedGo(dst, src []float64, indices []int) {
+	for i := range src {
+		dst[indices[i]] = src[i]
+	}
+}
+
 func sqrt64Go(dst, a []float64) {
 	for i := range dst {
 		dst[i] = math.Sqrt(a[i])

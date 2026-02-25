@@ -215,3 +215,65 @@ func TestGather_PanicsOutOfRange(t *testing.T) {
 
 	Gather(make([]float64, 1), []float64{1, 2, 3}, []int{3})
 }
+
+func TestScatter(t *testing.T) {
+	src := []float64{10, 20, 30, 40}
+	indices := []int{4, 0, 3, 1}
+	dst := make([]float64, 5)
+
+	Scatter(dst, src, indices)
+
+	want := []float64{20, 40, 0, 30, 10}
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("Scatter()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestScatter_DifferentLengths(t *testing.T) {
+	src := []float64{1, 2, 3, 4}
+	indices := []int{3, 2, 1}
+	dst := make([]float64, 4)
+
+	Scatter(dst, src, indices)
+
+	want := []float64{0, 3, 2, 1}
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("Scatter()[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestScatter_DuplicateIndices(t *testing.T) {
+	src := []float64{1, 2, 3}
+	indices := []int{1, 1, 1}
+	dst := make([]float64, 2)
+
+	Scatter(dst, src, indices)
+
+	if dst[1] != 3 {
+		t.Errorf("Scatter() last write should win: got %v, want %v", dst[1], 3)
+	}
+}
+
+func TestScatter_PanicsNegativeIndex(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("Scatter() did not panic for negative index")
+		}
+	}()
+
+	Scatter(make([]float64, 3), []float64{1}, []int{-1})
+}
+
+func TestScatter_PanicsOutOfRange(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("Scatter() did not panic for out-of-range index")
+		}
+	}()
+
+	Scatter(make([]float64, 3), []float64{1}, []int{3})
+}
