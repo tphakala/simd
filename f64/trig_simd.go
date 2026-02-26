@@ -28,6 +28,20 @@ const (
 	trigFallbackAbsLimit = 1.0e6
 )
 
+// quadrantMap applies the quadrant correction for sin/cos values.
+func quadrantMap(q int, s, c float64) (sv, cv float64) {
+	switch q & 3 {
+	case 0:
+		return s, c
+	case 1:
+		return c, -s
+	case 2:
+		return -s, -c
+	default: // 3
+		return -c, s
+	}
+}
+
 func sin64SIMD(dst, src []float64) {
 	sinCos64SIMDCore(dst, nil, src)
 }
@@ -117,18 +131,7 @@ func sinCos64SIMDCore(sinDst, cosDst, src []float64) {
 
 		if !needsFallback {
 			for i := range m {
-				var sv, cv float64
-				switch int(int64(q[i]) & 3) {
-				case 0:
-					sv, cv = s[i], c[i]
-				case 1:
-					sv, cv = c[i], -s[i]
-				case 2:
-					sv, cv = -s[i], -c[i]
-				default: // 3
-					sv, cv = -c[i], s[i]
-				}
-
+				sv, cv := quadrantMap(int(int64(q[i])), s[i], c[i])
 				if sinDst != nil {
 					sinDst[off+i] = sv
 				}
@@ -146,16 +149,7 @@ func sinCos64SIMDCore(sinDst, cosDst, src []float64) {
 			if math.IsNaN(v) || math.IsInf(v, 0) || math.Abs(v) > trigFallbackAbsLimit {
 				sv, cv = math.Sincos(v)
 			} else {
-				switch int(int64(q[i]) & 3) {
-				case 0:
-					sv, cv = s[i], c[i]
-				case 1:
-					sv, cv = c[i], -s[i]
-				case 2:
-					sv, cv = -s[i], -c[i]
-				default: // 3
-					sv, cv = -c[i], s[i]
-				}
+				sv, cv = quadrantMap(int(int64(q[i])), s[i], c[i])
 			}
 
 			if sinDst != nil {

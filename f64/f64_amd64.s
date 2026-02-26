@@ -3551,23 +3551,23 @@ cubic_avx_loop16:
 
     // Stage 2: p = b + x*p
     VMOVUPD 0(R8), Y5
-    VFMADD213PD Y7, Y5, Y1
+    VFMADD213PD Y5, Y7, Y1
     VMOVUPD 32(R8), Y5
-    VFMADD213PD Y7, Y5, Y2
+    VFMADD213PD Y5, Y7, Y2
     VMOVUPD 64(R8), Y5
-    VFMADD213PD Y7, Y5, Y3
+    VFMADD213PD Y5, Y7, Y3
     VMOVUPD 96(R8), Y5
-    VFMADD213PD Y7, Y5, Y4
+    VFMADD213PD Y5, Y7, Y4
 
     // Stage 3: coef = a + x*p
     VMOVUPD 0(DI), Y5
-    VFMADD213PD Y7, Y5, Y1
+    VFMADD213PD Y5, Y7, Y1
     VMOVUPD 32(DI), Y5
-    VFMADD213PD Y7, Y5, Y2
+    VFMADD213PD Y5, Y7, Y2
     VMOVUPD 64(DI), Y5
-    VFMADD213PD Y7, Y5, Y3
+    VFMADD213PD Y5, Y7, Y3
     VMOVUPD 96(DI), Y5
-    VFMADD213PD Y7, Y5, Y4
+    VFMADD213PD Y5, Y7, Y4
 
     // Accumulate: Σ hist * coef with independent accumulators.
     VMOVUPD 0(SI), Y5

@@ -126,7 +126,9 @@ func sumGo(a []float64) float64 {
 func minGo(a []float64) float64 {
 	m := a[0]
 	for _, v := range a[1:] {
-		m = math.Min(m, v)
+		if v < m {
+			m = v
+		}
 	}
 	return m
 }
@@ -134,7 +136,9 @@ func minGo(a []float64) float64 {
 func maxGo(a []float64) float64 {
 	m := a[0]
 	for _, v := range a[1:] {
-		m = math.Max(m, v)
+		if v > m {
+			m = v
+		}
 	}
 	return m
 }
@@ -207,7 +211,11 @@ func sinCos64Go(sinDst, cosDst, src []float64) {
 
 func round64Go(dst, src []float64) {
 	for i := range dst {
-		dst[i] = math.Round(src[i])
+		if src[i] < 0 {
+			dst[i] = math.Ceil(src[i] - 0.5)
+		} else {
+			dst[i] = math.Floor(src[i] + 0.5)
+		}
 	}
 }
 

@@ -24,7 +24,6 @@ const (
 	fp32MantMask    = 0x7FFFFF
 	fp32Infinity    = 0x7F800000
 	fp32ExpBias     = 127
-	fp32SignMask    = 0x8000
 	fp32MantHighBit = 0x800000
 
 	// Conversion constants

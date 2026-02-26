@@ -48,7 +48,7 @@ func TestInitSSE2(t *testing.T) {
 }
 
 func TestInitAVX512(t *testing.T) {
-	if !cpu.X86.AVX512F || !cpu.X86.AVX512VL {
+	if !cpu.X86.AVX512F || !cpu.X86.AVX512VL || !cpu.X86.AVX512DQ {
 		t.Skip("AVX-512 not supported on this CPU")
 	}
 

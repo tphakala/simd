@@ -36,7 +36,7 @@ func init() {
 	// Select optimal implementation based on CPU features
 	// Priority: AVX-512 > AVX+FMA > SSE2 > Go
 	switch {
-	case cpu.X86.AVX512F && cpu.X86.AVX512VL:
+	case cpu.X86.AVX512F && cpu.X86.AVX512VL && cpu.X86.AVX512DQ:
 		initAVX512()
 	case cpu.X86.AVX && cpu.X86.FMA:
 		initAVX()

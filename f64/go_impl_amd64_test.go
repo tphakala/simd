@@ -50,7 +50,7 @@ func TestInitSSE2(t *testing.T) {
 }
 
 func TestInitAVX512(t *testing.T) {
-	if !cpu.X86.AVX512F || !cpu.X86.AVX512VL {
+	if !cpu.X86.AVX512F || !cpu.X86.AVX512VL || !cpu.X86.AVX512DQ {
 		t.Skip("AVX-512 not supported on this CPU")
 	}
 
@@ -78,8 +78,18 @@ func TestInitAVX512(t *testing.T) {
 }
 
 func TestInitAVXNoFMA(t *testing.T) {
+	if !cpu.X86.AVX {
+		t.Skip("AVX not supported on this CPU")
+	}
+
 	savedDotProduct := dotProductImpl
 	savedMinSIMD := minSIMDElements
+	savedAdd := addImpl
+	t.Cleanup(func() {
+		dotProductImpl = savedDotProduct
+		minSIMDElements = savedMinSIMD
+		addImpl = savedAdd
+	})
 
 	initAVXNoFMA()
 
@@ -104,7 +114,4 @@ func TestInitAVXNoFMA(t *testing.T) {
 	if minSIMDElements != minAVXElements {
 		t.Errorf("initAVXNoFMA didn't set minSIMDElements correctly")
 	}
-
-	dotProductImpl = savedDotProduct
-	minSIMDElements = savedMinSIMD
 }

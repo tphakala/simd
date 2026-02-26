@@ -2684,15 +2684,15 @@ cubic32_avx_loop16:
 
     // Stage 2: p = b + x*p
     VMOVUPS 0(R8), Y5
-    VFMADD213PS Y7, Y5, Y1
+    VFMADD213PS Y5, Y7, Y1
     VMOVUPS 32(R8), Y5
-    VFMADD213PS Y7, Y5, Y2
+    VFMADD213PS Y5, Y7, Y2
 
     // Stage 3: coef = a + x*p
     VMOVUPS 0(DI), Y3
-    VFMADD213PS Y7, Y3, Y1
+    VFMADD213PS Y3, Y7, Y1
     VMOVUPS 32(DI), Y4
-    VFMADD213PS Y7, Y4, Y2
+    VFMADD213PS Y4, Y7, Y2
 
     // Accumulate with independent accumulators.
     VMOVUPS 0(SI), Y5

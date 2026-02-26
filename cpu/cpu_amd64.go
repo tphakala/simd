@@ -15,6 +15,7 @@ func init() {
 	X86.AVX2 = cpu.X86.HasAVX2
 	X86.AVX512F = cpu.X86.HasAVX512F
 	X86.AVX512VL = cpu.X86.HasAVX512VL
+	X86.AVX512DQ = cpu.X86.HasAVX512DQ
 	X86.FMA = cpu.X86.HasFMA
 	X86.BMI1 = cpu.X86.HasBMI1
 	X86.BMI2 = cpu.X86.HasBMI2
@@ -23,7 +24,7 @@ func init() {
 
 func cpuInfo() string {
 	switch {
-	case X86.AVX512F && X86.AVX512VL:
+	case X86.AVX512F && X86.AVX512VL && X86.AVX512DQ:
 		return "AMD64 AVX-512"
 	case X86.AVX && X86.FMA:
 		return "AMD64 AVX+FMA"

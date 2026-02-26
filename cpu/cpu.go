@@ -14,6 +14,7 @@ type Features struct {
 	AVX2     bool
 	AVX512F  bool
 	AVX512VL bool
+	AVX512DQ bool
 	FMA      bool
 	BMI1     bool
 	BMI2     bool
