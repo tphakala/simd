@@ -30,17 +30,11 @@ mul_avx_loop2:
     VSHUFPD $0x0F, Y0, Y0, Y3    // [ai, ai, ai, ai]
     VSHUFPD $0x05, Y1, Y1, Y4    // [bi, br, bi, br]
 
-    VMULPD Y1, Y2, Y2            // [ar*br, ar*bi, ar*br, ar*bi]
-    VMULPD Y4, Y3, Y5            // [ai*bi, ai*br, ai*bi, ai*br]
-
-    // Use separate add/sub then interleave for correct result
-    // real = ar*br - ai*bi (need Y2[even] - Y5[even])
-    // imag = ar*bi + ai*br (need Y2[odd] + Y5[odd])
-    VSUBPD Y5, Y2, Y6            // [ar*br-ai*bi, ar*bi-ai*br, ...]
-    VADDPD Y5, Y2, Y7            // [ar*br+ai*bi, ar*bi+ai*br, ...]
-
-    // Blend: take even from Y6, odd from Y7
-    VBLENDPD $0x0A, Y7, Y6, Y2   // 0x0A = 0b1010, take lanes 1,3 from Y7
+    // Compute cross products, then fused multiply-subtract/add
+    VMULPD Y4, Y3, Y5              // Y5 = [ai*bi, ai*br, ...]
+    VFMADDSUB213PD Y5, Y1, Y2      // Y2 = Y1*Y2 ± Y5
+                                    // even: ar*br - ai*bi (real)
+                                    // odd:  ar*bi + ai*br (imag)
 
     VMOVUPD Y2, (DX)
 
@@ -62,13 +56,8 @@ mul_avx_remainder:
     VSHUFPD $0x03, X0, X0, X3    // [ai, ai]
     VSHUFPD $0x01, X1, X1, X4    // [bi, br]
 
-    VMULPD X1, X2, X2            // [ar*br, ar*bi]
-    VMULPD X4, X3, X5            // [ai*bi, ai*br]
-
-    VSUBPD X5, X2, X6            // [ar*br-ai*bi, ar*bi-ai*br]
-    VADDPD X5, X2, X7            // [ar*br+ai*bi, ar*bi+ai*br]
-
-    VBLENDPD $0x02, X7, X6, X2   // Take lane 1 from X7
+    VMULPD X4, X3, X5              // X5 = [ai*bi, ai*br]
+    VFMADDSUB213PD X5, X1, X2      // X2 = X1*X2 ± X5
 
     VMOVUPD X2, (DX)
 
@@ -96,15 +85,12 @@ mulconj_avx_loop2:
     VSHUFPD $0x0F, Y0, Y0, Y3    // [ai, ai, ...]
     VSHUFPD $0x05, Y1, Y1, Y4    // [bi, br, ...]
 
-    VMULPD Y1, Y2, Y2            // [ar*br, ar*bi, ...]
-    VMULPD Y4, Y3, Y5            // [ai*bi, ai*br, ...]
-
     // For conj: real = ar*br + ai*bi, imag = ai*br - ar*bi
-    VADDPD Y5, Y2, Y6            // [ar*br+ai*bi, ar*bi+ai*br, ...]
-    VSUBPD Y2, Y5, Y7            // [ai*bi-ar*br, ai*br-ar*bi, ...]
-
-    // Blend: even from Y6 (add result), odd from Y7 (sub result)
-    VBLENDPD $0x0A, Y7, Y6, Y2
+    // Compute ar×b_swapped, then FMA with ai×b, producing result in swapped order
+    VMULPD Y4, Y2, Y5              // Y5 = [ar*bi, ar*br, ...]
+    VFMADDSUB213PD Y5, Y1, Y3      // Y3 = Y1*Y3 ± Y5
+                                    // even: ai*br - ar*bi, odd: ai*bi + ar*br
+    VSHUFPD $0x05, Y3, Y3, Y2      // Swap pairs → [ar*br+ai*bi, ai*br-ar*bi, ...]
 
     VMOVUPD Y2, (DX)
 
@@ -125,13 +111,9 @@ mulconj_avx_remainder:
     VSHUFPD $0x03, X0, X0, X3
     VSHUFPD $0x01, X1, X1, X4
 
-    VMULPD X1, X2, X2
-    VMULPD X4, X3, X5
-
-    VADDPD X5, X2, X6
-    VSUBPD X2, X5, X7
-
-    VBLENDPD $0x02, X7, X6, X2
+    VMULPD X4, X2, X5
+    VFMADDSUB213PD X5, X1, X3
+    VSHUFPD $0x01, X3, X3, X2
 
     VMOVUPD X2, (DX)
 
@@ -164,13 +146,9 @@ scale_avx_loop2:
     VMOVDDUP Y0, Y2              // [ar, ar, ...]
     VSHUFPD $0x0F, Y0, Y0, Y3    // [ai, ai, ...]
 
-    VMULPD Y1, Y2, Y2            // [ar*sr, ar*si, ...]
-    VMULPD Y4, Y3, Y5            // [ai*si, ai*sr, ...]
-
-    VSUBPD Y5, Y2, Y6            // [ar*sr-ai*si, ar*si-ai*sr]
-    VADDPD Y5, Y2, Y7            // [ar*sr+ai*si, ar*si+ai*sr]
-
-    VBLENDPD $0x0A, Y7, Y6, Y2
+    VMULPD Y4, Y3, Y5              // Y5 = [ai*si, ai*sr, ...]
+    VFMADDSUB213PD Y5, Y1, Y2      // Y2 = Y1*Y2 ± Y5
+                                    // even: ar*sr - ai*si, odd: ar*si + ai*sr
 
     VMOVUPD Y2, (DX)
 
@@ -192,13 +170,8 @@ scale_avx_remainder:
     VMOVDDUP X0, X2
     VSHUFPD $0x03, X0, X0, X3
 
-    VMULPD X1, X2, X2
     VMULPD X4, X3, X5
-
-    VSUBPD X5, X2, X6
-    VADDPD X5, X2, X7
-
-    VBLENDPD $0x02, X7, X6, X2
+    VFMADDSUB213PD X5, X1, X2
 
     VMOVUPD X2, (DX)
 
@@ -299,16 +272,8 @@ mul_avx512_loop4:
     VSHUFPD $0xFF, Z0, Z0, Z3
     VSHUFPD $0x55, Z1, Z1, Z4
 
-    VMULPD Z1, Z2, Z2
-    VMULPD Z4, Z3, Z5
-
-    VSUBPD Z5, Z2, Z6
-    VADDPD Z5, Z2, Z7
-
-    // Blend with mask 0xAA (10101010) for odd lanes
-    MOVB $0xAA, R8
-    KMOVB R8, K1
-    VBLENDMPD Z7, Z6, K1, Z2
+    VMULPD Z4, Z3, Z5              // Z5 = [ai*bi, ai*br, ...]
+    VFMADDSUB213PD Z5, Z1, Z2      // Z2 = Z1*Z2 ± Z5
 
     VMOVUPD Z2, (DX)
 
@@ -330,13 +295,8 @@ mul_avx512_tail:
     VSHUFPD $0x03, X0, X0, X3
     VSHUFPD $0x01, X1, X1, X4
 
-    VMULPD X1, X2, X2
     VMULPD X4, X3, X5
-
-    VSUBPD X5, X2, X6
-    VADDPD X5, X2, X7
-
-    VBLENDPD $0x02, X7, X6, X2
+    VFMADDSUB213PD X5, X1, X2
 
     VMOVUPD X2, (DX)
 
@@ -369,15 +329,9 @@ mulconj_avx512_loop4:
     VSHUFPD $0xFF, Z0, Z0, Z3
     VSHUFPD $0x55, Z1, Z1, Z4
 
-    VMULPD Z1, Z2, Z2
-    VMULPD Z4, Z3, Z5
-
-    VADDPD Z5, Z2, Z6
-    VSUBPD Z2, Z5, Z7
-
-    MOVB $0xAA, R8
-    KMOVB R8, K1
-    VBLENDMPD Z7, Z6, K1, Z2
+    VMULPD Z4, Z2, Z5              // Z5 = [ar*bi, ar*br, ...]
+    VFMADDSUB213PD Z5, Z1, Z3      // Z3 = Z1*Z3 ± Z5
+    VSHUFPD $0x55, Z3, Z3, Z2      // Swap pairs
 
     VMOVUPD Z2, (DX)
 
@@ -399,13 +353,9 @@ mulconj_avx512_tail:
     VSHUFPD $0x03, X0, X0, X3
     VSHUFPD $0x01, X1, X1, X4
 
-    VMULPD X1, X2, X2
-    VMULPD X4, X3, X5
-
-    VADDPD X5, X2, X6
-    VSUBPD X2, X5, X7
-
-    VBLENDPD $0x02, X7, X6, X2
+    VMULPD X4, X2, X5
+    VFMADDSUB213PD X5, X1, X3
+    VSHUFPD $0x01, X3, X3, X2
 
     VMOVUPD X2, (DX)
 
@@ -440,15 +390,8 @@ scale_avx512_loop4:
     VMOVDDUP Z0, Z2
     VSHUFPD $0xFF, Z0, Z0, Z3
 
-    VMULPD Z1, Z2, Z2
-    VMULPD Z4, Z3, Z5
-
-    VSUBPD Z5, Z2, Z6
-    VADDPD Z5, Z2, Z7
-
-    MOVB $0xAA, R8
-    KMOVB R8, K1
-    VBLENDMPD Z7, Z6, K1, Z2
+    VMULPD Z4, Z3, Z5              // Z5 = [ai*si, ai*sr, ...]
+    VFMADDSUB213PD Z5, Z1, Z2      // Z2 = Z1*Z2 ± Z5
 
     VMOVUPD Z2, (DX)
 
@@ -471,13 +414,8 @@ scale_avx512_tail:
     VMOVDDUP X0, X2
     VSHUFPD $0x03, X0, X0, X3
 
-    VMULPD X1, X2, X2
     VMULPD X4, X3, X5
-
-    VSUBPD X5, X2, X6
-    VADDPD X5, X2, X7
-
-    VBLENDPD $0x02, X7, X6, X2
+    VFMADDSUB213PD X5, X1, X2
 
     VMOVUPD X2, (DX)
 

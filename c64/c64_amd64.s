@@ -33,19 +33,11 @@ mul_avx_loop4:
     // Swap b pairs for cross products: [bi,br,bi,br,...]
     VSHUFPS $0xB1, Y1, Y1, Y4  // Y4 = [bi0,br0,bi1,br1,bi2,br2,bi3,br3]
 
-    // Compute products
-    VMULPS Y1, Y2, Y2        // Y2 = [ar*br, ar*bi, ar*br, ar*bi, ...]
-    VMULPS Y4, Y3, Y5        // Y5 = [ai*bi, ai*br, ai*bi, ai*br, ...]
-
-    // Combine: real = ar*br - ai*bi, imag = ar*bi + ai*br
-    // Use VADDSUBPS: subtracts odd elements, adds even elements
-    // But we need: sub even (real), add odd (imag) - opposite of ADDSUBPS
-    // So use VFMSUBADD231PS or separate add/sub with blend
-    VSUBPS Y5, Y2, Y6        // Y6 = [ar*br-ai*bi, ar*bi-ai*br, ...]
-    VADDPS Y5, Y2, Y7        // Y7 = [ar*br+ai*bi, ar*bi+ai*br, ...]
-
-    // Blend: take even from Y6 (sub result), odd from Y7 (add result)
-    VBLENDPS $0xAA, Y7, Y6, Y2  // 0xAA = 10101010, take lanes 1,3,5,7 from Y7
+    // Compute cross products, then fused multiply-subtract/add
+    VMULPS Y4, Y3, Y5              // Y5 = [ai*bi, ai*br, ...]
+    VFMADDSUB213PS Y5, Y1, Y2      // Y2 = Y1*Y2 ± Y5
+                                    // even: ar*br - ai*bi (real)
+                                    // odd:  ar*bi + ai*br (imag)
 
     VMOVUPS Y2, (DX)
 
@@ -69,13 +61,8 @@ mul_avx_tail:
     VMOVSHDUP X0, X3         // X3 = [ai, ai, ?, ?]
     VSHUFPS $0xB1, X1, X1, X4  // X4 = [bi, br, ?, ?]
 
-    VMULPS X1, X2, X2        // X2 = [ar*br, ar*bi, ?, ?]
-    VMULPS X4, X3, X5        // X5 = [ai*bi, ai*br, ?, ?]
-
-    VSUBPS X5, X2, X6        // X6 = [ar*br-ai*bi, ar*bi-ai*br, ?, ?]
-    VADDPS X5, X2, X7        // X7 = [ar*br+ai*bi, ar*bi+ai*br, ?, ?]
-
-    VBLENDPS $0x02, X7, X6, X2  // Take lane 1 from X7
+    VMULPS X4, X3, X5              // X5 = [ai*bi, ai*br, ?, ?]
+    VFMADDSUB213PS X5, X1, X2      // X2 = X1*X2 ± X5
 
     VMOVSD X2, (DX)
 
@@ -109,15 +96,12 @@ mulconj_avx_loop4:
     VMOVSHDUP Y0, Y3         // [ai, ai, ...]
     VSHUFPS $0xB1, Y1, Y1, Y4  // [bi, br, ...]
 
-    VMULPS Y1, Y2, Y2        // [ar*br, ar*bi, ...]
-    VMULPS Y4, Y3, Y5        // [ai*bi, ai*br, ...]
-
     // For conj: real = ar*br + ai*bi, imag = ai*br - ar*bi
-    VADDPS Y5, Y2, Y6        // [ar*br+ai*bi, ar*bi+ai*br, ...]
-    VSUBPS Y2, Y5, Y7        // [ai*bi-ar*br, ai*br-ar*bi, ...]
-
-    // Blend: even from Y6 (add result), odd from Y7 (sub result)
-    VBLENDPS $0xAA, Y7, Y6, Y2
+    // Compute ar×b_swapped, then FMA with ai×b, producing result in swapped order
+    VMULPS Y4, Y2, Y5              // Y5 = [ar*bi, ar*br, ...]
+    VFMADDSUB213PS Y5, Y1, Y3      // Y3 = Y1*Y3 ± Y5
+                                    // even: ai*br - ar*bi, odd: ai*bi + ar*br
+    VSHUFPS $0xB1, Y3, Y3, Y2      // Swap pairs → [ar*br+ai*bi, ai*br-ar*bi, ...]
 
     VMOVUPS Y2, (DX)
 
@@ -139,13 +123,9 @@ mulconj_avx_tail:
     VMOVSHDUP X0, X3
     VSHUFPS $0xB1, X1, X1, X4
 
-    VMULPS X1, X2, X2
-    VMULPS X4, X3, X5
-
-    VADDPS X5, X2, X6
-    VSUBPS X2, X5, X7
-
-    VBLENDPS $0x02, X7, X6, X2
+    VMULPS X4, X2, X5
+    VFMADDSUB213PS X5, X1, X3
+    VSHUFPS $0xB1, X3, X3, X2
 
     VMOVSD X2, (DX)
 
@@ -184,13 +164,9 @@ scale_avx_loop4:
     VMOVSLDUP Y0, Y2         // [ar, ar, ...]
     VMOVSHDUP Y0, Y3         // [ai, ai, ...]
 
-    VMULPS Y1, Y2, Y2        // [ar*sr, ar*si, ...]
-    VMULPS Y4, Y3, Y5        // [ai*si, ai*sr, ...]
-
-    VSUBPS Y5, Y2, Y6        // [ar*sr-ai*si, ar*si-ai*sr]
-    VADDPS Y5, Y2, Y7        // [ar*sr+ai*si, ar*si+ai*sr]
-
-    VBLENDPS $0xAA, Y7, Y6, Y2
+    VMULPS Y4, Y3, Y5              // Y5 = [ai*si, ai*sr, ...]
+    VFMADDSUB213PS Y5, Y1, Y2      // Y2 = Y1*Y2 ± Y5
+                                    // even: ar*sr - ai*si, odd: ar*si + ai*sr
 
     VMOVUPS Y2, (DX)
 
@@ -211,13 +187,8 @@ scale_avx_tail:
     VMOVSLDUP X0, X2
     VMOVSHDUP X0, X3
 
-    VMULPS X1, X2, X2
     VMULPS X4, X3, X5
-
-    VSUBPS X5, X2, X6
-    VADDPS X5, X2, X7
-
-    VBLENDPS $0x02, X7, X6, X2
+    VFMADDSUB213PS X5, X1, X2
 
     VMOVSD X2, (DX)
 
@@ -336,16 +307,8 @@ mul_avx512_loop8:
     VMOVSHDUP Z0, Z3         // Broadcast imag parts
     VSHUFPS $0xB1, Z1, Z1, Z4  // Swap pairs
 
-    VMULPS Z1, Z2, Z2        // [ar*br, ar*bi, ...]
-    VMULPS Z4, Z3, Z5        // [ai*bi, ai*br, ...]
-
-    VSUBPS Z5, Z2, Z6
-    VADDPS Z5, Z2, Z7
-
-    // Blend with mask 0xAAAA (alternating)
-    MOVW $0xAAAA, R8
-    KMOVW R8, K1
-    VBLENDMPS Z7, Z6, K1, Z2
+    VMULPS Z4, Z3, Z5              // Z5 = [ai*bi, ai*br, ...]
+    VFMADDSUB213PS Z5, Z1, Z2      // Z2 = Z1*Z2 ± Z5
 
     VMOVUPS Z2, (DX)
 
@@ -367,13 +330,8 @@ mul_avx512_tail:
     VMOVSHDUP X0, X3
     VSHUFPS $0xB1, X1, X1, X4
 
-    VMULPS X1, X2, X2
     VMULPS X4, X3, X5
-
-    VSUBPS X5, X2, X6
-    VADDPS X5, X2, X7
-
-    VBLENDPS $0x02, X7, X6, X2
+    VFMADDSUB213PS X5, X1, X2
 
     VMOVSD X2, (DX)
 
@@ -406,15 +364,9 @@ mulconj_avx512_loop8:
     VMOVSHDUP Z0, Z3
     VSHUFPS $0xB1, Z1, Z1, Z4
 
-    VMULPS Z1, Z2, Z2
-    VMULPS Z4, Z3, Z5
-
-    VADDPS Z5, Z2, Z6
-    VSUBPS Z2, Z5, Z7
-
-    MOVW $0xAAAA, R8
-    KMOVW R8, K1
-    VBLENDMPS Z7, Z6, K1, Z2
+    VMULPS Z4, Z2, Z5              // Z5 = [ar*bi, ar*br, ...]
+    VFMADDSUB213PS Z5, Z1, Z3      // Z3 = Z1*Z3 ± Z5
+    VSHUFPS $0xB1, Z3, Z3, Z2      // Swap pairs
 
     VMOVUPS Z2, (DX)
 
@@ -436,13 +388,9 @@ mulconj_avx512_tail:
     VMOVSHDUP X0, X3
     VSHUFPS $0xB1, X1, X1, X4
 
-    VMULPS X1, X2, X2
-    VMULPS X4, X3, X5
-
-    VADDPS X5, X2, X6
-    VSUBPS X2, X5, X7
-
-    VBLENDPS $0x02, X7, X6, X2
+    VMULPS X4, X2, X5
+    VFMADDSUB213PS X5, X1, X3
+    VSHUFPS $0xB1, X3, X3, X2
 
     VMOVSD X2, (DX)
 
@@ -476,15 +424,8 @@ scale_avx512_loop8:
     VMOVSLDUP Z0, Z2
     VMOVSHDUP Z0, Z3
 
-    VMULPS Z1, Z2, Z2
-    VMULPS Z4, Z3, Z5
-
-    VSUBPS Z5, Z2, Z6
-    VADDPS Z5, Z2, Z7
-
-    MOVW $0xAAAA, R8
-    KMOVW R8, K1
-    VBLENDMPS Z7, Z6, K1, Z2
+    VMULPS Z4, Z3, Z5              // Z5 = [ai*si, ai*sr, ...]
+    VFMADDSUB213PS Z5, Z1, Z2      // Z2 = Z1*Z2 ± Z5
 
     VMOVUPS Z2, (DX)
 
@@ -505,13 +446,8 @@ scale_avx512_tail:
     VMOVSLDUP X0, X2
     VMOVSHDUP X0, X3
 
-    VMULPS X1, X2, X2
     VMULPS X4, X3, X5
-
-    VSUBPS X5, X2, X6
-    VADDPS X5, X2, X7
-
-    VBLENDPS $0x02, X7, X6, X2
+    VFMADDSUB213PS X5, X1, X2
 
     VMOVSD X2, (DX)
 
