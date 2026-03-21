@@ -4,8 +4,9 @@ import "math"
 
 // Loop unroll factors for SIMD-width matching
 const (
-	unrollFactor = 8 // Match AVX 256-bit = 8 x float32
-	unrollMask   = unrollFactor - 1
+	unrollFactor      = 8 // Match AVX 256-bit = 8 x float32
+	unrollMask        = unrollFactor - 1
+	float32SignBitPos = 31 // IEEE 754 float32 sign bit position
 )
 
 // Numerical stability thresholds
@@ -105,7 +106,7 @@ func maxGo(a []float32) float32 {
 
 func absGo(dst, a []float32) {
 	for i := range dst {
-		dst[i] = math.Float32frombits(math.Float32bits(a[i]) &^ (1 << 31))
+		dst[i] = math.Float32frombits(math.Float32bits(a[i]) &^ (1 << float32SignBitPos))
 	}
 }
 
