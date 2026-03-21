@@ -21,15 +21,13 @@ func DotProduct(a, b []float64) float64 {
 	return dotProduct(a, b)
 }
 
-// DotProductUnsafe computes the dot product without length validation.
-// This is a low-overhead variant for performance-critical code paths.
+// DotProductUnsafe computes the dot product without empty-slice checks.
+// It skips the len==0 guard in [DotProduct] but is otherwise identical:
+// the underlying SIMD kernels and Go fallback clamp to min(len(a), len(b)) internally,
+// so mismatched lengths do not cause out-of-bounds access.
 //
 // PRECONDITIONS (caller must ensure):
-//   - len(a) == len(b)
-//   - len(a) > 0
-//
-// Violating these preconditions results in undefined behavior (panic or incorrect results).
-// Use DotProduct for safe operation with automatic length handling.
+//   - len(a) > 0 && len(b) > 0
 func DotProductUnsafe(a, b []float64) float64 {
 	return dotProduct(a, b)
 }
