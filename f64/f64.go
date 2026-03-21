@@ -105,6 +105,10 @@ func Sum(a []float64) float64 {
 
 // Min returns the minimum value in the slice.
 // Returns +Inf for empty slices.
+//
+// NaN handling: unlike [math.Min], this function does not propagate NaN.
+// If the input contains NaN values, the result is architecture-dependent.
+// Callers that require strict NaN semantics should filter NaN values first.
 func Min(a []float64) float64 {
 	if len(a) == 0 {
 		return posInf
@@ -114,6 +118,10 @@ func Min(a []float64) float64 {
 
 // Max returns the maximum value in the slice.
 // Returns -Inf for empty slices.
+//
+// NaN handling: unlike [math.Max], this function does not propagate NaN.
+// If the input contains NaN values, the result is architecture-dependent.
+// Callers that require strict NaN semantics should filter NaN values first.
 func Max(a []float64) float64 {
 	if len(a) == 0 {
 		return negInf
