@@ -179,6 +179,61 @@ func TestAbs(t *testing.T) {
 	}
 }
 
+func TestAbs_SpecialValues(t *testing.T) {
+	posInf := math.Inf(1)
+	negInf := math.Inf(-1)
+	nan := math.NaN()
+	negZero := math.Float64frombits(1 << 63)
+
+	tests := []struct {
+		name string
+		in   float64
+		want float64
+	}{
+		{"positive_inf", posInf, posInf},
+		{"negative_inf", negInf, posInf},
+		{"negative_zero", negZero, 0},
+		{"positive_zero", 0, 0},
+		{"smallest_normal", math.SmallestNonzeroFloat64, math.SmallestNonzeroFloat64},
+		{"neg_smallest_normal", -math.SmallestNonzeroFloat64, math.SmallestNonzeroFloat64},
+		{"max_float64", math.MaxFloat64, math.MaxFloat64},
+		{"neg_max_float64", -math.MaxFloat64, math.MaxFloat64},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := make([]float64, 1)
+			Abs(dst, []float64{tt.in})
+			if math.Float64bits(dst[0]) != math.Float64bits(tt.want) {
+				t.Errorf("Abs(%v) = %v (bits: %016x), want %v (bits: %016x)",
+					tt.in, dst[0], math.Float64bits(dst[0]), tt.want, math.Float64bits(tt.want))
+			}
+		})
+	}
+
+	// NaN: abs(NaN) should be NaN (sign bit cleared, but still NaN)
+	t.Run("nan", func(t *testing.T) {
+		dst := make([]float64, 1)
+		Abs(dst, []float64{nan})
+		if !math.IsNaN(dst[0]) {
+			t.Errorf("Abs(NaN) = %v, want NaN", dst[0])
+		}
+	})
+
+	// Negative NaN: abs(-NaN) should be NaN
+	t.Run("negative_nan", func(t *testing.T) {
+		negNaN := math.Float64frombits(math.Float64bits(nan) | (1 << 63))
+		dst := make([]float64, 1)
+		Abs(dst, []float64{negNaN})
+		if !math.IsNaN(dst[0]) {
+			t.Errorf("Abs(-NaN) = %v, want NaN", dst[0])
+		}
+		if math.Signbit(dst[0]) {
+			t.Errorf("Abs(-NaN) has sign bit set, want positive NaN")
+		}
+	})
+}
+
 func TestNeg(t *testing.T) {
 	a := []float64{1, -2, 3, -4, 5}
 	dst := make([]float64, len(a))

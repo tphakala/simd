@@ -101,6 +101,61 @@ func TestAbs(t *testing.T) {
 	}
 }
 
+func TestAbs_SpecialValues(t *testing.T) {
+	posInf := float32(math.Inf(1))
+	negInf := float32(math.Inf(-1))
+	nan := float32(math.NaN())
+	negZero := math.Float32frombits(1 << 31) // -0
+
+	tests := []struct {
+		name string
+		in   float32
+		want float32
+	}{
+		{"positive_inf", posInf, posInf},
+		{"negative_inf", negInf, posInf},
+		{"negative_zero", negZero, 0},
+		{"positive_zero", 0, 0},
+		{"smallest_normal", math.SmallestNonzeroFloat32, math.SmallestNonzeroFloat32},
+		{"neg_smallest_normal", -math.SmallestNonzeroFloat32, math.SmallestNonzeroFloat32},
+		{"max_float32", math.MaxFloat32, math.MaxFloat32},
+		{"neg_max_float32", -math.MaxFloat32, math.MaxFloat32},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := make([]float32, 1)
+			Abs(dst, []float32{tt.in})
+			if math.Float32bits(dst[0]) != math.Float32bits(tt.want) {
+				t.Errorf("Abs(%v) = %v (bits: %08x), want %v (bits: %08x)",
+					tt.in, dst[0], math.Float32bits(dst[0]), tt.want, math.Float32bits(tt.want))
+			}
+		})
+	}
+
+	// NaN: abs(NaN) should be NaN (sign bit cleared, but still NaN)
+	t.Run("nan", func(t *testing.T) {
+		dst := make([]float32, 1)
+		Abs(dst, []float32{nan})
+		if !math.IsNaN(float64(dst[0])) {
+			t.Errorf("Abs(NaN) = %v, want NaN", dst[0])
+		}
+	})
+
+	// Negative NaN: abs(-NaN) should be NaN
+	t.Run("negative_nan", func(t *testing.T) {
+		negNaN := math.Float32frombits(math.Float32bits(nan) | (1 << 31))
+		dst := make([]float32, 1)
+		Abs(dst, []float32{negNaN})
+		if !math.IsNaN(float64(dst[0])) {
+			t.Errorf("Abs(-NaN) = %v, want NaN", dst[0])
+		}
+		if math.Signbit(float64(dst[0])) {
+			t.Errorf("Abs(-NaN) has sign bit set, want positive NaN")
+		}
+	})
+}
+
 func TestFMA(t *testing.T) {
 	a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
 	b := []float32{2, 2, 2, 2, 2, 2, 2, 2}
