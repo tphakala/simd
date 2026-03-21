@@ -105,7 +105,7 @@ func TestAbs_SpecialValues(t *testing.T) {
 	posInf := float32(math.Inf(1))
 	negInf := float32(math.Inf(-1))
 	nan := float32(math.NaN())
-	negZero := float32(math.Float64frombits(1 << 63)) // -0
+	negZero := math.Float32frombits(1 << 31) // -0
 
 	tests := []struct {
 		name string
@@ -126,8 +126,9 @@ func TestAbs_SpecialValues(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dst := make([]float32, 1)
 			Abs(dst, []float32{tt.in})
-			if dst[0] != tt.want {
-				t.Errorf("Abs(%v) = %v, want %v", tt.in, dst[0], tt.want)
+			if math.Float32bits(dst[0]) != math.Float32bits(tt.want) {
+				t.Errorf("Abs(%v) = %v (bits: %08x), want %v (bits: %08x)",
+					tt.in, dst[0], math.Float32bits(dst[0]), tt.want, math.Float32bits(tt.want))
 			}
 		})
 	}

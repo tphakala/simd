@@ -204,8 +204,9 @@ func TestAbs_SpecialValues(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dst := make([]float64, 1)
 			Abs(dst, []float64{tt.in})
-			if dst[0] != tt.want {
-				t.Errorf("Abs(%v) = %v, want %v", tt.in, dst[0], tt.want)
+			if math.Float64bits(dst[0]) != math.Float64bits(tt.want) {
+				t.Errorf("Abs(%v) = %v (bits: %016x), want %v (bits: %016x)",
+					tt.in, dst[0], math.Float64bits(dst[0]), tt.want, math.Float64bits(tt.want))
 			}
 		})
 	}
