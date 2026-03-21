@@ -105,7 +105,7 @@ func maxGo(a []float32) float32 {
 
 func absGo(dst, a []float32) {
 	for i := range dst {
-		dst[i] = float32(math.Abs(float64(a[i])))
+		dst[i] = math.Float32frombits(math.Float32bits(a[i]) &^ (1 << 31))
 	}
 }
 
