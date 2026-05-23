@@ -90,13 +90,17 @@ fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 |                 | `Div(dst, a, b)`                    | Element-wise division         | 8x / 4x / 2x                        |
 |                 | `Scale(dst, a, s)`                  | Multiply by scalar            | 8x / 4x / 2x                        |
 |                 | `AddScalar(dst, a, s)`              | Add scalar                    | 8x / 4x / 2x                        |
+|                 | `SubFromScalar(dst, a, s)`          | Scalar minus vector           | 8x / 4x / 2x (composed SIMD)        |
 |                 | `FMA(dst, a, b, c)`                 | Fused multiply-add: a\*b+c    | 8x / 4x / 2x                        |
 |                 | `AddScaled(dst, alpha, s)`          | dst += alpha\*s (axpy)        | 8x / 4x / 2x                        |
 | **Unary**       | `Abs(dst, a)`                       | Absolute value                | 8x / 4x / 2x                        |
 |                 | `Neg(dst, a)`                       | Negation                      | 8x / 4x / 2x                        |
 |                 | `Sqrt(dst, a)`                      | Square root                   | 8x / 4x / 2x                        |
 |                 | `Reciprocal(dst, a)`                | Reciprocal (1/x)              | 8x / 4x / 2x                        |
+|                 | `Round(dst, src)`                   | Round half away from zero     | 4x (AVX) / 2x (NEON) / Go fallback  |
 | **Reduction**   | `DotProduct(a, b)`                  | Dot product                   | 8x / 4x / 2x                        |
+|                 | `WeightedSum(w, src)`               | Weighted sum Σ(wᵢ·srcᵢ)       | 8x / 4x / 2x                        |
+|                 | `SumOfSquares(src)`                 | Sum of squares Σ(srcᵢ²)       | 8x / 4x / 2x                        |
 |                 | `Sum(a)`                            | Sum of elements               | 8x / 4x / 2x                        |
 |                 | `Min(a)`                            | Minimum value                 | 8x / 4x / 2x                        |
 |                 | `Max(a)`                            | Maximum value                 | 8x / 4x / 2x                        |
