@@ -494,11 +494,12 @@ func TestSigmoid(t *testing.T) {
 // Edge Case Tests
 // =============================================================================
 
-func TestEmptySlices(_ *testing.T) {
+func TestEmptySlices(t *testing.T) {
 	// These should not panic
 	var empty []Float16
 
 	DotProduct(empty, empty)
+	DotProductF32(empty, empty)
 	Add(empty, empty, empty)
 	Sub(empty, empty, empty)
 	Mul(empty, empty, empty)
@@ -510,6 +511,20 @@ func TestEmptySlices(_ *testing.T) {
 	ReLU(empty, empty)
 	Sigmoid(empty, empty)
 	Mean(empty)
+
+	// Reductions with sentinel returns on empty input.
+	if got := Min(empty); got != 0x7C00 {
+		t.Errorf("Min(empty): got 0x%04X, want 0x7C00 (+Inf)", got)
+	}
+	if got := Max(empty); got != 0xFC00 {
+		t.Errorf("Max(empty): got 0x%04X, want 0xFC00 (-Inf)", got)
+	}
+	if got := MinIdx(empty); got != -1 {
+		t.Errorf("MinIdx(empty): got %d, want -1", got)
+	}
+	if got := MaxIdx(empty); got != -1 {
+		t.Errorf("MaxIdx(empty): got %d, want -1", got)
+	}
 
 	var emptyF32 []float32
 	var emptyF16 []Float16
