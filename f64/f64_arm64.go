@@ -64,13 +64,11 @@ func addScalar(dst, a []float64, s float64) {
 }
 
 func subFromScalar64(dst, a []float64, s float64) {
-	// Compose using existing NEON primitives: (s - a) == (-a) + s.
-	if hasNEON && len(dst) >= 2 {
-		neg64(dst, a)
-		addScalar(dst, dst, s)
-		return
-	}
-	subFromScalarGo(dst, a, s)
+	// Compose using already-dispatched primitives: (s - a) == (-a) + s.
+	// neg64 and addScalar each gate on hasNEON internally and fall back to
+	// pure Go when NEON is unavailable, so no extra guard is needed here.
+	neg64(dst, a)
+	addScalar(dst, dst, s)
 }
 
 func sum(a []float64) float64 {

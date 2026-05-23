@@ -36,7 +36,10 @@ func DotProductUnsafe(a, b []float64) float64 {
 // This is equivalent to [DotProduct]; the alternate name documents intent at the call site
 // when the operands have asymmetric roles (signal vs. weights).
 func WeightedSum(weights, src []float64) float64 {
-	return DotProduct(weights, src)
+	if len(weights) == 0 || len(src) == 0 {
+		return 0
+	}
+	return dotProduct(weights, src)
 }
 
 // SumOfSquares returns Σ(src[i]²).

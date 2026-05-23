@@ -238,14 +238,11 @@ func addScalar(dst, a []float64, s float64) {
 }
 
 func subFromScalar64(dst, a []float64, s float64) {
-	// Compose using existing SIMD primitives: (s - a) == (-a) + s.
-	// Each step uses a SIMD-vectorized kernel; two passes over memory but stays in cache.
-	if cpu.X86.AVX || cpu.X86.SSE2 {
-		neg64(dst, a)
-		addScalar(dst, dst, s)
-		return
-	}
-	subFromScalarGo(dst, a, s)
+	// Compose using already-dispatched primitives: (s - a) == (-a) + s.
+	// Each step is internally vectorized or falls back to Go via the global impl
+	// pointers, so this works on every supported CPU without an extra guard.
+	neg64(dst, a)
+	addScalar(dst, dst, s)
 }
 
 func sum(a []float64) float64 {
@@ -381,8 +378,9 @@ func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 }
 
 func sigmoid64(dst, src []float64) {
-	// Use AVX+FMA if available and have enough elements
-	if cpu.X86.AVX && cpu.X86.FMA && len(dst) >= minAVXElements {
+	// sigmoidAVX uses VMULPD/VADDPD/VDIVPD only - no FMA instructions - so it
+	// is safe on AVX-only CPUs.
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
 		sigmoidAVX(dst, src)
 		return
 	}
