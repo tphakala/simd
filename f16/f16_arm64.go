@@ -59,6 +59,19 @@ func dotProduct(a, b []Float16) float32 {
 	return dotProductGo(a, b)
 }
 
+func dotProductF32(a, b []Float16) float32 {
+	n := min(len(a), len(b))
+	if hasFP16 && n >= neonWidth {
+		// Process vectorized portion
+		nVec := (n / neonWidth) * neonWidth
+		result := dotProductWideNEON(a[:nVec], b[:nVec])
+		// Handle remainder with Go
+		result += dotProductGo(a[nVec:n], b[nVec:n])
+		return result
+	}
+	return dotProductGo(a, b)
+}
+
 func add(dst, a, b []Float16) {
 	n := len(dst)
 	if hasFP16 && n >= neonWidth {
@@ -337,6 +350,9 @@ func fromFloat32SliceNEON(dst []Float16, src []float32)
 
 //go:noescape
 func dotProductNEON(a, b []Float16) float32
+
+//go:noescape
+func dotProductWideNEON(a, b []Float16) float32
 
 //go:noescape
 func addNEON(dst, a, b []Float16)

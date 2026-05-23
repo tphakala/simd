@@ -22,6 +22,10 @@ func dotProduct(a, b []Float16) float32 {
 	return dotProductGo(a, b)
 }
 
+func dotProductF32(a, b []Float16) float32 {
+	return dotProductGo(a, b)
+}
+
 func add(dst, a, b []Float16) {
 	addGo(dst, a, b)
 }

@@ -133,6 +133,52 @@ dot16_reduce:
     FMOVS F4, ret+48(FP)
     RET
 
+// func dotProductWideNEON(a, b []Float16) float32
+// FP32-widened dot product: each FP16 lane is widened to FP32 BEFORE the
+// multiply, so |a[i] * b[i]| > 65504 does not saturate. Length must be a
+// multiple of 8 (caller guarantees via dispatch).
+TEXT ·dotProductWideNEON(SB), NOSPLIT, $0-52
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R2
+    MOVD b_base+24(FP), R1
+
+    // Zero accumulators (4 FP32 each)
+    VEOR V4.B16, V4.B16, V4.B16
+    VEOR V5.B16, V5.B16, V5.B16
+
+    LSR $3, R2, R3
+    CBZ R3, dotF32_reduce
+
+dotF32_loop8:
+    VLD1 (R0), [V0.H8]          // Load 8 FP16 from a
+    ADD $16, R0
+    VLD1 (R1), [V1.H8]          // Load 8 FP16 from b
+    ADD $16, R1
+
+    // Widen to FP32 BEFORE multiplying. Each FCVTL/FCVTL2 expands 4 FP16
+    // lanes into 4 FP32 lanes.
+    WORD $0x0E217802            // FCVTL  V2.4S, V0.4H (a lower)
+    WORD $0x4E217803            // FCVTL2 V3.4S, V0.8H (a upper)
+    WORD $0x0E217826            // FCVTL  V6.4S, V1.4H (b lower)
+    WORD $0x4E217827            // FCVTL2 V7.4S, V1.8H (b upper)
+
+    // Fused multiply-add in FP32: V4 += V2*V6 ; V5 += V3*V7
+    WORD $0x4E26CC44            // FMLA V4.4S, V2.4S, V6.4S
+    WORD $0x4E27CC65            // FMLA V5.4S, V3.4S, V7.4S
+
+    SUB $1, R3
+    CBNZ R3, dotF32_loop8
+
+    // Combine accumulators
+    WORD $0x4E25D484            // FADD V4.4S, V4.4S, V5.4S
+
+dotF32_reduce:
+    // Horizontal sum of V4.4S -> S4
+    WORD $0x6E24D484            // FADDP V4.4S, V4.4S, V4.4S
+    WORD $0x7E30D884            // FADDP S4, V4.2S
+    FMOVS F4, ret+48(FP)
+    RET
+
 // func addNEON(dst, a, b []Float16)
 // Length must be multiple of 8.
 TEXT ·addNEON(SB), NOSPLIT, $0-72

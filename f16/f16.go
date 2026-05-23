@@ -66,12 +66,36 @@ func FromFloat32Slice(dst []Float16, src []float32) {
 // Returns sum(a[i] * b[i]) for i in 0..min(len(a), len(b)).
 // Accumulates in float32 for numerical stability.
 //
-// Uses native FP16 SIMD on ARM64 with FP16 support.
+// Uses native FP16 SIMD on ARM64 with FP16 support. On ARM64 with FP16
+// SIMD, intermediate products are computed in FP16 and may saturate to
+// ±Inf when |a[i] * b[i]| > 65504. Use DotProductF32 if the dynamic range
+// of your inputs can produce such products.
 func DotProduct(a, b []Float16) float32 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
 	}
 	return dotProduct(a, b)
+}
+
+// DotProductF32 computes the dot product with FP32 widening before multiply.
+//
+// Unlike DotProduct, intermediate products do not saturate when |a[i] * b[i]|
+// exceeds the FP16 representable maximum (~65504). The cost on ARM64 with
+// native FP16 SIMD is roughly 1.5-2x more work than DotProduct.
+//
+// Use this for audio/signal-processing inputs whose per-element products may
+// fall outside the FP16 range. For ML workloads with inputs normalized to
+// [-1, 1], DotProduct is faster with equivalent accuracy on every supported
+// platform.
+//
+// Returns sum(float32(a[i]) * float32(b[i])) for i in 0..min(len(a), len(b)),
+// or 0 if either slice is empty. Accumulates in float32 for numerical
+// stability.
+func DotProductF32(a, b []Float16) float32 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	return dotProductF32(a, b)
 }
 
 // Add computes element-wise addition: dst[i] = a[i] + b[i].
@@ -165,17 +189,19 @@ func Sigmoid(dst, src []Float16) {
 }
 
 // Min returns the minimum value.
+// Returns +Inf for empty slices.
 func Min(a []Float16) Float16 {
 	if len(a) == 0 {
-		return fromFloat32Go(float32(math.Inf(1)))
+		return fp16Infinity
 	}
 	return min16(a)
 }
 
 // Max returns the maximum value.
+// Returns -Inf for empty slices.
 func Max(a []Float16) Float16 {
 	if len(a) == 0 {
-		return fromFloat32Go(float32(math.Inf(-1)))
+		return fp16Infinity | fp16SignMask
 	}
 	return max16(a)
 }
