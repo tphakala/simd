@@ -1149,23 +1149,6 @@ func TestMaxIdxGo_EmptySlice(t *testing.T) {
 	}
 }
 
-func TestDotProductF32_NoOverflow(t *testing.T) {
-	const n = 8
-	a := make([]Float16, n)
-	b := make([]Float16, n)
-	for i := range a {
-		a[i] = FromFloat32(300)
-		b[i] = FromFloat32(300)
-	}
-	got := DotProductF32(a, b)
-	// 300 is exact in FP16 (1.171875 * 2^8). Each product 300*300 = 90000
-	// overflows FP16 max (65504) but fits FP32 easily; sum is 720000.
-	const want = float32(720000)
-	if got != want {
-		t.Fatalf("DotProductF32: got %v, want %v", got, want)
-	}
-}
-
 func TestDotProductF32_MatchesGoSum(t *testing.T) {
 	sizes := []int{8, 16, 64, 256, 1024}
 	rng := rand.New(rand.NewSource(42))
@@ -1224,10 +1207,15 @@ func TestDotProductF32_TailLessThanWidth(t *testing.T) {
 	}
 }
 
-// TestDotProductF32_Repro22 reproduces the scenario from issue #22 and logs
-// both APIs for cross-platform comparison. Asserts only DotProductF32; the
-// DotProduct value is logged for the PR description (it is +Inf on ARM64
-// with native FP16 SIMD and 720000 on AMD64).
+// TestDotProductF32_Repro22 reproduces the scenario from issue #22 and
+// asserts that DotProductF32 does not saturate. 300 is exact in FP16
+// (1.171875 * 2^8), each product 300*300 = 90000 overflows FP16 max
+// (65504) but fits FP32 easily; sum of 8 products is 720000.
+//
+// Logs both APIs for cross-platform comparison: DotProduct is +Inf on
+// ARM64 with native FP16 SIMD and 720000 on AMD64 (where the Go fallback
+// already widens before multiplying). The log line is captured in PR
+// descriptions to document the platform-specific saturation.
 func TestDotProductF32_Repro22(t *testing.T) {
 	const n = 8
 	a := make([]Float16, n)

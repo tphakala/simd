@@ -294,9 +294,10 @@ func sigmoidGo(dst, src []Float16) {
 }
 
 // minGo returns the minimum value.
+// Returns +Inf (FP16 0x7C00) for empty slices.
 func minGo(a []Float16) Float16 {
 	if len(a) == 0 {
-		return fromFloat32Go(float32(math.Inf(1)))
+		return fp16Infinity
 	}
 	minVal := a[0]
 	minF := toFloat32Go(minVal)
@@ -311,9 +312,10 @@ func minGo(a []Float16) Float16 {
 }
 
 // maxGo returns the maximum value.
+// Returns -Inf (FP16 0xFC00) for empty slices.
 func maxGo(a []Float16) Float16 {
 	if len(a) == 0 {
-		return fromFloat32Go(float32(math.Inf(-1)))
+		return fp16Infinity | fp16SignMask
 	}
 	maxVal := a[0]
 	maxF := toFloat32Go(maxVal)

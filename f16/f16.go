@@ -189,17 +189,19 @@ func Sigmoid(dst, src []Float16) {
 }
 
 // Min returns the minimum value.
+// Returns +Inf for empty slices.
 func Min(a []Float16) Float16 {
 	if len(a) == 0 {
-		return fromFloat32Go(float32(math.Inf(1)))
+		return fp16Infinity
 	}
 	return min16(a)
 }
 
 // Max returns the maximum value.
+// Returns -Inf for empty slices.
 func Max(a []Float16) Float16 {
 	if len(a) == 0 {
-		return fromFloat32Go(float32(math.Inf(-1)))
+		return fp16Infinity | fp16SignMask
 	}
 	return max16(a)
 }
