@@ -41,36 +41,64 @@ func dotProductGo(a, b []float32) float32 {
 }
 
 func addGo(dst, a, b []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + b[i]
 	}
 }
 
 func subGo(dst, a, b []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] - b[i]
 	}
 }
 
 func mulGo(dst, a, b []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * b[i]
 	}
 }
 
 func divGo(dst, a, b []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] / b[i]
 	}
 }
 
 func scaleGo(dst, a []float32, s float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * s
 	}
 }
 
 func addScalarGo(dst, a []float32, s float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + s
 	}
@@ -105,24 +133,42 @@ func maxGo(a []float32) float32 {
 }
 
 func absGo(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = math.Float32frombits(math.Float32bits(a[i]) &^ (1 << float32SignBitPos))
 	}
 }
 
 func negGo(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = -a[i]
 	}
 }
 
 func fmaGo(dst, a, b, c []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
+	_ = c[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i]*b[i] + c[i]
 	}
 }
 
 func clampGo(dst, a []float32, minVal, maxVal float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		v := a[i]
 		if v < minVal {

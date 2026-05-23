@@ -159,6 +159,11 @@ func fromFloat32SliceGo(dst []Float16, src []float32) {
 // dotProductGo computes dot product using pure Go (converts to float32).
 func dotProductGo(a, b []Float16) float32 {
 	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	_ = a[n-1]
+	_ = b[n-1]
 	var sum float32
 	for i := range n {
 		sum += toFloat32Go(a[i]) * toFloat32Go(b[i])
@@ -168,6 +173,11 @@ func dotProductGo(a, b []Float16) float32 {
 
 // addGo computes element-wise addition.
 func addGo(dst, a, b []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) + toFloat32Go(b[i]))
 	}
@@ -175,6 +185,11 @@ func addGo(dst, a, b []Float16) {
 
 // subGo computes element-wise subtraction.
 func subGo(dst, a, b []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) - toFloat32Go(b[i]))
 	}
@@ -182,6 +197,11 @@ func subGo(dst, a, b []Float16) {
 
 // mulGo computes element-wise multiplication.
 func mulGo(dst, a, b []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) * toFloat32Go(b[i]))
 	}
@@ -189,6 +209,10 @@ func mulGo(dst, a, b []Float16) {
 
 // scaleGo multiplies each element by a scalar.
 func scaleGo(dst, a []Float16, s Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	sf := toFloat32Go(s)
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) * sf)
@@ -197,6 +221,12 @@ func scaleGo(dst, a []Float16, s Float16) {
 
 // fmaGo computes fused multiply-add.
 func fmaGo(dst, a, b, c []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
+	_ = c[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i])*toFloat32Go(b[i]) + toFloat32Go(c[i]))
 	}
@@ -213,6 +243,10 @@ func sumGo(a []Float16) float32 {
 
 // absGo computes element-wise absolute value.
 func absGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		// Clear sign bit
 		dst[i] = a[i] & fp16AbsMask
@@ -221,6 +255,10 @@ func absGo(dst, a []Float16) {
 
 // negGo computes element-wise negation.
 func negGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		// Flip sign bit
 		dst[i] = a[i] ^ fp16SignMask
@@ -229,6 +267,10 @@ func negGo(dst, a []Float16) {
 
 // reluGo computes ReLU activation.
 func reluGo(dst, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		if src[i]&0x8000 != 0 { // negative (sign bit set)
 			dst[i] = 0
@@ -240,6 +282,10 @@ func reluGo(dst, src []Float16) {
 
 // sigmoidGo computes sigmoid activation.
 func sigmoidGo(dst, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		x := toFloat32Go(src[i])
 		// sigmoid(x) = 1 / (1 + exp(-x))
@@ -277,6 +323,11 @@ func maxGo(a []Float16) Float16 {
 
 // divGo computes element-wise division.
 func divGo(dst, a, b []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) / toFloat32Go(b[i]))
 	}
@@ -284,6 +335,10 @@ func divGo(dst, a, b []Float16) {
 
 // addScalarGo adds a scalar to each element.
 func addScalarGo(dst, a []Float16, s Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	sf := toFloat32Go(s)
 	for i := range dst {
 		dst[i] = fromFloat32Go(toFloat32Go(a[i]) + sf)
@@ -292,6 +347,10 @@ func addScalarGo(dst, a []Float16, s Float16) {
 
 // clampGo clamps each element to [minVal, maxVal].
 func clampGo(dst, a []Float16, minVal, maxVal Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	minF := toFloat32Go(minVal)
 	maxF := toFloat32Go(maxVal)
 	for i := range dst {
@@ -307,6 +366,10 @@ func clampGo(dst, a []Float16, minVal, maxVal Float16) {
 
 // sqrtGo computes element-wise square root.
 func sqrtGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(float32(math.Sqrt(float64(toFloat32Go(a[i])))))
 	}
