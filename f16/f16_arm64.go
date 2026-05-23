@@ -60,10 +60,15 @@ func dotProduct(a, b []Float16) float32 {
 }
 
 func dotProductF32(a, b []Float16) float32 {
-	// Task 3 will swap this to a NEON kernel that widens FP16 to FP32 first.
-	// For now, the Go fallback already widens before multiplying, so it
-	// gives the right answer on every input, just slower than the eventual
-	// NEON path.
+	n := min(len(a), len(b))
+	if hasFP16 && n >= neonWidth {
+		// Process vectorized portion
+		nVec := (n / neonWidth) * neonWidth
+		result := dotProductWideNEON(a[:nVec], b[:nVec])
+		// Handle remainder with Go
+		result += dotProductGo(a[nVec:n], b[nVec:n])
+		return result
+	}
 	return dotProductGo(a, b)
 }
 
@@ -345,6 +350,9 @@ func fromFloat32SliceNEON(dst []Float16, src []float32)
 
 //go:noescape
 func dotProductNEON(a, b []Float16) float32
+
+//go:noescape
+func dotProductWideNEON(a, b []Float16) float32
 
 //go:noescape
 func addNEON(dst, a, b []Float16)
