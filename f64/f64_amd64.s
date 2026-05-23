@@ -13,7 +13,9 @@ DATA absf64mask<>+0x30(SB)/8, $0x7fffffffffffffff
 DATA absf64mask<>+0x38(SB)/8, $0x7fffffffffffffff
 GLOBL absf64mask<>(SB), RODATA|NOPTR, $64
 
-// Constants for Round (half away from zero): trunc(abs(x)+0.5) with sign restore.
+// Constants for Round (half away from zero): result = trunc(x) + copysign(1, x)
+// when |x - trunc(x)| >= 0.5, otherwise result = trunc(x). Ties (|frac|==0.5)
+// round away from zero, matching math.Round.
 DATA roundf64_signmask<>+0x00(SB)/8, $0x8000000000000000
 DATA roundf64_signmask<>+0x08(SB)/8, $0x8000000000000000
 DATA roundf64_signmask<>+0x10(SB)/8, $0x8000000000000000
