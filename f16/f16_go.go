@@ -295,6 +295,9 @@ func sigmoidGo(dst, src []Float16) {
 
 // minGo returns the minimum value.
 func minGo(a []Float16) Float16 {
+	if len(a) == 0 {
+		return fromFloat32Go(float32(math.Inf(1)))
+	}
 	minVal := a[0]
 	minF := toFloat32Go(minVal)
 	for i := 1; i < len(a); i++ {
@@ -309,6 +312,9 @@ func minGo(a []Float16) Float16 {
 
 // maxGo returns the maximum value.
 func maxGo(a []Float16) Float16 {
+	if len(a) == 0 {
+		return fromFloat32Go(float32(math.Inf(-1)))
+	}
 	maxVal := a[0]
 	maxF := toFloat32Go(maxVal)
 	for i := 1; i < len(a); i++ {
@@ -409,7 +415,11 @@ func tanhGo(dst, src []Float16) {
 }
 
 // minIdxGo returns the index of the minimum value.
+// Returns -1 for empty slices.
 func minIdxGo(a []Float16) int {
+	if len(a) == 0 {
+		return -1
+	}
 	minIdx := 0
 	minF := toFloat32Go(a[0])
 	for i := 1; i < len(a); i++ {
@@ -423,7 +433,11 @@ func minIdxGo(a []Float16) int {
 }
 
 // maxIdxGo returns the index of the maximum value.
+// Returns -1 for empty slices.
 func maxIdxGo(a []Float16) int {
+	if len(a) == 0 {
+		return -1
+	}
 	maxIdx := 0
 	maxF := toFloat32Go(a[0])
 	for i := 1; i < len(a); i++ {

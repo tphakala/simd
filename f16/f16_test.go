@@ -1121,3 +1121,29 @@ func TestNewEmptySlices(_ *testing.T) {
 	ExpInPlace(empty)
 	TanhInPlace(empty)
 }
+
+func TestMinGo_EmptySlice(t *testing.T) {
+	got := minGo(nil)
+	if got != 0x7C00 { // +Inf in FP16
+		t.Errorf("minGo(nil): got 0x%04X, want 0x7C00 (+Inf)", got)
+	}
+}
+
+func TestMaxGo_EmptySlice(t *testing.T) {
+	got := maxGo(nil)
+	if got != 0xFC00 { // -Inf in FP16
+		t.Errorf("maxGo(nil): got 0x%04X, want 0xFC00 (-Inf)", got)
+	}
+}
+
+func TestMinIdxGo_EmptySlice(t *testing.T) {
+	if got := minIdxGo(nil); got != -1 {
+		t.Errorf("minIdxGo(nil): got %d, want -1", got)
+	}
+}
+
+func TestMaxIdxGo_EmptySlice(t *testing.T) {
+	if got := maxIdxGo(nil); got != -1 {
+		t.Errorf("maxIdxGo(nil): got %d, want -1", got)
+	}
+}

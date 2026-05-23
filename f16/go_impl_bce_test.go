@@ -31,4 +31,8 @@ func TestGoFallbacks_EmptyDst(_ *testing.T) {
 	fromFloat32SliceGo(dst, src32)
 	dotProductGo(nil, src)
 	dotProductGo(src, nil)
+	_ = minGo(nil)
+	_ = maxGo(nil)
+	_ = minIdxGo(nil)
+	_ = maxIdxGo(nil)
 }
