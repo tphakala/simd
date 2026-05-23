@@ -1163,3 +1163,33 @@ clampscale64_neon_scalar_loop:
 
 clampscale64_neon_done:
     RET
+
+// ============================================================================
+// roundNEON: round-half-away-from-zero using FRINTA
+// ============================================================================
+
+// func roundNEON(dst, src []float64)
+TEXT ·roundNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R2
+    MOVD src_base+24(FP), R1
+
+    LSR $1, R2, R3
+    CBZ R3, round_scalar
+
+round_loop2:
+    VLD1.P 16(R1), [V0.D2]
+    WORD $0x6E618800           // FRINTA V0.2D, V0.2D
+    VST1.P [V0.D2], 16(R0)
+    SUB $1, R3
+    CBNZ R3, round_loop2
+
+round_scalar:
+    AND $1, R2
+    CBZ R2, round_done
+    FMOVD (R1), F0
+    WORD $0x1E664000           // FRINTA D0, D0
+    FMOVD F0, (R0)
+
+round_done:
+    RET

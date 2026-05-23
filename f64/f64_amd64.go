@@ -48,6 +48,7 @@ var (
 	negImpl               unaryOpFunc
 	sqrtImpl              unaryOpFunc
 	reciprocalImpl        unaryOpFunc
+	roundImpl             unaryOpFunc
 	fmaImpl               fmaFunc
 	clampImpl             clampFunc
 	varianceImpl          varianceFunc
@@ -58,13 +59,15 @@ var (
 )
 
 func init() {
-	// Select optimal implementation based on CPU features
-	// Priority: AVX-512 > AVX+FMA > SSE2 > Go
+	// Select optimal implementation based on CPU features.
+	// Priority: AVX-512 > AVX+FMA > AVX (no FMA) > SSE2 > Go
 	switch {
 	case cpu.X86.AVX512F && cpu.X86.AVX512VL:
 		initAVX512()
 	case cpu.X86.AVX && cpu.X86.FMA:
 		initAVX()
+	case cpu.X86.AVX:
+		initAVXNoFMA()
 	case cpu.X86.SSE2:
 		initSSE2()
 	default:
@@ -88,6 +91,7 @@ func initAVX512() {
 	negImpl = negAVX512
 	sqrtImpl = sqrtAVX512
 	reciprocalImpl = reciprocalAVX512
+	roundImpl = roundAVX
 	fmaImpl = fmaAVX512
 	clampImpl = clampAVX512
 	varianceImpl = varianceAVX512
@@ -98,6 +102,7 @@ func initAVX512() {
 }
 
 func initAVX() {
+	minSIMDElements = minAVXElements
 	dotProductImpl = dotProductAVX
 	addImpl = addAVX
 	subImpl = subAVX
@@ -112,6 +117,7 @@ func initAVX() {
 	negImpl = negAVX
 	sqrtImpl = sqrtAVX
 	reciprocalImpl = reciprocalAVX
+	roundImpl = roundAVX
 	fmaImpl = fmaAVX
 	clampImpl = clampAVX
 	varianceImpl = varianceAVX
@@ -119,6 +125,36 @@ func initAVX() {
 	interleave2Impl = interleave2AVX
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledAVX
+}
+
+// initAVXNoFMA runs on AVX-capable CPUs that lack FMA (rare but possible:
+// some early Sandy/Ivy Bridge generations, certain Atom/Pentium SKUs).
+// AVX kernels that don't depend on FMA stay on AVX paths; FMA-dependent kernels
+// fall back to SSE2 variants which use scalar/SSE multiply-add sequences.
+func initAVXNoFMA() {
+	minSIMDElements = minAVXElements
+	dotProductImpl = dotProductSSE2
+	addImpl = addAVX
+	subImpl = subAVX
+	mulImpl = mulAVX
+	divImpl = divAVX
+	scaleImpl = scaleAVX
+	addScalarImpl = addScalarAVX
+	sumImpl = sumAVX
+	minImpl = minAVX
+	maxImpl = maxAVX
+	absImpl = absAVX
+	negImpl = negAVX
+	sqrtImpl = sqrtAVX
+	reciprocalImpl = reciprocalAVX
+	roundImpl = roundAVX
+	fmaImpl = fmaSSE2
+	clampImpl = clampAVX
+	varianceImpl = varianceSSE2
+	euclideanDistanceImpl = euclideanDistanceSSE2
+	interleave2Impl = interleave2AVX
+	deinterleave2Impl = deinterleave2AVX
+	addScaledImpl = addScaledSSE2
 }
 
 func initSSE2() {
@@ -136,6 +172,7 @@ func initSSE2() {
 	negImpl = negSSE2
 	sqrtImpl = sqrtSSE2
 	reciprocalImpl = reciprocalSSE2
+	roundImpl = round64Go
 	fmaImpl = fmaSSE2
 	clampImpl = clampSSE2
 	varianceImpl = varianceSSE2
@@ -160,6 +197,7 @@ func initGo() {
 	negImpl = negGo
 	sqrtImpl = sqrt64Go
 	reciprocalImpl = reciprocal64Go
+	roundImpl = round64Go
 	fmaImpl = fmaGo
 	clampImpl = clampGo
 	varianceImpl = variance64Go
@@ -199,6 +237,17 @@ func addScalar(dst, a []float64, s float64) {
 	addScalarImpl(dst, a, s)
 }
 
+func subFromScalar64(dst, a []float64, s float64) {
+	// Compose using existing SIMD primitives: (s - a) == (-a) + s.
+	// Each step uses a SIMD-vectorized kernel; two passes over memory but stays in cache.
+	if cpu.X86.AVX || cpu.X86.SSE2 {
+		neg64(dst, a)
+		addScalar(dst, dst, s)
+		return
+	}
+	subFromScalarGo(dst, a, s)
+}
+
 func sum(a []float64) float64 {
 	return sumImpl(a)
 }
@@ -235,6 +284,10 @@ func fma64(dst, a, b, c []float64) {
 
 func clamp64(dst, a []float64, minVal, maxVal float64) {
 	clampImpl(dst, a, minVal, maxVal)
+}
+
+func round64(dst, src []float64) {
+	roundImpl(dst, src)
 }
 
 func sqrt64(dst, a []float64) {
@@ -412,6 +465,9 @@ func absAVX(dst, a []float64)
 
 //go:noescape
 func negAVX(dst, a []float64)
+
+//go:noescape
+func roundAVX(dst, src []float64)
 
 //go:noescape
 func fmaAVX(dst, a, b, c []float64)

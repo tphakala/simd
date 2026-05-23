@@ -38,36 +38,64 @@ func dotProductGo(a, b []float64) float64 {
 }
 
 func addGo(dst, a, b []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + b[i]
 	}
 }
 
 func subGo(dst, a, b []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] - b[i]
 	}
 }
 
 func mulGo(dst, a, b []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * b[i]
 	}
 }
 
 func divGo(dst, a, b []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] / b[i]
 	}
 }
 
 func scaleGo(dst, a []float64, s float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] * s
 	}
 }
 
 func addScalarGo(dst, a []float64, s float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = a[i] + s
 	}
@@ -102,24 +130,42 @@ func maxGo(a []float64) float64 {
 }
 
 func absGo(dst, a []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = math.Abs(a[i])
 	}
 }
 
 func negGo(dst, a []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = -a[i]
 	}
 }
 
 func fmaGo(dst, a, b, c []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = b[len(dst)-1]
+	_ = c[len(dst)-1]
 	for i := range dst {
 		dst[i] = math.FMA(a[i], b[i], c[i])
 	}
 }
 
 func clampGo(dst, a []float64, minVal, maxVal float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		v := a[i]
 		if v < minVal {
@@ -134,6 +180,18 @@ func clampGo(dst, a []float64, minVal, maxVal float64) {
 func sqrt64Go(dst, a []float64) {
 	for i := range dst {
 		dst[i] = math.Sqrt(a[i])
+	}
+}
+
+func round64Go(dst, src []float64) {
+	for i := range dst {
+		dst[i] = math.Round(src[i])
+	}
+}
+
+func subFromScalarGo(dst, a []float64, s float64) {
+	for i := range dst {
+		dst[i] = s - a[i]
 	}
 }
 

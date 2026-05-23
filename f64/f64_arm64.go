@@ -63,6 +63,16 @@ func addScalar(dst, a []float64, s float64) {
 	addScalarGo(dst, a, s)
 }
 
+func subFromScalar64(dst, a []float64, s float64) {
+	// Compose using existing NEON primitives: (s - a) == (-a) + s.
+	if hasNEON && len(dst) >= 2 {
+		neg64(dst, a)
+		addScalar(dst, dst, s)
+		return
+	}
+	subFromScalarGo(dst, a, s)
+}
+
 func sum(a []float64) float64 {
 	if hasNEON && len(a) >= 2 {
 		return sumNEON(a)
@@ -122,6 +132,14 @@ func sqrt64(dst, a []float64) {
 		return
 	}
 	sqrt64Go(dst, a)
+}
+
+func round64(dst, src []float64) {
+	if hasNEON && len(dst) >= 2 {
+		roundNEON(dst, src)
+		return
+	}
+	round64Go(dst, src)
 }
 
 func reciprocal64(dst, a []float64) {
@@ -228,6 +246,9 @@ func sqrtNEON(dst, a []float64)
 
 //go:noescape
 func reciprocalNEON(dst, a []float64)
+
+//go:noescape
+func roundNEON(dst, src []float64)
 
 //go:noescape
 func varianceNEON(a []float64, mean float64) float64
