@@ -93,6 +93,37 @@ func BenchmarkDotProduct(b *testing.B) {
 	}
 }
 
+// BenchmarkDotProductF32 measures the FP32-widened DotProduct variant
+// against the native (potentially-saturating) DotProduct and the pure-Go
+// reference. On ARM64 with asimdhp, Native uses dotProductNEON (FP16 FMUL)
+// while F32Wide uses dotProductWideNEON (FP32 FMLA after widening). On
+// AMD64 both F32Wide and Native call dotProductGo, so they should report
+// near-identical times.
+func BenchmarkDotProductF32(b *testing.B) {
+	for _, size := range benchSizes {
+		a16, b16, _, _ := makeBenchDataF16(size)
+
+		b.Run(fmt.Sprintf("F32Wide_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink32 = DotProductF32(a16, b16)
+			}
+			reportThroughput16(b, size*2)
+		})
+		b.Run(fmt.Sprintf("Native_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink32 = DotProduct(a16, b16)
+			}
+			reportThroughput16(b, size*2)
+		})
+		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink32 = dotProductGo(a16, b16)
+			}
+			reportThroughput16(b, size*2)
+		})
+	}
+}
+
 // =============================================================================
 // Element-wise Binary Operations
 // =============================================================================
