@@ -32,6 +32,24 @@ func DotProductUnsafe(a, b []float64) float64 {
 	return dotProduct(a, b)
 }
 
+// WeightedSum returns Σ(weights[i] * src[i]) for i in 0..min(len(weights), len(src)).
+// This is equivalent to [DotProduct]; the alternate name documents intent at the call site
+// when the operands have asymmetric roles (signal vs. weights).
+func WeightedSum(weights, src []float64) float64 {
+	if len(weights) == 0 || len(src) == 0 {
+		return 0
+	}
+	return dotProduct(weights, src)
+}
+
+// SumOfSquares returns Σ(src[i]²).
+func SumOfSquares(src []float64) float64 {
+	if len(src) == 0 {
+		return 0
+	}
+	return dotProduct(src, src)
+}
+
 // Add computes element-wise addition: dst[i] = a[i] + b[i].
 // Processes min(len(dst), len(a), len(b)) elements.
 func Add(dst, a, b []float64) {
@@ -91,6 +109,16 @@ func AddScalar(dst, a []float64, s float64) {
 		return
 	}
 	addScalar(dst[:n], a[:n], s)
+}
+
+// SubFromScalar subtracts each element from a scalar: dst[i] = s - a[i].
+// Processes min(len(dst), len(a)) elements.
+func SubFromScalar(dst, a []float64, s float64) {
+	n := min(len(a), len(dst))
+	if n == 0 {
+		return
+	}
+	subFromScalar64(dst[:n], a[:n], s)
 }
 
 // Sum returns the sum of all elements in the slice.
@@ -164,6 +192,16 @@ func Clamp(dst, a []float64, minVal, maxVal float64) {
 		return
 	}
 	clamp64(dst[:n], a[:n], minVal, maxVal)
+}
+
+// Round rounds each element to the nearest integer, half away from zero:
+// dst[i] = round(src[i]). Processes min(len(dst), len(src)) elements.
+func Round(dst, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	round64(dst[:n], src[:n])
 }
 
 func minLen(a, b, c int) int {

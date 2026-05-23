@@ -13,6 +13,33 @@ DATA absf64mask<>+0x30(SB)/8, $0x7fffffffffffffff
 DATA absf64mask<>+0x38(SB)/8, $0x7fffffffffffffff
 GLOBL absf64mask<>(SB), RODATA|NOPTR, $64
 
+// Constants for Round (half away from zero): result = trunc(x) + copysign(1, x)
+// when |x - trunc(x)| >= 0.5, otherwise result = trunc(x). Ties (|frac|==0.5)
+// round away from zero, matching math.Round.
+DATA roundf64_signmask<>+0x00(SB)/8, $0x8000000000000000
+DATA roundf64_signmask<>+0x08(SB)/8, $0x8000000000000000
+DATA roundf64_signmask<>+0x10(SB)/8, $0x8000000000000000
+DATA roundf64_signmask<>+0x18(SB)/8, $0x8000000000000000
+GLOBL roundf64_signmask<>(SB), RODATA|NOPTR, $32
+
+DATA roundf64_absmask<>+0x00(SB)/8, $0x7fffffffffffffff
+DATA roundf64_absmask<>+0x08(SB)/8, $0x7fffffffffffffff
+DATA roundf64_absmask<>+0x10(SB)/8, $0x7fffffffffffffff
+DATA roundf64_absmask<>+0x18(SB)/8, $0x7fffffffffffffff
+GLOBL roundf64_absmask<>(SB), RODATA|NOPTR, $32
+
+DATA roundf64_half<>+0x00(SB)/8, $0x3fe0000000000000
+DATA roundf64_half<>+0x08(SB)/8, $0x3fe0000000000000
+DATA roundf64_half<>+0x10(SB)/8, $0x3fe0000000000000
+DATA roundf64_half<>+0x18(SB)/8, $0x3fe0000000000000
+GLOBL roundf64_half<>(SB), RODATA|NOPTR, $32
+
+DATA roundf64_one<>+0x00(SB)/8, $0x3ff0000000000000
+DATA roundf64_one<>+0x08(SB)/8, $0x3ff0000000000000
+DATA roundf64_one<>+0x10(SB)/8, $0x3ff0000000000000
+DATA roundf64_one<>+0x18(SB)/8, $0x3ff0000000000000
+GLOBL roundf64_one<>(SB), RODATA|NOPTR, $32
+
 // ============================================================================
 // AVX+FMA IMPLEMENTATIONS (256-bit, 4x float64 per iteration)
 // ============================================================================
@@ -3097,34 +3124,101 @@ TEXT ·cubicInterpDotAVX(SB), NOSPLIT, $0-136
     // Broadcast x to all lanes of Y7
     VBROADCASTSD x+120(FP), Y7
 
-    // Initialize accumulator to zero
-    VXORPD Y0, Y0, Y0          // Y0 = accumulator
+    // Independent accumulators for ILP.
+    VXORPD Y0, Y0, Y0
+    VXORPD Y11, Y11, Y11
+    VXORPD Y12, Y12, Y12
+    VXORPD Y13, Y13, Y13
 
-    // Process 4 elements per iteration (one YMM register)
+    // Process 16 elements per iteration (4 YMM × 4 doubles)
     MOVQ CX, AX
-    SHRQ $2, AX                // AX = len / 4
+    SHRQ $4, AX                // AX = len / 16
+    JZ   cubic_avx_loop4_check
+
+cubic_avx_loop16:
+    // Multi-stage Horner with four independent chains.
+    // VFMADD213PD dst, mul, add: dst = dst*mul + add (Y7 = broadcast x).
+
+    // Stage 1: p = c + x*d (4 parallel chains)
+    VMOVUPD 0(R9), Y1
+    VMOVUPD 0(R10), Y5
+    VFMADD231PD Y5, Y7, Y1
+
+    VMOVUPD 32(R9), Y2
+    VMOVUPD 32(R10), Y5
+    VFMADD231PD Y5, Y7, Y2
+
+    VMOVUPD 64(R9), Y3
+    VMOVUPD 64(R10), Y5
+    VFMADD231PD Y5, Y7, Y3
+
+    VMOVUPD 96(R9), Y4
+    VMOVUPD 96(R10), Y5
+    VFMADD231PD Y5, Y7, Y4
+
+    // Stage 2: p = b + x*p
+    VMOVUPD 0(R8), Y5
+    VFMADD213PD Y5, Y7, Y1
+    VMOVUPD 32(R8), Y5
+    VFMADD213PD Y5, Y7, Y2
+    VMOVUPD 64(R8), Y5
+    VFMADD213PD Y5, Y7, Y3
+    VMOVUPD 96(R8), Y5
+    VFMADD213PD Y5, Y7, Y4
+
+    // Stage 3: coef = a + x*p
+    VMOVUPD 0(DI), Y5
+    VFMADD213PD Y5, Y7, Y1
+    VMOVUPD 32(DI), Y5
+    VFMADD213PD Y5, Y7, Y2
+    VMOVUPD 64(DI), Y5
+    VFMADD213PD Y5, Y7, Y3
+    VMOVUPD 96(DI), Y5
+    VFMADD213PD Y5, Y7, Y4
+
+    // Accumulate: Σ hist * coef with independent accumulators.
+    VMOVUPD 0(SI), Y5
+    VFMADD231PD Y5, Y1, Y0
+    VMOVUPD 32(SI), Y5
+    VFMADD231PD Y5, Y2, Y11
+    VMOVUPD 64(SI), Y5
+    VFMADD231PD Y5, Y3, Y12
+    VMOVUPD 96(SI), Y5
+    VFMADD231PD Y5, Y4, Y13
+
+    ADDQ $128, SI
+    ADDQ $128, DI
+    ADDQ $128, R8
+    ADDQ $128, R9
+    ADDQ $128, R10
+    DECQ AX
+    JNZ  cubic_avx_loop16
+
+    // Combine accumulators.
+    VADDPD Y11, Y0, Y0
+    VADDPD Y12, Y0, Y0
+    VADDPD Y13, Y0, Y0
+
+cubic_avx_loop4_check:
+    // Handle remaining 4-element vectors.
+    ANDQ $15, CX
+    MOVQ CX, AX
+    SHRQ $2, AX
     JZ   cubic_avx_remainder
 
 cubic_avx_loop4:
-    // Load coefficient vectors
-    VMOVUPD (R10), Y1          // Y1 = d[i:i+4]
-    VMOVUPD (R9), Y2           // Y2 = c[i:i+4]
-    VMOVUPD (R8), Y3           // Y3 = b[i:i+4]
-    VMOVUPD (DI), Y4           // Y4 = a[i:i+4]
-    VMOVUPD (SI), Y5           // Y5 = hist[i:i+4]
+    VMOVUPD (R10), Y1          // d
+    VMOVUPD (R9), Y2           // c
+    VMOVUPD (R8), Y3           // b
+    VMOVUPD (DI), Y4           // a
+    VMOVUPD (SI), Y5           // hist
 
     // Horner's method: coef = a + x*(b + x*(c + x*d))
-    // Step 1: Y2 = c + x*d (using VFMADD231: dst = src1*src2 + dst)
-    VFMADD231PD Y1, Y7, Y2     // Y2 = d*x + c
-    // Step 2: Y3 = b + x*(c + x*d)
-    VFMADD231PD Y2, Y7, Y3     // Y3 = (d*x+c)*x + b
-    // Step 3: Y4 = a + x*(b + x*(c + x*d))
-    VFMADD231PD Y3, Y7, Y4     // Y4 = ((d*x+c)*x+b)*x + a = coef
+    VFMADD231PD Y1, Y7, Y2
+    VFMADD231PD Y2, Y7, Y3
+    VFMADD231PD Y3, Y7, Y4
+    VFMADD231PD Y5, Y4, Y0
 
-    // Accumulate: acc += hist * coef
-    VFMADD231PD Y5, Y4, Y0     // Y0 = hist * coef + Y0
-
-    // Advance pointers
     ADDQ $32, SI
     ADDQ $32, DI
     ADDQ $32, R8
@@ -3532,5 +3626,76 @@ tanh64_scalar:
     JNZ  tanh64_scalar
 
 tanh64_done:
+    VZEROUPPER
+    RET
+
+// ============================================================================
+// roundAVX: round-half-away-from-zero
+// ============================================================================
+
+// func roundAVX(dst, src []float64)
+TEXT ·roundAVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    // Algorithm: round-half-away-from-zero matching math.Round.
+    //   t   = trunc(x)
+    //   f   = x - t                     // signed fractional part in (-1, 1)
+    //   inc = (|f| >= 0.5) ? sign(x)*1.0 : 0
+    //   result = t + inc
+    // This avoids the trunc(|x|+0.5) overcounting at |x|=nextafter(0.5,0),
+    // where the FP add rounds up to exactly 1.0.
+    VMOVUPD roundf64_absmask<>(SB), Y3
+    VMOVUPD roundf64_signmask<>(SB), Y4
+    VMOVUPD roundf64_half<>(SB), Y5
+    VMOVUPD roundf64_one<>(SB), Y11
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   round_avx_remainder
+
+round_avx_loop4:
+    VMOVUPD (SI), Y0                  // Y0 = x
+    VROUNDPD $3, Y0, Y1                // Y1 = trunc(x)
+    VSUBPD Y1, Y0, Y2                  // Y2 = x - trunc(x) = signed frac
+    VANDPD Y3, Y2, Y6                  // Y6 = |frac|
+    VCMPPD $5, Y5, Y6, Y7              // Y7 = mask: |frac| NLT 0.5  (|frac| >= 0.5)
+    VANDPD Y11, Y7, Y8                 // Y8 = 1.0 where mask, else 0
+    VANDPD Y4, Y0, Y9                  // Y9 = signbit(x)
+    VORPD Y9, Y8, Y8                   // Y8 = ±1.0 (or ±0.0 when no increment)
+    VADDPD Y8, Y1, Y1                  // Y1 = trunc(x) + ±1 or +0
+    VMOVUPD Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  round_avx_loop4
+
+round_avx_remainder:
+    ANDQ $3, CX
+    JZ   round_avx_done
+
+    VMOVSD roundf64_absmask<>(SB), X3
+    VMOVSD roundf64_signmask<>(SB), X4
+    VMOVSD roundf64_half<>(SB), X5
+    VMOVSD roundf64_one<>(SB), X11
+
+round_avx_scalar:
+    VMOVSD (SI), X0                   // X0 = x
+    VROUNDSD $3, X0, X0, X1            // X1 = trunc(x)
+    VSUBSD X1, X0, X2                  // X2 = signed frac
+    VANDPD X3, X2, X6                  // X6 = |frac|
+    VCMPSD $5, X5, X6, X7              // X7 = mask: |frac| NLT 0.5
+    VANDPD X11, X7, X8                 // X8 = 1.0 where mask else 0
+    VANDPD X4, X0, X9                  // X9 = signbit(x)
+    VORPD X9, X8, X8                   // X8 = ±1 or ±0
+    VADDSD X8, X1, X1                  // X1 = trunc(x) + inc
+    VMOVSD X1, (DX)
+    ADDQ $8, SI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  round_avx_scalar
+
+round_avx_done:
     VZEROUPPER
     RET
