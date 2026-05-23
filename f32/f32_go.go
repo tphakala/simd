@@ -227,12 +227,20 @@ func convolveValidMultiGo(dsts [][]float32, signal []float32, kernels [][]float3
 }
 
 func sqrt32Go(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = float32(math.Sqrt(float64(a[i])))
 	}
 }
 
 func reciprocal32Go(dst, a []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = 1.0 / a[i]
 	}
@@ -338,6 +346,10 @@ func cubicInterpDotGo(hist, a, b, c, d []float32, x float32) float32 {
 // sigmoid32Go computes sigmoid(x) = 1 / (1 + e^(-x)) using math.Exp.
 // This is accurate but slower than SIMD approximations.
 func sigmoid32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		x := src[i]
 		// Clamp extreme values for numerical stability
@@ -354,6 +366,10 @@ func sigmoid32Go(dst, src []float32) {
 
 // relu32Go computes ReLU(x) = max(0, x).
 func relu32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		if src[i] > 0 {
 			dst[i] = src[i]
@@ -365,6 +381,10 @@ func relu32Go(dst, src []float32) {
 
 // clampScale32Go performs fused clamp and scale operation.
 func clampScale32Go(dst, src []float32, minVal, maxVal, scale float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		v := src[i]
 		if v < minVal {
@@ -379,6 +399,10 @@ func clampScale32Go(dst, src []float32, minVal, maxVal, scale float32) {
 // tanh32Go computes hyperbolic tangent using math.Tanh for accuracy.
 // This is the accurate implementation used as a fallback when SIMD is unavailable.
 func tanh32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = float32(math.Tanh(float64(src[i])))
 	}
@@ -386,6 +410,10 @@ func tanh32Go(dst, src []float32) {
 
 // exp32Go computes e^x using math.Exp.
 func exp32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		x := src[i]
 		// Clamp extreme values

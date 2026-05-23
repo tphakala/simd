@@ -178,24 +178,40 @@ func clampGo(dst, a []float64, minVal, maxVal float64) {
 }
 
 func sqrt64Go(dst, a []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = math.Sqrt(a[i])
 	}
 }
 
 func round64Go(dst, src []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = math.Round(src[i])
 	}
 }
 
 func subFromScalarGo(dst, a []float64, s float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = s - a[i]
 	}
 }
 
 func reciprocal64Go(dst, a []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = 1.0 / a[i]
 	}
@@ -369,6 +385,10 @@ func maxIdxGo64(a []float64) int {
 }
 
 func addScaledGo64(dst []float64, alpha float64, s []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = s[len(dst)-1]
 	for i := range dst {
 		dst[i] += alpha * s[i]
 	}
@@ -377,6 +397,10 @@ func addScaledGo64(dst []float64, alpha float64, s []float64) {
 // sigmoid64Go computes sigmoid(x) = 1 / (1 + e^(-x)) using math.Exp.
 // This is accurate but slower than SIMD approximations.
 func sigmoid64Go(dst, src []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		x := src[i]
 		// Clamp extreme values for numerical stability
@@ -393,6 +417,10 @@ func sigmoid64Go(dst, src []float64) {
 
 // relu64Go computes ReLU activation: dst[i] = max(0, src[i]).
 func relu64Go(dst, src []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		if src[i] > 0 {
 			dst[i] = src[i]
@@ -405,6 +433,10 @@ func relu64Go(dst, src []float64) {
 // clampScale64Go performs fused clamp and scale operation.
 // dst[i] = (clamp(src[i], minVal, maxVal) - minVal) * scale
 func clampScale64Go(dst, src []float64, minVal, maxVal, scale float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		v := src[i]
 		if v < minVal {
@@ -419,6 +451,10 @@ func clampScale64Go(dst, src []float64, minVal, maxVal, scale float64) {
 // tanh64Go computes hyperbolic tangent using math.Tanh for accuracy.
 // This is the accurate implementation used as a fallback when SIMD is unavailable.
 func tanh64Go(dst, src []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = math.Tanh(src[i])
 	}
@@ -427,6 +463,10 @@ func tanh64Go(dst, src []float64) {
 // exp64Go computes exponential function: dst[i] = e^src[i].
 // Uses math.Exp with overflow/underflow protection.
 func exp64Go(dst, src []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		x := src[i]
 		// Clamp to prevent overflow/underflow

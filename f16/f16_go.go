@@ -377,6 +377,10 @@ func sqrtGo(dst, a []Float16) {
 
 // reciprocalGo computes element-wise reciprocal.
 func reciprocalGo(dst, a []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(1.0 / toFloat32Go(a[i]))
 	}
@@ -384,6 +388,10 @@ func reciprocalGo(dst, a []Float16) {
 
 // expGo computes element-wise exponential.
 func expGo(dst, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(float32(math.Exp(float64(toFloat32Go(src[i])))))
 	}
@@ -391,6 +399,10 @@ func expGo(dst, src []Float16) {
 
 // tanhGo computes element-wise hyperbolic tangent.
 func tanhGo(dst, src []Float16) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
 	for i := range dst {
 		dst[i] = fromFloat32Go(float32(math.Tanh(float64(toFloat32Go(src[i])))))
 	}
