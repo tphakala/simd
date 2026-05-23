@@ -3,6 +3,7 @@ package f16
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/tphakala/simd/cpu"
@@ -1145,5 +1146,100 @@ func TestMinIdxGo_EmptySlice(t *testing.T) {
 func TestMaxIdxGo_EmptySlice(t *testing.T) {
 	if got := maxIdxGo(nil); got != -1 {
 		t.Errorf("maxIdxGo(nil): got %d, want -1", got)
+	}
+}
+
+func TestDotProductF32_NoOverflow(t *testing.T) {
+	const n = 8
+	a := make([]Float16, n)
+	b := make([]Float16, n)
+	for i := range a {
+		a[i] = FromFloat32(300)
+		b[i] = FromFloat32(300)
+	}
+	got := DotProductF32(a, b)
+	// 300 is exact in FP16 (1.171875 * 2^8). Each product 300*300 = 90000
+	// overflows FP16 max (65504) but fits FP32 easily; sum is 720000.
+	const want = float32(720000)
+	if got != want {
+		t.Fatalf("DotProductF32: got %v, want %v", got, want)
+	}
+}
+
+func TestDotProductF32_MatchesGoSum(t *testing.T) {
+	sizes := []int{8, 16, 64, 256, 1024}
+	rng := rand.New(rand.NewSource(42))
+	for _, n := range sizes {
+		a := make([]Float16, n)
+		b := make([]Float16, n)
+		for i := range a {
+			a[i] = FromFloat32(rng.Float32()*2 - 1) // [-1, 1]
+			b[i] = FromFloat32(rng.Float32()*2 - 1)
+		}
+
+		got := DotProductF32(a, b)
+		want := dotProductGo(a, b)
+
+		// Reference and SIMD differ in summation order; bound generously to
+		// absorb up to n*ULP per accumulator chain.
+		tol := math.Abs(float64(want))*float64(n)*1e-6 + 1e-5
+		if math.Abs(float64(got-want)) > tol {
+			t.Errorf("n=%d: got %v, want %v (tol %v)", n, got, want, tol)
+		}
+	}
+}
+
+func TestDotProductF32_Empty(t *testing.T) {
+	if got := DotProductF32(nil, nil); got != 0 {
+		t.Errorf("nil,nil: got %v, want 0", got)
+	}
+	if got := DotProductF32(nil, []Float16{FromFloat32(1), FromFloat32(2)}); got != 0 {
+		t.Errorf("nil,non-nil: got %v, want 0", got)
+	}
+}
+
+func TestDotProductF32_LengthMismatch(t *testing.T) {
+	a := []Float16{FromFloat32(1), FromFloat32(2), FromFloat32(3)}
+	b := []Float16{FromFloat32(4), FromFloat32(5)}
+	// min(len) = 2; expected = 1*4 + 2*5 = 14
+	if got := DotProductF32(a, b); got != 14 {
+		t.Errorf("length-mismatch: got %v, want 14", got)
+	}
+}
+
+func TestDotProductF32_TailLessThanWidth(t *testing.T) {
+	// n = 11 exercises 1 NEON iteration (8) + 3 Go tail on ARM64,
+	// and the all-Go path on AMD64.
+	const n = 11
+	a := make([]Float16, n)
+	b := make([]Float16, n)
+	for i := range a {
+		a[i] = FromFloat32(float32(i + 1))
+		b[i] = FromFloat32(float32(i + 1))
+	}
+	want := dotProductGo(a, b)
+	got := DotProductF32(a, b)
+	if math.Abs(float64(got-want)) > 1e-4 {
+		t.Errorf("tail handling: got %v, want %v", got, want)
+	}
+}
+
+// TestDotProductF32_Repro22 reproduces the scenario from issue #22 and logs
+// both APIs for cross-platform comparison. Asserts only DotProductF32; the
+// DotProduct value is logged for the PR description (it is +Inf on ARM64
+// with native FP16 SIMD and 720000 on AMD64).
+func TestDotProductF32_Repro22(t *testing.T) {
+	const n = 8
+	a := make([]Float16, n)
+	b := make([]Float16, n)
+	for i := range a {
+		a[i] = FromFloat32(300)
+		b[i] = FromFloat32(300)
+	}
+	native := DotProduct(a, b)
+	wide := DotProductF32(a, b)
+	t.Logf("issue #22 reproducer: DotProduct=%v  DotProductF32=%v", native, wide)
+	if wide != 720000 {
+		t.Fatalf("DotProductF32: got %v, want 720000", wide)
 	}
 }

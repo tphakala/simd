@@ -59,6 +59,14 @@ func dotProduct(a, b []Float16) float32 {
 	return dotProductGo(a, b)
 }
 
+func dotProductF32(a, b []Float16) float32 {
+	// Task 3 will swap this to a NEON kernel that widens FP16 to FP32 first.
+	// For now, the Go fallback already widens before multiplying, so it
+	// gives the right answer on every input, just slower than the eventual
+	// NEON path.
+	return dotProductGo(a, b)
+}
+
 func add(dst, a, b []Float16) {
 	n := len(dst)
 	if hasFP16 && n >= neonWidth {
