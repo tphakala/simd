@@ -65,7 +65,7 @@ func snapshotDispatch() implSnapshot {
 	}
 }
 
-func restoreDispatch(s implSnapshot) {
+func restoreDispatch(s *implSnapshot) {
 	dotProductImpl = s.dotProduct
 	addImpl = s.add
 	subImpl = s.sub
@@ -91,7 +91,7 @@ func restoreDispatch(s implSnapshot) {
 	minSIMDElements = s.minSIMDElements
 }
 
-func samePointer(a, b interface{}) bool {
+func samePointer(a, b any) bool {
 	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
 }
 
@@ -100,7 +100,7 @@ func samePointer(a, b interface{}) bool {
 
 func TestInitGo(t *testing.T) {
 	saved := snapshotDispatch()
-	t.Cleanup(func() { restoreDispatch(saved) })
+	t.Cleanup(func() { restoreDispatch(&saved) })
 
 	initGo()
 
@@ -119,7 +119,7 @@ func TestInitGo(t *testing.T) {
 
 func TestInitSSE2(t *testing.T) {
 	saved := snapshotDispatch()
-	t.Cleanup(func() { restoreDispatch(saved) })
+	t.Cleanup(func() { restoreDispatch(&saved) })
 
 	initSSE2()
 
@@ -142,7 +142,7 @@ func TestInitAVX512(t *testing.T) {
 	}
 
 	saved := snapshotDispatch()
-	t.Cleanup(func() { restoreDispatch(saved) })
+	t.Cleanup(func() { restoreDispatch(&saved) })
 
 	initAVX512()
 
@@ -171,15 +171,15 @@ func TestInitAVXNoFMA(t *testing.T) {
 	}
 
 	saved := snapshotDispatch()
-	t.Cleanup(func() { restoreDispatch(saved) })
+	t.Cleanup(func() { restoreDispatch(&saved) })
 
 	initAVXNoFMA()
 
 	// FMA-free AVX kernels stay on AVX paths.
 	for _, c := range []struct {
 		name string
-		got  interface{}
-		want interface{}
+		got  any
+		want any
 	}{
 		{"addImpl", addImpl, addAVX},
 		{"subImpl", subImpl, subAVX},
@@ -207,8 +207,8 @@ func TestInitAVXNoFMA(t *testing.T) {
 	// FMA-dependent kernels fall back to SSE2/scalar variants.
 	for _, c := range []struct {
 		name string
-		got  interface{}
-		want interface{}
+		got  any
+		want any
 	}{
 		{"dotProductImpl", dotProductImpl, dotProductSSE2},
 		{"fmaImpl", fmaImpl, fmaSSE2},

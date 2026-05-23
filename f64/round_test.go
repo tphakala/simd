@@ -36,7 +36,7 @@ func TestRound_SpecialValues(t *testing.T) {
 	}
 }
 
-func TestRound_EmptySlices(t *testing.T) {
+func TestRound_EmptySlices(_ *testing.T) {
 	Round(nil, nil)
 	Round([]float64{}, []float64{1, 2, 3})
 	Round([]float64{1, 2, 3}, nil)

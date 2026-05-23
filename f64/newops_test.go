@@ -18,7 +18,7 @@ func TestSubFromScalar(t *testing.T) {
 	}
 }
 
-func TestSubFromScalar_EmptySlices(t *testing.T) {
+func TestSubFromScalar_EmptySlices(_ *testing.T) {
 	SubFromScalar(nil, nil, 1)
 	SubFromScalar([]float64{}, []float64{1, 2}, 1)
 	SubFromScalar([]float64{1, 2}, nil, 1)
