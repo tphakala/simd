@@ -32,6 +32,12 @@ DATA roundf64_half<>+0x10(SB)/8, $0x3fe0000000000000
 DATA roundf64_half<>+0x18(SB)/8, $0x3fe0000000000000
 GLOBL roundf64_half<>(SB), RODATA|NOPTR, $32
 
+DATA roundf64_one<>+0x00(SB)/8, $0x3ff0000000000000
+DATA roundf64_one<>+0x08(SB)/8, $0x3ff0000000000000
+DATA roundf64_one<>+0x10(SB)/8, $0x3ff0000000000000
+DATA roundf64_one<>+0x18(SB)/8, $0x3ff0000000000000
+GLOBL roundf64_one<>(SB), RODATA|NOPTR, $32
+
 // ============================================================================
 // AVX+FMA IMPLEMENTATIONS (256-bit, 4x float64 per iteration)
 // ============================================================================
@@ -3631,9 +3637,17 @@ TEXT ·roundAVX(SB), NOSPLIT, $0-48
     MOVQ dst_len+8(FP), CX
     MOVQ src_base+24(FP), SI
 
+    // Algorithm: round-half-away-from-zero matching math.Round.
+    //   t   = trunc(x)
+    //   f   = x - t                     // signed fractional part in (-1, 1)
+    //   inc = (|f| >= 0.5) ? sign(x)*1.0 : 0
+    //   result = t + inc
+    // This avoids the trunc(|x|+0.5) overcounting at |x|=nextafter(0.5,0),
+    // where the FP add rounds up to exactly 1.0.
     VMOVUPD roundf64_absmask<>(SB), Y3
     VMOVUPD roundf64_signmask<>(SB), Y4
     VMOVUPD roundf64_half<>(SB), Y5
+    VMOVUPD roundf64_one<>(SB), Y11
 
     MOVQ CX, AX
     SHRQ $2, AX
@@ -3641,11 +3655,14 @@ TEXT ·roundAVX(SB), NOSPLIT, $0-48
 
 round_avx_loop4:
     VMOVUPD (SI), Y0                  // Y0 = x
-    VANDPD Y3, Y0, Y1                 // Y1 = abs(x)
-    VADDPD Y5, Y1, Y1                 // Y1 = abs(x) + 0.5
-    VROUNDPD $3, Y1, Y1               // Y1 = trunc(abs(x)+0.5)
-    VANDPD Y4, Y0, Y2                 // Y2 = signbit(x)
-    VORPD Y2, Y1, Y1                  // Y1 = apply sign
+    VROUNDPD $3, Y0, Y1                // Y1 = trunc(x)
+    VSUBPD Y1, Y0, Y2                  // Y2 = x - trunc(x) = signed frac
+    VANDPD Y3, Y2, Y6                  // Y6 = |frac|
+    VCMPPD $5, Y5, Y6, Y7              // Y7 = mask: |frac| NLT 0.5  (|frac| >= 0.5)
+    VANDPD Y11, Y7, Y8                 // Y8 = 1.0 where mask, else 0
+    VANDPD Y4, Y0, Y9                  // Y9 = signbit(x)
+    VORPD Y9, Y8, Y8                   // Y8 = ±1.0 (or ±0.0 when no increment)
+    VADDPD Y8, Y1, Y1                  // Y1 = trunc(x) + ±1 or +0
     VMOVUPD Y1, (DX)
     ADDQ $32, SI
     ADDQ $32, DX
@@ -3659,14 +3676,18 @@ round_avx_remainder:
     VMOVSD roundf64_absmask<>(SB), X3
     VMOVSD roundf64_signmask<>(SB), X4
     VMOVSD roundf64_half<>(SB), X5
+    VMOVSD roundf64_one<>(SB), X11
 
 round_avx_scalar:
     VMOVSD (SI), X0                   // X0 = x
-    VANDPD X3, X0, X1                 // X1 = abs(x)
-    VADDSD X5, X1, X1                 // X1 = abs(x)+0.5
-    VROUNDSD $3, X1, X1, X1           // X1 = trunc(abs(x)+0.5)
-    VANDPD X4, X0, X2                 // X2 = signbit(x)
-    VORPD X2, X1, X1                  // X1 = apply sign
+    VROUNDSD $3, X0, X0, X1            // X1 = trunc(x)
+    VSUBSD X1, X0, X2                  // X2 = signed frac
+    VANDPD X3, X2, X6                  // X6 = |frac|
+    VCMPSD $5, X5, X6, X7              // X7 = mask: |frac| NLT 0.5
+    VANDPD X11, X7, X8                 // X8 = 1.0 where mask else 0
+    VANDPD X4, X0, X9                  // X9 = signbit(x)
+    VORPD X9, X8, X8                   // X8 = ±1 or ±0
+    VADDSD X8, X1, X1                  // X1 = trunc(x) + inc
     VMOVSD X1, (DX)
     ADDQ $8, SI
     ADDQ $8, DX
