@@ -76,3 +76,43 @@ func TestInitAVX512(t *testing.T) {
 	dotProductImpl = savedDotProduct
 	minSIMDElements = savedMinSIMD
 }
+
+func TestInitAVXNoFMA(t *testing.T) {
+	// initAVXNoFMA assigns AVX kernels (e.g. addAVX) to the global impl pointers.
+	// Skip on CPUs without AVX so calling addImpl after init can't SIGILL.
+	if !cpu.X86.AVX {
+		t.Skip("AVX not supported on this CPU")
+	}
+
+	savedDotProduct := dotProductImpl
+	savedAdd := addImpl
+	savedMinSIMD := minSIMDElements
+	t.Cleanup(func() {
+		dotProductImpl = savedDotProduct
+		addImpl = savedAdd
+		minSIMDElements = savedMinSIMD
+	})
+
+	initAVXNoFMA()
+
+	a := []float64{1, 2, 3, 4}
+	b := []float64{4, 3, 2, 1}
+
+	// dotProduct in AVX-no-FMA mode routes to SSE2 (FMA-free).
+	if got := dotProductImpl(a, b); got != 20 {
+		t.Errorf("After initAVXNoFMA, dotProduct = %v, want 20", got)
+	}
+
+	// Non-FMA arithmetic kernels still use AVX implementations.
+	dst := make([]float64, len(a))
+	addImpl(dst, a, b)
+	for i, want := range []float64{5, 5, 5, 5} {
+		if dst[i] != want {
+			t.Errorf("After initAVXNoFMA, add[%d] = %v, want %v", i, dst[i], want)
+		}
+	}
+
+	if minSIMDElements != minAVXElements {
+		t.Errorf("initAVXNoFMA: minSIMDElements = %d, want %d", minSIMDElements, minAVXElements)
+	}
+}
