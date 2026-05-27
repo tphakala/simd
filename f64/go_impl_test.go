@@ -53,6 +53,7 @@ func TestMinGo(t *testing.T) {
 		a    []float64
 		want float64
 	}{
+		{"empty", []float64{}, math.Inf(1)},
 		{"single", []float64{5}, 5},
 		{"min_first", []float64{1, 2, 3}, 1},
 		{"min_middle", []float64{3, 1, 2}, 1},
@@ -77,6 +78,7 @@ func TestMaxGo(t *testing.T) {
 		a    []float64
 		want float64
 	}{
+		{"empty", []float64{}, math.Inf(-1)},
 		{"single", []float64{5}, 5},
 		{"max_first", []float64{3, 2, 1}, 3},
 		{"max_middle", []float64{1, 3, 2}, 3},

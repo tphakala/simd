@@ -113,6 +113,9 @@ func sumGo(a []float32) float32 {
 }
 
 func minGo(a []float32) float32 {
+	if len(a) == 0 {
+		return posInf
+	}
 	m := a[0]
 	for _, v := range a[1:] {
 		if v < m {
@@ -123,6 +126,9 @@ func minGo(a []float32) float32 {
 }
 
 func maxGo(a []float32) float32 {
+	if len(a) == 0 {
+		return negInf
+	}
 	m := a[0]
 	for _, v := range a[1:] {
 		if v > m {
