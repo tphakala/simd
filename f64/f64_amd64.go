@@ -418,10 +418,15 @@ func tanh64(dst, src []float64) {
 func tanhAVX(dst, src []float64)
 
 func exp64(dst, src []float64) {
-	// Exp is complex, use Go implementation with math.Exp for now
-	// Can be optimized with AVX polynomial approximation later
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
+		expAVX(dst, src)
+		return
+	}
 	exp64Go(dst, src)
 }
+
+//go:noescape
+func expAVX(dst, src []float64)
 
 //go:noescape
 func sigmoidAVX(dst, src []float64)

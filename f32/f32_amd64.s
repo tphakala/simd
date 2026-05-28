@@ -2920,6 +2920,29 @@ DATA exp_bias<>+0x18(SB)/4, $0x3f800000
 DATA exp_bias<>+0x1c(SB)/4, $0x3f800000
 GLOBL exp_bias<>(SB), RODATA|NOPTR, $32
 
+// Exp clamp thresholds: ±88.0 keeps the 2^k reconstruction inside the
+// representable float32 range (exp(88) ~= 1.65e38 < MaxFloat32). Matches the
+// pure-Go fallback's overflow/underflow clamp.
+DATA exp_clamp_hi<>+0x00(SB)/4, $0x42b00000  // 88.0
+DATA exp_clamp_hi<>+0x04(SB)/4, $0x42b00000
+DATA exp_clamp_hi<>+0x08(SB)/4, $0x42b00000
+DATA exp_clamp_hi<>+0x0c(SB)/4, $0x42b00000
+DATA exp_clamp_hi<>+0x10(SB)/4, $0x42b00000
+DATA exp_clamp_hi<>+0x14(SB)/4, $0x42b00000
+DATA exp_clamp_hi<>+0x18(SB)/4, $0x42b00000
+DATA exp_clamp_hi<>+0x1c(SB)/4, $0x42b00000
+GLOBL exp_clamp_hi<>(SB), RODATA|NOPTR, $32
+
+DATA exp_clamp_lo<>+0x00(SB)/4, $0xc2b00000  // -88.0
+DATA exp_clamp_lo<>+0x04(SB)/4, $0xc2b00000
+DATA exp_clamp_lo<>+0x08(SB)/4, $0xc2b00000
+DATA exp_clamp_lo<>+0x0c(SB)/4, $0xc2b00000
+DATA exp_clamp_lo<>+0x10(SB)/4, $0xc2b00000
+DATA exp_clamp_lo<>+0x14(SB)/4, $0xc2b00000
+DATA exp_clamp_lo<>+0x18(SB)/4, $0xc2b00000
+DATA exp_clamp_lo<>+0x1c(SB)/4, $0xc2b00000
+GLOBL exp_clamp_lo<>(SB), RODATA|NOPTR, $32
+
 // Constants for exp-based tanh (float32)
 DATA tanh32_two<>+0x00(SB)/4, $0x40000000  // 2.0
 DATA tanh32_two<>+0x04(SB)/4, $0x40000000
@@ -3098,6 +3121,130 @@ sigmoid32_scalar:
     JNZ  sigmoid32_scalar
 
 sigmoid32_done:
+    VZEROUPPER
+    RET
+
+// func expAVX(dst, src []float32)
+// Computes e^x using range reduction and a degree-5 polynomial, the same exp
+// core as sigmoidAVX but without the negation and the final 1/(1+exp) wrap.
+// Inputs are clamped to [-88, 88] to match the pure-Go fallback: results stay
+// finite and large-negative inputs underflow to 0.
+TEXT ·expAVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DI
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    // Load constants into registers
+    VMOVUPS exp_log2e<>(SB), Y8         // Y8 = log2(e)
+    VMOVUPS exp_ln2<>(SB), Y9           // Y9 = ln(2)
+    VMOVUPS exp_one<>(SB), Y10          // Y10 = 1.0
+    VMOVUPS exp_c2<>(SB), Y11           // Y11 = c2 = 0.5
+    VMOVUPS exp_c3<>(SB), Y12           // Y12 = c3 = 1/6
+    VMOVUPS exp_c4<>(SB), Y13           // Y13 = c4 = 1/24
+    VMOVUPS exp_c5<>(SB), Y14           // Y14 = c5 = 1/120
+    VMOVUPS exp_magic<>(SB), Y15        // Y15 = magic for rounding
+
+    // Process 8 elements per iteration
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   exp32_remainder
+
+exp32_loop8:
+    VMOVUPS (SI), Y0                    // Y0 = x
+
+    // Clamp x to [-88, 88]
+    VMOVUPS exp_clamp_hi<>(SB), Y1
+    VMOVUPS exp_clamp_lo<>(SB), Y2
+    VMINPS Y1, Y0, Y0                   // clamp upper
+    VMAXPS Y2, Y0, Y0                   // clamp lower
+
+    // Range reduction: k = round(x * log2e), r = x - k * ln2
+    VMULPS Y8, Y0, Y1                   // Y1 = x * log2e
+    VADDPS Y15, Y1, Y2                  // Y2 = x*log2e + magic
+    VSUBPS Y15, Y2, Y3                  // Y3 = k = round(x * log2e) as float
+    VMULPS Y9, Y3, Y4                   // Y4 = k * ln2
+    VSUBPS Y4, Y0, Y0                   // Y0 = r = x - k * ln2
+
+    // Polynomial: exp(r) ~= 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
+    VMULPS Y0, Y14, Y1                  // Y1 = r * c5
+    VADDPS Y13, Y1, Y1                  // Y1 = c4 + r*c5
+    VMULPS Y0, Y1, Y1                   // Y1 = r*(c4 + r*c5)
+    VADDPS Y12, Y1, Y1                  // Y1 = c3 + r*(...)
+    VMULPS Y0, Y1, Y1                   // Y1 = r*(c3 + ...)
+    VADDPS Y11, Y1, Y1                  // Y1 = c2 + r*(...)
+    VMULPS Y0, Y1, Y1                   // Y1 = r*(c2 + ...)
+    VADDPS Y10, Y1, Y1                  // Y1 = 1 + r*(...)
+    VMULPS Y0, Y1, Y1                   // Y1 = r*(1 + ...)
+    VADDPS Y10, Y1, Y1                  // Y1 = exp(r)
+
+    // Reconstruct: exp(x) = exp(r) * 2^k
+    VCVTPS2DQ Y3, Y4                    // Y4 = int(k)
+    VPSLLD $23, Y4, Y4                  // Y4 = k << 23
+    VPADDD Y10, Y4, Y4                  // Y4 = 2^k (add to 1.0's bits)
+    VMULPS Y4, Y1, Y1                   // Y1 = exp(x)
+
+    VMOVUPS Y1, (DI)                    // store result
+
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  exp32_loop8
+
+exp32_remainder:
+    ANDQ $7, CX
+    JZ   exp32_done
+
+    VMOVSS exp_log2e<>(SB), X8
+    VMOVSS exp_ln2<>(SB), X9
+    VMOVSS exp_magic<>(SB), X15
+    VMOVSS exp_one<>(SB), X10
+    VMOVSS exp_c2<>(SB), X11
+    VMOVSS exp_c3<>(SB), X12
+    VMOVSS exp_c4<>(SB), X13
+    VMOVSS exp_c5<>(SB), X14
+    VMOVSS exp_clamp_hi<>(SB), X6        // clamp bounds in X6/X7: X1/X2 are
+    VMOVSS exp_clamp_lo<>(SB), X7        // reused as temporaries in the loop
+
+exp32_scalar:
+    VMOVSS (SI), X0                     // X0 = x
+
+    // Clamp
+    VMINSS X6, X0, X0
+    VMAXSS X7, X0, X0
+
+    // Range reduction
+    VMULSS X8, X0, X1                   // X1 = x * log2e
+    VADDSS X15, X1, X2
+    VSUBSS X15, X2, X3                  // X3 = k
+    VMULSS X9, X3, X4
+    VSUBSS X4, X0, X0                   // X0 = r
+
+    // Polynomial
+    VMULSS X0, X14, X1
+    VADDSS X13, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X12, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X11, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X10, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X10, X1, X1                  // X1 = exp(r)
+
+    // Reconstruct 2^k
+    VCVTSS2SI X3, AX                    // AX = int(k)
+    SHLL $23, AX                        // AX = k << 23
+    ADDL $0x3f800000, AX                // AX = 2^k bits (add 127<<23 bias)
+    VMOVD AX, X4
+    VMULSS X4, X1, X1                   // X1 = exp(x)
+    VMOVSS X1, (DI)
+
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ CX
+    JNZ  exp32_scalar
+
+exp32_done:
     VZEROUPPER
     RET
 

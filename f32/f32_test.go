@@ -424,6 +424,63 @@ func TestExp(t *testing.T) {
 	}
 }
 
+// TestExpAccuracy checks Exp against math.Exp across the full clamp range,
+// exercising both the SIMD body (len >= 8) and the scalar remainder. The
+// reference mirrors the pure-Go fallback semantics: inputs are clamped to
+// [-88, 88], large-positive results saturate at exp(88), and large-negative
+// inputs underflow to 0.
+func TestExpAccuracy(t *testing.T) {
+	src := []float32{
+		-90, -88, -50, -20, -10, -5, -2, -1,
+		-0.5, 0, 0.5, 1, 2, 5, 10, 50,
+		88, 90, 3.3, -3.3, 7.7, // 21 elements: 2 SIMD blocks + 5 remainder
+	}
+	dst := make([]float32, len(src))
+	Exp(dst, src)
+
+	for i, x := range src {
+		got := dst[i]
+		if math.IsNaN(float64(got)) || got < 0 {
+			t.Errorf("Exp(%v)[%d] = %v, expected a finite non-negative value", x, i, got)
+			continue
+		}
+		var want float32
+		switch {
+		case x > 88:
+			want = float32(math.Exp(88))
+		case x < -88:
+			want = 0
+		default:
+			want = float32(math.Exp(float64(x)))
+		}
+		if relErr := relErrF32(got, want); relErr > 1e-4 {
+			t.Errorf("Exp(%v)[%d] = %v, want %v (relErr %v)", x, i, got, want, relErr)
+		}
+	}
+}
+
+// TestExpLengths runs Exp over every length from 1 to 33 so the scalar
+// remainder loop is exercised with 1, 2 and 3 trailing elements (the NEON
+// body consumes 4 at a time). This guards against remainder-loop bugs that a
+// single trailing element would miss, e.g. clobbering hoisted clamp constants.
+func TestExpLengths(t *testing.T) {
+	for n := 1; n <= 33; n++ {
+		src := make([]float32, n)
+		dst := make([]float32, n)
+		for i := range src {
+			// Distinct, non-trivial values across the loop body and remainder.
+			src[i] = float32(-6.0 + 0.7*float64(i))
+		}
+		Exp(dst, src)
+		for i, x := range src {
+			want := float32(math.Exp(float64(x)))
+			if relErr := relErrF32(dst[i], want); relErr > 1e-4 {
+				t.Errorf("len=%d Exp(%v)[%d] = %v, want %v (relErr %v)", n, x, i, dst[i], want, relErr)
+			}
+		}
+	}
+}
+
 // Benchmarks
 
 func BenchmarkDotProduct_100(b *testing.B) {

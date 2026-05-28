@@ -339,8 +339,16 @@ func tanh32(dst, src []float32) {
 func tanhNEON(dst, src []float32)
 
 func exp32(dst, src []float32) {
+	// Assumes len(src) >= len(dst); caller ensures this via public API
+	if hasNEON && len(dst) >= 4 {
+		expNEON(dst, src)
+		return
+	}
 	exp32Go(dst, src)
 }
+
+//go:noescape
+func expNEON(dst, src []float32)
 
 func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 	if hasNEON && len(dst) >= 4 {

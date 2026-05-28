@@ -587,10 +587,15 @@ func TanhInPlace(a []float64) {
 }
 
 // Exp computes the exponential function: dst[i] = e^src[i].
-// Uses polynomial approximation for reasonable accuracy and performance.
 // Processes min(len(dst), len(src)) elements.
 //
-// Uses AVX+FMA on AMD64 (4x float64), NEON on ARM64 (2x float64).
+// The SIMD paths use range reduction plus a degree-5 polynomial, giving a
+// maximum relative error of about 3e-6. Inputs are clamped to [-709, 709] so
+// results stay finite (exp(709) is near MaxFloat64); inputs below about -709
+// underflow to 0. This matches the pure-Go fallback's clamping.
+//
+// Uses AVX on AMD64 (2x float64), NEON on ARM64 (2x float64), and falls back
+// to math.Exp otherwise.
 func Exp(dst, src []float64) {
 	n := min(len(dst), len(src))
 	if n == 0 {

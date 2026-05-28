@@ -116,7 +116,7 @@ fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 | **Activation**  | `Sigmoid(dst, src)`                 | Sigmoid: 1/(1+e^-x)           | 4x (AVX) / 2x (NEON)                |
 |                 | `ReLU(dst, src)`                    | Rectified Linear Unit         | 8x / 4x / 2x                        |
 |                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 8x / 4x / 2x                        |
-|                 | `Exp(dst, src)`                     | Exponential e^x               | Pure Go                             |
+|                 | `Exp(dst, src)`                     | Exponential e^x               | 8x / 4x / 2x                        |
 |                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 8x / 4x / 2x                        |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
@@ -376,6 +376,7 @@ c64.Abs(magnitude, signalFFT)              // Extract magnitude
 | Sigmoid    | 138       | 5906     | **43x**    | 59.3 GB/s       |
 | ReLU       | 39        | 662      | **17x**    | 211 GB/s        |
 | Tanh       | 138       | 28116    | **204x**   | 59.5 GB/s       |
+| Exp        | 312       | 5555     | **18x**    | 26.3 GB/s       |
 
 **float64 (1024 elements):**
 
@@ -383,12 +384,14 @@ c64.Abs(magnitude, signalFFT)              // Extract magnitude
 | ---------- | --------- | -------- | ---------- | --------------- |
 | ReLU       | 68        | 646      | **9.5x**   | 240 GB/s        |
 | Tanh       | 445       | 6230     | **14x**    | 36.8 GB/s       |
+| Exp        | 1600      | 5140     | **3.2x**   | 10.2 GB/s       |
 
 **Key Characteristics:**
 
 - **Tanh**: 200x+ speedup for f32 - fast approximation with saturation vs math.Tanh
 - **ReLU**: Highest throughput (211-240 GB/s) - simple max(0, x) operation
 - **Sigmoid**: 43x speedup for f32 - fast approximation with exponential
+- **Exp**: 18x speedup for f32 (12x on ARM64 NEON) via range reduction plus a degree-5 polynomial; max relative error ~7e-6 (f32), ~3e-6 (f64)
 
 #### Batch & Signal Processing (varied sizes)
 
