@@ -15,6 +15,7 @@
 // FMAX Vd.4S, Vn.4S, Vm.4S: 0x4E20F400 | (Vm << 16) | (Vn << 5) | Vd
 // FABS Vd.4S, Vn.4S:        0x4EA0F800 | (Vn << 5) | Vd
 // FNEG Vd.4S, Vn.4S:        0x6EA0F800 | (Vn << 5) | Vd
+// FRINTN Vd.4S, Vn.4S:      0x4E218800 | (Vn << 5) | Vd  (round to nearest, ties to even)
 // FMLA Vd.4S, Vn.4S, Vm.4S: 0x4E20CC00 | (Vm << 16) | (Vn << 5) | Vd
 // FADDP Vd.4S, Vn.4S, Vm.4S: 0x6E20D400 | (Vm << 16) | (Vn << 5) | Vd
 // FADDP Sd, Vn.2S:          0x7E30D800 | (Vn << 5) | Vd
@@ -1052,7 +1053,7 @@ sigmoid32_neon_loop4:
     VLD1.P 16(R1), [V0.S4]        // V0 = x
 
     // Negate: V0 = -x
-    WORD $0x6EA07C00              // FNEG V0.4S, V0.4S
+    WORD $0x6EA0F800              // FNEG V0.4S, V0.4S
 
     // Clamp -x to [-20, 20]
     WORD $0x4EBBF400              // FMIN V0.4S, V0.4S, V27.4S  (clamp upper to 20)
@@ -1060,7 +1061,7 @@ sigmoid32_neon_loop4:
 
     // Range reduction: k = round(-x * log2e), r = -x - k * ln2
     WORD $0x6E34DC01              // FMUL V1.4S, V0.4S, V20.4S   V1 = -x * log2e
-    WORD $0x4E218C22              // FRINTN V2.4S, V1.4S         V2 = k = round(V1)
+    WORD $0x4E218822              // FRINTN V2.4S, V1.4S         V2 = k = round(V1)
     // V3 = V0 - V2 * ln2
     WORD $0x6E35DC44              // FMUL V4.4S, V2.4S, V21.4S   V4 = k * ln2
     WORD $0x4EA4D403              // FSUB V3.4S, V0.4S, V4.4S    V3 = r = -x - k * ln2
@@ -1269,7 +1270,7 @@ tanh32_neon_loop4:
     VLD1.P 16(R1), [V0.S4]            // V0 = x
 
     // Compute -2x: negate then multiply by 2
-    WORD $0x6EA07C00                  // FNEG V0.4S, V0.4S           V0 = -x
+    WORD $0x6EA0F800                  // FNEG V0.4S, V0.4S           V0 = -x
     WORD $0x6E33DC00                  // FMUL V0.4S, V0.4S, V19.4S   V0 = -2x
 
     // Clamp -2x to [-20, 20]
@@ -1278,7 +1279,7 @@ tanh32_neon_loop4:
 
     // Range reduction: k = round(-2x * log2e), r = -2x - k * ln2
     WORD $0x6E34DC01                  // FMUL V1.4S, V0.4S, V20.4S   V1 = -2x * log2e
-    WORD $0x4E218C22                  // FRINTN V2.4S, V1.4S         V2 = k = round(V1)
+    WORD $0x4E218822                  // FRINTN V2.4S, V1.4S         V2 = k = round(V1)
     WORD $0x6E35DC44                  // FMUL V4.4S, V2.4S, V21.4S   V4 = k * ln2
     WORD $0x4EA4D403                  // FSUB V3.4S, V0.4S, V4.4S    V3 = r = -2x - k * ln2
 

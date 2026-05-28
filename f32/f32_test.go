@@ -218,8 +218,29 @@ func TestSigmoid(t *testing.T) {
 
 			// Verify results are in valid range (0, 1)
 			for i, v := range dst {
+				// Reject NaN/Inf explicitly: ordered comparisons below are
+				// always false for NaN, so a NaN result would otherwise slip
+				// through every range and accuracy check unnoticed.
+				if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+					t.Errorf("Sigmoid(%v)[%d] = %v, expected a finite value", tc.src[i], i, v)
+					continue
+				}
+
 				if v < 0 || v > 1 {
 					t.Errorf("Sigmoid()[%d] = %v, expected value in range (0, 1)", i, v)
+				}
+
+				// Verify accuracy against the reference sigmoid.
+				expected := float32(1.0 / (1.0 + math.Exp(-float64(tc.src[i]))))
+				diff := math.Abs(float64(v - expected))
+				var relErr float64
+				if math.Abs(float64(expected)) > 1e-6 {
+					relErr = diff / math.Abs(float64(expected))
+				} else {
+					relErr = diff
+				}
+				if relErr > 1e-4 {
+					t.Errorf("Sigmoid(%v)[%d] = %v, want %v (error: %v)", tc.src[i], i, v, expected, relErr)
 				}
 
 				// Test specific values
@@ -327,6 +348,14 @@ func TestTanh(t *testing.T) {
 			Tanh(dst, tc.src)
 
 			for i, v := range dst {
+				// Reject NaN/Inf explicitly: ordered comparisons below are
+				// always false for NaN, so a NaN result would otherwise slip
+				// through both the range and accuracy checks unnoticed.
+				if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+					t.Errorf("Tanh(%v)[%d] = %v, expected a finite value", tc.src[i], i, v)
+					continue
+				}
+
 				// Verify results are in valid range [-1, 1]
 				if v < -1 || v > 1 {
 					t.Errorf("Tanh(%v)[%d] = %v, expected value in range [-1, 1]", tc.src[i], i, v)
