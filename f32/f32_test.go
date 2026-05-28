@@ -186,6 +186,44 @@ func TestClamp(t *testing.T) {
 	}
 }
 
+// relErrF32 returns the relative error of got vs want, falling back to
+// absolute error when want is near zero (where relative error is unstable).
+func relErrF32(got, want float32) float64 {
+	diff := math.Abs(float64(got - want))
+	if math.Abs(float64(want)) > 1e-6 {
+		return diff / math.Abs(float64(want))
+	}
+	return diff
+}
+
+// checkSigmoid32 verifies a single Sigmoid output against the reference. It
+// rejects NaN/Inf first: ordered comparisons are always false for NaN, so a
+// non-finite result would otherwise slip through every range and accuracy
+// check unnoticed.
+func checkSigmoid32(t *testing.T, x, got float32, i int) {
+	t.Helper()
+	if math.IsNaN(float64(got)) || math.IsInf(float64(got), 0) {
+		t.Errorf("Sigmoid(%v)[%d] = %v, expected a finite value", x, i, got)
+		return
+	}
+	if got < 0 || got > 1 {
+		t.Errorf("Sigmoid(%v)[%d] = %v, expected value in range (0, 1)", x, i, got)
+	}
+	expected := float32(1.0 / (1.0 + math.Exp(-float64(x))))
+	if relErr := relErrF32(got, expected); relErr > 1e-4 {
+		t.Errorf("Sigmoid(%v)[%d] = %v, want %v (error: %v)", x, i, got, expected, relErr)
+	}
+	if x == 0 && math.Abs(float64(got-0.5)) > 0.01 {
+		t.Errorf("Sigmoid(0)[%d] = %v, expected ~0.5", i, got)
+	}
+	if x > 10 && got < 0.99 {
+		t.Errorf("Sigmoid(%v)[%d] = %v, expected > 0.99", x, i, got)
+	}
+	if x < -10 && got > 0.01 {
+		t.Errorf("Sigmoid(%v)[%d] = %v, expected < 0.01", x, i, got)
+	}
+}
+
 func TestSigmoid(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -216,43 +254,9 @@ func TestSigmoid(t *testing.T) {
 			// Test Sigmoid
 			Sigmoid(dst, tc.src)
 
-			// Verify results are in valid range (0, 1)
+			// Verify each result (range, finiteness, accuracy, saturation).
 			for i, v := range dst {
-				// Reject NaN/Inf explicitly: ordered comparisons below are
-				// always false for NaN, so a NaN result would otherwise slip
-				// through every range and accuracy check unnoticed.
-				if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-					t.Errorf("Sigmoid(%v)[%d] = %v, expected a finite value", tc.src[i], i, v)
-					continue
-				}
-
-				if v < 0 || v > 1 {
-					t.Errorf("Sigmoid()[%d] = %v, expected value in range (0, 1)", i, v)
-				}
-
-				// Verify accuracy against the reference sigmoid.
-				expected := float32(1.0 / (1.0 + math.Exp(-float64(tc.src[i]))))
-				diff := math.Abs(float64(v - expected))
-				var relErr float64
-				if math.Abs(float64(expected)) > 1e-6 {
-					relErr = diff / math.Abs(float64(expected))
-				} else {
-					relErr = diff
-				}
-				if relErr > 1e-4 {
-					t.Errorf("Sigmoid(%v)[%d] = %v, want %v (error: %v)", tc.src[i], i, v, expected, relErr)
-				}
-
-				// Test specific values
-				if tc.src[i] == 0 && math.Abs(float64(v-0.5)) > 0.01 {
-					t.Errorf("Sigmoid(0)[%d] = %v, expected ~0.5", i, v)
-				}
-				if tc.src[i] > 10 && v < 0.99 {
-					t.Errorf("Sigmoid(%v)[%d] = %v, expected > 0.99", tc.src[i], i, v)
-				}
-				if tc.src[i] < -10 && v > 0.01 {
-					t.Errorf("Sigmoid(%v)[%d] = %v, expected < 0.01", tc.src[i], i, v)
-				}
+				checkSigmoid32(t, tc.src[i], v, i)
 			}
 
 			// Test SigmoidInPlace
@@ -262,7 +266,9 @@ func TestSigmoid(t *testing.T) {
 
 			// Verify in-place results match
 			for i, v := range src2 {
-				if math.Abs(float64(v-dst[i])) > 1e-6 {
+				// math.Abs(NaN) > tol is false, so guard against a NaN
+				// regression that the difference check would miss.
+				if math.IsNaN(float64(v)) || math.Abs(float64(v-dst[i])) > 1e-6 {
 					t.Errorf("SigmoidInPlace()[%d] = %v, Sigmoid() = %v, expected same", i, v, dst[i])
 				}
 			}
@@ -363,17 +369,7 @@ func TestTanh(t *testing.T) {
 
 				// Verify accuracy against math.Tanh
 				expected := float32(math.Tanh(float64(tc.src[i])))
-				diff := math.Abs(float64(v - expected))
-
-				// Use relative error for values away from zero, absolute for near-zero
-				var relErr float64
-				if math.Abs(float64(expected)) > 1e-6 {
-					relErr = diff / math.Abs(float64(expected))
-				} else {
-					relErr = diff
-				}
-
-				if relErr > epsilon {
+				if relErr := relErrF32(v, expected); relErr > epsilon {
 					t.Errorf("Tanh(%v)[%d] = %v, want %v (error: %v)", tc.src[i], i, v, expected, relErr)
 				}
 			}
@@ -391,7 +387,9 @@ func TestTanh(t *testing.T) {
 		TanhInPlace(inPlace)
 
 		for i := range dst {
-			if math.Abs(float64(dst[i]-inPlace[i])) > 1e-6 {
+			// math.Abs(NaN) > tol is false, so guard against a NaN regression
+			// that the difference check would miss.
+			if math.IsNaN(float64(inPlace[i])) || math.Abs(float64(dst[i]-inPlace[i])) > 1e-6 {
 				t.Errorf("TanhInPlace()[%d] = %v, Tanh() = %v, expected same", i, inPlace[i], dst[i])
 			}
 		}
