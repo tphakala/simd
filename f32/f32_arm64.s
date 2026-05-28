@@ -1262,29 +1262,16 @@ exp32_neon_scalar:
     AND $3, R3
     CBZ R3, exp32_neon_done
 
-exp32_neon_scalar_loop:
-    FMOVS (R1), F0                // F0 = x
-
-    // Clamp to [-88, 88]
+    // Hoist loop-invariant constants out of the remainder loop. The clamp
+    // bounds live in F6/F7 because F1/F2 are reused as temporaries below.
     MOVW $0x42b00000, R10
-    FMOVS R10, F1
+    FMOVS R10, F6                 // F6 = 88.0 (clamp_hi)
     MOVW $0xc2b00000, R10
-    FMOVS R10, F2
-    FMINS F1, F0, F0
-    FMAXS F2, F0, F0
-
-    // Range reduction
+    FMOVS R10, F7                 // F7 = -88.0 (clamp_lo)
     MOVW $0x3fb8aa3b, R10
-    FMOVS R10, F8
-    FMULS F8, F0, F1              // F1 = x * log2e
-    FRINTNS F1, F2                // F2 = k = round(F1)
-
+    FMOVS R10, F8                 // F8 = log2(e)
     MOVW $0x3f317218, R10
-    FMOVS R10, F9
-    FMULS F9, F2, F3              // F3 = k * ln2
-    FSUBS F3, F0, F0              // F0 = r = x - k * ln2
-
-    // Polynomial coefficients
+    FMOVS R10, F9                 // F9 = ln(2)
     FMOVS $1.0, F10               // c1 = 1.0
     FMOVS $0.5, F11               // c2 = 0.5
     MOVW $0x3e2aaaab, R10
@@ -1293,6 +1280,20 @@ exp32_neon_scalar_loop:
     FMOVS R10, F13                // c4 = 1/24
     MOVW $0x3c088889, R10
     FMOVS R10, F14                // c5 = 1/120
+    MOVW $0x3f800000, R11         // R11 = 1.0's bits (exponent bias)
+
+exp32_neon_scalar_loop:
+    FMOVS (R1), F0                // F0 = x
+
+    // Clamp to [-88, 88]
+    FMINS F6, F0, F0
+    FMAXS F7, F0, F0
+
+    // Range reduction
+    FMULS F8, F0, F1              // F1 = x * log2e
+    FRINTNS F1, F2                // F2 = k = round(F1)
+    FMULS F9, F2, F3              // F3 = k * ln2
+    FSUBS F3, F0, F0              // F0 = r = x - k * ln2
 
     // Horner's method
     FMULS F0, F14, F4             // F4 = r * c5
@@ -1309,7 +1310,6 @@ exp32_neon_scalar_loop:
     // Reconstruct 2^k
     FCVTZSS F2, R10               // R10 = int(k)
     LSL $23, R10, R10            // R10 = k << 23
-    MOVW $0x3f800000, R11
     ADD R11, R10, R10            // R10 = 2^k bits
     FMOVS R10, F5
     FMULS F5, F4, F4             // F4 = exp(x)

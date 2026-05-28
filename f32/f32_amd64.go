@@ -533,7 +533,10 @@ func tanh32(dst, src []float32) {
 func tanhAVX(dst, src []float32)
 
 func exp32(dst, src []float32) {
-	if cpu.X86.AVX && cpu.X86.FMA && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+	// Requires AVX2: the 2^k reconstruction uses 256-bit integer ops
+	// (VPSLLD/VPADDD/VCVTPS2DQ on YMM) that are not available on AVX1-only
+	// CPUs. FMA is not used, so AVX2 alone is the correct guard.
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements && len(src) >= minAVXElements {
 		expAVX(dst, src)
 		return
 	}

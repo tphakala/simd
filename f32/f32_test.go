@@ -459,6 +459,28 @@ func TestExpAccuracy(t *testing.T) {
 	}
 }
 
+// TestExpLengths runs Exp over every length from 1 to 33 so the scalar
+// remainder loop is exercised with 1, 2 and 3 trailing elements (the NEON
+// body consumes 4 at a time). This guards against remainder-loop bugs that a
+// single trailing element would miss, e.g. clobbering hoisted clamp constants.
+func TestExpLengths(t *testing.T) {
+	for n := 1; n <= 33; n++ {
+		src := make([]float32, n)
+		dst := make([]float32, n)
+		for i := range src {
+			// Distinct, non-trivial values across the loop body and remainder.
+			src[i] = float32(-6.0 + 0.7*float64(i))
+		}
+		Exp(dst, src)
+		for i, x := range src {
+			want := float32(math.Exp(float64(x)))
+			if relErr := relErrF32(dst[i], want); relErr > 1e-4 {
+				t.Errorf("len=%d Exp(%v)[%d] = %v, want %v (relErr %v)", n, x, i, dst[i], want, relErr)
+			}
+		}
+	}
+}
+
 // Benchmarks
 
 func BenchmarkDotProduct_100(b *testing.B) {

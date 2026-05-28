@@ -1158,3 +1158,28 @@ func TestExpAccuracy(t *testing.T) {
 		}
 	}
 }
+
+// TestExpLengths runs Exp over every length from 1 to 33 so the scalar
+// remainder loop is exercised alongside the SIMD body (the NEON/AVX bodies
+// consume 2 elements at a time for float64).
+func TestExpLengths(t *testing.T) {
+	for n := 1; n <= 33; n++ {
+		src := make([]float64, n)
+		dst := make([]float64, n)
+		for i := range src {
+			src[i] = -6.0 + 0.7*float64(i)
+		}
+		Exp(dst, src)
+		for i, x := range src {
+			want := math.Exp(x)
+			diff := math.Abs(dst[i] - want)
+			relErr := diff
+			if math.Abs(want) > 1e-12 {
+				relErr = diff / math.Abs(want)
+			}
+			if relErr > 1e-5 {
+				t.Errorf("len=%d Exp(%v)[%d] = %v, want %v (relErr %v)", n, x, i, dst[i], want, relErr)
+			}
+		}
+	}
+}

@@ -537,7 +537,7 @@ func TanhInPlace(a []float32) {
 // results stay finite (exp(88) is near MaxFloat32); inputs below about -88
 // underflow to 0. This matches the pure-Go fallback's clamping.
 //
-// Uses AVX+FMA on AMD64 (8x float32), NEON on ARM64 (4x float32), and falls
+// Uses AVX2 on AMD64 (8x float32), NEON on ARM64 (4x float32), and falls
 // back to math.Exp otherwise.
 func Exp(dst, src []float32) {
 	n := min(len(dst), len(src))
