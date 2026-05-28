@@ -3722,10 +3722,8 @@ exp64_scalar:
     VMOVSD (SI), X0                    // X0 = x
 
     // Clamp to [-709, 709]
-    MOVQ $0x4086280000000000, AX       // 709.0
-    VMOVQ AX, X1
-    MOVQ $0xC086280000000000, AX       // -709.0
-    VMOVQ AX, X2
+    VMOVSD exp_clamp_hi64<>(SB), X1
+    VMOVSD exp_clamp_lo64<>(SB), X2
     VMINSD X1, X0, X0
     VMAXSD X2, X0, X0
 

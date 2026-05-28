@@ -3202,15 +3202,15 @@ exp32_remainder:
     VMOVSS exp_c3<>(SB), X12
     VMOVSS exp_c4<>(SB), X13
     VMOVSS exp_c5<>(SB), X14
+    VMOVSS exp_clamp_hi<>(SB), X6        // clamp bounds in X6/X7: X1/X2 are
+    VMOVSS exp_clamp_lo<>(SB), X7        // reused as temporaries in the loop
 
 exp32_scalar:
     VMOVSS (SI), X0                     // X0 = x
 
     // Clamp
-    VMOVSS exp_clamp_hi<>(SB), X1
-    VMOVSS exp_clamp_lo<>(SB), X2
-    VMINSS X1, X0, X0
-    VMAXSS X2, X0, X0
+    VMINSS X6, X0, X0
+    VMAXSS X7, X0, X0
 
     // Range reduction
     VMULSS X8, X0, X1                   // X1 = x * log2e

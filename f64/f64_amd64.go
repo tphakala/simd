@@ -418,7 +418,7 @@ func tanh64(dst, src []float64) {
 func tanhAVX(dst, src []float64)
 
 func exp64(dst, src []float64) {
-	if cpu.X86.AVX && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
 		expAVX(dst, src)
 		return
 	}
