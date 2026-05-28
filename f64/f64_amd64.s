@@ -3330,6 +3330,17 @@ DATA tanh64_clamp_lo<>+0x10(SB)/8, $0xC034000000000000
 DATA tanh64_clamp_lo<>+0x18(SB)/8, $0xC034000000000000
 GLOBL tanh64_clamp_lo<>(SB), RODATA|NOPTR, $32
 
+// Exp clamp thresholds: ±709.0 keeps the 2^k reconstruction inside the
+// representable float64 range (exp(709) ~= 8.2e307 < MaxFloat64). Matches the
+// pure-Go fallback's overflow/underflow clamp.
+DATA exp_clamp_hi64<>+0x00(SB)/8, $0x4086280000000000  // 709.0
+DATA exp_clamp_hi64<>+0x08(SB)/8, $0x4086280000000000
+GLOBL exp_clamp_hi64<>(SB), RODATA|NOPTR, $16
+
+DATA exp_clamp_lo64<>+0x00(SB)/8, $0xC086280000000000  // -709.0
+DATA exp_clamp_lo64<>+0x08(SB)/8, $0xC086280000000000
+GLOBL exp_clamp_lo64<>(SB), RODATA|NOPTR, $16
+
 // Note: absf64mask is already defined at top of file
 
 // func sigmoidAVX(dst, src []float64)
@@ -3626,6 +3637,131 @@ tanh64_scalar:
     JNZ  tanh64_scalar
 
 tanh64_done:
+    VZEROUPPER
+    RET
+
+// func expAVX(dst, src []float64)
+// Computes e^x using range reduction and a degree-5 polynomial, the same exp
+// core as tanhAVX but without the -2x scaling and the tanh wrap. Inputs are
+// clamped to [-709, 709] to match the pure-Go fallback: results stay finite
+// and large-negative inputs underflow to 0. Processes 2 elements per
+// iteration (XMM = 2 x float64).
+TEXT ·expAVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    VMOVUPD tanh64_log2e<>(SB), X9     // X9 = log2(e)
+    VMOVUPD tanh64_ln2<>(SB), X10      // X10 = ln(2)
+    VMOVUPD sigmoid_one64<>(SB), X11   // X11 = 1.0
+    VMOVUPD sigmoid_half64<>(SB), X12  // X12 = 0.5 (c2)
+    VMOVUPD tanh64_c3<>(SB), X13       // X13 = 1/6 (c3)
+    VMOVUPD tanh64_c4<>(SB), X14       // X14 = 1/24 (c4)
+    VMOVUPD tanh64_c5<>(SB), X15       // X15 = 1/120 (c5)
+
+    // Process 2 elements per iteration
+    MOVQ CX, R8
+    SHRQ $1, R8
+    JZ   exp64_remainder
+
+exp64_loop2:
+    VMOVUPD (SI), X0                   // X0 = 2 x float64
+
+    // Clamp x to [-709, 709]
+    VMOVUPD exp_clamp_hi64<>(SB), X1
+    VMOVUPD exp_clamp_lo64<>(SB), X2
+    VMINPD X1, X0, X0
+    VMAXPD X2, X0, X0
+
+    // Range reduction: k = round(x * log2e), r = x - k * ln2
+    VMULPD X9, X0, X1                  // X1 = x * log2e
+    VROUNDPD $0, X1, X2                // X2 = k = round(X1)
+    VMULPD X10, X2, X3                 // X3 = k * ln2
+    VSUBPD X3, X0, X3                  // X3 = r = x - k * ln2
+
+    // Polynomial: exp(r) ~= 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
+    VMULPD X3, X15, X4                 // X4 = r * c5
+    VADDPD X14, X4, X4                 // X4 = c4 + r*c5
+    VMULPD X3, X4, X4                  // X4 = r*(c4 + r*c5)
+    VADDPD X13, X4, X4                 // X4 = c3 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(c3 + ...)
+    VADDPD X12, X4, X4                 // X4 = c2 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(c2 + ...)
+    VADDPD X11, X4, X4                 // X4 = 1 + r*(...)
+    VMULPD X3, X4, X4                  // X4 = r*(1 + ...)
+    VADDPD X11, X4, X4                 // X4 = exp(r)
+
+    // Reconstruct exp(x) = exp(r) * 2^k for 2 elements
+    // Element 0:
+    VCVTTSD2SI X2, AX                  // AX = int64(k[0])
+    SHLQ $52, AX                       // k[0] << 52
+    MOVQ $0x3FF0000000000000, BX
+    ADDQ BX, AX                        // 2^k[0] bits
+    VMOVQ AX, X5
+    // Element 1:
+    VPSRLDQ $8, X2, X6                 // X6 = k[1]
+    VCVTTSD2SI X6, AX                  // AX = int64(k[1])
+    SHLQ $52, AX
+    MOVQ $0x3FF0000000000000, BX
+    ADDQ BX, AX
+    VMOVQ AX, X6
+    VPUNPCKLQDQ X6, X5, X5             // X5 = {2^k[0], 2^k[1]}
+    VMULPD X5, X4, X4                  // X4 = exp(x)
+
+    VMOVUPD X4, (DX)                   // store 2 results
+    ADDQ $16, SI
+    ADDQ $16, DX
+    DECQ R8
+    JNZ  exp64_loop2
+
+exp64_remainder:
+    ANDQ $1, CX
+    JZ   exp64_done
+
+exp64_scalar:
+    VMOVSD (SI), X0                    // X0 = x
+
+    // Clamp to [-709, 709]
+    MOVQ $0x4086280000000000, AX       // 709.0
+    VMOVQ AX, X1
+    MOVQ $0xC086280000000000, AX       // -709.0
+    VMOVQ AX, X2
+    VMINSD X1, X0, X0
+    VMAXSD X2, X0, X0
+
+    // Range reduction
+    VMULSD X9, X0, X1
+    VROUNDSD $0, X1, X1, X2            // X2 = k
+    VMULSD X10, X2, X3
+    VSUBSD X3, X0, X3                  // X3 = r
+
+    // Polynomial
+    VMULSD X3, X15, X4
+    VADDSD X14, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X13, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X12, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X11, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X11, X4, X4                 // X4 = exp(r)
+
+    // Reconstruct 2^k
+    VCVTTSD2SI X2, AX                  // AX = int64(k)
+    SHLQ $52, AX
+    MOVQ $0x3FF0000000000000, BX
+    ADDQ BX, AX
+    VMOVQ AX, X5
+    VMULSD X5, X4, X4                  // X4 = exp(x)
+
+    VMOVSD X4, (DX)
+    ADDQ $8, SI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  exp64_scalar
+
+exp64_done:
     VZEROUPPER
     RET
 

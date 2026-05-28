@@ -352,8 +352,16 @@ func tanh64(dst, src []float64) {
 }
 
 func exp64(dst, src []float64) {
+	// Assumes len(src) >= len(dst); caller ensures this via public API
+	if hasNEON && len(dst) >= 2 {
+		expNEON64(dst, src)
+		return
+	}
 	exp64Go(dst, src)
 }
+
+//go:noescape
+func expNEON64(dst, src []float64)
 
 //go:noescape
 func sigmoidNEON64(dst, src []float64)

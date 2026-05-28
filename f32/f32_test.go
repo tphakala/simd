@@ -424,6 +424,41 @@ func TestExp(t *testing.T) {
 	}
 }
 
+// TestExpAccuracy checks Exp against math.Exp across the full clamp range,
+// exercising both the SIMD body (len >= 8) and the scalar remainder. The
+// reference mirrors the pure-Go fallback semantics: inputs are clamped to
+// [-88, 88], large-positive results saturate at exp(88), and large-negative
+// inputs underflow to 0.
+func TestExpAccuracy(t *testing.T) {
+	src := []float32{
+		-90, -88, -50, -20, -10, -5, -2, -1,
+		-0.5, 0, 0.5, 1, 2, 5, 10, 50,
+		88, 90, 3.3, -3.3, 7.7, // 21 elements: 2 SIMD blocks + 5 remainder
+	}
+	dst := make([]float32, len(src))
+	Exp(dst, src)
+
+	for i, x := range src {
+		got := dst[i]
+		if math.IsNaN(float64(got)) || got < 0 {
+			t.Errorf("Exp(%v)[%d] = %v, expected a finite non-negative value", x, i, got)
+			continue
+		}
+		var want float32
+		switch {
+		case x > 88:
+			want = float32(math.Exp(88))
+		case x < -88:
+			want = 0
+		default:
+			want = float32(math.Exp(float64(x)))
+		}
+		if relErr := relErrF32(got, want); relErr > 1e-4 {
+			t.Errorf("Exp(%v)[%d] = %v, want %v (relErr %v)", x, i, got, want, relErr)
+		}
+	}
+}
+
 // Benchmarks
 
 func BenchmarkDotProduct_100(b *testing.B) {

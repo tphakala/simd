@@ -533,10 +533,15 @@ func tanh32(dst, src []float32) {
 func tanhAVX(dst, src []float32)
 
 func exp32(dst, src []float32) {
-	// Exp is complex, use Go implementation with math.Exp for now
-	// Can be optimized with AVX polynomial approximation later
+	if cpu.X86.AVX && cpu.X86.FMA && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+		expAVX(dst, src)
+		return
+	}
 	exp32Go(dst, src)
 }
+
+//go:noescape
+func expAVX(dst, src []float32)
 
 func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 	// Use AVX if available and have enough elements

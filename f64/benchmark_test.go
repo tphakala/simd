@@ -644,6 +644,28 @@ func BenchmarkTanh(b *testing.B) {
 	}
 }
 
+func BenchmarkExp(b *testing.B) {
+	for _, size := range benchSizes {
+		a, _, _, dst := makeBenchData64(size)
+		// Use values in a reasonable range for exp
+		for i := range a {
+			a[i] = (a[i] - 50) / 10 // Range roughly -5 to +5
+		}
+		b.Run(fmt.Sprintf("SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				Exp(dst, a)
+			}
+			reportThroughput64(b, size*2)
+		})
+		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				exp64Go(dst, a)
+			}
+			reportThroughput64(b, size*2)
+		})
+	}
+}
+
 // =============================================================================
 // Quick Summary Benchmark
 // =============================================================================
