@@ -910,6 +910,12 @@ func TestSigmoid(t *testing.T) {
 
 			// Verify all values are in [0,1]
 			for i, v := range dst {
+				// Reject NaN/Inf explicitly: ordered comparisons are always
+				// false for NaN, so a NaN result would otherwise pass silently.
+				if math.IsNaN(v) || math.IsInf(v, 0) {
+					t.Errorf("sigmoid(%v) = %v, expected a finite value", tc.src[i], v)
+					continue
+				}
 				if v < 0 || v > 1 {
 					t.Errorf("sigmoid(%v) = %v, want in range [0,1]", tc.src[i], v)
 				}
@@ -928,7 +934,9 @@ func TestSigmoid(t *testing.T) {
 			copy(inPlace, tc.src)
 			SigmoidInPlace(inPlace)
 			for i := range dst {
-				if math.Abs(dst[i]-inPlace[i]) > 1e-10 {
+				// math.Abs(NaN) > tol is false, so guard against a NaN
+				// regression that the difference check would miss.
+				if math.IsNaN(inPlace[i]) || math.Abs(dst[i]-inPlace[i]) > 1e-10 {
 					t.Errorf("SigmoidInPlace mismatch at %d: got %v, want %v", i, inPlace[i], dst[i])
 				}
 			}
@@ -1027,6 +1035,14 @@ func TestTanh(t *testing.T) {
 			Tanh(dst, tc.src)
 
 			for i, v := range dst {
+				// Reject NaN/Inf explicitly: ordered comparisons below are
+				// always false for NaN, so a NaN result would otherwise slip
+				// through both the range and accuracy checks unnoticed.
+				if math.IsNaN(v) || math.IsInf(v, 0) {
+					t.Errorf("Tanh(%v)[%d] = %v, expected a finite value", tc.src[i], i, v)
+					continue
+				}
+
 				// Verify results are in valid range [-1, 1]
 				if v < -1 || v > 1 {
 					t.Errorf("Tanh(%v)[%d] = %v, expected value in range [-1, 1]", tc.src[i], i, v)
@@ -1062,7 +1078,9 @@ func TestTanh(t *testing.T) {
 		TanhInPlace(inPlace)
 
 		for i := range dst {
-			if math.Abs(dst[i]-inPlace[i]) > 1e-10 {
+			// math.Abs(NaN) > tol is false, so guard against a NaN regression
+			// that the difference check would miss.
+			if math.IsNaN(inPlace[i]) || math.Abs(dst[i]-inPlace[i]) > 1e-10 {
 				t.Errorf("TanhInPlace()[%d] = %v, Tanh() = %v, expected same", i, inPlace[i], dst[i])
 			}
 		}
@@ -1092,7 +1110,9 @@ func TestExp(t *testing.T) {
 	copy(inPlace, src)
 	ExpInPlace(inPlace)
 	for i := range dst {
-		if math.Abs(dst[i]-inPlace[i]) > 1e-10 {
+		// math.Abs(NaN) > tol is false, so guard against a NaN regression
+		// that the difference check would miss.
+		if math.IsNaN(inPlace[i]) || math.Abs(dst[i]-inPlace[i]) > 1e-10 {
 			t.Errorf("ExpInPlace mismatch at %d: got %v, want %v", i, inPlace[i], dst[i])
 		}
 	}

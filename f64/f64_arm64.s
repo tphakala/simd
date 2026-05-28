@@ -16,6 +16,7 @@
 // FMAX Vd.2D, Vn.2D, Vm.2D: 0x4E60F400 | (Vm << 16) | (Vn << 5) | Vd
 // FABS Vd.2D, Vn.2D:        0x4EE0F800 | (Vn << 5) | Vd
 // FNEG Vd.2D, Vn.2D:        0x6EE0F800 | (Vn << 5) | Vd
+// FRINTN Vd.2D, Vn.2D:      0x4E618800 | (Vn << 5) | Vd  (round to nearest, ties to even)
 // FMLA Vd.2D, Vn.2D, Vm.2D: 0x4E60CC00 | (Vm << 16) | (Vn << 5) | Vd
 // FADDP Dd, Vn.2D:          0x7E70D800 | (Vn << 5) | Vd
 
@@ -1007,7 +1008,7 @@ tanh64_neon_loop2:
 
     // Range reduction: k = round(-2x * log2e), r = -2x - k * ln2
     WORD $0x6E74DC01                  // FMUL V1.2D, V0.2D, V20.2D   V1 = -2x * log2e
-    WORD $0x4E619822                  // FRINTN V2.2D, V1.2D         V2 = k = round(V1)
+    WORD $0x4E618822                  // FRINTN V2.2D, V1.2D         V2 = k = round(V1)
     WORD $0x6E75DC44                  // FMUL V4.2D, V2.2D, V21.2D   V4 = k * ln2
     WORD $0x4EE4D403                  // FSUB V3.2D, V0.2D, V4.2D    V3 = r = -2x - k * ln2
 
