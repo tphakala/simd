@@ -46,6 +46,18 @@ func TestScanSourceIgnoresCommentedOutWord(t *testing.T) {
 	}
 }
 
+func TestScanSourceEmptyCommentAbove(t *testing.T) {
+	// An empty "//" line above a directive must not become an empty comment.
+	src := "    //\n    WORD $0x4E24CC40"
+	got := ScanSource(src)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 directive, got %d: %+v", len(got), got)
+	}
+	if got[0].Source != NoComment {
+		t.Errorf("Source = %v, want NoComment (empty comment line must not be used)", got[0].Source)
+	}
+}
+
 func TestParseWordLine(t *testing.T) {
 	tests := []struct {
 		name        string

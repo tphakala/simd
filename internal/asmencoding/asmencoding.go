@@ -62,9 +62,11 @@ func ScanSource(src string) []Directive {
 			d.Source = InlineComment
 		case i > 0:
 			if prev := strings.TrimSpace(lines[i-1]); strings.HasPrefix(prev, "//") {
-				// A commented-out WORD directly above is disabled code, not a
-				// description of this instruction.
-				if text := strings.TrimSpace(strings.TrimPrefix(prev, "//")); !strings.HasPrefix(text, "WORD") {
+				// Use the line above as the description only if it is a
+				// non-empty comment that is not itself a commented-out WORD
+				// directive (matched case-insensitively).
+				text := strings.TrimSpace(strings.TrimPrefix(prev, "//"))
+				if text != "" && !strings.HasPrefix(strings.ToUpper(text), "WORD") {
 					d.Comment = text
 					d.Source = PrecedingComment
 				}
