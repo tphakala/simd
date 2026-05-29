@@ -1038,31 +1038,43 @@ conj_avx512_done:
     VZEROUPPER
     RET
 
+// conjSignMask flips the sign bit of the imaginary lane of each packed
+// complex128: XOR [re0, im0, re1, im1] -> [re0, -im0, re1, -im1].
+// The low 128 bits ([0.0, -0.0]) serve the single-element remainder.
+DATA conjSignMask<>+0(SB)/8, $0x0000000000000000
+DATA conjSignMask<>+8(SB)/8, $0x8000000000000000
+DATA conjSignMask<>+16(SB)/8, $0x0000000000000000
+DATA conjSignMask<>+24(SB)/8, $0x8000000000000000
+GLOBL conjSignMask<>(SB), RODATA|NOPTR, $32
+
 // func conjAVX(dst, a []complex128)
 TEXT ·conjAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
-    TESTQ CX, CX
+    VMOVUPD conjSignMask<>(SB), Y2 // [0.0, -0.0, 0.0, -0.0]
+
+    MOVQ CX, AX
+    SHRQ $1, AX            // AX = pairs (2 complex128 per iter, YMM)
+    JZ   conj_avx_remainder
+
+conj_avx_loop2:
+    VMOVUPD (SI), Y0       // [re0, im0, re1, im1]
+    VXORPD  Y2, Y0, Y0     // [re0, -im0, re1, -im1]
+    VMOVUPD Y0, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  conj_avx_loop2
+
+conj_avx_remainder:
+    ANDQ $1, CX
     JZ   conj_avx_done
 
-conj_avx_loop:
-    VMOVUPD (SI), X0       // [real, imag]
-
-    // Create negated copy: [-real, -imag]
-    VXORPD X1, X1, X1      // Clear X1 = [0, 0]
-    VSUBPD X0, X1, X1      // X1 = -X0 = [-real, -imag]
-
-    // Use SHUFPD to blend/reconstruct: [real, -imag]
-    SHUFPD $2, X1, X0      // X0 = [low(X0)=real, high(X1)=-imag]
-
+    VMOVUPD (SI), X0       // [re, im]
+    VXORPD  X2, X0, X0     // [re, -im] (X2 = low lane of Y2)
     VMOVUPD X0, (DX)
-
-    ADDQ $16, SI
-    ADDQ $16, DX
-    DECQ CX
-    JNZ  conj_avx_loop
 
 conj_avx_done:
     VZEROUPPER
