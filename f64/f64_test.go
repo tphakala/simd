@@ -919,6 +919,22 @@ func TestSigmoid(t *testing.T) {
 				if v < 0 || v > 1 {
 					t.Errorf("sigmoid(%v) = %v, want in range [0,1]", tc.src[i], v)
 				}
+
+				// Verify accuracy against the reference sigmoid. Use relative
+				// error for values away from zero and absolute error near zero,
+				// where the deep tail saturates to a tiny magnitude and relative
+				// error stops being meaningful. Mirrors the f64 Tanh assertion.
+				expected := 1.0 / (1.0 + math.Exp(-tc.src[i]))
+				diff := math.Abs(v - expected)
+				var relErr float64
+				if math.Abs(expected) > 1e-10 {
+					relErr = diff / math.Abs(expected)
+				} else {
+					relErr = diff
+				}
+				if relErr > 1e-4 {
+					t.Errorf("sigmoid(%v) = %v, want %v (error: %v)", tc.src[i], v, expected, relErr)
+				}
 			}
 
 			// Verify special values
@@ -1160,8 +1176,8 @@ func TestExpAccuracy(t *testing.T) {
 }
 
 // TestExpLengths runs Exp over every length from 1 to 33 so the scalar
-// remainder loop is exercised alongside the SIMD body (the NEON/AVX bodies
-// consume 2 elements at a time for float64).
+// remainder loop is exercised alongside the SIMD body (the AVX body consumes
+// 4 elements at a time, the NEON body 2, for float64).
 func TestExpLengths(t *testing.T) {
 	for n := 1; n <= 33; n++ {
 		src := make([]float64, n)
@@ -1179,6 +1195,66 @@ func TestExpLengths(t *testing.T) {
 			}
 			if relErr > 1e-5 {
 				t.Errorf("len=%d Exp(%v)[%d] = %v, want %v (relErr %v)", n, x, i, dst[i], want, relErr)
+			}
+		}
+	}
+}
+
+// TestSigmoidAccuracy sweeps a fine grid through the SIMD body plus the
+// tail/clamp regions, asserting tight accuracy against the reference
+// 1/(1+exp(-x)). It locks in the accurate exp-based kernel that replaced the
+// old fast rational approximation 0.5+0.5*x/(1+|x|) (issue #33), whose error
+// reached several percent in the mid-range.
+func TestSigmoidAccuracy(t *testing.T) {
+	// Dense grid (-30..30 step 0.25 = 241 points) across the active transition
+	// region, plus the 7 boundary/clamp values appended below.
+	src := make([]float64, 0, 248)
+	for x := -30.0; x <= 30.0; x += 0.25 {
+		src = append(src, x)
+	}
+	// Boundary and beyond-clamp values (z = -x is clamped to ±709).
+	src = append(src, -720, -709, -100, 0, 100, 709, 720)
+	dst := make([]float64, len(src))
+	Sigmoid(dst, src)
+
+	for i, x := range src {
+		got := dst[i]
+		if math.IsNaN(got) || math.IsInf(got, 0) || got < 0 || got > 1 {
+			t.Errorf("Sigmoid(%v)[%d] = %v, want a finite value in [0,1]", x, i, got)
+			continue
+		}
+		want := 1.0 / (1.0 + math.Exp(-x))
+		diff := math.Abs(got - want)
+		relErr := diff
+		if math.Abs(want) > 1e-12 {
+			relErr = diff / math.Abs(want)
+		}
+		if relErr > 1e-5 {
+			t.Errorf("Sigmoid(%v)[%d] = %v, want %v (relErr %v)", x, i, got, want, relErr)
+		}
+	}
+}
+
+// TestSigmoidLengths runs Sigmoid over every length from 1 to 33 so the scalar
+// remainder loop is exercised alongside the SIMD body (the AVX body consumes
+// 4 elements at a time, the NEON body 2, for float64).
+func TestSigmoidLengths(t *testing.T) {
+	for n := 1; n <= 33; n++ {
+		src := make([]float64, n)
+		dst := make([]float64, n)
+		for i := range src {
+			src[i] = -6.0 + 0.7*float64(i)
+		}
+		Sigmoid(dst, src)
+		for i, x := range src {
+			want := 1.0 / (1.0 + math.Exp(-x))
+			diff := math.Abs(dst[i] - want)
+			relErr := diff
+			if math.Abs(want) > 1e-12 {
+				relErr = diff / math.Abs(want)
+			}
+			if relErr > 1e-5 {
+				t.Errorf("len=%d Sigmoid(%v)[%d] = %v, want %v (relErr %v)", n, x, i, dst[i], want, relErr)
 			}
 		}
 	}

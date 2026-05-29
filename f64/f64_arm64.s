@@ -849,31 +849,106 @@ cubic_neon_done:
     RET
 
 // func sigmoidNEON64(dst, src []float64)
-// Implements fast sigmoid approximation: σ(x) ≈ 0.5 + 0.5 * x / (1 + |x|)
-// This approximation is SIMD-friendly and commonly used in neural networks.
+// Computes accurate sigmoid: sigmoid(x) = 1 / (1 + e^(-x)).
+// Uses the same exp range reduction + degree-5 polynomial core as tanhNEON64,
+// replacing the previous fast rational approximation (0.5 + 0.5*x/(1+|x|)),
+// which was far less accurate than the f32 kernel. Inputs are clamped via
+// z = -x in [-709, 709] so the 2^k reconstruction stays in range.
+// Processes 2 elements per iteration (float64 uses D2 arrangement).
 TEXT ·sigmoidNEON64(SB), NOSPLIT, $0-48
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
     MOVD src_base+24(FP), R1
 
-    // Load constants into vector registers
-    FMOVD $0.5, F30
-    FMOVD $1.0, F31
-    VDUP V30.D[0], V30.D2         // V30 = {0.5, 0.5}
-    VDUP V31.D[0], V31.D2         // V31 = {1.0, 1.0}
+    // log2(e) = 1.4426950408889634 = 0x3FF71547652B82FE
+    MOVD $0x3FF71547652B82FE, R10
+    VMOV R10, V20.D[0]
+    VDUP V20.D[0], V20.D2             // V20 = log2(e)
 
-    // Process 2 elements per iteration
+    // ln(2) = 0.6931471805599453 = 0x3FE62E42FEFA39EF
+    MOVD $0x3FE62E42FEFA39EF, R10
+    VMOV R10, V21.D[0]
+    VDUP V21.D[0], V21.D2             // V21 = ln(2)
+
+    // 1.0
+    FMOVD $1.0, F22
+    VDUP V22.D[0], V22.D2             // V22 = 1.0
+
+    // c2 = 0.5
+    FMOVD $0.5, F23
+    VDUP V23.D[0], V23.D2             // V23 = c2 = 0.5
+
+    // c3 = 1/6 = 0x3FC5555555555555
+    MOVD $0x3FC5555555555555, R10
+    VMOV R10, V24.D[0]
+    VDUP V24.D[0], V24.D2             // V24 = c3 = 1/6
+
+    // c4 = 1/24 = 0x3FA5555555555555
+    MOVD $0x3FA5555555555555, R10
+    VMOV R10, V25.D[0]
+    VDUP V25.D[0], V25.D2             // V25 = c4 = 1/24
+
+    // c5 = 1/120 = 0x3F81111111111111
+    MOVD $0x3F81111111111111, R10
+    VMOV R10, V26.D[0]
+    VDUP V26.D[0], V26.D2             // V26 = c5 = 1/120
+
+    // Clamp thresholds for z = -x: ±709.0 (matches exp; keeps 2^k in range)
+    // 709.0 = 0x4086280000000000
+    MOVD $0x4086280000000000, R10
+    VMOV R10, V27.D[0]
+    VDUP V27.D[0], V27.D2             // V27 = 709.0 (clamp_hi)
+
+    // -709.0 = 0xC086280000000000
+    MOVD $0xC086280000000000, R10
+    VMOV R10, V28.D[0]
+    VDUP V28.D[0], V28.D2             // V28 = -709.0 (clamp_lo)
+
+    // Process 2 elements per iteration (float64 uses D2 arrangement)
     LSR $1, R3, R4
     CBZ R4, sigmoid64_neon_scalar
 
 sigmoid64_neon_loop2:
-    VLD1.P 16(R1), [V0.D2]        // V0 = x
-    WORD $0x4EE0F801              // FABS V1.2D, V0.2D -> V1 = |x|
-    WORD $0x4E7FD422              // FADD V2.2D, V1.2D, V31.2D -> V2 = 1 + |x|
-    WORD $0x6E62FC03              // FDIV V3.2D, V0.2D, V2.2D -> V3 = x / (1 + |x|)
-    WORD $0x6E7EDC64              // FMUL V4.2D, V3.2D, V30.2D -> V4 = 0.5 * x / (1 + |x|)
-    WORD $0x4E7ED485              // FADD V5.2D, V4.2D, V30.2D -> V5 = 0.5 + result
-    VST1.P [V5.D2], 16(R0)        // store result
+    VLD1.P 16(R1), [V0.D2]            // V0 = x
+
+    // Compute z = -x
+    WORD $0x6EE0F800                  // FNEG V0.2D, V0.2D           V0 = -x = z
+
+    // Clamp z to [-709, 709]
+    WORD $0x4EFBF400                  // FMIN V0.2D, V0.2D, V27.2D   clamp upper to 709
+    WORD $0x4E7CF400                  // FMAX V0.2D, V0.2D, V28.2D   clamp lower to -709
+
+    // Range reduction: k = round(z * log2e), r = z - k * ln2
+    WORD $0x6E74DC01                  // FMUL V1.2D, V0.2D, V20.2D   V1 = z * log2e
+    WORD $0x4E618822                  // FRINTN V2.2D, V1.2D         V2 = k = round(V1)
+    WORD $0x6E75DC44                  // FMUL V4.2D, V2.2D, V21.2D   V4 = k * ln2
+    WORD $0x4EE4D403                  // FSUB V3.2D, V0.2D, V4.2D    V3 = r = z - k * ln2
+
+    // Polynomial: exp(r) ≈ 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
+    // Horner's method
+    WORD $0x6E7ADC64                  // FMUL V4.2D, V3.2D, V26.2D   V4 = r * c5
+    WORD $0x4E79D484                  // FADD V4.2D, V4.2D, V25.2D   V4 = c4 + r*c5
+    WORD $0x6E63DC84                  // FMUL V4.2D, V4.2D, V3.2D    V4 = r*(c4 + r*c5)
+    WORD $0x4E78D484                  // FADD V4.2D, V4.2D, V24.2D   V4 = c3 + r*(...)
+    WORD $0x6E63DC84                  // FMUL V4.2D, V4.2D, V3.2D    V4 = r*(c3 + ...)
+    WORD $0x4E77D484                  // FADD V4.2D, V4.2D, V23.2D   V4 = c2 + r*(...)
+    WORD $0x6E63DC84                  // FMUL V4.2D, V4.2D, V3.2D    V4 = r*(c2 + ...)
+    WORD $0x4E76D484                  // FADD V4.2D, V4.2D, V22.2D   V4 = 1 + r*(...)
+    WORD $0x6E63DC84                  // FMUL V4.2D, V4.2D, V3.2D    V4 = r*(1 + ...)
+    WORD $0x4E76D484                  // FADD V4.2D, V4.2D, V22.2D   V4 = exp(r)
+
+    // Reconstruct: exp(-x) = exp(r) * 2^k
+    // For float64: shift by 52 bits (mantissa size), add 0x3FF0... (1.0's bits)
+    WORD $0x4EE1B841                  // FCVTZS V1.2D, V2.2D         V1 = int(k)
+    WORD $0x4F745421                  // SHL V1.2D, V1.2D, #52       V1 = k << 52
+    WORD $0x4EF68421                  // ADD V1.2D, V1.2D, V22.2D    V1 = 2^k (add 1.0's bits)
+    WORD $0x6E61DC84                  // FMUL V4.2D, V4.2D, V1.2D    V4 = e^(-x)
+
+    // sigmoid(x) = 1 / (1 + e^(-x))
+    WORD $0x4E64D6C6                  // FADD V6.2D, V22.2D, V4.2D   V6 = 1 + e^(-x)
+    WORD $0x6E66FEC0                  // FDIV V0.2D, V22.2D, V6.2D   V0 = 1 / (1 + e^(-x))
+
+    VST1.P [V0.D2], 16(R0)            // store result
 
     SUB $1, R4
     CBNZ R4, sigmoid64_neon_loop2
@@ -882,13 +957,52 @@ sigmoid64_neon_scalar:
     AND $1, R3
     CBZ R3, sigmoid64_neon_done
 
-    FMOVD (R1), F0                // F0 = x
-    FABSD F0, F1                  // F1 = |x|
-    FADDD F31, F1, F2             // F2 = 1 + |x|
-    FDIVD F2, F0, F3              // F3 = x / (1 + |x|)
-    FMULD F30, F3, F4             // F4 = 0.5 * x / (1 + |x|)
-    FADDD F30, F4, F5             // F5 = 0.5 + result
-    FMOVD F5, (R0)                // store result
+sigmoid64_neon_scalar_loop:
+    // Scalar path for remaining element
+    FMOVD (R1), F0                    // F0 = x
+    FNEGD F0, F0                      // F0 = -x = z
+
+    // Clamp to [-709, 709] using the hoisted bounds (F27=709, F28=-709)
+    FMIND F27, F0, F0
+    FMAXD F28, F0, F0
+
+    // Range reduction using the hoisted constants (F20=log2e, F21=ln2)
+    FMULD F20, F0, F1                 // F1 = z * log2e
+    FRINTND F1, F2                    // F2 = k = round(F1)
+    FMULD F21, F2, F3                 // F3 = k * ln2
+    FSUBD F3, F0, F0                  // F0 = r = z - k * ln2
+
+    // Horner's method using the hoisted coefficients
+    // (F22=1.0, F23=c2, F24=c3, F25=c4, F26=c5)
+    FMULD F0, F26, F4                 // F4 = r * c5
+    FADDD F25, F4, F4                 // F4 = c4 + r*c5
+    FMULD F0, F4, F4
+    FADDD F24, F4, F4                 // F4 = c3 + r*(...)
+    FMULD F0, F4, F4
+    FADDD F23, F4, F4                 // F4 = c2 + r*(...)
+    FMULD F0, F4, F4
+    FADDD F22, F4, F4                 // F4 = 1 + r*(...)
+    FMULD F0, F4, F4
+    FADDD F22, F4, F4                 // F4 = exp(r)
+
+    // Reconstruct 2^k (float64: shift by 52, add 0x3FF0000000000000)
+    FCVTZSD F2, R10
+    LSL $52, R10, R10
+    MOVD $0x3FF0000000000000, R11
+    ADD R11, R10, R10
+    FMOVD R10, F5
+    FMULD F5, F4, F4                  // F4 = e^(-x)
+
+    // sigmoid(x) = 1 / (1 + e^(-x))
+    FADDD F4, F22, F6                 // F6 = 1 + e^(-x)
+    FDIVD F6, F22, F0                 // F0 = 1.0 / (1 + e^(-x))
+
+    FMOVD F0, (R0)                    // store result
+
+    ADD $8, R0
+    ADD $8, R1
+    SUB $1, R3
+    CBNZ R3, sigmoid64_neon_scalar_loop
 
 sigmoid64_neon_done:
     RET
