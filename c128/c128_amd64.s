@@ -856,95 +856,119 @@ abs_sse2_done:
 // ============================================================================
 
 // func absSqAVX512(dst []float64, a []complex128)
-// Fixed: Use VHADDPD + proper packing (same approach as absAVX512)
+// Mirrors absAVX512 (4 complex128 per iteration) without the final VSQRTPD.
 TEXT ·absSqAVX512(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
     MOVQ CX, AX
-    SHRQ $1, AX            // Process 2 complex128 per iteration
-    JZ   abssq_avx512_remainder
+    SHRQ $2, AX            // Process 4 elements per iteration
+    JZ   abssq_avx512_loop2_check
+
+abssq_avx512_loop4:
+    // Load 4 complex128 = 8 float64: [r0, i0, r1, i1, r2, i2, r3, i3]
+    VMOVUPD (SI), Z0
+
+    // Compute [r²+i²] with shuffle+add (no horizontal add dependency).
+    VMULPD Z0, Z0, Z0
+    VSHUFPD $0x55, Z0, Z0, Z1
+    VADDPD Z0, Z1, Z2      // [s0, s0, s1, s1, s2, s2, s3, s3]
+
+    // Pack duplicated sums into contiguous lanes: [s0, s1, s2, s3].
+    VEXTRACTF64X4 $1, Z2, Y3
+    VEXTRACTF128 $1, Y2, X4
+    VUNPCKLPD X4, X2, X2
+    VEXTRACTF128 $1, Y3, X5
+    VUNPCKLPD X5, X3, X3
+    VINSERTF128 $1, X3, Y2, Y2
+
+    VMOVUPD Y2, (DX)       // no sqrt for AbsSq
+
+    ADDQ $64, SI           // 4 complex128 = 64 bytes
+    ADDQ $32, DX           // 4 float64 = 32 bytes
+    DECQ AX
+    JNZ  abssq_avx512_loop4
+
+abssq_avx512_loop2_check:
+    ANDQ $3, CX
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   abssq_avx512_remainder1
 
 abssq_avx512_loop2:
     // Load 2 complex128 = 4 float64: [r0, i0, r1, i1]
     VMOVUPD (SI), Y0
-
-    // Square all elements: [r0², i0², r1², i1²]
     VMULPD Y0, Y0, Y0
+    VSHUFPD $0x55, Y0, Y0, Y1
+    VADDPD Y0, Y1, Y0      // [s0, s0, s1, s1]
 
-    // Horizontal add pairs within each 128-bit lane
-    // VHADDPD Y0, Y0, Y0 produces:
-    //   Lane 0: [r0²+i0², r0²+i0²]
-    //   Lane 1: [r1²+i1², r1²+i1²]
-    // Result: [r0²+i0², r0²+i0², r1²+i1², r1²+i1²]
-    VHADDPD Y0, Y0, Y0
-
-    // Pack results: elements 0 and 2 contain the sums we need
-    // Extract upper 128 bits: X1 = [r1²+i1², r1²+i1²]
     VEXTRACTF128 $1, Y0, X1
-    // Unpack low elements: X0 = [r0²+i0², r1²+i1²]
-    VUNPCKLPD X1, X0, X0
+    VUNPCKLPD X1, X0, X0   // [s0, s1]
+    VMOVUPD X0, (DX)       // no sqrt for AbsSq
 
-    // Store 2 results (no sqrt for AbsSq)
-    VMOVUPD X0, (DX)
-
-    ADDQ $32, SI           // 2 complex128 = 32 bytes
-    ADDQ $16, DX           // 2 float64 = 16 bytes
+    ADDQ $32, SI
+    ADDQ $16, DX
     DECQ AX
     JNZ  abssq_avx512_loop2
 
-abssq_avx512_remainder:
+abssq_avx512_remainder1:
     ANDQ $1, CX
     JZ   abssq_avx512_done
 
     // Handle 1 remaining element using XMM
-abssq_avx512_remainder_loop:
     MOVUPD (SI), X0        // Load one complex128
-
-    // X0 = [real, imag]
     VMOVDDUP X0, X1        // X1 = [real, real]
     VSHUFPD $1, X0, X0, X2 // X2 = [imag, imag]
 
     VMULPD X1, X1, X1      // real²
     VMULPD X2, X2, X2      // imag²
     VADDPD X2, X1, X1      // r² + i²
-
-    VMOVSD X1, (DX)
-
-    ADDQ $16, SI
-    ADDQ $8, DX
-    DECQ CX
-    JNZ  abssq_avx512_remainder_loop
+    VMOVSD X1, (DX)        // no sqrt for AbsSq
 
 abssq_avx512_done:
     VZEROUPPER
     RET
 
 // func absSqAVX(dst []float64, a []complex128)
+// Mirrors absAVX (2 complex128 per iteration) without the final VSQRTPD.
 TEXT ·absSqAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
-    TESTQ CX, CX
+    MOVQ CX, AX
+    SHRQ $1, AX            // Process 2 complex128 per iteration
+    JZ   abssq_avx_remainder
+
+abssq_avx_loop2:
+    // Load 2 complex128 = 4 float64: [r0, i0, r1, i1]
+    VMOVUPD (SI), Y0
+    VMULPD Y0, Y0, Y0
+    VSHUFPD $0x55, Y0, Y0, Y1
+    VADDPD Y0, Y1, Y0      // [s0, s0, s1, s1]
+
+    VEXTRACTF128 $1, Y0, X1
+    VUNPCKLPD X1, X0, X0   // [s0, s1]
+    VMOVUPD X0, (DX)       // no sqrt for AbsSq
+
+    ADDQ $32, SI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ  abssq_avx_loop2
+
+abssq_avx_remainder:
+    ANDQ $1, CX
     JZ   abssq_avx_done
 
-abssq_avx_loop:
-    VMOVUPD (SI), X0
-
-    VMULPD X0, X0, X1      // [r², i²]
-
-    VMOVDDUP X1, X2        // X2 = [r², r²]
-    SHUFPD $1, X1, X1      // X1 = [i², i²]
-    VADDPD X1, X2, X2      // r² + i²
-
-    VMOVSD X2, (DX)
-
-    ADDQ $16, SI
-    ADDQ $8, DX
-    DECQ CX
-    JNZ  abssq_avx_loop
+    // Handle 1 remaining element
+    MOVUPD (SI), X0
+    VMOVDDUP X0, X1
+    VSHUFPD $1, X0, X0, X2
+    VMULPD X1, X1, X1
+    VMULPD X2, X2, X2
+    VADDPD X2, X1, X1
+    VMOVSD X1, (DX)        // no sqrt for AbsSq
 
 abssq_avx_done:
     VZEROUPPER

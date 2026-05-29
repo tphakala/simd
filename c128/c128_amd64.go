@@ -34,12 +34,14 @@ var (
 
 func init() {
 	// Select optimal implementation based on CPU features
-	// Priority: AVX-512 > AVX+FMA > SSE2 > Go
+	// Priority: AVX-512 > AVX+FMA > AVX (no FMA) > SSE2 > Go
 	switch {
 	case cpu.X86.AVX512F && cpu.X86.AVX512VL:
 		initAVX512()
 	case cpu.X86.AVX && cpu.X86.FMA:
 		initAVX()
+	case cpu.X86.AVX:
+		initAVXNoFMA()
 	case cpu.X86.SSE2:
 		initSSE2()
 	default:
@@ -62,6 +64,21 @@ func initAVX() {
 	mulImpl = mulAVX
 	mulConjImpl = mulConjAVX
 	scaleImpl = scaleAVX
+	addImpl = addAVX
+	subImpl = subAVX
+	absImpl = absAVX
+	absSqImpl = absSqAVX
+	conjImpl = conjAVX
+}
+
+// initAVXNoFMA runs on AVX-capable CPUs that lack FMA (rare but possible:
+// some early Sandy/Ivy Bridge generations, certain Atom/Pentium SKUs).
+// The mul/mulConj/scale AVX kernels depend on VFMADDSUB213PD, so they fall
+// back to SSE2; the FMA-free AVX kernels (add/sub/abs/absSq/conj) stay on AVX.
+func initAVXNoFMA() {
+	mulImpl = mulSSE2
+	mulConjImpl = mulConjSSE2
+	scaleImpl = scaleSSE2
 	addImpl = addAVX
 	subImpl = subAVX
 	absImpl = absAVX
