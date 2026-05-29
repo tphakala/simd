@@ -124,7 +124,8 @@ func TestSelectImpl(t *testing.T) {
 	}
 	for _, c := range cases {
 		selectImpl(c.avx512, c.avxFMA, c.avx, c.sse2)
-		if mulImpl == nil || absSqImpl == nil || conjImpl == nil {
+		if mulImpl == nil || mulConjImpl == nil || scaleImpl == nil || addImpl == nil ||
+			subImpl == nil || absImpl == nil || absSqImpl == nil || conjImpl == nil {
 			t.Fatalf("%s: selectImpl left a nil implementation pointer", c.name)
 		}
 	}
