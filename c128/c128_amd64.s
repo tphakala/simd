@@ -705,8 +705,9 @@ TEXT ·absAVX512(SB), NOSPLIT, $0-48
     MOVQ a_base+24(FP), SI
 
     // Mask for VCOMPRESSPD: pick even lanes (0,2,4,6) from duplicated sums.
-    MOVB $0x55, R8
-    KMOVB R8, K1
+    // Use KMOVW (AVX512F) instead of KMOVB (AVX512DQ) for baseline compatibility.
+    MOVL $0x55, AX
+    KMOVW AX, K1
 
     MOVQ CX, AX
     SHRQ $2, AX            // Process 4 elements per iteration
@@ -862,8 +863,9 @@ TEXT ·absSqAVX512(SB), NOSPLIT, $0-48
     MOVQ a_base+24(FP), SI
 
     // Mask for VCOMPRESSPD: pick even lanes (0,2,4,6) from duplicated sums.
-    MOVB $0x55, R8
-    KMOVB R8, K1
+    // Use KMOVW (AVX512F) instead of KMOVB (AVX512DQ) for baseline compatibility.
+    MOVL $0x55, AX
+    KMOVW AX, K1
 
     MOVQ CX, AX
     SHRQ $2, AX            // Process 4 elements per iteration
@@ -1027,18 +1029,14 @@ conj_avx512_loop4:
 
 conj_avx512_loop2_check:
     ANDQ $3, CX
-    MOVQ CX, AX
-    SHRQ $1, AX
+    TESTQ $2, CX
     JZ   conj_avx512_remainder1
 
-conj_avx512_loop2:
     VMOVUPD (SI), Y0
     VXORPD  Y2, Y0, Y0     // Y2 = low half of Z2
     VMOVUPD Y0, (DX)
     ADDQ $32, SI
     ADDQ $32, DX
-    DECQ AX
-    JNZ  conj_avx512_loop2
 
 conj_avx512_remainder1:
     ANDQ $1, CX
