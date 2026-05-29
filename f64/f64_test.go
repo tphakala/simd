@@ -1206,8 +1206,9 @@ func TestExpLengths(t *testing.T) {
 // old fast rational approximation 0.5+0.5*x/(1+|x|) (issue #33), whose error
 // reached several percent in the mid-range.
 func TestSigmoidAccuracy(t *testing.T) {
-	var src []float64
-	// Dense grid across the active transition region.
+	// Dense grid (-30..30 step 0.25 = 241 points) across the active transition
+	// region, plus the 7 boundary/clamp values appended below.
+	src := make([]float64, 0, 248)
 	for x := -30.0; x <= 30.0; x += 0.25 {
 		src = append(src, x)
 	}

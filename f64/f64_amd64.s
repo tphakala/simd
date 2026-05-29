@@ -3375,6 +3375,11 @@ TEXT ·sigmoidAVX(SB), NOSPLIT, $0-48
     VMOVUPD tanh64_c4<>(SB), Y14       // Y14 = 1/24 (c4)
     VMOVUPD tanh64_c5<>(SB), Y15       // Y15 = 1/120 (c5)
 
+    // Clamp bounds are loop-invariant; hoist into Y7/Y8 (both free in this
+    // kernel) so they are not reloaded from memory on every iteration.
+    VMOVUPD exp_clamp_hi64<>(SB), Y7   // Y7 = 709.0
+    VMOVUPD exp_clamp_lo64<>(SB), Y8   // Y8 = -709.0
+
     // Process 4 elements per iteration (YMM = 256 bits = 4 x float64)
     MOVQ CX, R8
     SHRQ $2, R8                        // len / 4
@@ -3387,11 +3392,9 @@ sigmoid64_loop4:
     VXORPD Y1, Y1, Y1                  // Y1 = 0
     VSUBPD Y0, Y1, Y0                  // Y0 = -x = z
 
-    // Clamp z to [-709, 709] so 2^k stays representable
-    VMOVUPD exp_clamp_hi64<>(SB), Y1   // Y1 = 709.0
-    VMOVUPD exp_clamp_lo64<>(SB), Y2   // Y2 = -709.0
-    VMINPD Y1, Y0, Y0                  // Y0 = min(z, 709)
-    VMAXPD Y2, Y0, Y0                  // Y0 = max(min(z, 709), -709)
+    // Clamp z to [-709, 709] so 2^k stays representable (Y7=709, Y8=-709)
+    VMINPD Y7, Y0, Y0                  // Y0 = min(z, 709)
+    VMAXPD Y8, Y0, Y0                  // Y0 = max(min(z, 709), -709)
 
     // Range reduction: k = round(z * log2e), r = z - k * ln2
     VMULPD Y9, Y0, Y1                  // Y1 = z * log2e
@@ -3747,6 +3750,11 @@ TEXT ·expAVX(SB), NOSPLIT, $0-48
     VMOVUPD tanh64_c4<>(SB), Y14       // Y14 = 1/24 (c4)
     VMOVUPD tanh64_c5<>(SB), Y15       // Y15 = 1/120 (c5)
 
+    // Clamp bounds are loop-invariant; hoist into Y7/Y8 (both free in this
+    // kernel) so they are not reloaded from memory on every iteration.
+    VMOVUPD exp_clamp_hi64<>(SB), Y7   // Y7 = 709.0
+    VMOVUPD exp_clamp_lo64<>(SB), Y8   // Y8 = -709.0
+
     // Process 4 elements per iteration (YMM = 256 bits = 4 x float64)
     MOVQ CX, R8
     SHRQ $2, R8                        // len / 4
@@ -3755,11 +3763,9 @@ TEXT ·expAVX(SB), NOSPLIT, $0-48
 exp64_loop4:
     VMOVUPD (SI), Y0                   // Y0 = 4 x float64
 
-    // Clamp x to [-709, 709]
-    VMOVUPD exp_clamp_hi64<>(SB), Y1
-    VMOVUPD exp_clamp_lo64<>(SB), Y2
-    VMINPD Y1, Y0, Y0
-    VMAXPD Y2, Y0, Y0
+    // Clamp x to [-709, 709] (Y7=709, Y8=-709)
+    VMINPD Y7, Y0, Y0
+    VMAXPD Y8, Y0, Y0
 
     // Range reduction: k = round(x * log2e), r = x - k * ln2
     VMULPD Y9, Y0, Y1                  // Y1 = x * log2e
