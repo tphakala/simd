@@ -704,6 +704,11 @@ TEXT ·absAVX512(SB), NOSPLIT, $0-48
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
+    // Mask for VCOMPRESSPD: pick even lanes (0,2,4,6) from duplicated sums.
+    // Use KMOVW (AVX512F) instead of KMOVB (AVX512DQ) for baseline compatibility.
+    MOVL $0x55, AX
+    KMOVW AX, K1
+
     MOVQ CX, AX
     SHRQ $2, AX            // Process 4 elements per iteration
     JZ   abs_avx512_loop2_check
@@ -718,12 +723,7 @@ abs_avx512_loop4:
     VADDPD Z0, Z1, Z2      // [s0, s0, s1, s1, s2, s2, s3, s3]
 
     // Pack duplicated sums into contiguous lanes: [s0, s1, s2, s3].
-    VEXTRACTF64X4 $1, Z2, Y3
-    VEXTRACTF128 $1, Y2, X4
-    VUNPCKLPD X4, X2, X2
-    VEXTRACTF128 $1, Y3, X5
-    VUNPCKLPD X5, X3, X3
-    VINSERTF128 $1, X3, Y2, Y2
+    VCOMPRESSPD Z2, K1, Z2
 
     VSQRTPD Y2, Y2
     VMOVUPD Y2, (DX)
@@ -862,6 +862,11 @@ TEXT ·absSqAVX512(SB), NOSPLIT, $0-48
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
+    // Mask for VCOMPRESSPD: pick even lanes (0,2,4,6) from duplicated sums.
+    // Use KMOVW (AVX512F) instead of KMOVB (AVX512DQ) for baseline compatibility.
+    MOVL $0x55, AX
+    KMOVW AX, K1
+
     MOVQ CX, AX
     SHRQ $2, AX            // Process 4 elements per iteration
     JZ   abssq_avx512_loop2_check
@@ -876,12 +881,7 @@ abssq_avx512_loop4:
     VADDPD Z0, Z1, Z2      // [s0, s0, s1, s1, s2, s2, s3, s3]
 
     // Pack duplicated sums into contiguous lanes: [s0, s1, s2, s3].
-    VEXTRACTF64X4 $1, Z2, Y3
-    VEXTRACTF128 $1, Y2, X4
-    VUNPCKLPD X4, X2, X2
-    VEXTRACTF128 $1, Y3, X5
-    VUNPCKLPD X5, X3, X3
-    VINSERTF128 $1, X3, Y2, Y2
+    VCOMPRESSPD Z2, K1, Z2
 
     VMOVUPD Y2, (DX)       // no sqrt for AbsSq
 
@@ -1012,27 +1012,39 @@ TEXT ·conjAVX512(SB), NOSPLIT, $0-48
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
-    TESTQ CX, CX
+    VMOVUPD conjSignMask<>(SB), Z2  // Z2 = [0,-0,0,-0,0,-0,0,-0]
+
+    MOVQ CX, AX
+    SHRQ $2, AX            // AX = groups of 4 complex128
+    JZ   conj_avx512_loop2_check
+
+conj_avx512_loop4:
+    VMOVUPD (SI), Z0
+    VPXORQ  Z2, Z0, Z0     // flip imaginary sign bits (VPXORQ is AVX512F; VXORPD needs AVX512DQ)
+    VMOVUPD Z0, (DX)
+    ADDQ $64, SI
+    ADDQ $64, DX
+    DECQ AX
+    JNZ  conj_avx512_loop4
+
+conj_avx512_loop2_check:
+    ANDQ $3, CX
+    TESTQ $2, CX
+    JZ   conj_avx512_remainder1
+
+    VMOVUPD (SI), Y0
+    VXORPD  Y2, Y0, Y0     // Y2 = low half of Z2
+    VMOVUPD Y0, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+
+conj_avx512_remainder1:
+    ANDQ $1, CX
     JZ   conj_avx512_done
 
-    // Use scalar loop (same as SSE2 but through dispatch)
-    // AVX512 doesn't provide a simpler conjugate operation than mixing scalars
-conj_avx512_loop:
-    MOVUPD (SI), X0        // [real, imag]
-
-    // Create negated copy: [-real, -imag]
-    XORPD X1, X1           // Clear X1 = [0, 0]
-    SUBPD X0, X1           // X1 = -X0 = [-real, -imag]
-
-    // Use SHUFPD to blend/reconstruct: [real, -imag]
-    SHUFPD $2, X1, X0      // X0 = [low(X0)=real, high(X1)=-imag]
-
-    MOVUPD X0, (DX)
-
-    ADDQ $16, SI
-    ADDQ $16, DX
-    DECQ CX
-    JNZ  conj_avx512_loop
+    VMOVUPD (SI), X0
+    VXORPD  X2, X0, X0     // X2 = low quarter of Z2
+    VMOVUPD X0, (DX)
 
 conj_avx512_done:
     VZEROUPPER
@@ -1040,12 +1052,16 @@ conj_avx512_done:
 
 // conjSignMask flips the sign bit of the imaginary lane of each packed
 // complex128: XOR [re0, im0, re1, im1] -> [re0, -im0, re1, -im1].
-// The low 128 bits ([0.0, -0.0]) serve the single-element remainder.
+// 64 bytes: low 32 bytes serve AVX (YMM), full 64 bytes serve AVX-512 (ZMM).
 DATA conjSignMask<>+0(SB)/8, $0x0000000000000000
 DATA conjSignMask<>+8(SB)/8, $0x8000000000000000
 DATA conjSignMask<>+16(SB)/8, $0x0000000000000000
 DATA conjSignMask<>+24(SB)/8, $0x8000000000000000
-GLOBL conjSignMask<>(SB), RODATA|NOPTR, $32
+DATA conjSignMask<>+32(SB)/8, $0x0000000000000000
+DATA conjSignMask<>+40(SB)/8, $0x8000000000000000
+DATA conjSignMask<>+48(SB)/8, $0x0000000000000000
+DATA conjSignMask<>+56(SB)/8, $0x8000000000000000
+GLOBL conjSignMask<>(SB), RODATA|NOPTR, $64
 
 // func conjAVX(dst, a []complex128)
 TEXT ·conjAVX(SB), NOSPLIT, $0-48
