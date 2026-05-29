@@ -461,7 +461,7 @@ min16_loop8:
     ADD $16, R0
 
     // FMIN V4.8H, V4.8H, V0.8H
-    WORD $0x4EC03480
+    WORD $0x4EC03484
 
     SUB $1, R3
     CBNZ R3, min16_loop8
@@ -497,7 +497,7 @@ max16_loop8:
     ADD $16, R0
 
     // FMAX V4.8H, V4.8H, V0.8H
-    WORD $0x4E403480
+    WORD $0x4E403484
 
     SUB $1, R3
     CBNZ R3, max16_loop8
@@ -651,7 +651,7 @@ TEXT ·reciprocalNEON(SB), NOSPLIT, $0-48
     FMOVD R4, F2
     MOVD $0x3C003C003C003C00, R4
     FMOVD R4, F3
-    WORD $0x4E032042            // INS V2.D[1], V3.D[0]
+    WORD $0x6E180462            // INS V2.D[1], V3.D[0]
 
     LSR $3, R3, R4
     CBZ R4, recip16_done
