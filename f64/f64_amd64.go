@@ -378,9 +378,13 @@ func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 }
 
 func sigmoid64(dst, src []float64) {
-	// sigmoidAVX uses VMULPD/VADDPD/VDIVPD only - no FMA instructions - so it
-	// is safe on AVX-only CPUs.
-	if cpu.X86.AVX && len(dst) >= minAVXElements {
+	// Requires AVX2: sigmoidAVX reconstructs 2^k with 256-bit YMM integer ops
+	// (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ) that do not exist on AVX1-only CPUs.
+	// Gating on plain AVX would let AVX1 parts reach an AVX2-only kernel and
+	// fault with SIGILL (same fix class as the f32 sigmoid32/tanh32 gating).
+	// FMA is not used here, so AVX2 alone is the correct guard; AVX1-only CPUs
+	// fall back to the accurate Go path.
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements {
 		sigmoidAVX(dst, src)
 		return
 	}
@@ -407,7 +411,11 @@ func clampScale64(dst, src []float64, minVal, maxVal, scale float64) {
 }
 
 func tanh64(dst, src []float64) {
-	if cpu.X86.AVX && len(dst) >= minAVXElements {
+	// Requires AVX2: tanhAVX reconstructs 2^k with 256-bit YMM integer ops
+	// (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ) that do not exist on AVX1-only CPUs.
+	// FMA is not used here, so AVX2 alone is the correct guard; AVX1-only CPUs
+	// fall back to the accurate Go path.
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements {
 		tanhAVX(dst, src)
 		return
 	}
@@ -418,7 +426,11 @@ func tanh64(dst, src []float64) {
 func tanhAVX(dst, src []float64)
 
 func exp64(dst, src []float64) {
-	if cpu.X86.AVX && len(dst) >= minAVXElements {
+	// Requires AVX2: expAVX reconstructs 2^k with 256-bit YMM integer ops
+	// (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ) that do not exist on AVX1-only CPUs.
+	// FMA is not used here, so AVX2 alone is the correct guard; AVX1-only CPUs
+	// fall back to the accurate Go path.
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements {
 		expAVX(dst, src)
 		return
 	}

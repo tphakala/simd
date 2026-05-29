@@ -3333,61 +3333,153 @@ GLOBL tanh64_clamp_lo<>(SB), RODATA|NOPTR, $32
 // Exp clamp thresholds: ±709.0 keeps the 2^k reconstruction inside the
 // representable float64 range (exp(709) ~= 8.2e307 < MaxFloat64). Matches the
 // pure-Go fallback's overflow/underflow clamp.
+// Widened to 4 lanes (32 bytes) so the 4/iter YMM activation kernels can load
+// the clamp directly with VMOVUPD. The scalar remainder path reads only the
+// first lane via VMOVSD.
 DATA exp_clamp_hi64<>+0x00(SB)/8, $0x4086280000000000  // 709.0
 DATA exp_clamp_hi64<>+0x08(SB)/8, $0x4086280000000000
-GLOBL exp_clamp_hi64<>(SB), RODATA|NOPTR, $16
+DATA exp_clamp_hi64<>+0x10(SB)/8, $0x4086280000000000
+DATA exp_clamp_hi64<>+0x18(SB)/8, $0x4086280000000000
+GLOBL exp_clamp_hi64<>(SB), RODATA|NOPTR, $32
 
 DATA exp_clamp_lo64<>+0x00(SB)/8, $0xC086280000000000  // -709.0
 DATA exp_clamp_lo64<>+0x08(SB)/8, $0xC086280000000000
-GLOBL exp_clamp_lo64<>(SB), RODATA|NOPTR, $16
+DATA exp_clamp_lo64<>+0x10(SB)/8, $0xC086280000000000
+DATA exp_clamp_lo64<>+0x18(SB)/8, $0xC086280000000000
+GLOBL exp_clamp_lo64<>(SB), RODATA|NOPTR, $32
 
 // Note: absf64mask is already defined at top of file
 
 // func sigmoidAVX(dst, src []float64)
-// Implements fast sigmoid approximation: σ(x) ≈ 0.5 + 0.5 * x / (1 + |x|)
-// This approximation is SIMD-friendly and commonly used in neural networks.
+// Computes accurate sigmoid: sigmoid(x) = 1 / (1 + e^(-x)).
+// Uses the same exp range reduction + degree-5 polynomial core as tanhAVX,
+// replacing the previous fast rational approximation (0.5 + 0.5*x/(1+|x|)),
+// which was far less accurate than the f32 kernel. Inputs are clamped via
+// z = -x in [-709, 709] so the 2^k reconstruction stays in range.
+// Processes 4 elements per iteration on YMM. The 2^k reconstruction is
+// vectorized with AVX2 integer ops (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ), so
+// this kernel must be dispatched only when cpu.X86.AVX2 is set; no FMA is used.
+// The 0-3 element tail uses the scalar 1/iter path below.
 TEXT ·sigmoidAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DI
     MOVQ dst_len+8(FP), CX
     MOVQ src_base+24(FP), SI
 
-    // Load constants (use unaligned loads to avoid alignment faults)
-    VMOVUPD sigmoid_half64<>(SB), Y8   // Y8 = 0.5
-    VMOVUPD sigmoid_one64<>(SB), Y9    // Y9 = 1.0
-    VMOVUPD absf64mask<>(SB), Y10      // Y10 = abs mask
+    // Load constants into YMM registers (all are 32-byte / 4-lane RODATA).
+    // The low 128 bits (X9-X15) are reused by the scalar remainder path.
+    VMOVUPD tanh64_log2e<>(SB), Y9     // Y9 = log2(e)
+    VMOVUPD tanh64_ln2<>(SB), Y10      // Y10 = ln(2)
+    VMOVUPD sigmoid_one64<>(SB), Y11   // Y11 = 1.0
+    VMOVUPD sigmoid_half64<>(SB), Y12  // Y12 = 0.5 (c2)
+    VMOVUPD tanh64_c3<>(SB), Y13       // Y13 = 1/6 (c3)
+    VMOVUPD tanh64_c4<>(SB), Y14       // Y14 = 1/24 (c4)
+    VMOVUPD tanh64_c5<>(SB), Y15       // Y15 = 1/120 (c5)
 
-    // Process 4 elements per iteration
-    MOVQ CX, AX
-    SHRQ $2, AX
+    // Process 4 elements per iteration (YMM = 256 bits = 4 x float64)
+    MOVQ CX, R8
+    SHRQ $2, R8                        // len / 4
     JZ   sigmoid64_remainder
 
 sigmoid64_loop4:
-    VMOVUPD (SI), Y0               // Y0 = x
-    VANDPD Y10, Y0, Y1             // Y1 = |x|
-    VADDPD Y9, Y1, Y2              // Y2 = 1 + |x|
-    VDIVPD Y2, Y0, Y3              // Y3 = x / (1 + |x|)
-    VMULPD Y8, Y3, Y4              // Y4 = 0.5 * x / (1 + |x|)
-    VADDPD Y8, Y4, Y5              // Y5 = 0.5 + 0.5 * x / (1 + |x|)
-    VMOVUPD Y5, (DI)               // store result
+    VMOVUPD (SI), Y0                   // Y0 = 4 x float64 = x
 
+    // z = -x
+    VXORPD Y1, Y1, Y1                  // Y1 = 0
+    VSUBPD Y0, Y1, Y0                  // Y0 = -x = z
+
+    // Clamp z to [-709, 709] so 2^k stays representable
+    VMOVUPD exp_clamp_hi64<>(SB), Y1   // Y1 = 709.0
+    VMOVUPD exp_clamp_lo64<>(SB), Y2   // Y2 = -709.0
+    VMINPD Y1, Y0, Y0                  // Y0 = min(z, 709)
+    VMAXPD Y2, Y0, Y0                  // Y0 = max(min(z, 709), -709)
+
+    // Range reduction: k = round(z * log2e), r = z - k * ln2
+    VMULPD Y9, Y0, Y1                  // Y1 = z * log2e
+    VROUNDPD $0, Y1, Y2                // Y2 = k = round(Y1) (nearest)
+    VMULPD Y10, Y2, Y3                 // Y3 = k * ln2
+    VSUBPD Y3, Y0, Y3                  // Y3 = r = z - k * ln2
+
+    // Polynomial: exp(r) ≈ 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
+    // Horner's method
+    VMULPD Y3, Y15, Y4                 // Y4 = r * c5
+    VADDPD Y14, Y4, Y4                 // Y4 = c4 + r*c5
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c4 + r*c5)
+    VADDPD Y13, Y4, Y4                 // Y4 = c3 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c3 + ...)
+    VADDPD Y12, Y4, Y4                 // Y4 = c2 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c2 + ...)
+    VADDPD Y11, Y4, Y4                 // Y4 = 1 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(1 + ...)
+    VADDPD Y11, Y4, Y4                 // Y4 = exp(r)
+
+    // Reconstruct exp(z) = exp(r) * 2^k for all 4 lanes with AVX2 integer ops.
+    // k is integer-valued (from VROUNDPD), so float64->int32 truncation is exact.
+    VCVTTPD2DQY Y2, X5                 // X5 = 4 x int32(k)
+    VPMOVSXDQ X5, Y5                   // Y5 = 4 x int64(k) (sign-extended; k may be < 0)
+    VPSLLQ $52, Y5, Y5                 // Y5 = k << 52 (into the exponent field)
+    VPADDQ sigmoid_one64<>(SB), Y5, Y5 // Y5 = (k<<52) + bits(1.0) = bits(2^k)
+    VMULPD Y5, Y4, Y4                  // Y4 = exp(z) = exp(-x)
+
+    // sigmoid(x) = 1 / (1 + exp(-x))
+    VADDPD Y4, Y11, Y6                 // Y6 = 1 + exp(-x)
+    VDIVPD Y6, Y11, Y0                 // Y0 = 1 / (1 + exp(-x))
+
+    VMOVUPD Y0, (DI)                   // store 4 results
     ADDQ $32, SI
     ADDQ $32, DI
-    DECQ AX
+    DECQ R8
     JNZ  sigmoid64_loop4
 
 sigmoid64_remainder:
-    ANDQ $3, CX
+    ANDQ $3, CX                        // remainder = len % 4
     JZ   sigmoid64_done
 
 sigmoid64_scalar:
-    VMOVSD (SI), X0                // X0 = x
-    VANDPD X10, X0, X1             // X1 = |x|
-    VADDSD X9, X1, X2              // X2 = 1 + |x|
-    VDIVSD X2, X0, X3              // X3 = x / (1 + |x|)
-    VMULSD X8, X3, X4              // X4 = 0.5 * x / (1 + |x|)
-    VADDSD X8, X4, X5              // X5 = 0.5 + 0.5 * x / (1 + |x|)
-    VMOVSD X5, (DI)                // store result
+    VMOVSD (SI), X0                    // X0 = x
 
+    // z = -x
+    VXORPD X1, X1, X1
+    VSUBSD X0, X1, X0                  // X0 = -x
+
+    // Clamp to [-709, 709]
+    MOVQ $0x4086280000000000, AX       // 709.0
+    VMOVQ AX, X1
+    MOVQ $0xC086280000000000, AX       // -709.0
+    VMOVQ AX, X2
+    VMINSD X1, X0, X0
+    VMAXSD X2, X0, X0
+
+    // Range reduction
+    VMULSD X9, X0, X1                  // X1 = z * log2e
+    VROUNDSD $0, X1, X1, X2            // X2 = k = round(X1)
+    VMULSD X10, X2, X3                 // X3 = k * ln2
+    VSUBSD X3, X0, X3                  // X3 = r = z - k * ln2
+
+    // Horner's polynomial
+    VMULSD X3, X15, X4                 // X4 = r * c5
+    VADDSD X14, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X13, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X12, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X11, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X11, X4, X4                 // X4 = exp(r)
+
+    // Reconstruct 2^k
+    VCVTTSD2SI X2, AX                  // AX = int64(k)
+    SHLQ $52, AX                       // AX = k << 52
+    MOVQ $0x3FF0000000000000, BX       // 1.0's bits
+    ADDQ BX, AX                        // AX = 2^k bits
+    VMOVQ AX, X5
+    VMULSD X5, X4, X4                  // X4 = exp(-x)
+
+    // sigmoid = 1 / (1 + exp(-x))
+    VADDSD X4, X11, X6                 // X6 = 1 + exp(-x)
+    VDIVSD X6, X11, X0                 // X0 = 1 / (1 + exp(-x))
+
+    VMOVSD X0, (DI)
     ADDQ $8, SI
     ADDQ $8, DI
     DECQ CX
@@ -3491,95 +3583,86 @@ relu64_done:
 
 // func tanhAVX(dst, src []float64)
 // Computes accurate tanh: tanh(x) = (1 - e^(-2x)) / (1 + e^(-2x))
-// Uses range reduction and polynomial approximation for exp.
-// Processes 2 elements at a time (XMM registers) due to Go assembler limitations.
+// Uses range reduction and a degree-5 polynomial approximation for exp.
+// Processes 4 elements per iteration on YMM. The 2^k reconstruction is
+// vectorized with AVX2 integer ops (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ), so
+// this kernel must be dispatched only when cpu.X86.AVX2 is set; no FMA is used.
+// The 0-3 element tail uses the scalar 1/iter path below.
 TEXT ·tanhAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ src_base+24(FP), SI
 
-    // Load constants into XMM registers (using low 128-bits of YMM loads)
-    VMOVUPD tanh64_two<>(SB), X8       // X8 = 2.0
-    VMOVUPD tanh64_log2e<>(SB), X9     // X9 = log2(e)
-    VMOVUPD tanh64_ln2<>(SB), X10      // X10 = ln(2)
-    VMOVUPD sigmoid_one64<>(SB), X11   // X11 = 1.0
-    VMOVUPD sigmoid_half64<>(SB), X12  // X12 = 0.5 (c2)
-    VMOVUPD tanh64_c3<>(SB), X13       // X13 = 1/6 (c3)
-    VMOVUPD tanh64_c4<>(SB), X14       // X14 = 1/24 (c4)
-    VMOVUPD tanh64_c5<>(SB), X15       // X15 = 1/120 (c5)
+    // Load constants into YMM registers (all are 32-byte / 4-lane RODATA).
+    // The low 128 bits (X8-X15) are reused by the scalar remainder path.
+    VMOVUPD tanh64_two<>(SB), Y8       // Y8 = 2.0
+    VMOVUPD tanh64_log2e<>(SB), Y9     // Y9 = log2(e)
+    VMOVUPD tanh64_ln2<>(SB), Y10      // Y10 = ln(2)
+    VMOVUPD sigmoid_one64<>(SB), Y11   // Y11 = 1.0
+    VMOVUPD sigmoid_half64<>(SB), Y12  // Y12 = 0.5 (c2)
+    VMOVUPD tanh64_c3<>(SB), Y13       // Y13 = 1/6 (c3)
+    VMOVUPD tanh64_c4<>(SB), Y14       // Y14 = 1/24 (c4)
+    VMOVUPD tanh64_c5<>(SB), Y15       // Y15 = 1/120 (c5)
 
-    // Process 2 elements per iteration (XMM = 128 bits = 2 x float64)
+    // Process 4 elements per iteration (YMM = 256 bits = 4 x float64)
     MOVQ CX, R8
-    SHRQ $1, R8                        // len / 2
+    SHRQ $2, R8                        // len / 4
     JZ   tanh64_remainder
 
-tanh64_loop2:
-    VMOVUPD (SI), X0                   // X0 = 2 x float64
+tanh64_loop4:
+    VMOVUPD (SI), Y0                   // Y0 = 4 x float64
 
     // Compute z = -2x
-    VXORPD X1, X1, X1                  // X1 = 0
-    VSUBPD X0, X1, X0                  // X0 = -x
-    VMULPD X8, X0, X0                  // X0 = -2x = z
+    VXORPD Y1, Y1, Y1                  // Y1 = 0
+    VSUBPD Y0, Y1, Y0                  // Y0 = -x
+    VMULPD Y8, Y0, Y0                  // Y0 = -2x = z
 
     // Clamp z to [-20, 20]
-    VMOVUPD tanh64_clamp_hi<>(SB), X1  // X1 = 20.0
-    VMOVUPD tanh64_clamp_lo<>(SB), X2  // X2 = -20.0
-    VMINPD X1, X0, X0                  // X0 = min(z, 20)
-    VMAXPD X2, X0, X0                  // X0 = max(min(z, 20), -20)
+    VMOVUPD tanh64_clamp_hi<>(SB), Y1  // Y1 = 20.0
+    VMOVUPD tanh64_clamp_lo<>(SB), Y2  // Y2 = -20.0
+    VMINPD Y1, Y0, Y0                  // Y0 = min(z, 20)
+    VMAXPD Y2, Y0, Y0                  // Y0 = max(min(z, 20), -20)
 
     // Range reduction: k = round(z * log2e), r = z - k * ln2
-    VMULPD X9, X0, X1                  // X1 = z * log2e
-    VROUNDPD $0, X1, X2                // X2 = k = round(X1) (nearest)
-    VMULPD X10, X2, X3                 // X3 = k * ln2
-    VSUBPD X3, X0, X3                  // X3 = r = z - k * ln2
+    VMULPD Y9, Y0, Y1                  // Y1 = z * log2e
+    VROUNDPD $0, Y1, Y2                // Y2 = k = round(Y1) (nearest)
+    VMULPD Y10, Y2, Y3                 // Y3 = k * ln2
+    VSUBPD Y3, Y0, Y3                  // Y3 = r = z - k * ln2
 
     // Polynomial: exp(r) ≈ 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
     // Horner's method
-    VMULPD X3, X15, X4                 // X4 = r * c5
-    VADDPD X14, X4, X4                 // X4 = c4 + r*c5
-    VMULPD X3, X4, X4                  // X4 = r*(c4 + r*c5)
-    VADDPD X13, X4, X4                 // X4 = c3 + r*(...)
-    VMULPD X3, X4, X4                  // X4 = r*(c3 + ...)
-    VADDPD X12, X4, X4                 // X4 = c2 + r*(...)
-    VMULPD X3, X4, X4                  // X4 = r*(c2 + ...)
-    VADDPD X11, X4, X4                 // X4 = 1 + r*(...)
-    VMULPD X3, X4, X4                  // X4 = r*(1 + ...)
-    VADDPD X11, X4, X4                 // X4 = exp(r)
+    VMULPD Y3, Y15, Y4                 // Y4 = r * c5
+    VADDPD Y14, Y4, Y4                 // Y4 = c4 + r*c5
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c4 + r*c5)
+    VADDPD Y13, Y4, Y4                 // Y4 = c3 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c3 + ...)
+    VADDPD Y12, Y4, Y4                 // Y4 = c2 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c2 + ...)
+    VADDPD Y11, Y4, Y4                 // Y4 = 1 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(1 + ...)
+    VADDPD Y11, Y4, Y4                 // Y4 = exp(r)
 
-    // Reconstruct exp(z) = exp(r) * 2^k for 2 elements
-    // Process each k value separately via scalar conversion
-    // Element 0:
-    VCVTTSD2SI X2, AX                  // AX = int64(k[0])
-    SHLQ $52, AX                       // k[0] << 52
-    MOVQ $0x3FF0000000000000, BX
-    ADDQ BX, AX                        // 2^k[0] bits
-    VMOVQ AX, X5                       // X5[0] = 2^k[0]
-
-    // Element 1:
-    VPSRLDQ $8, X2, X6                 // X6 = k[1] (shift right by 8 bytes)
-    VCVTTSD2SI X6, AX                  // AX = int64(k[1])
-    SHLQ $52, AX
-    MOVQ $0x3FF0000000000000, BX
-    ADDQ BX, AX
-    VMOVQ AX, X6                       // X6[0] = 2^k[1]
-
-    // Combine: X5 = {2^k[0], 2^k[1]}
-    VPUNPCKLQDQ X6, X5, X5             // X5 = {2^k[0], 2^k[1]}
-    VMULPD X5, X4, X4                  // X4 = exp(z) = exp(-2x)
+    // Reconstruct exp(z) = exp(r) * 2^k for all 4 lanes with AVX2 integer ops.
+    // k is integer-valued (from VROUNDPD), so float64->int32 truncation is exact.
+    VCVTTPD2DQY Y2, X5                 // X5 = 4 x int32(k)
+    VPMOVSXDQ X5, Y5                   // Y5 = 4 x int64(k) (sign-extended; k may be < 0)
+    VPSLLQ $52, Y5, Y5                 // Y5 = k << 52 (into the exponent field)
+    VPADDQ sigmoid_one64<>(SB), Y5, Y5 // Y5 = (k<<52) + bits(1.0) = bits(2^k)
+    VMULPD Y5, Y4, Y4                  // Y4 = exp(z) = exp(-2x)
 
     // tanh(x) = (1 - exp(-2x)) / (1 + exp(-2x))
-    VSUBPD X4, X11, X5                 // X5 = 1 - exp(-2x)
-    VADDPD X4, X11, X6                 // X6 = 1 + exp(-2x)
-    VDIVPD X6, X5, X0                  // X0 = tanh(x)
+    VSUBPD Y4, Y11, Y5                 // Y5 = 1 - exp(-2x)
+    VADDPD Y4, Y11, Y6                 // Y6 = 1 + exp(-2x)
+    VDIVPD Y6, Y5, Y0                  // Y0 = tanh(x)
 
-    VMOVUPD X0, (DX)                   // store 2 results
-    ADDQ $16, SI
-    ADDQ $16, DX
+    VMOVUPD Y0, (DX)                   // store 4 results
+    ADDQ $32, SI
+    ADDQ $32, DX
     DECQ R8
-    JNZ  tanh64_loop2
+    JNZ  tanh64_loop4
 
 tanh64_remainder:
-    ANDQ $1, CX                        // remainder = len % 2
+    ANDQ $3, CX                        // remainder = len % 4
     JZ   tanh64_done
 
 tanh64_scalar:
@@ -3644,78 +3727,74 @@ tanh64_done:
 // Computes e^x using range reduction and a degree-5 polynomial, the same exp
 // core as tanhAVX but without the -2x scaling and the tanh wrap. Inputs are
 // clamped to [-709, 709] to match the pure-Go fallback: results stay finite
-// and large-negative inputs underflow to 0. Processes 2 elements per
-// iteration (XMM = 2 x float64).
+// and large-negative inputs underflow to 0. Processes 4 elements per iteration
+// on YMM. The 2^k reconstruction is vectorized with AVX2 integer ops
+// (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ), so this kernel must be dispatched only
+// when cpu.X86.AVX2 is set; no FMA is used. The 0-3 element tail uses the
+// scalar 1/iter path below.
 TEXT ·expAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
     MOVQ src_base+24(FP), SI
 
-    VMOVUPD tanh64_log2e<>(SB), X9     // X9 = log2(e)
-    VMOVUPD tanh64_ln2<>(SB), X10      // X10 = ln(2)
-    VMOVUPD sigmoid_one64<>(SB), X11   // X11 = 1.0
-    VMOVUPD sigmoid_half64<>(SB), X12  // X12 = 0.5 (c2)
-    VMOVUPD tanh64_c3<>(SB), X13       // X13 = 1/6 (c3)
-    VMOVUPD tanh64_c4<>(SB), X14       // X14 = 1/24 (c4)
-    VMOVUPD tanh64_c5<>(SB), X15       // X15 = 1/120 (c5)
+    // Load constants into YMM registers (all are 32-byte / 4-lane RODATA).
+    // The low 128 bits (X9-X15) are reused by the scalar remainder path.
+    VMOVUPD tanh64_log2e<>(SB), Y9     // Y9 = log2(e)
+    VMOVUPD tanh64_ln2<>(SB), Y10      // Y10 = ln(2)
+    VMOVUPD sigmoid_one64<>(SB), Y11   // Y11 = 1.0
+    VMOVUPD sigmoid_half64<>(SB), Y12  // Y12 = 0.5 (c2)
+    VMOVUPD tanh64_c3<>(SB), Y13       // Y13 = 1/6 (c3)
+    VMOVUPD tanh64_c4<>(SB), Y14       // Y14 = 1/24 (c4)
+    VMOVUPD tanh64_c5<>(SB), Y15       // Y15 = 1/120 (c5)
 
-    // Process 2 elements per iteration
+    // Process 4 elements per iteration (YMM = 256 bits = 4 x float64)
     MOVQ CX, R8
-    SHRQ $1, R8
+    SHRQ $2, R8                        // len / 4
     JZ   exp64_remainder
 
-exp64_loop2:
-    VMOVUPD (SI), X0                   // X0 = 2 x float64
+exp64_loop4:
+    VMOVUPD (SI), Y0                   // Y0 = 4 x float64
 
     // Clamp x to [-709, 709]
-    VMOVUPD exp_clamp_hi64<>(SB), X1
-    VMOVUPD exp_clamp_lo64<>(SB), X2
-    VMINPD X1, X0, X0
-    VMAXPD X2, X0, X0
+    VMOVUPD exp_clamp_hi64<>(SB), Y1
+    VMOVUPD exp_clamp_lo64<>(SB), Y2
+    VMINPD Y1, Y0, Y0
+    VMAXPD Y2, Y0, Y0
 
     // Range reduction: k = round(x * log2e), r = x - k * ln2
-    VMULPD X9, X0, X1                  // X1 = x * log2e
-    VROUNDPD $0, X1, X2                // X2 = k = round(X1)
-    VMULPD X10, X2, X3                 // X3 = k * ln2
-    VSUBPD X3, X0, X3                  // X3 = r = x - k * ln2
+    VMULPD Y9, Y0, Y1                  // Y1 = x * log2e
+    VROUNDPD $0, Y1, Y2                // Y2 = k = round(Y1)
+    VMULPD Y10, Y2, Y3                 // Y3 = k * ln2
+    VSUBPD Y3, Y0, Y3                  // Y3 = r = x - k * ln2
 
     // Polynomial: exp(r) ~= 1 + r*(1 + r*(c2 + r*(c3 + r*(c4 + r*c5))))
-    VMULPD X3, X15, X4                 // X4 = r * c5
-    VADDPD X14, X4, X4                 // X4 = c4 + r*c5
-    VMULPD X3, X4, X4                  // X4 = r*(c4 + r*c5)
-    VADDPD X13, X4, X4                 // X4 = c3 + r*(...)
-    VMULPD X3, X4, X4                  // X4 = r*(c3 + ...)
-    VADDPD X12, X4, X4                 // X4 = c2 + r*(...)
-    VMULPD X3, X4, X4                  // X4 = r*(c2 + ...)
-    VADDPD X11, X4, X4                 // X4 = 1 + r*(...)
-    VMULPD X3, X4, X4                  // X4 = r*(1 + ...)
-    VADDPD X11, X4, X4                 // X4 = exp(r)
+    VMULPD Y3, Y15, Y4                 // Y4 = r * c5
+    VADDPD Y14, Y4, Y4                 // Y4 = c4 + r*c5
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c4 + r*c5)
+    VADDPD Y13, Y4, Y4                 // Y4 = c3 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c3 + ...)
+    VADDPD Y12, Y4, Y4                 // Y4 = c2 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(c2 + ...)
+    VADDPD Y11, Y4, Y4                 // Y4 = 1 + r*(...)
+    VMULPD Y3, Y4, Y4                  // Y4 = r*(1 + ...)
+    VADDPD Y11, Y4, Y4                 // Y4 = exp(r)
 
-    // Reconstruct exp(x) = exp(r) * 2^k for 2 elements
-    // Element 0:
-    VCVTTSD2SI X2, AX                  // AX = int64(k[0])
-    SHLQ $52, AX                       // k[0] << 52
-    MOVQ $0x3FF0000000000000, BX
-    ADDQ BX, AX                        // 2^k[0] bits
-    VMOVQ AX, X5
-    // Element 1:
-    VPSRLDQ $8, X2, X6                 // X6 = k[1]
-    VCVTTSD2SI X6, AX                  // AX = int64(k[1])
-    SHLQ $52, AX
-    MOVQ $0x3FF0000000000000, BX
-    ADDQ BX, AX
-    VMOVQ AX, X6
-    VPUNPCKLQDQ X6, X5, X5             // X5 = {2^k[0], 2^k[1]}
-    VMULPD X5, X4, X4                  // X4 = exp(x)
+    // Reconstruct exp(x) = exp(r) * 2^k for all 4 lanes with AVX2 integer ops.
+    // k is integer-valued (from VROUNDPD), so float64->int32 truncation is exact.
+    VCVTTPD2DQY Y2, X5                 // X5 = 4 x int32(k)
+    VPMOVSXDQ X5, Y5                   // Y5 = 4 x int64(k) (sign-extended; k may be < 0)
+    VPSLLQ $52, Y5, Y5                 // Y5 = k << 52 (into the exponent field)
+    VPADDQ sigmoid_one64<>(SB), Y5, Y5 // Y5 = (k<<52) + bits(1.0) = bits(2^k)
+    VMULPD Y5, Y4, Y4                  // Y4 = exp(x)
 
-    VMOVUPD X4, (DX)                   // store 2 results
-    ADDQ $16, SI
-    ADDQ $16, DX
+    VMOVUPD Y4, (DX)                   // store 4 results
+    ADDQ $32, SI
+    ADDQ $32, DX
     DECQ R8
-    JNZ  exp64_loop2
+    JNZ  exp64_loop4
 
 exp64_remainder:
-    ANDQ $1, CX
+    ANDQ $3, CX
     JZ   exp64_done
 
 exp64_scalar:

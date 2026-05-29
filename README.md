@@ -113,7 +113,7 @@ fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 |                 | `Normalize(dst, a)`                 | Unit vector normalization     | 8x / 4x / 2x                        |
 |                 | `CumulativeSum(dst, a)`             | Running sum                   | Sequential                          |
 | **Range**       | `Clamp(dst, a, min, max)`           | Clamp to range                | 8x / 4x / 2x                        |
-| **Activation**  | `Sigmoid(dst, src)`                 | Sigmoid: 1/(1+e^-x)           | 4x (AVX) / 2x (NEON)                |
+| **Activation**  | `Sigmoid(dst, src)`                 | Sigmoid: 1/(1+e^-x)           | 8x / 4x / 2x                        |
 |                 | `ReLU(dst, src)`                    | Rectified Linear Unit         | 8x / 4x / 2x                        |
 |                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 8x / 4x / 2x                        |
 |                 | `Exp(dst, src)`                     | Exponential e^x               | 8x / 4x / 2x                        |
