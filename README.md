@@ -114,10 +114,10 @@ fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
 |                 | `CumulativeSum(dst, a)`             | Running sum                   | Sequential                          |
 | **Range**       | `Clamp(dst, a, min, max)`           | Clamp to range                | 8x / 4x / 2x                        |
 | **Activation**  | `Sigmoid(dst, src)`                 | Sigmoid: 1/(1+e^-x)           | 4x (AVX2) / 2x (NEON)               |
-|                 | `ReLU(dst, src)`                    | Rectified Linear Unit         | 8x / 4x / 2x                        |
+|                 | `ReLU(dst, src)`                    | Rectified Linear Unit         | 4x (AVX) / 2x (NEON)                |
 |                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 4x (AVX2) / 2x (NEON)               |
 |                 | `Exp(dst, src)`                     | Exponential e^x               | 4x (AVX2) / 2x (NEON)               |
-|                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 8x / 4x / 2x                        |
+|                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 4x (AVX) / 2x (NEON)                |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |

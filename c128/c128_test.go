@@ -553,6 +553,25 @@ func TestAbsSqGo(t *testing.T) {
 	}
 }
 
+func TestConj_OddLarge(t *testing.T) {
+	// Exercises the 2-wide conjAVX loop plus the single-element remainder
+	// after many iterations (odd length greater than the SIMD width).
+	for _, n := range []int{99, 101, 1001} {
+		a := make([]complex128, n)
+		for i := range n {
+			a[i] = complex(float64(i+1), float64(-i-2))
+		}
+		dst := make([]complex128, n)
+		Conj(dst, a)
+		for i := range n {
+			expected := cmplx.Conj(a[i])
+			if !complexClose(dst[i], expected) {
+				t.Fatalf("Conj_OddLarge(n=%d)[%d] = %v, want %v", n, i, dst[i], expected)
+			}
+		}
+	}
+}
+
 func TestConjGo(t *testing.T) {
 	a := []complex128{1 + 2i, 3 + 4i}
 	dst := make([]complex128, 2)
