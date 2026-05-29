@@ -31,6 +31,21 @@ func TestScanSource(t *testing.T) {
 	}
 }
 
+func TestScanSourceIgnoresCommentedOutWord(t *testing.T) {
+	// Line 1 is a commented-out directive; line 2 is the real one.
+	src := "    // WORD $0x4EC03480\n    WORD $0x4E24CC40"
+	got := ScanSource(src)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 directive (commented-out one ignored), got %d: %+v", len(got), got)
+	}
+	if got[0].Hex != 0x4E24CC40 {
+		t.Errorf("hex = 0x%08X, want 0x4E24CC40", got[0].Hex)
+	}
+	if got[0].Source != NoComment {
+		t.Errorf("Source = %v, want NoComment (commented-out WORD must not become a comment)", got[0].Source)
+	}
+}
+
 func TestParseWordLine(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -61,6 +76,11 @@ func TestParseWordLine(t *testing.T) {
 		{
 			name:   "comment only line",
 			line:   "    // FADD V2.8H, V0.8H, V1.8H",
+			wantOK: false,
+		},
+		{
+			name:   "commented-out word directive",
+			line:   "    // WORD $0x4EC03480",
 			wantOK: false,
 		},
 	}
@@ -104,6 +124,7 @@ func TestNormalize(t *testing.T) {
 	}{
 		{"FMLA V0.4S, V2.4S, V4.4S", "FMLA V0.4S,V2.4S,V4.4S"},
 		{"fmla v0.4s,  v2.4s,v4.4s", "FMLA V0.4S,V2.4S,V4.4S"},
+		{"FMLA V0.4S , V2.4S", "FMLA V0.4S,V2.4S"},
 	}
 	for _, tt := range tests {
 		if got := Normalize(tt.in); got != tt.want {

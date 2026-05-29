@@ -49,7 +49,7 @@ type Directive struct {
 // its inline comment, or the comment on the line directly above it.
 func ScanSource(src string) []Directive {
 	lines := strings.Split(src, "\n")
-	var out []Directive
+	out := make([]Directive, 0, len(lines))
 	for i, line := range lines {
 		hex, inline, ok := ParseWordLine(line)
 		if !ok {
@@ -62,8 +62,12 @@ func ScanSource(src string) []Directive {
 			d.Source = InlineComment
 		case i > 0:
 			if prev := strings.TrimSpace(lines[i-1]); strings.HasPrefix(prev, "//") {
-				d.Comment = strings.TrimSpace(strings.TrimPrefix(prev, "//"))
-				d.Source = PrecedingComment
+				// A commented-out WORD directly above is disabled code, not a
+				// description of this instruction.
+				if text := strings.TrimSpace(strings.TrimPrefix(prev, "//")); !strings.HasPrefix(text, "WORD") {
+					d.Comment = text
+					d.Source = PrecedingComment
+				}
 			}
 		}
 		out = append(out, d)
@@ -91,6 +95,13 @@ var commentRe = regexp.MustCompile(`//\s*(.*)$`)
 // ParseWordLine extracts the hex value and inline comment from a single
 // assembly line. ok is false when the line is not a WORD $0x... directive.
 func ParseWordLine(line string) (hex uint32, comment string, ok bool) {
+	// Ignore commented-out directives like "// WORD $0x...": if WORD appears
+	// only after a // on the line, it is disabled code, not an instruction.
+	if c := strings.Index(line, "//"); c != -1 {
+		if w := strings.Index(line, "WORD"); w > c {
+			return 0, "", false
+		}
+	}
 	m := wordLineRe.FindStringSubmatch(line)
 	if m == nil {
 		return 0, "", false
@@ -121,6 +132,7 @@ func Decode(hex uint32) (string, error) {
 func Normalize(s string) string {
 	s = strings.ToUpper(strings.TrimSpace(s))
 	s = strings.Join(strings.Fields(s), " ")
+	s = strings.ReplaceAll(s, " ,", ",")
 	s = strings.ReplaceAll(s, ", ", ",")
 	mnem, rest, hasRest := strings.Cut(s, " ")
 	if canon, found := aliases[mnem]; found {

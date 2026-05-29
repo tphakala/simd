@@ -58,7 +58,9 @@ func findArm64Asm(t *testing.T) []string {
 			return err
 		}
 		if !d.IsDir() && strings.HasSuffix(p, "_arm64.s") {
-			files = append(files, p)
+			// Normalize to forward slashes so allow-list matching and
+			// reporting are identical on Windows (WalkDir yields backslashes).
+			files = append(files, filepath.ToSlash(p))
 		}
 		return nil
 	})
