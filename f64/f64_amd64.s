@@ -3135,62 +3135,63 @@ TEXT ·cubicInterpDotAVX(SB), NOSPLIT, $0-136
     SHRQ $4, AX                // AX = len / 16
     JZ   cubic_avx_loop4_check
 
+    // R11 is a shared byte-offset index for all 5 streams (hist, a, b, c, d),
+    // so a single increment per iteration replaces five pointer advances.
+    XORQ R11, R11
+
 cubic_avx_loop16:
     // Multi-stage Horner with four independent chains.
     // VFMADD213PD dst, mul, add: dst = dst*mul + add (Y7 = broadcast x).
+    // All loads use base+R11 indexing; R11 is the shared byte offset.
 
     // Stage 1: p = c + x*d (4 parallel chains)
-    VMOVUPD 0(R9), Y1
-    VMOVUPD 0(R10), Y5
+    VMOVUPD 0(R9)(R11*1), Y1
+    VMOVUPD 0(R10)(R11*1), Y5
     VFMADD231PD Y5, Y7, Y1
 
-    VMOVUPD 32(R9), Y2
-    VMOVUPD 32(R10), Y5
+    VMOVUPD 32(R9)(R11*1), Y2
+    VMOVUPD 32(R10)(R11*1), Y5
     VFMADD231PD Y5, Y7, Y2
 
-    VMOVUPD 64(R9), Y3
-    VMOVUPD 64(R10), Y5
+    VMOVUPD 64(R9)(R11*1), Y3
+    VMOVUPD 64(R10)(R11*1), Y5
     VFMADD231PD Y5, Y7, Y3
 
-    VMOVUPD 96(R9), Y4
-    VMOVUPD 96(R10), Y5
+    VMOVUPD 96(R9)(R11*1), Y4
+    VMOVUPD 96(R10)(R11*1), Y5
     VFMADD231PD Y5, Y7, Y4
 
     // Stage 2: p = b + x*p
-    VMOVUPD 0(R8), Y5
+    VMOVUPD 0(R8)(R11*1), Y5
     VFMADD213PD Y5, Y7, Y1
-    VMOVUPD 32(R8), Y5
+    VMOVUPD 32(R8)(R11*1), Y5
     VFMADD213PD Y5, Y7, Y2
-    VMOVUPD 64(R8), Y5
+    VMOVUPD 64(R8)(R11*1), Y5
     VFMADD213PD Y5, Y7, Y3
-    VMOVUPD 96(R8), Y5
+    VMOVUPD 96(R8)(R11*1), Y5
     VFMADD213PD Y5, Y7, Y4
 
     // Stage 3: coef = a + x*p
-    VMOVUPD 0(DI), Y5
+    VMOVUPD 0(DI)(R11*1), Y5
     VFMADD213PD Y5, Y7, Y1
-    VMOVUPD 32(DI), Y5
+    VMOVUPD 32(DI)(R11*1), Y5
     VFMADD213PD Y5, Y7, Y2
-    VMOVUPD 64(DI), Y5
+    VMOVUPD 64(DI)(R11*1), Y5
     VFMADD213PD Y5, Y7, Y3
-    VMOVUPD 96(DI), Y5
+    VMOVUPD 96(DI)(R11*1), Y5
     VFMADD213PD Y5, Y7, Y4
 
     // Accumulate: Σ hist * coef with independent accumulators.
-    VMOVUPD 0(SI), Y5
+    VMOVUPD 0(SI)(R11*1), Y5
     VFMADD231PD Y5, Y1, Y0
-    VMOVUPD 32(SI), Y5
+    VMOVUPD 32(SI)(R11*1), Y5
     VFMADD231PD Y5, Y2, Y11
-    VMOVUPD 64(SI), Y5
+    VMOVUPD 64(SI)(R11*1), Y5
     VFMADD231PD Y5, Y3, Y12
-    VMOVUPD 96(SI), Y5
+    VMOVUPD 96(SI)(R11*1), Y5
     VFMADD231PD Y5, Y4, Y13
 
-    ADDQ $128, SI
-    ADDQ $128, DI
-    ADDQ $128, R8
-    ADDQ $128, R9
-    ADDQ $128, R10
+    ADDQ $128, R11             // single index advance (was 5 pointer adds)
     DECQ AX
     JNZ  cubic_avx_loop16
 
@@ -3198,6 +3199,14 @@ cubic_avx_loop16:
     VADDPD Y11, Y0, Y0
     VADDPD Y12, Y0, Y0
     VADDPD Y13, Y0, Y0
+
+    // Advance base pointers once past the bytes consumed by loop16 so the
+    // loop4 and scalar tails resume at the correct offset.
+    ADDQ R11, SI
+    ADDQ R11, DI
+    ADDQ R11, R8
+    ADDQ R11, R9
+    ADDQ R11, R10
 
 cubic_avx_loop4_check:
     // Handle remaining 4-element vectors.
