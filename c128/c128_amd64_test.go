@@ -4,10 +4,24 @@ package c128
 
 import (
 	"math"
+	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/tphakala/simd/cpu"
 )
+
+// implName returns the symbol name of a dispatch function pointer, for use in
+// assertion failure messages.
+func implName(f any) string {
+	return runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
+}
+
+// sameImpl reports whether two dispatch function pointers refer to the same
+// function. Go does not allow func == func, so compare program counters.
+func sameImpl(a, b any) bool {
+	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
+}
 
 // Tests for init functions to ensure they properly configure function pointers
 // These tests are AMD64-specific because they test x86 SIMD initialization paths.
@@ -70,6 +84,52 @@ func TestInitAVX512(t *testing.T) {
 	mulImpl = savedMul
 }
 
+// c128Impls snapshots the dispatch function pointers so a test that mutates
+// them via an init*/selectImpl call can restore them for later tests.
+type c128Impls struct {
+	mul, mulConj, add, sub binaryOpFunc
+	scale                  scaleFunc
+	abs, absSq             unaryAbsFunc
+	conj                   unaryConjFunc
+}
+
+func saveImpls() c128Impls {
+	return c128Impls{mulImpl, mulConjImpl, addImpl, subImpl, scaleImpl, absImpl, absSqImpl, conjImpl}
+}
+
+func restoreImpls(s c128Impls) {
+	mulImpl, mulConjImpl, addImpl, subImpl = s.mul, s.mulConj, s.add, s.sub
+	scaleImpl = s.scale
+	absImpl, absSqImpl = s.abs, s.absSq
+	conjImpl = s.conj
+}
+
+// TestSelectImpl exercises every dispatch arm of selectImpl on any host,
+// including the AVX-without-FMA arm that never runs through init() on
+// FMA-capable CI hardware. It only assigns function pointers (no kernel is
+// executed), so it is safe regardless of the host's actual CPU features.
+func TestSelectImpl(t *testing.T) {
+	saved := saveImpls()
+	defer restoreImpls(saved)
+
+	cases := []struct {
+		name                      string
+		avx512, avxFMA, avx, sse2 bool
+	}{
+		{"avx512", true, false, false, false},
+		{"avxFMA", false, true, false, false},
+		{"avxNoFMA", false, false, true, false},
+		{"sse2", false, false, false, true},
+		{"go", false, false, false, false},
+	}
+	for _, c := range cases {
+		selectImpl(c.avx512, c.avxFMA, c.avx, c.sse2)
+		if mulImpl == nil || absSqImpl == nil || conjImpl == nil {
+			t.Fatalf("%s: selectImpl left a nil implementation pointer", c.name)
+		}
+	}
+}
+
 // TestInitAVXNoFMA verifies the AVX-without-FMA dispatch path: FMA-dependent
 // kernels (mul/mulConj/scale) fall back to SSE2, while FMA-free AVX kernels
 // (add/sub/abs/absSq/conj) stay on AVX. Runs on any AVX-capable CPU by calling
@@ -79,21 +139,34 @@ func TestInitAVXNoFMA(t *testing.T) {
 		t.Skip("AVX not supported on this CPU")
 	}
 
-	// Save every pointer initAVXNoFMA reassigns so later tests are unaffected.
-	saved := struct {
-		mul, mulConj, add, sub binaryOpFunc
-		scale                  scaleFunc
-		abs, absSq             unaryAbsFunc
-		conj                   unaryConjFunc
-	}{mulImpl, mulConjImpl, addImpl, subImpl, scaleImpl, absImpl, absSqImpl, conjImpl}
-	defer func() {
-		mulImpl, mulConjImpl, addImpl, subImpl = saved.mul, saved.mulConj, saved.add, saved.sub
-		scaleImpl = saved.scale
-		absImpl, absSqImpl = saved.abs, saved.absSq
-		conjImpl = saved.conj
-	}()
+	// Restore every pointer initAVXNoFMA reassigns so later tests are unaffected.
+	saved := saveImpls()
+	defer restoreImpls(saved)
 
 	initAVXNoFMA()
+
+	// Assert the dispatch targets, not just numeric results: a wrong impl
+	// (e.g. mulAVX or absSqSSE2) could still produce correct numbers and hide a
+	// regression. FMA-dependent kernels must fall back to SSE2; FMA-free kernels
+	// must stay on AVX.
+	targets := []struct {
+		name      string
+		got, want any
+	}{
+		{"mulImpl", mulImpl, mulSSE2},
+		{"mulConjImpl", mulConjImpl, mulConjSSE2},
+		{"scaleImpl", scaleImpl, scaleSSE2},
+		{"addImpl", addImpl, addAVX},
+		{"subImpl", subImpl, subAVX},
+		{"absImpl", absImpl, absAVX},
+		{"absSqImpl", absSqImpl, absSqAVX},
+		{"conjImpl", conjImpl, conjAVX},
+	}
+	for _, tt := range targets {
+		if !sameImpl(tt.got, tt.want) {
+			t.Errorf("%s dispatch = %s, want %s", tt.name, implName(tt.got), implName(tt.want))
+		}
+	}
 
 	// SSE2-routed kernel (FMA-dependent): mul.
 	a := []complex128{1 + 2i, 5 + 6i}

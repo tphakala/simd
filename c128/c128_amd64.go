@@ -33,16 +33,27 @@ var (
 )
 
 func init() {
-	// Select optimal implementation based on CPU features
-	// Priority: AVX-512 > AVX+FMA > AVX (no FMA) > SSE2 > Go
+	selectImpl(
+		cpu.X86.AVX512F && cpu.X86.AVX512VL,
+		cpu.X86.AVX && cpu.X86.FMA,
+		cpu.X86.AVX,
+		cpu.X86.SSE2,
+	)
+}
+
+// selectImpl assigns the operation implementations from CPU feature predicates.
+// Priority: AVX-512 > AVX+FMA > AVX (no FMA) > SSE2 > Go.
+// It is split out from init so the dispatch priority can be unit-tested on any
+// host, including the AVX-without-FMA path that never runs on FMA-capable CI.
+func selectImpl(avx512, avxFMA, avx, sse2 bool) {
 	switch {
-	case cpu.X86.AVX512F && cpu.X86.AVX512VL:
+	case avx512:
 		initAVX512()
-	case cpu.X86.AVX && cpu.X86.FMA:
+	case avxFMA:
 		initAVX()
-	case cpu.X86.AVX:
+	case avx:
 		initAVXNoFMA()
-	case cpu.X86.SSE2:
+	case sse2:
 		initSSE2()
 	default:
 		initGo()

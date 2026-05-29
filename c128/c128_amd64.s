@@ -761,7 +761,7 @@ abs_avx512_remainder1:
     JZ   abs_avx512_done
 
     // Handle 1 remaining element using XMM
-    MOVUPD (SI), X0        // Load one complex128
+    VMOVUPD (SI), X0       // Load one complex128 (VEX-encoded: avoid AVX-SSE transition)
     VMOVDDUP X0, X1        // X1 = [real, real]
     VSHUFPD $1, X0, X0, X2 // X2 = [imag, imag]
 
@@ -807,7 +807,7 @@ abs_avx_remainder:
     JZ   abs_avx_done
 
     // Handle 1 remaining element
-    MOVUPD (SI), X0
+    VMOVUPD (SI), X0       // VEX-encoded: avoid AVX-SSE transition penalty
     VMOVDDUP X0, X1
     VSHUFPD $1, X0, X0, X2
     VMULPD X1, X1, X1
@@ -917,7 +917,7 @@ abssq_avx512_remainder1:
     JZ   abssq_avx512_done
 
     // Handle 1 remaining element using XMM
-    MOVUPD (SI), X0        // Load one complex128
+    VMOVUPD (SI), X0       // Load one complex128 (VEX-encoded: avoid AVX-SSE transition)
     VMOVDDUP X0, X1        // X1 = [real, real]
     VSHUFPD $1, X0, X0, X2 // X2 = [imag, imag]
 
@@ -962,7 +962,7 @@ abssq_avx_remainder:
     JZ   abssq_avx_done
 
     // Handle 1 remaining element
-    MOVUPD (SI), X0
+    VMOVUPD (SI), X0       // VEX-encoded: avoid AVX-SSE transition penalty
     VMOVDDUP X0, X1
     VSHUFPD $1, X0, X0, X2
     VMULPD X1, X1, X1
