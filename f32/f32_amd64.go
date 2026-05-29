@@ -489,8 +489,11 @@ func cubicInterpDot32(hist, a, b, c, d []float32, x float32) float32 {
 func cubicInterpDotAVX(hist, a, b, c, d []float32, x float32) float32
 
 func sigmoid32(dst, src []float32) {
-	// Use AVX+FMA if available and have enough elements on both slices
-	if cpu.X86.AVX && cpu.X86.FMA && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+	// Requires AVX2: sigmoidAVX reconstructs 2^k with 256-bit YMM integer ops
+	// (VCVTPS2DQ/VPSLLD/VPADDD) that do not exist on AVX1-only CPUs. Gating on
+	// AVX+FMA let AVX1+FMA parts (e.g. AMD Piledriver) reach an AVX2-only kernel
+	// and fault with SIGILL. FMA is not used here, so AVX2 alone is correct.
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements && len(src) >= minAVXElements {
 		sigmoidAVX(dst, src)
 		return
 	}
@@ -522,7 +525,11 @@ func clampScale32(dst, src []float32, minVal, maxVal, scale float32) {
 }
 
 func tanh32(dst, src []float32) {
-	if cpu.X86.AVX && len(dst) >= minAVXElements && len(src) >= minAVXElements {
+	// Requires AVX2: tanhAVX reconstructs 2^k with 256-bit YMM integer ops
+	// (VCVTPS2DQ/VPSLLD/VPADDD) that do not exist on AVX1-only CPUs. Gating on
+	// plain AVX let AVX1 parts reach an AVX2-only kernel and fault with SIGILL.
+	// FMA is not used here, so AVX2 alone is correct.
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements && len(src) >= minAVXElements {
 		tanhAVX(dst, src)
 		return
 	}
