@@ -962,46 +962,28 @@ sigmoid64_neon_scalar_loop:
     FMOVD (R1), F0                    // F0 = x
     FNEGD F0, F0                      // F0 = -x = z
 
-    // Clamp to [-709, 709]
-    MOVD $0x4086280000000000, R10     // 709.0
-    FMOVD R10, F1
-    MOVD $0xC086280000000000, R10     // -709.0
-    FMOVD R10, F2
-    FMIND F1, F0, F0
-    FMAXD F2, F0, F0
+    // Clamp to [-709, 709] using the hoisted bounds (F27=709, F28=-709)
+    FMIND F27, F0, F0
+    FMAXD F28, F0, F0
 
-    // Range reduction
-    MOVD $0x3FF71547652B82FE, R10     // log2(e)
-    FMOVD R10, F8
-    FMULD F8, F0, F1                  // F1 = z * log2e
+    // Range reduction using the hoisted constants (F20=log2e, F21=ln2)
+    FMULD F20, F0, F1                 // F1 = z * log2e
     FRINTND F1, F2                    // F2 = k = round(F1)
-
-    MOVD $0x3FE62E42FEFA39EF, R10     // ln(2)
-    FMOVD R10, F9
-    FMULD F9, F2, F3                  // F3 = k * ln2
+    FMULD F21, F2, F3                 // F3 = k * ln2
     FSUBD F3, F0, F0                  // F0 = r = z - k * ln2
 
-    // Polynomial coefficients
-    FMOVD $1.0, F10                   // c1 = 1.0
-    FMOVD $0.5, F11                   // c2 = 0.5
-    MOVD $0x3FC5555555555555, R10     // c3 = 1/6
-    FMOVD R10, F12
-    MOVD $0x3FA5555555555555, R10     // c4 = 1/24
-    FMOVD R10, F13
-    MOVD $0x3F81111111111111, R10     // c5 = 1/120
-    FMOVD R10, F14
-
-    // Horner's method
-    FMULD F0, F14, F4                 // F4 = r * c5
-    FADDD F13, F4, F4                 // F4 = c4 + r*c5
+    // Horner's method using the hoisted coefficients
+    // (F22=1.0, F23=c2, F24=c3, F25=c4, F26=c5)
+    FMULD F0, F26, F4                 // F4 = r * c5
+    FADDD F25, F4, F4                 // F4 = c4 + r*c5
     FMULD F0, F4, F4
-    FADDD F12, F4, F4                 // F4 = c3 + r*(...)
+    FADDD F24, F4, F4                 // F4 = c3 + r*(...)
     FMULD F0, F4, F4
-    FADDD F11, F4, F4                 // F4 = c2 + r*(...)
+    FADDD F23, F4, F4                 // F4 = c2 + r*(...)
     FMULD F0, F4, F4
-    FADDD F10, F4, F4                 // F4 = 1 + r*(...)
+    FADDD F22, F4, F4                 // F4 = 1 + r*(...)
     FMULD F0, F4, F4
-    FADDD F10, F4, F4                 // F4 = exp(r)
+    FADDD F22, F4, F4                 // F4 = exp(r)
 
     // Reconstruct 2^k (float64: shift by 52, add 0x3FF0000000000000)
     FCVTZSD F2, R10
@@ -1012,8 +994,8 @@ sigmoid64_neon_scalar_loop:
     FMULD F5, F4, F4                  // F4 = e^(-x)
 
     // sigmoid(x) = 1 / (1 + e^(-x))
-    FADDD F4, F10, F6                 // F6 = 1 + e^(-x)
-    FDIVD F6, F10, F0                 // F0 = 1.0 / (1 + e^(-x))
+    FADDD F4, F22, F6                 // F6 = 1 + e^(-x)
+    FDIVD F6, F22, F0                 // F0 = 1.0 / (1 + e^(-x))
 
     FMOVD F0, (R0)                    // store result
 
