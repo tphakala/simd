@@ -272,17 +272,17 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 - **Conj**: Cross-correlation, frequency-domain filtering
 - **Mul/MulConj**: FFT-based convolution, filtering, correlation
 
-**Benchmark (1024 elements, Intel i7-1260P AVX+FMA):**
+**Benchmark (1024 elements, Intel Xeon Platinum 8362 AVX-512):**
 
 | Operation | SIMD    | Pure Go | Speedup   |
 | --------- | ------- | ------- | --------- |
-| Mul       | 341 ns  | 757 ns  | **2.2x**  |
-| MulConj   | 340 ns  | 749 ns  | **2.2x**  |
-| Scale     | 253 ns  | 551 ns  | **2.2x**  |
-| Add       | 86 ns   | 189 ns  | **2.2x**  |
-| Abs       | 743 ns  | 2530 ns | **3.4x**  |
-| AbsSq     | 258 ns  | 476 ns  | **1.85x** |
-| Conj      | 304 ns  | 474 ns  | **1.56x** |
+| Mul       | 239 ns  | 1021 ns | **4.3x**  |
+| MulConj   | 314 ns  | 1434 ns | **4.6x**  |
+| Scale     | 180 ns  | 959 ns  | **5.3x**  |
+| Add       | 255 ns  | 733 ns  | **2.9x**  |
+| Abs       | 918 ns  | 3453 ns | **3.8x**  |
+| AbsSq     | 237 ns  | 594 ns  | **2.5x**  |
+| Conj      | 163 ns  | 594 ns  | **3.7x**  |
 
 ### `c64` - complex64 Operations
 
