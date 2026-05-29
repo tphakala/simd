@@ -9,7 +9,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 ## Features
 
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
-- **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, SSE4.1, NEON, NEON+FP16, or pure Go)
+- **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, AVX without FMA, SSE4.1, NEON, NEON+FP16, or pure Go)
 - **Zero allocations** - All operations work on pre-allocated slices
 - **80+ operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, and complex number operations
 - **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
@@ -280,8 +280,8 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 | MulConj   | 340 ns  | 749 ns  | **2.2x**  |
 | Scale     | 253 ns  | 551 ns  | **2.2x**  |
 | Add       | 86 ns   | 189 ns  | **2.2x**  |
-| Abs       | 1326 ns | 2260 ns | **1.7x**  |
-| AbsSq     | 367 ns  | 504 ns  | **1.37x** |
+| Abs       | 743 ns  | 2530 ns | **3.4x**  |
+| AbsSq     | 258 ns  | 476 ns  | **1.85x** |
 | Conj      | 304 ns  | 474 ns  | **1.56x** |
 
 ### `c64` - complex64 Operations
@@ -417,7 +417,7 @@ c64.Abs(magnitude, signalFFT)              // Extract magnitude
 | -------- | --------------- | ------------ | ------------ |
 | **f32**  | **6.5x**        | 21.8x (Abs)  | 35 functions |
 | **f64**  | **3.2x**        | 7.9x (Clamp) | 32 functions |
-| **c128** | **1.77x**       | 2.2x (Mul)   | 8 functions  |
+| **c128** | **2.2x**        | 3.4x (Abs)   | 8 functions  |
 | **c64**  | **~2x**         | ~3x (Mul)    | 9 functions  |
 
 ### ARM64 (Raspberry Pi 5, NEON)
