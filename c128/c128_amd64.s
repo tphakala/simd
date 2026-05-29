@@ -1020,7 +1020,7 @@ TEXT ·conjAVX512(SB), NOSPLIT, $0-48
 
 conj_avx512_loop4:
     VMOVUPD (SI), Z0
-    VXORPD  Z2, Z0, Z0     // flip imaginary sign bits
+    VPXORQ  Z2, Z0, Z0     // flip imaginary sign bits (VPXORQ is AVX512F; VXORPD needs AVX512DQ)
     VMOVUPD Z0, (DX)
     ADDQ $64, SI
     ADDQ $64, DX
