@@ -360,7 +360,7 @@ min32_scalar:
     CBZ R1, min32_reduce
 
     // Reduce vector FIRST before scalar ops
-    WORD $0x6EB0F400           // FMINP V0.4S, V0.4S, V0.4S
+    WORD $0x6EA0F400           // FMINP V0.4S, V0.4S, V0.4S
     WORD $0x7EB0F800           // FMINP S0, V0.2S
 
 min32_loop1:
@@ -375,7 +375,7 @@ min32_loop1:
 
 min32_reduce:
     // Horizontal min when no scalar remainder
-    WORD $0x6EB0F400           // FMINP V0.4S, V0.4S, V0.4S
+    WORD $0x6EA0F400           // FMINP V0.4S, V0.4S, V0.4S
     WORD $0x7EB0F800           // FMINP S0, V0.2S
     FMOVS F0, ret+24(FP)
     RET
@@ -402,7 +402,7 @@ max32_scalar:
     CBZ R1, max32_reduce
 
     // Reduce vector FIRST before scalar ops
-    WORD $0x6E30F400           // FMAXP V0.4S, V0.4S, V0.4S
+    WORD $0x6E20F400           // FMAXP V0.4S, V0.4S, V0.4S
     WORD $0x7E30F800           // FMAXP S0, V0.2S
 
 max32_loop1:
@@ -417,7 +417,7 @@ max32_loop1:
 
 max32_reduce:
     // Horizontal max when no scalar remainder
-    WORD $0x6E30F400           // FMAXP V0.4S, V0.4S, V0.4S
+    WORD $0x6E20F400           // FMAXP V0.4S, V0.4S, V0.4S
     WORD $0x7E30F800           // FMAXP S0, V0.2S
     FMOVS F0, ret+24(FP)
     RET
