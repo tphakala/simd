@@ -73,11 +73,13 @@ func main() {
 ```go
 import "github.com/tphakala/simd/cpu"
 
-fmt.Println(cpu.Info())      // "AMD64 AVX-512", "AMD64 AVX+FMA", "AMD64 SSE2", or "ARM64 NEON"
-fmt.Println(cpu.HasAVX())    // true/false
-fmt.Println(cpu.HasAVX512()) // true/false
-fmt.Println(cpu.HasNEON())   // true/false
-fmt.Println(cpu.HasFP16())   // true/false (ARM64 half-precision SIMD)
+fmt.Println(cpu.Info())        // "AMD64 AVX-512", "AMD64 AVX+FMA", "AMD64 AVX", "AMD64 SSE2", "AMD64 (scalar)", "ARM64 NEON+FP16", or "ARM64 NEON"
+fmt.Println(cpu.HasAVX())      // true/false
+fmt.Println(cpu.HasAVX2())     // true/false
+fmt.Println(cpu.HasFMA())      // true/false
+fmt.Println(cpu.HasAVX512VL()) // true/false (AVX-512 F+VL)
+fmt.Println(cpu.HasNEON())     // true/false
+fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
 ```
 
 ### `f64` - float64 Operations
@@ -382,9 +384,10 @@ c64.Abs(magnitude, signalFFT)              // Extract magnitude
 
 | Function   | SIMD (ns) | Go (ns)  | Speedup    | SIMD Throughput |
 | ---------- | --------- | -------- | ---------- | --------------- |
+| Sigmoid    | 745       | 5640     | **7.6x**   | 22.0 GB/s       |
 | ReLU       | 68        | 646      | **9.5x**   | 240 GB/s        |
-| Tanh       | 445       | 6230     | **14x**    | 36.8 GB/s       |
-| Exp        | 1600      | 5140     | **3.2x**   | 10.2 GB/s       |
+| Tanh       | 836       | 6529     | **7.8x**   | 19.6 GB/s       |
+| Exp        | 606       | 4698     | **7.8x**   | 27.0 GB/s       |
 
 **Key Characteristics:**
 
@@ -417,7 +420,7 @@ c64.Abs(magnitude, signalFFT)              // Extract magnitude
 | -------- | --------------- | ------------ | ------------ |
 | **f32**  | **6.5x**        | 21.8x (Abs)  | 35 functions |
 | **f64**  | **3.2x**        | 7.9x (Clamp) | 32 functions |
-| **c128** | **2.2x**        | 3.4x (Abs)   | 8 functions  |
+| **c128** | **2.7x**        | 3.4x (Abs)   | 8 functions  |
 | **c64**  | **~2x**         | ~3x (Mul)    | 9 functions  |
 
 ### ARM64 (Raspberry Pi 5, NEON)
