@@ -192,7 +192,7 @@ f16.ReLU(dst, a)             // Activation functions
 |                 | `Sqrt(dst, a)`                      | Square root                   | 8x (NEON+FP16)   |
 |                 | `Reciprocal(dst, a)`                | Reciprocal (1/x)              | 8x (NEON+FP16)   |
 | **Reduction**   | `DotProduct(a, b)` → float32        | Dot product                   | 8x (NEON+FP16)   |
-|                 | `DotProductF32(a, b)` → float32     | Dot product (FP32 widen)      | 8x (NEON+FP32)   |
+|                 | `DotProductF32(a, b)` → float32     | Dot product (FP32 widen)      | 8x (NEON)        |
 |                 | `Sum(a)` → float32                  | Sum of elements               | 8x (NEON+FP16)   |
 |                 | `Min(a)`                            | Minimum value                 | 8x (NEON+FP16)   |
 |                 | `Max(a)`                            | Maximum value                 | 8x (NEON+FP16)   |
@@ -223,7 +223,7 @@ f16.ReLU(dst, a)             // Activation functions
 - **Reductions**: Accumulate in float32 for numerical stability
 - **Memory efficiency**: 2x bandwidth vs float32 (8 elements per 128-bit NEON vector)
 - **DotProduct saturation**: On ARM64 with FP16 SIMD, `DotProduct` computes per-element products in FP16 and saturates to ±Inf when `|a[i] * b[i]| > 65504`. Use `DotProductF32` (FP32 widening before multiply, ~1.5-2x slower) for audio DSP or raw-signal inputs that can produce out-of-range products.
-- **FP32-widened ops**: `EuclideanDistance`, `Variance`, `StdDev`, and `ClampScale` widen each FP16 lane to FP32 before arithmetic (like `DotProductF32`), so they match the pure-Go reference and never saturate. They use only base-NEON instructions (the `FCVTL`/`FCVTN` conversions are ARMv8.0-A, not the FEAT_FP16 extension), so they run on any ARM64 NEON core, including non-FP16 parts (Cortex-A72/A53). `Interleave2`/`Deinterleave2` are likewise bit-exact 16-bit lane permutes (`ZIP`/`UZP`) that run on any ARM64 NEON core.
+- **FP32-widened ops**: `DotProductF32`, `EuclideanDistance`, `Variance`, `StdDev`, and `ClampScale` widen each FP16 lane to FP32 before arithmetic, so they match the pure-Go reference and never saturate. They use only base-NEON instructions (the `FCVTL`/`FCVTN` conversions are ARMv8.0-A, not the FEAT_FP16 extension), so they run on any ARM64 NEON core, including non-FP16 parts (Cortex-A72/A53). `Interleave2`/`Deinterleave2` are likewise bit-exact 16-bit lane permutes (`ZIP`/`UZP`) that run on any ARM64 NEON core.
 
 **Benchmark (1024 elements, Raspberry Pi 5 / Cortex-A76, zero allocations):**
 
