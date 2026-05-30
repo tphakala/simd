@@ -460,24 +460,36 @@ func addScaledGo(dst []Float16, alpha Float16, s []Float16) {
 	}
 }
 
-// euclideanDistanceGo computes Euclidean distance.
-func euclideanDistanceGo(a, b []Float16) float32 {
+// sumSqDiffGo returns sum((a[i]-b[i])^2) computed in float32. Callers slice a
+// and b to equal length; it is shared by the Go fallback and the SIMD remainder.
+func sumSqDiffGo(a, b []Float16) float32 {
 	var sum float32
 	for i := range a {
 		d := toFloat32Go(a[i]) - toFloat32Go(b[i])
 		sum += d * d
 	}
-	return float32(math.Sqrt(float64(sum)))
+	return sum
 }
 
-// varianceGo computes variance given the mean.
-func varianceGo(a []Float16, mean float32) float32 {
+// sumSqDevGo returns sum((a[i]-mean)^2) computed in float32. Shared by the Go
+// fallback and the SIMD remainder.
+func sumSqDevGo(a []Float16, mean float32) float32 {
 	var sum float32
 	for i := range a {
 		d := toFloat32Go(a[i]) - mean
 		sum += d * d
 	}
-	return sum / float32(len(a))
+	return sum
+}
+
+// euclideanDistanceGo computes Euclidean distance.
+func euclideanDistanceGo(a, b []Float16) float32 {
+	return float32(math.Sqrt(float64(sumSqDiffGo(a, b))))
+}
+
+// varianceGo computes variance given the mean.
+func varianceGo(a []Float16, mean float32) float32 {
+	return sumSqDevGo(a, mean) / float32(len(a))
 }
 
 // cumulativeSumGo computes cumulative sum.
