@@ -65,7 +65,9 @@ func dotProduct(a, b []Float16) float32 {
 
 func dotProductF32(a, b []Float16) float32 {
 	n := min(len(a), len(b))
-	if hasFP16 && n >= neonWidth {
+	// FP32-widened kernel: only FCVTL (base ARMv8.0 convert) + FP32 NEON
+	// arithmetic, so it needs base NEON, not FEAT_FP16.
+	if hasNEON && n >= neonWidth {
 		// Process vectorized portion
 		nVec := (n / neonWidth) * neonWidth
 		result := dotProductWideNEON(a[:nVec], b[:nVec])
