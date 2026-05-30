@@ -199,13 +199,13 @@ f16.ReLU(dst, a)             // Activation functions
 |                 | `MinIdx(a)`                         | Index of minimum              | Pure Go          |
 |                 | `MaxIdx(a)`                         | Index of maximum              | Pure Go          |
 | **Statistical** | `Mean(a)` → float32                 | Arithmetic mean               | 8x (NEON+FP16)   |
-|                 | `Variance(a)` → float32             | Population variance           | Pure Go          |
-|                 | `StdDev(a)` → float32               | Standard deviation            | Pure Go          |
-| **Vector**      | `EuclideanDistance(a, b)` → float32 | L2 distance                   | Pure Go          |
+|                 | `Variance(a)` → float32             | Population variance           | 8x (NEON)        |
+|                 | `StdDev(a)` → float32               | Standard deviation            | 8x (NEON)        |
+| **Vector**      | `EuclideanDistance(a, b)` → float32 | L2 distance                   | 8x (NEON)        |
 |                 | `Normalize(dst, a)`                 | Unit vector normalization     | 8x (NEON+FP16)   |
 |                 | `CumulativeSum(dst, a)`             | Running sum                   | Sequential       |
 | **Range**       | `Clamp(dst, a, min, max)`           | Clamp to range                | 8x (NEON+FP16)   |
-|                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | Pure Go          |
+|                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 8x (NEON)        |
 | **Activation**  | `ReLU(dst, src)`                    | Rectified Linear Unit         | 8x (NEON+FP16)   |
 |                 | `Sigmoid(dst, src)`                 | Sigmoid: 1/(1+e^-x)           | Pure Go          |
 |                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | Pure Go          |
@@ -213,8 +213,8 @@ f16.ReLU(dst, a)             // Activation functions
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x (NEON+FP16)   |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | Pure Go          |
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x (NEON+FP16)   |
-| **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | Pure Go          |
-|                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | Pure Go          |
+| **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 8x (NEON)        |
+|                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 8x (NEON)        |
 
 **Key characteristics:**
 
@@ -223,6 +223,17 @@ f16.ReLU(dst, a)             // Activation functions
 - **Reductions**: Accumulate in float32 for numerical stability
 - **Memory efficiency**: 2x bandwidth vs float32 (8 elements per 128-bit NEON vector)
 - **DotProduct saturation**: On ARM64 with FP16 SIMD, `DotProduct` computes per-element products in FP16 and saturates to ±Inf when `|a[i] * b[i]| > 65504`. Use `DotProductF32` (FP32 widening before multiply, ~1.5-2x slower) for audio DSP or raw-signal inputs that can produce out-of-range products.
+- **FP32-widened ops**: `EuclideanDistance`, `Variance`, `StdDev`, and `ClampScale` widen each FP16 lane to FP32 before arithmetic (like `DotProductF32`), so they match the pure-Go reference and never saturate. They use only base-NEON instructions (the `FCVTL`/`FCVTN` conversions are ARMv8.0-A, not the FEAT_FP16 extension), so they run on any ARM64 NEON core, including non-FP16 parts (Cortex-A72/A53). `Interleave2`/`Deinterleave2` are likewise bit-exact 16-bit lane permutes (`ZIP`/`UZP`) that run on any ARM64 NEON core.
+
+**Benchmark (1024 elements, Raspberry Pi 5 / Cortex-A76, zero allocations):**
+
+| Operation         | SIMD   | Pure Go  | Speedup   |
+| ----------------- | ------ | -------- | --------- |
+| EuclideanDistance | 481 ns | 5995 ns  | **12.5x** |
+| Variance          | 506 ns | 8901 ns  | **17.6x** |
+| Interleave2       | 178 ns | 2163 ns  | **12.2x** |
+| Deinterleave2     | 178 ns | 2167 ns  | **12.2x** |
+| ClampScale        | 531 ns | 12211 ns | **23.0x** |
 
 **Hardware requirements:**
 

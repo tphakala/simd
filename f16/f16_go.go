@@ -5,38 +5,38 @@ import "math"
 // IEEE 754 half-precision format constants.
 const (
 	// FP16 bit layout
-	fp16SignShift     = 15
-	fp16ExpShift      = 10
-	fp16ExpMask       = 0x1F
-	fp16MantMask      = 0x3FF
-	fp16MantHighBit   = 0x400
-	fp16ExpMax        = 31
-	fp16ExpBias       = 15
-	fp16Infinity      = 0x7C00
-	fp16SignMask      = 0x8000
-	fp16AbsMask       = 0x7FFF
-	fp16NormExpMax    = 30
+	fp16SignShift   = 15
+	fp16ExpShift    = 10
+	fp16ExpMask     = 0x1F
+	fp16MantMask    = 0x3FF
+	fp16MantHighBit = 0x400
+	fp16ExpMax      = 31
+	fp16ExpBias     = 15
+	fp16Infinity    = 0x7C00
+	fp16SignMask    = 0x8000
+	fp16AbsMask     = 0x7FFF
+	fp16NormExpMax  = 30
 
 	// FP32 bit layout
-	fp32SignShift     = 31
-	fp32ExpShift      = 23
-	fp32ExpMask       = 0xFF
-	fp32MantMask      = 0x7FFFFF
-	fp32Infinity      = 0x7F800000
-	fp32ExpBias       = 127
-	fp32SignMask      = 0x8000
-	fp32MantHighBit   = 0x800000
+	fp32SignShift   = 31
+	fp32ExpShift    = 23
+	fp32ExpMask     = 0xFF
+	fp32MantMask    = 0x7FFFFF
+	fp32Infinity    = 0x7F800000
+	fp32ExpBias     = 127
+	fp32SignMask    = 0x8000
+	fp32MantHighBit = 0x800000
 
 	// Conversion constants
-	fp32MantShift     = 13                             // FP32 mantissa bits to shift for FP16
-	fp32SignExtract   = 16                             // Shift to extract sign from FP32 to FP16 position
-	fp32RoundBit      = 0x1000                         // Bit 12 for rounding
-	fp32RoundMask     = 0xFFF                          // Bits below round bit
-	fp32RoundCheck    = 0x2000                         // Bit 13 for round-to-even check
-	expBiasDiff       = fp32ExpBias - fp16ExpBias      // 112
-	expOverflow       = fp32ExpBias + fp16ExpBias      // 142 - overflow threshold
-	expUnderflow      = fp32ExpBias - 24               // 103 - underflow threshold
-	expDenormThresh   = fp32ExpBias - fp16ExpBias + 1  // 113 - denormalized threshold
+	fp32MantShift   = 13                            // FP32 mantissa bits to shift for FP16
+	fp32SignExtract = 16                            // Shift to extract sign from FP32 to FP16 position
+	fp32RoundBit    = 0x1000                        // Bit 12 for rounding
+	fp32RoundMask   = 0xFFF                         // Bits below round bit
+	fp32RoundCheck  = 0x2000                        // Bit 13 for round-to-even check
+	expBiasDiff     = fp32ExpBias - fp16ExpBias     // 112
+	expOverflow     = fp32ExpBias + fp16ExpBias     // 142 - overflow threshold
+	expUnderflow    = fp32ExpBias - 24              // 103 - underflow threshold
+	expDenormThresh = fp32ExpBias - fp16ExpBias + 1 // 113 - denormalized threshold
 )
 
 // toFloat32Go converts Float16 to float32 using pure Go.
@@ -460,24 +460,37 @@ func addScaledGo(dst []Float16, alpha Float16, s []Float16) {
 	}
 }
 
-// euclideanDistanceGo computes Euclidean distance.
-func euclideanDistanceGo(a, b []Float16) float32 {
+// sumSqDiffGo returns sum((a[i]-b[i])^2) computed in float32. Callers slice a
+// and b to equal length; it is shared by the Go fallback and the SIMD remainder.
+func sumSqDiffGo(a, b []Float16) float32 {
 	var sum float32
 	for i := range a {
 		d := toFloat32Go(a[i]) - toFloat32Go(b[i])
 		sum += d * d
 	}
-	return float32(math.Sqrt(float64(sum)))
+	return sum
 }
 
-// varianceGo computes variance given the mean.
-func varianceGo(a []Float16, mean float32) float32 {
+// sumSqDevGo returns sum((a[i]-mean)^2) computed in float32. Shared by the Go
+// fallback and the SIMD remainder.
+func sumSqDevGo(a []Float16, mean float32) float32 {
 	var sum float32
 	for i := range a {
 		d := toFloat32Go(a[i]) - mean
 		sum += d * d
 	}
-	return sum / float32(len(a))
+	return sum
+}
+
+// euclideanDistanceGo computes Euclidean distance.
+func euclideanDistanceGo(a, b []Float16) float32 {
+	n := min(len(a), len(b))
+	return float32(math.Sqrt(float64(sumSqDiffGo(a[:n], b[:n]))))
+}
+
+// varianceGo computes variance given the mean.
+func varianceGo(a []Float16, mean float32) float32 {
+	return sumSqDevGo(a, mean) / float32(len(a))
 }
 
 // cumulativeSumGo computes cumulative sum.
