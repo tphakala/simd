@@ -2,7 +2,11 @@
 
 package f16
 
-import "github.com/tphakala/simd/cpu"
+import (
+	"math"
+
+	"github.com/tphakala/simd/cpu"
+)
 
 // neonWidth is the number of FP16 elements per NEON vector (128-bit / 16-bit = 8).
 const neonWidth = 8
@@ -295,11 +299,24 @@ func addScaled16(dst []Float16, alpha Float16, s []Float16) {
 }
 
 func euclideanDistance16(a, b []Float16) float32 {
-	// Use Go implementation - could optimize later
+	n := min(len(a), len(b))
+	if hasFP16 && n >= neonWidth {
+		nVec := (n / neonWidth) * neonWidth
+		sumSq := sumSqDiffNEON(a[:nVec], b[:nVec])
+		sumSq += sumSqDiffGo(a[nVec:n], b[nVec:n])
+		return float32(math.Sqrt(float64(sumSq)))
+	}
 	return euclideanDistanceGo(a, b)
 }
 
 func variance16(a []Float16, mean float32) float32 {
+	n := len(a)
+	if hasFP16 && n >= neonWidth {
+		nVec := (n / neonWidth) * neonWidth
+		sumSq := sumSqDevNEON(a[:nVec], mean)
+		sumSq += sumSqDevGo(a[nVec:], mean)
+		return sumSq / float32(n)
+	}
 	return varianceGo(a, mean)
 }
 
@@ -331,14 +348,38 @@ func convolveValid16(dst, signal, kernel []Float16) {
 }
 
 func interleave2_16(dst, a, b []Float16) {
+	n := len(a) // == len(b); dst has length 2n (caller slices)
+	if hasNEON && n >= neonWidth {
+		nVec := (n / neonWidth) * neonWidth
+		interleave2NEON(dst[:nVec*2], a[:nVec], b[:nVec])
+		interleave2Go(dst[nVec*2:], a[nVec:], b[nVec:])
+		return
+	}
 	interleave2Go(dst, a, b)
 }
 
 func deinterleave2_16(a, b, src []Float16) {
+	n := len(a) // == len(b); src has length 2n (caller slices)
+	if hasNEON && n >= neonWidth {
+		nVec := (n / neonWidth) * neonWidth
+		deinterleave2NEON(a[:nVec], b[:nVec], src[:nVec*2])
+		deinterleave2Go(a[nVec:], b[nVec:], src[nVec*2:])
+		return
+	}
 	deinterleave2Go(a, b, src)
 }
 
 func clampScale16(dst, src []Float16, minVal, maxVal, scale Float16) {
+	n := len(dst)
+	if hasFP16 && n >= neonWidth {
+		nVec := (n / neonWidth) * neonWidth
+		minF := toFloat32Go(minVal)
+		maxF := toFloat32Go(maxVal)
+		scaleF := toFloat32Go(scale)
+		clampScaleNEON(dst[:nVec], src[:nVec], minF, maxF, scaleF)
+		clampScaleGo(dst[nVec:], src[nVec:], minVal, maxVal, scale)
+		return
+	}
 	clampScaleGo(dst, src, minVal, maxVal, scale)
 }
 
@@ -407,3 +448,18 @@ func addScaledNEON(dst []Float16, alpha Float16, s []Float16)
 
 //go:noescape
 func accumulateAddNEON(dst, src []Float16)
+
+//go:noescape
+func sumSqDiffNEON(a, b []Float16) float32
+
+//go:noescape
+func sumSqDevNEON(a []Float16, mean float32) float32
+
+//go:noescape
+func interleave2NEON(dst, a, b []Float16)
+
+//go:noescape
+func deinterleave2NEON(a, b, src []Float16)
+
+//go:noescape
+func clampScaleNEON(dst, src []Float16, minF, maxF, scaleF float32)

@@ -734,3 +734,199 @@ accadd16_loop8:
 
 accadd16_done:
     RET
+
+// func sumSqDiffNEON(a, b []Float16) float32
+// Returns sum((a[i]-b[i])^2). Each FP16 lane is widened to FP32 before the
+// subtract and square, so large differences do not saturate. Length must be a
+// multiple of 8 (caller guarantees via dispatch).
+TEXT ·sumSqDiffNEON(SB), NOSPLIT, $0-52
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R2
+    MOVD b_base+24(FP), R1
+
+    VEOR V4.B16, V4.B16, V4.B16   // acc lower 4 lanes
+    VEOR V5.B16, V5.B16, V5.B16   // acc upper 4 lanes
+
+    LSR $3, R2, R3
+    CBZ R3, ssd_reduce
+
+ssd_loop8:
+    VLD1 (R0), [V0.H8]            // 8 FP16 from a
+    ADD $16, R0
+    VLD1 (R1), [V1.H8]            // 8 FP16 from b
+    ADD $16, R1
+
+    WORD $0x0E217802             // FCVTL  V2.4S, V0.4H (a lower)
+    WORD $0x4E217803             // FCVTL2 V3.4S, V0.8H (a upper)
+    WORD $0x0E217826             // FCVTL  V6.4S, V1.4H (b lower)
+    WORD $0x4E217827             // FCVTL2 V7.4S, V1.8H (b upper)
+
+    WORD $0x4EA6D442             // FSUB V2.4S, V2.4S, V6.4S (diff lower)
+    WORD $0x4EA7D463             // FSUB V3.4S, V3.4S, V7.4S (diff upper)
+
+    WORD $0x4E22CC44             // FMLA V4.4S, V2.4S, V2.4S (acc += diff^2)
+    WORD $0x4E23CC65             // FMLA V5.4S, V3.4S, V3.4S (acc += diff^2)
+
+    SUB $1, R3
+    CBNZ R3, ssd_loop8
+
+    WORD $0x4E25D484             // FADD V4.4S, V4.4S, V5.4S
+
+ssd_reduce:
+    WORD $0x6E24D484             // FADDP V4.4S, V4.4S, V4.4S
+    WORD $0x7E30D884             // FADDP S4, V4.2S
+    FMOVS F4, ret+48(FP)
+    RET
+
+// func sumSqDevNEON(a []Float16, mean float32) float32
+// Returns sum((a[i]-mean)^2), widened to FP32 before subtract/square.
+// Length must be a multiple of 8 (caller guarantees via dispatch).
+// Result is 8-byte aligned after the 28-byte args, so it lands at +32.
+TEXT ·sumSqDevNEON(SB), NOSPLIT, $0-36
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R2
+
+    FMOVS mean+24(FP), F1        // mean -> S1
+    WORD $0x4E040421             // DUP V1.4S, V1.S[0] (broadcast mean)
+
+    VEOR V4.B16, V4.B16, V4.B16  // acc lower
+    VEOR V5.B16, V5.B16, V5.B16  // acc upper
+
+    LSR $3, R2, R3
+    CBZ R3, ssv_reduce
+
+ssv_loop8:
+    VLD1 (R0), [V0.H8]
+    ADD $16, R0
+
+    WORD $0x0E217802            // FCVTL  V2.4S, V0.4H (lower)
+    WORD $0x4E217803            // FCVTL2 V3.4S, V0.8H (upper)
+
+    WORD $0x4EA1D442            // FSUB V2.4S, V2.4S, V1.4S (x-mean lower)
+    WORD $0x4EA1D463            // FSUB V3.4S, V3.4S, V1.4S (x-mean upper)
+
+    WORD $0x4E22CC44           // FMLA V4.4S, V2.4S, V2.4S (acc += dev^2)
+    WORD $0x4E23CC65           // FMLA V5.4S, V3.4S, V3.4S (acc += dev^2)
+
+    SUB $1, R3
+    CBNZ R3, ssv_loop8
+
+    WORD $0x4E25D484           // FADD V4.4S, V4.4S, V5.4S
+
+ssv_reduce:
+    WORD $0x6E24D484           // FADDP V4.4S, V4.4S, V4.4S
+    WORD $0x7E30D884           // FADDP S4, V4.2S
+    FMOVS F4, ret+32(FP)
+    RET
+
+// func interleave2NEON(dst, a, b []Float16)
+// dst[2i]=a[i], dst[2i+1]=b[i]. Processes a/b in blocks of 8 pairs (16 outputs
+// per iteration). a_len must be a multiple of 8 (caller guarantees).
+TEXT ·interleave2NEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD a_base+24(FP), R1
+    MOVD a_len+32(FP), R3        // number of input pairs
+    MOVD b_base+48(FP), R2
+
+    LSR $3, R3, R4
+    CBZ R4, il2_done
+
+il2_loop8:
+    VLD1 (R1), [V0.H8]           // 8 from a
+    ADD $16, R1
+    VLD1 (R2), [V1.H8]           // 8 from b
+    ADD $16, R2
+
+    WORD $0x4E413802            // ZIP1 V2.8H, V0.8H, V1.8H (a0 b0 .. a3 b3)
+    WORD $0x4E417803            // ZIP2 V3.8H, V0.8H, V1.8H (a4 b4 .. a7 b7)
+
+    VST1 [V2.H8], (R0)
+    ADD $16, R0
+    VST1 [V3.H8], (R0)
+    ADD $16, R0
+
+    SUB $1, R4
+    CBNZ R4, il2_loop8
+
+il2_done:
+    RET
+
+// func deinterleave2NEON(a, b, src []Float16)
+// a[i]=src[2i], b[i]=src[2i+1]. Processes 8 outputs per channel per iteration
+// (16 inputs). a_len must be a multiple of 8 (caller guarantees).
+TEXT ·deinterleave2NEON(SB), NOSPLIT, $0-72
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R3         // outputs per channel
+    MOVD b_base+24(FP), R1
+    MOVD src_base+48(FP), R2
+
+    LSR $3, R3, R4
+    CBZ R4, dil2_done
+
+dil2_loop8:
+    VLD1 (R2), [V0.H8]           // src[0..7]
+    ADD $16, R2
+    VLD1 (R2), [V1.H8]           // src[8..15]
+    ADD $16, R2
+
+    WORD $0x4E411802            // UZP1 V2.8H, V0.8H, V1.8H (even lanes -> a)
+    WORD $0x4E415803            // UZP2 V3.8H, V0.8H, V1.8H (odd lanes  -> b)
+
+    VST1 [V2.H8], (R0)
+    ADD $16, R0
+    VST1 [V3.H8], (R1)
+    ADD $16, R1
+
+    SUB $1, R4
+    CBNZ R4, dil2_loop8
+
+dil2_done:
+    RET
+
+// func clampScaleNEON(dst, src []Float16, minF, maxF, scaleF float32)
+// dst[i] = (clamp(src[i], minF, maxF) - minF) * scaleF, widened to FP32 for the
+// full expression and rounded to FP16 once. Length must be a multiple of 8.
+TEXT ·clampScaleNEON(SB), NOSPLIT, $0-60
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    FMOVS minF+48(FP), F1
+    WORD $0x4E040421            // DUP V1.4S, V1.S[0] (minF)
+    FMOVS maxF+52(FP), F2
+    WORD $0x4E040442            // DUP V2.4S, V2.S[0] (maxF)
+    FMOVS scaleF+56(FP), F3
+    WORD $0x4E040463            // DUP V3.4S, V3.S[0] (scaleF)
+
+    LSR $3, R3, R4
+    CBZ R4, clampscale16_done
+
+clampscale16_loop8:
+    VLD1 (R1), [V0.H8]
+    ADD $16, R1
+
+    WORD $0x0E217804           // FCVTL  V4.4S, V0.4H (lower)
+    WORD $0x4E217805           // FCVTL2 V5.4S, V0.8H (upper)
+
+    WORD $0x4E21F484           // FMAX V4.4S, V4.4S, V1.4S (clamp low, lower)
+    WORD $0x4EA2F484           // FMIN V4.4S, V4.4S, V2.4S (clamp high, lower)
+    WORD $0x4E21F4A5           // FMAX V5.4S, V5.4S, V1.4S (clamp low, upper)
+    WORD $0x4EA2F4A5           // FMIN V5.4S, V5.4S, V2.4S (clamp high, upper)
+
+    WORD $0x4EA1D484           // FSUB V4.4S, V4.4S, V1.4S (subtract min, lower)
+    WORD $0x4EA1D4A5           // FSUB V5.4S, V5.4S, V1.4S (subtract min, upper)
+
+    WORD $0x6E23DC84           // FMUL V4.4S, V4.4S, V3.4S (scale lower)
+    WORD $0x6E23DCA5           // FMUL V5.4S, V5.4S, V3.4S (scale upper)
+
+    WORD $0x0E216886           // FCVTN  V6.4H, V4.4S (narrow lower)
+    WORD $0x4E2168A6           // FCVTN2 V6.8H, V5.4S (narrow upper)
+
+    VST1 [V6.H8], (R0)
+    ADD $16, R0
+
+    SUB $1, R4
+    CBNZ R4, clampscale16_loop8
+
+clampscale16_done:
+    RET
