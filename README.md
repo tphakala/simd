@@ -230,7 +230,7 @@ f16.ReLU(dst, a)             // Activation functions
 | Operation         | SIMD   | Pure Go  | Speedup   |
 | ----------------- | ------ | -------- | --------- |
 | EuclideanDistance | 481 ns | 5995 ns  | **12.5x** |
-| Variance          | 524 ns | 5455 ns  | **10.4x** |
+| Variance          | 506 ns | 8901 ns  | **17.6x** |
 | Interleave2       | 178 ns | 2163 ns  | **12.2x** |
 | Deinterleave2     | 178 ns | 2167 ns  | **12.2x** |
 | ClampScale        | 531 ns | 12211 ns | **23.0x** |

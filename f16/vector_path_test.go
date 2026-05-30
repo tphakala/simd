@@ -58,6 +58,16 @@ func TestMinMaxVectorPath(t *testing.T) {
 	}
 }
 
+func TestEuclideanDistanceUnequalLen(t *testing.T) {
+	// euclideanDistanceGo must not panic when len(a) > len(b); it computes over
+	// the common prefix, consistent with the public API which slices to min.
+	a := []Float16{FromFloat32(3), FromFloat32(4), FromFloat32(99)}
+	b := []Float16{FromFloat32(0), FromFloat32(0)}
+	if got := euclideanDistanceGo(a, b); !almostEqual32(got, 5, 0.1) {
+		t.Errorf("euclideanDistanceGo(unequal len) = %v, want 5", got)
+	}
+}
+
 func TestEuclideanDistanceVectorPath(t *testing.T) {
 	for _, n := range []int{8, 11, 16, 19, 24, 32} {
 		a := make([]Float16, n)

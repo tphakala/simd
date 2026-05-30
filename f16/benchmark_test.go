@@ -428,9 +428,9 @@ func BenchmarkSummary(b *testing.B) {
 	scalar16 := FromFloat32(2.5)
 
 	ops := []struct {
-		name   string
-		f16    func()
-		f32    func()
+		name string
+		f16  func()
+		f32  func()
 	}{
 		{"DotProduct", func() { sink32 = DotProduct(a16, b16) }, func() { sink32 = f32.DotProduct(a32, b32) }},
 		{"Add", func() { Add(dst16, a16, b16) }, func() { f32.Add(dst32, a32, b32) }},
@@ -495,13 +495,13 @@ func BenchmarkEuclideanDistance(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				sink32 = EuclideanDistance(a16, b16)
 			}
-			reportThroughput16(b, size)
+			reportThroughput16(b, size*2) // reads a + b
 		})
 		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				sink32 = euclideanDistanceGo(a16, b16)
 			}
-			reportThroughput16(b, size)
+			reportThroughput16(b, size*2) // reads a + b
 		})
 	}
 }
@@ -515,10 +515,12 @@ func BenchmarkVariance(b *testing.B) {
 			}
 			reportThroughput16(b, size)
 		})
+		// Fair comparison: Variance(a16) computes the mean each call, so the Go
+		// path must compute the mean (in pure Go) inside the loop too.
 		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
-			mean := Mean(a16)
+			n := float32(len(a16))
 			for i := 0; i < b.N; i++ {
-				sink32 = varianceGo(a16, mean)
+				sink32 = varianceGo(a16, sumGo(a16)/n)
 			}
 			reportThroughput16(b, size)
 		})
@@ -533,13 +535,13 @@ func BenchmarkInterleave2(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				Interleave2(dst, a16, b16)
 			}
-			reportThroughput16(b, size)
+			reportThroughput16(b, size*4) // reads a + b, writes dst (2*size)
 		})
 		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				interleave2Go(dst, a16, b16)
 			}
-			reportThroughput16(b, size)
+			reportThroughput16(b, size*4) // reads a + b, writes dst (2*size)
 		})
 	}
 }
@@ -556,13 +558,13 @@ func BenchmarkDeinterleave2(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				Deinterleave2(a16, b16, src)
 			}
-			reportThroughput16(b, size)
+			reportThroughput16(b, size*4) // reads src (2*size), writes a + b
 		})
 		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				deinterleave2Go(a16, b16, src)
 			}
-			reportThroughput16(b, size)
+			reportThroughput16(b, size*4) // reads src (2*size), writes a + b
 		})
 	}
 }
@@ -577,13 +579,13 @@ func BenchmarkClampScale(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				ClampScale(dst, a16, minV, maxV, sc)
 			}
-			reportThroughput16(b, size)
+			reportThroughput16(b, size*2) // reads src + writes dst
 		})
 		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				clampScaleGo(dst, a16, minV, maxV, sc)
 			}
-			reportThroughput16(b, size)
+			reportThroughput16(b, size*2) // reads src + writes dst
 		})
 	}
 }
