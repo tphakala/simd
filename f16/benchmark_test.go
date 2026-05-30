@@ -483,3 +483,107 @@ func BenchmarkMemoryBandwidth(b *testing.B) {
 		})
 	}
 }
+
+// =============================================================================
+// EuclideanDistance / Variance / StdDev / Interleave / ClampScale (new SIMD)
+// =============================================================================
+
+func BenchmarkEuclideanDistance(b *testing.B) {
+	for _, size := range benchSizes {
+		a16, b16, _, _ := makeBenchDataF16(size)
+		b.Run(fmt.Sprintf("F16_SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink32 = EuclideanDistance(a16, b16)
+			}
+			reportThroughput16(b, size)
+		})
+		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink32 = euclideanDistanceGo(a16, b16)
+			}
+			reportThroughput16(b, size)
+		})
+	}
+}
+
+func BenchmarkVariance(b *testing.B) {
+	for _, size := range benchSizes {
+		a16, _, _, _ := makeBenchDataF16(size)
+		b.Run(fmt.Sprintf("F16_SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink32 = Variance(a16)
+			}
+			reportThroughput16(b, size)
+		})
+		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
+			mean := Mean(a16)
+			for i := 0; i < b.N; i++ {
+				sink32 = varianceGo(a16, mean)
+			}
+			reportThroughput16(b, size)
+		})
+	}
+}
+
+func BenchmarkInterleave2(b *testing.B) {
+	for _, size := range benchSizes {
+		a16, b16, _, _ := makeBenchDataF16(size)
+		dst := make([]Float16, size*2)
+		b.Run(fmt.Sprintf("F16_SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				Interleave2(dst, a16, b16)
+			}
+			reportThroughput16(b, size)
+		})
+		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				interleave2Go(dst, a16, b16)
+			}
+			reportThroughput16(b, size)
+		})
+	}
+}
+
+func BenchmarkDeinterleave2(b *testing.B) {
+	for _, size := range benchSizes {
+		src := make([]Float16, size*2)
+		for i := range src {
+			src[i] = FromFloat32(float32(i%100) + 0.5)
+		}
+		a16 := make([]Float16, size)
+		b16 := make([]Float16, size)
+		b.Run(fmt.Sprintf("F16_SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				Deinterleave2(a16, b16, src)
+			}
+			reportThroughput16(b, size)
+		})
+		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				deinterleave2Go(a16, b16, src)
+			}
+			reportThroughput16(b, size)
+		})
+	}
+}
+
+func BenchmarkClampScale(b *testing.B) {
+	minV := FromFloat32(10)
+	maxV := FromFloat32(90)
+	sc := FromFloat32(0.0125)
+	for _, size := range benchSizes {
+		a16, _, _, dst := makeBenchDataF16(size)
+		b.Run(fmt.Sprintf("F16_SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				ClampScale(dst, a16, minV, maxV, sc)
+			}
+			reportThroughput16(b, size)
+		})
+		b.Run(fmt.Sprintf("F16_Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				clampScaleGo(dst, a16, minV, maxV, sc)
+			}
+			reportThroughput16(b, size)
+		})
+	}
+}
