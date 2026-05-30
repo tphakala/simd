@@ -300,7 +300,9 @@ func addScaled16(dst []Float16, alpha Float16, s []Float16) {
 
 func euclideanDistance16(a, b []Float16) float32 {
 	n := min(len(a), len(b))
-	if hasFP16 && n >= neonWidth {
+	// FP32-widened kernel: only FCVTL (base ARMv8.0 convert) + FP32 NEON
+	// arithmetic, so it needs base NEON, not FEAT_FP16.
+	if hasNEON && n >= neonWidth {
 		nVec := (n / neonWidth) * neonWidth
 		sumSq := sumSqDiffNEON(a[:nVec], b[:nVec])
 		sumSq += sumSqDiffGo(a[nVec:n], b[nVec:n])
@@ -311,7 +313,8 @@ func euclideanDistance16(a, b []Float16) float32 {
 
 func variance16(a []Float16, mean float32) float32 {
 	n := len(a)
-	if hasFP16 && n >= neonWidth {
+	// FP32-widened kernel: base NEON only (FCVTL + FP32 arithmetic), not FP16.
+	if hasNEON && n >= neonWidth {
 		nVec := (n / neonWidth) * neonWidth
 		sumSq := sumSqDevNEON(a[:nVec], mean)
 		sumSq += sumSqDevGo(a[nVec:], mean)
@@ -371,7 +374,8 @@ func deinterleave2_16(a, b, src []Float16) {
 
 func clampScale16(dst, src []Float16, minVal, maxVal, scale Float16) {
 	n := len(dst)
-	if hasFP16 && n >= neonWidth {
+	// FP32-widened kernel: base NEON only (FCVTL/FCVTN + FP32 arithmetic).
+	if hasNEON && n >= neonWidth {
 		nVec := (n / neonWidth) * neonWidth
 		minF := toFloat32Go(minVal)
 		maxF := toFloat32Go(maxVal)
