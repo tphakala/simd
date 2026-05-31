@@ -11,10 +11,10 @@ import (
 // plain Go so the SIMD paths can be checked against it.
 func convolveDecimateRef(signal, kernel []float64, factor, phase int) []float64 {
 	kLen := len(kernel)
-	if kLen == 0 || factor < 1 || phase < 0 {
+	if kLen == 0 || factor < 1 || phase < 0 || len(signal)-kLen-phase < 0 {
 		return nil
 	}
-	var out []float64
+	out := make([]float64, 0, (len(signal)-kLen-phase)/factor+1)
 	for pos := phase; pos+kLen <= len(signal); pos += factor {
 		var sum float64
 		for i := range kLen {
@@ -201,7 +201,7 @@ func checkConvolveDecimateExact(t *testing.T) {
 					kernel := randSlice(kLen)
 					signal := randSlice(sigLen)
 
-					var want []float64
+					want := make([]float64, 0, (sigLen-kLen-phase)/factor+1)
 					for pos := phase; pos+kLen <= sigLen; pos += factor {
 						want = append(want, DotProductUnsafe(signal[pos:pos+kLen], kernel))
 					}
