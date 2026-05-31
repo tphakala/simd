@@ -118,6 +118,16 @@ func TestConvolveDecimate_Edge(t *testing.T) {
 		t.Errorf("negative phase wrote to dst: %v", dst)
 	}
 
+	// phase >= factor: no-op (precondition phase in [0, factor)).
+	dst = []float32{99, 99}
+	ConvolveDecimate(dst, signal, []float32{1}, 2, 2)
+	if dst[0] != 99 || dst[1] != 99 {
+		t.Errorf("phase>=factor wrote to dst: %v", dst)
+	}
+
+	// empty dst: nothing to write (n == 0), must not panic.
+	ConvolveDecimate([]float32{}, signal, []float32{1}, 1, 0)
+
 	// kernel longer than signal: no valid output.
 	dst = []float32{99}
 	ConvolveDecimate(dst, []float32{1, 2}, []float32{1, 2, 3}, 1, 0)

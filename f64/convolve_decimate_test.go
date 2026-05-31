@@ -102,6 +102,16 @@ func TestConvolveDecimate_Edge(t *testing.T) {
 		t.Errorf("negative phase wrote to dst: %v", dst)
 	}
 
+	// phase >= factor: no-op (precondition phase in [0, factor)).
+	dst = []float64{99, 99}
+	ConvolveDecimate(dst, signal, []float64{1}, 2, 2)
+	if dst[0] != 99 || dst[1] != 99 {
+		t.Errorf("phase>=factor wrote to dst: %v", dst)
+	}
+
+	// empty dst: nothing to write (n == 0), must not panic.
+	ConvolveDecimate([]float64{}, signal, []float64{1}, 1, 0)
+
 	dst = []float64{99}
 	ConvolveDecimate(dst, []float64{1, 2}, []float64{1, 2, 3}, 1, 0)
 	if dst[0] != 99 {
@@ -133,7 +143,7 @@ func TestConvolveDecimate_Parity(t *testing.T) {
 		return s
 	}
 
-	taps := []int{1, 3, 5, 8, 16, 20, 32, 64, 128, 241}
+	taps := []int{1, 4, 7, 16, 20, 32, 64, 128, 241}
 	factors := []int{1, 2, 3, 4}
 	sigLens := []int{257, 480, 999, 4096, 8191}
 
@@ -187,7 +197,7 @@ func checkConvolveDecimateExact(t *testing.T) {
 		return s
 	}
 
-	taps := []int{1, 3, 5, 8, 16, 20, 32, 64, 128, 241}
+	taps := []int{1, 4, 7, 16, 20, 32, 64, 128, 241}
 	factors := []int{1, 2, 3, 4}
 	sigLens := []int{257, 480, 999, 4096, 8191}
 

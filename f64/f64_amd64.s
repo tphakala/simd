@@ -3928,7 +3928,9 @@ round_avx_done:
 // product of signal[pos:pos+kLen] with kernel, then advances pos by factor.
 // The inner dot replicates dotProductAVX exactly (4 accumulators, 16/4/scalar
 // reduction) so results are bit-identical to a per-window DotProductUnsafe.
-// Outer state lives in R8-R14; the inner dot uses SI/DI/CX/AX and Y0-Y5.
+// Outer state lives in R8-R13 plus BX (pos); the inner dot uses SI/DI/CX/AX and
+// Y0-Y5. BX (not R14) holds pos: R14 is the goroutine g pointer in Go's amd64
+// ABI and must not be clobbered.
 TEXT ·convolveDecimateAVX(SB), NOSPLIT, $0-88
     MOVQ dst_base+0(FP), R8        // output pointer
     MOVQ dst_len+8(FP), R9         // n outputs
@@ -3936,13 +3938,13 @@ TEXT ·convolveDecimateAVX(SB), NOSPLIT, $0-88
     MOVQ kernel_base+48(FP), R11   // kernel base
     MOVQ kernel_len+56(FP), R12    // kLen
     MOVQ factor+72(FP), R13        // factor (elements)
-    MOVQ phase+80(FP), R14         // pos (elements)
+    MOVQ phase+80(FP), BX         // pos (elements)
 
     TESTQ R9, R9
     JZ    cd_avx_ret
 
 cd_avx_outer:
-    LEAQ (R10)(R14*8), SI          // SI = &signal[pos]
+    LEAQ (R10)(BX*8), SI          // SI = &signal[pos]
     MOVQ R11, DI                   // DI = &kernel[0]
 
     VXORPD Y0, Y0, Y0
@@ -4014,7 +4016,7 @@ cd_avx_scalar:
 cd_avx_store:
     VMOVSD X0, (R8)
     ADDQ $8, R8
-    ADDQ R13, R14                  // pos += factor
+    ADDQ R13, BX                  // pos += factor
     DECQ R9
     JNZ  cd_avx_outer
 
@@ -4034,13 +4036,13 @@ TEXT ·convolveDecimateAVX512(SB), NOSPLIT, $0-88
     MOVQ kernel_base+48(FP), R11
     MOVQ kernel_len+56(FP), R12
     MOVQ factor+72(FP), R13
-    MOVQ phase+80(FP), R14
+    MOVQ phase+80(FP), BX
 
     TESTQ R9, R9
     JZ    cd_avx512_ret
 
 cd_avx512_outer:
-    LEAQ (R10)(R14*8), SI
+    LEAQ (R10)(BX*8), SI
     MOVQ R11, DI
 
     VXORPD Z0, Z0, Z0
@@ -4114,7 +4116,7 @@ cd_avx512_scalar:
 cd_avx512_store:
     VMOVSD X0, (R8)
     ADDQ $8, R8
-    ADDQ R13, R14
+    ADDQ R13, BX
     DECQ R9
     JNZ  cd_avx512_outer
 
@@ -4135,13 +4137,13 @@ TEXT ·convolveDecimateSSE2(SB), NOSPLIT, $0-88
     MOVQ kernel_base+48(FP), R11
     MOVQ kernel_len+56(FP), R12
     MOVQ factor+72(FP), R13
-    MOVQ phase+80(FP), R14
+    MOVQ phase+80(FP), BX
 
     TESTQ R9, R9
     JZ    cd_sse2_ret
 
 cd_sse2_outer:
-    LEAQ (R10)(R14*8), SI
+    LEAQ (R10)(BX*8), SI
     MOVQ R11, DI
     XORPD X0, X0
 
@@ -4177,7 +4179,7 @@ cd_sse2_reduce:
 cd_sse2_store:
     MOVSD X0, (R8)
     ADDQ $8, R8
-    ADDQ R13, R14
+    ADDQ R13, BX
     DECQ R9
     JNZ  cd_sse2_outer
 

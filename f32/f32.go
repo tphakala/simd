@@ -203,8 +203,8 @@ func ConvolveValid(dst, signal, kernel []float32) {
 // The kernel is applied as a plain dot product; pre-reverse it for true
 // convolution (matching DotProductUnsafe and ConvolveValid usage). factor must
 // be >= 1 (factor == 1 is valid convolution at every position) and phase must be
-// in [0, factor); factor < 1 or phase < 0 are treated as no-ops. With factor == 1
-// and phase == 0 this is exactly ConvolveValid.
+// in [0, factor); factor < 1, phase < 0, or phase >= factor are treated as
+// no-ops. With factor == 1 and phase == 0 this is exactly ConvolveValid.
 //
 // The number of outputs is the count of strided positions whose full kernel
 // window fits in signal; ConvolveDecimate writes min(len(dst), that count) and
@@ -212,7 +212,7 @@ func ConvolveValid(dst, signal, kernel []float32) {
 // the caller-provided buffers.
 func ConvolveDecimate(dst, signal, kernel []float32, factor, phase int) {
 	kLen := len(kernel)
-	if kLen == 0 || factor < 1 || phase < 0 {
+	if kLen == 0 || factor < 1 || phase < 0 || phase >= factor {
 		return
 	}
 	span := len(signal) - kLen - phase
