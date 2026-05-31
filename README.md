@@ -420,8 +420,12 @@ c64.Abs(magnitude, signalFFT)              // Extract magnitude
 | ConvolveValidMulti (f64) | 1000 sig × 64 ker × 2 | 13.4 µs | -       | -        |
 | CubicInterpDot (f64)     | 241 taps              | 47 ns   | 88 ns   | **1.9x** |
 | CubicInterpDot (f32)     | 241 taps              | 21 ns   | 66 ns   | **3.1x** |
-| Int32ToFloat32Scale      | 1024 elements         | 40 ns   | 364 ns  | **9.0x** |
-| Int32ToFloat32Scale      | 4096 elements         | 153 ns  | 1439 ns | **9.4x** |
+| Int32ToFloat32Scale      | 1024 elements         | 50 ns   | 405 ns  | **8.1x** |
+| Int32ToFloat32Scale      | 4096 elements         | 157 ns  | 1586 ns | **10.1x**|
+| Int16ToFloat32Scale      | 1024 elements         | 58 ns   | 483 ns  | **8.3x** |
+| Int16ToFloat32Scale      | 4096 elements         | 200 ns  | 1914 ns | **9.6x** |
+| Float32ToInt16Scale      | 1024 elements         | 92 ns   | 1360 ns | **14.8x**|
+| Float32ToInt16Scale      | 4096 elements         | 365 ns  | 5420 ns | **14.8x**|
 | Interleave2 (f64)        | 1000 pairs            | 216 ns  | -       | -        |
 | Deinterleave2 (f64)      | 1000 pairs            | 216 ns  | -       | -        |
 | Interleave2 (f32)        | 1000 pairs            | 109 ns  | -       | -        |
