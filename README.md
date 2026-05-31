@@ -123,6 +123,7 @@ fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
+|                 | `ConvolveDecimate(dst,sig,k,f,p)`   | Strided FIR downsample (decimate) | 8x / 4x / 2x                    |
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
@@ -430,6 +431,24 @@ c64.Abs(magnitude, signalFFT)              // Extract magnitude
 | Deinterleave2 (f64)      | 1000 pairs            | 216 ns  | -       | -        |
 | Interleave2 (f32)        | 1000 pairs            | 109 ns  | -       | -        |
 | Deinterleave2 (f32)      | 1000 pairs            | 216 ns  | -       | -        |
+
+#### ConvolveDecimate (fused strided convolution)
+
+`ConvolveDecimate` fuses an FIR downsample loop into one call. The relevant
+baseline is what a consumer writes today: a Go loop calling `DotProductUnsafe`
+at each strided window (the inner dot is already SIMD). Both compute identical
+results; the fused kernel removes the per-output call, dispatch and slice-header
+overhead and keeps the kernel pointer resident, so the win is largest for short
+kernels. Signal length 4096, allocation-free. Measured (AVX2 on x86-64, NEON on
+a Raspberry Pi 5):
+
+| Config              | f32 x86 | f64 x86 | f32 NEON | f64 NEON |
+| ------------------- | ------- | ------- | -------- | -------- |
+| 20 taps, 2x decimate  | **2.0x** | **2.3x** | **1.7x** | **1.9x** |
+| 32 taps, 2x decimate  | **2.3x** | **1.7x** | **1.9x** | **1.7x** |
+| 64 taps, 2x decimate  | **2.0x** | **1.8x** | **1.7x** | **1.3x** |
+| 241 taps, 2x decimate | **1.5x** | **1.3x** | **1.2x** | **1.1x** |
+| 241 taps, 4x decimate | **1.4x** | **1.2x** | **1.2x** | **1.1x** |
 
 #### Performance Summary
 

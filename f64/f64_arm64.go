@@ -188,6 +188,19 @@ func convolveValid64(dst, signal, kernel []float64) {
 	}
 }
 
+func convolveDecimate64(dst, signal, kernel []float64, factor, phase int) {
+	// Mirror dotProduct's NEON length threshold (>= 2) so the fused kernel and a
+	// per-window DotProductUnsafe pick the same backend, keeping results identical.
+	if hasNEON && len(kernel) >= 2 {
+		convolveDecimateNEON(dst, signal, kernel, factor, phase)
+		return
+	}
+	convolveDecimate64Go(dst, signal, kernel, factor, phase)
+}
+
+//go:noescape
+func convolveDecimateNEON(dst, signal, kernel []float64, factor, phase int)
+
 func accumulateAdd64(dst, src []float64) {
 	// AccumulateAdd is dst += src, use add with dst as both operands
 	if hasNEON && len(dst) >= 2 {

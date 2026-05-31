@@ -1465,3 +1465,80 @@ round_scalar:
 
 round_done:
     RET
+
+// func convolveDecimateNEON(dst, signal, kernel []float64, factor, phase int)
+//
+// Fused decimating valid convolution. For each output it computes the dot
+// product of signal[pos:pos+kLen] with kernel, then advances pos by factor.
+// The inner dot replicates dotProductNEON exactly (dual accumulators, 4/2/scalar
+// reduction) so results are bit-identical to a per-window DotProductUnsafe when
+// the kernel takes the NEON path (the Go dispatcher only calls this for
+// len(kernel) >= 2). Outer state lives in R9-R15; the inner dot uses R0-R4 and
+// V0-V5.
+TEXT ·convolveDecimateNEON(SB), NOSPLIT, $0-88
+    MOVD dst_base+0(FP), R9
+    MOVD dst_len+8(FP), R10
+    MOVD signal_base+24(FP), R11
+    MOVD kernel_base+48(FP), R12
+    MOVD kernel_len+56(FP), R13
+    MOVD factor+72(FP), R14
+    MOVD phase+80(FP), R15
+
+    CBZ R10, cd_neon_done
+
+cd_neon_outer:
+    ADD R15<<3, R11, R0           // R0 = &signal[pos]
+    MOVD R12, R1
+    MOVD R13, R2                  // R2 = kLen
+
+    VEOR V0.B16, V0.B16, V0.B16
+    VEOR V1.B16, V1.B16, V1.B16
+
+    LSR $2, R2, R3                // kLen / 4
+    CBZ R3, cd_neon_rem2
+
+cd_neon_loop4:
+    VLD1.P 16(R0), [V2.D2]
+    VLD1.P 16(R0), [V3.D2]
+    VLD1.P 16(R1), [V4.D2]
+    VLD1.P 16(R1), [V5.D2]
+    WORD $0x4E64CC40             // FMLA V0.2D, V2.2D, V4.2D
+    WORD $0x4E65CC61             // FMLA V1.2D, V3.2D, V5.2D
+    SUB $1, R3
+    CBNZ R3, cd_neon_loop4
+
+    WORD $0x4E61D400            // FADD V0.2D, V0.2D, V1.2D
+
+cd_neon_rem2:
+    AND $3, R2, R3
+    LSR $1, R3, R4
+    CBZ R4, cd_neon_rem1
+
+    VLD1.P 16(R0), [V2.D2]
+    VLD1.P 16(R1), [V4.D2]
+    WORD $0x4E64CC40            // FMLA V0.2D, V2.2D, V4.2D
+
+cd_neon_rem1:
+    AND $1, R3, R4
+    CBZ R4, cd_neon_reduce
+
+    // Reduce vector FIRST before scalar op (scalar ops zero upper V bits).
+    WORD $0x7E70D800           // FADDP D0, V0.2D
+    FMOVD (R0), F2
+    FMOVD (R1), F4
+    FMADDD F4, F0, F2, F0        // F0 = F2 * F4 + F0
+
+    B cd_neon_store
+
+cd_neon_reduce:
+    WORD $0x7E70D800           // FADDP D0, V0.2D
+
+cd_neon_store:
+    FMOVD F0, (R9)
+    ADD $8, R9
+    ADD R14, R15
+    SUB $1, R10
+    CBNZ R10, cd_neon_outer
+
+cd_neon_done:
+    RET

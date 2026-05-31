@@ -30,6 +30,7 @@ type (
 	interleave2Func       func(dst, a, b []float64)
 	deinterleave2Func     func(a, b, src []float64)
 	addScaledFunc         func(dst []float64, alpha float64, s []float64)
+	convolveDecimateFunc  func(dst, signal, kernel []float64, factor, phase int)
 )
 
 // Function pointers - assigned at init time based on CPU features
@@ -56,6 +57,7 @@ var (
 	interleave2Impl       interleave2Func
 	deinterleave2Impl     deinterleave2Func
 	addScaledImpl         addScaledFunc
+	convolveDecimateImpl  convolveDecimateFunc
 )
 
 func init() {
@@ -99,6 +101,7 @@ func initAVX512() {
 	interleave2Impl = interleave2AVX
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledAVX512
+	convolveDecimateImpl = convolveDecimateAVX512
 }
 
 func initAVX() {
@@ -125,6 +128,7 @@ func initAVX() {
 	interleave2Impl = interleave2AVX
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledAVX
+	convolveDecimateImpl = convolveDecimateAVX
 }
 
 // initAVXNoFMA runs on AVX-capable CPUs that lack FMA (rare but possible:
@@ -155,6 +159,7 @@ func initAVXNoFMA() {
 	interleave2Impl = interleave2AVX
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledSSE2
+	convolveDecimateImpl = convolveDecimateSSE2
 }
 
 func initSSE2() {
@@ -180,6 +185,7 @@ func initSSE2() {
 	interleave2Impl = interleave2SSE2
 	deinterleave2Impl = deinterleave2SSE2
 	addScaledImpl = addScaledSSE2
+	convolveDecimateImpl = convolveDecimateSSE2
 }
 
 func initGo() {
@@ -205,6 +211,7 @@ func initGo() {
 	interleave2Impl = interleave2Go
 	deinterleave2Impl = deinterleave2Go
 	addScaledImpl = addScaledGo64
+	convolveDecimateImpl = convolveDecimate64Go
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -327,6 +334,10 @@ func convolveValid64(dst, signal, kernel []float64) {
 	}
 }
 
+func convolveDecimate64(dst, signal, kernel []float64, factor, phase int) {
+	convolveDecimateImpl(dst, signal, kernel, factor, phase)
+}
+
 func accumulateAdd64(dst, src []float64) {
 	// AccumulateAdd is dst += src, which is the same as add(dst, dst, src)
 	addImpl(dst, dst, src)
@@ -447,6 +458,15 @@ func sigmoidAVX(dst, src []float64)
 //
 //go:noescape
 func dotProductAVX(a, b []float64) float64
+
+//go:noescape
+func convolveDecimateAVX(dst, signal, kernel []float64, factor, phase int)
+
+//go:noescape
+func convolveDecimateAVX512(dst, signal, kernel []float64, factor, phase int)
+
+//go:noescape
+func convolveDecimateSSE2(dst, signal, kernel []float64, factor, phase int)
 
 //go:noescape
 func addAVX(dst, a, b []float64)

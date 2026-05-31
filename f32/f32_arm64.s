@@ -2460,3 +2460,88 @@ addsub_neon_scalar:
 
 addsub_neon_done:
     RET
+
+// func convolveDecimateNEON(dst, signal, kernel []float32, factor, phase int)
+//
+// Fused decimating valid convolution. For each output it computes the dot
+// product of signal[pos:pos+kLen] with kernel, then advances pos by factor.
+// The inner dot replicates dotProductNEON exactly (dual accumulators, 8/4/scalar
+// reduction) so results are bit-identical to a per-window DotProductUnsafe when
+// the kernel is long enough to take the NEON path (the Go dispatcher only calls
+// this for len(kernel) >= 4). Outer state lives in R9-R15; the inner dot uses
+// R0-R4 and V0-V5.
+TEXT ·convolveDecimateNEON(SB), NOSPLIT, $0-88
+    MOVD dst_base+0(FP), R9        // output pointer
+    MOVD dst_len+8(FP), R10        // n outputs
+    MOVD signal_base+24(FP), R11   // signal base
+    MOVD kernel_base+48(FP), R12   // kernel base
+    MOVD kernel_len+56(FP), R13    // kLen
+    MOVD factor+72(FP), R14        // factor (elements)
+    MOVD phase+80(FP), R15         // pos (elements)
+
+    CBZ R10, cd_neon_done
+
+cd_neon_outer:
+    ADD R15<<2, R11, R0            // R0 = &signal[pos]
+    MOVD R12, R1                   // R1 = &kernel[0]
+    MOVD R13, R2                   // R2 = kLen (dot length)
+
+    VEOR V0.B16, V0.B16, V0.B16
+    VEOR V1.B16, V1.B16, V1.B16
+
+    LSR $3, R2, R3                 // kLen / 8
+    CBZ R3, cd_neon_rem4
+
+cd_neon_loop8:
+    VLD1.P 16(R0), [V2.S4]
+    VLD1.P 16(R0), [V3.S4]
+    VLD1.P 16(R1), [V4.S4]
+    VLD1.P 16(R1), [V5.S4]
+    WORD $0x4E24CC40              // FMLA V0.4S, V2.4S, V4.4S
+    WORD $0x4E25CC61              // FMLA V1.4S, V3.4S, V5.4S
+    SUB $1, R3
+    CBNZ R3, cd_neon_loop8
+
+    WORD $0x4E21D400             // FADD V0.4S, V0.4S, V1.4S
+
+cd_neon_rem4:
+    AND $7, R2, R3
+    LSR $2, R3, R4
+    CBZ R4, cd_neon_rem
+
+    VLD1.P 16(R0), [V2.S4]
+    VLD1.P 16(R1), [V4.S4]
+    WORD $0x4E24CC40              // FMLA V0.4S, V2.4S, V4.4S
+
+cd_neon_rem:
+    AND $3, R3, R4
+    CBZ R4, cd_neon_reduce
+
+    // Reduce vector FIRST before scalar ops (scalar ops zero upper V bits).
+    WORD $0x6E20D400             // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800             // FADDP S0, V0.2S
+
+cd_neon_scalar:
+    FMOVS (R0), F2
+    FMOVS (R1), F4
+    FMADDS F4, F0, F2, F0         // F0 = F2 * F4 + F0
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R4
+    CBNZ R4, cd_neon_scalar
+
+    B cd_neon_store
+
+cd_neon_reduce:
+    WORD $0x6E20D400             // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800             // FADDP S0, V0.2S
+
+cd_neon_store:
+    FMOVS F0, (R9)
+    ADD $4, R9
+    ADD R14, R15                  // pos += factor
+    SUB $1, R10
+    CBNZ R10, cd_neon_outer
+
+cd_neon_done:
+    RET
