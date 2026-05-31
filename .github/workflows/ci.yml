@@ -34,11 +34,22 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Install aarch64 binutils (FP16 .8H encoding cross-check)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
+
       - name: Run tests
+        env:
+          # Require the aarch64 objdump FP16 (.8H) cross-check on Linux, where
+          # binutils-aarch64-linux-gnu is installed above. macOS and Windows
+          # lack it and skip that cross-check cleanly.
+          SIMD_REQUIRE_OBJDUMP: ${{ runner.os == 'Linux' && '1' || '' }}
         run: go test -v -race ./...
 
       - name: Run tests with coverage
         if: matrix.coverage
+        env:
+          SIMD_REQUIRE_OBJDUMP: ${{ runner.os == 'Linux' && '1' || '' }}
         run: go test -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage

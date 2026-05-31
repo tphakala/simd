@@ -154,7 +154,17 @@ func Verify(hex uint32, claimed string) Result {
 	if err != nil {
 		return Result{Status: Undecodable, Err: err}
 	}
-	nd := Normalize(gnu)
+	return VerifyDecoded(gnu, claimed)
+}
+
+// VerifyDecoded checks an already-decoded instruction string against the
+// claimed instruction text, using the same normalization and token-boundary
+// prefix rule as Verify. It lets callers supply a disassembly from a source
+// other than arm64asm (for example aarch64 objdump, see objdump.go) while
+// sharing one comparison policy. The status is never Undecodable: the input is
+// already decoded, so the result is either Match or Mismatch.
+func VerifyDecoded(decoded, claimed string) Result {
+	nd := Normalize(decoded)
 	nc := Normalize(claimed)
 	if nc == nd || strings.HasPrefix(nc, nd+" ") {
 		return Result{Status: Match, Decoded: nd, Claimed: nc}

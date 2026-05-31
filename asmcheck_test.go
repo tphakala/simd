@@ -1,6 +1,7 @@
 package simd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,44 +11,11 @@ import (
 	"github.com/tphakala/simd/internal/asmencoding"
 )
 
-// asmException documents a WORD directive the checker cannot mechanically
-// verify, with the reason it is exempt. The current exemptions are all ARMv8.2
-// half-precision (.8H) SIMD instructions, which golang.org/x/arch/arm64asm
-// cannot decode. These are covered by the on-hardware numeric tests instead.
-type asmException struct {
-	file   string // path suffix relative to the module root
-	hex    uint32
-	expect string // intended instruction, for human reference
-	reason string
-}
-
-// fp16Reason applies to every entry below: golang.org/x/arch/arm64asm cannot
-// decode ARMv8.2 half-precision (.8H) SIMD instructions. Each encoding here was
-// instead verified with aarch64 GNU objdump (binutils 2.44) to match its
-// comment, and is exercised by the on-hardware numeric tests in f16.
-const fp16Reason = "ARMv8.2 FP16 (.8H) SIMD; not decodable by arm64asm; verified via aarch64 objdump"
-
-var asmAllowlist = []asmException{
-	{"f16/f16_arm64.s", 0x4E403484, "FMAX V4.8H, V4.8H, V0.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4E410C02, "FMLA V2.8H, V0.8H, V1.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4E411400, "FADD V0.8H, V0.8H, V1.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4E411402, "FADD V2.8H, V0.8H, V1.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4E413402, "FMAX V2.8H, V0.8H, V1.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4E421400, "FADD V0.8H, V0.8H, V2.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4E423401, "FMAX V1.8H, V0.8H, V2.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4EC03484, "FMIN V4.8H, V4.8H, V0.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4EC11402, "FSUB V2.8H, V0.8H, V1.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4EC33421, "FMIN V1.8H, V1.8H, V3.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x4EF8F801, "FABS V1.8H, V0.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x6E403C41, "FDIV V1.8H, V2.8H, V0.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x6E411C02, "FMUL V2.8H, V0.8H, V1.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x6E411C62, "FMUL V2.8H, V3.8H, V1.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x6E413C02, "FDIV V2.8H, V0.8H, V1.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x6E443484, "FMAXP V4.8H, V4.8H, V4.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x6EC43484, "FMINP V4.8H, V4.8H, V4.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x6EF8F801, "FNEG V1.8H, V0.8H", fp16Reason},
-	{"f16/f16_arm64.s", 0x6EF9F801, "FSQRT V1.8H, V0.8H", fp16Reason},
-}
+// requireObjdumpEnv, when set in the environment, makes a missing aarch64
+// objdump a hard failure instead of a skip-with-warning. CI sets it so the
+// FP16 (.8H) cross-check cannot silently regress to "unchecked" if the
+// binutils install ever breaks. Local runs without it stay green.
+const requireObjdumpEnv = "SIMD_REQUIRE_OBJDUMP"
 
 // findArm64Asm returns every *_arm64.s file under the module root.
 func findArm64Asm(t *testing.T) []string {
@@ -58,8 +26,8 @@ func findArm64Asm(t *testing.T) []string {
 			return err
 		}
 		if !d.IsDir() && strings.HasSuffix(p, "_arm64.s") {
-			// Normalize to forward slashes so allow-list matching and
-			// reporting are identical on Windows (WalkDir yields backslashes).
+			// Normalize to forward slashes so reporting is identical on
+			// Windows (WalkDir yields backslashes).
 			files = append(files, filepath.ToSlash(p))
 		}
 		return nil
@@ -73,68 +41,128 @@ func findArm64Asm(t *testing.T) []string {
 	return files
 }
 
-func allowed(file string, hex uint32, used map[int]bool) bool {
-	for i, e := range asmAllowlist {
-		if e.hex == hex && strings.HasSuffix(file, e.file) {
-			used[i] = true
-			return true
-		}
-	}
-	return false
+// fp16Directive is a WORD directive that golang.org/x/arch/arm64asm cannot
+// decode (an ARMv8.2 half-precision .8H FP16 SIMD instruction), deferred to the
+// objdump cross-check.
+type fp16Directive struct {
+	line    int
+	hex     uint32
+	comment string
 }
 
 // TestArm64WordEncodings decodes every hand-encoded WORD directive in the ARM64
 // assembly and asserts it matches the instruction named in its comment.
+// Instructions arm64asm can decode are checked directly; ARMv8.2 FP16 (.8H)
+// instructions, which it cannot decode, are cross-checked with an aarch64
+// objdump when one is available. Without objdump the FP16 directives are
+// accepted unchecked (so the test stays green on machines lacking cross
+// binutils) unless SIMD_REQUIRE_OBJDUMP is set, which CI does.
 func TestArm64WordEncodings(t *testing.T) {
-	usedExceptions := map[int]bool{}
+	tool := asmencoding.FindObjdump()
+	if os.Getenv(requireObjdumpEnv) != "" && tool == "" {
+		t.Fatalf("%s is set but no aarch64-capable objdump was found; install binutils-aarch64-linux-gnu", requireObjdumpEnv)
+	}
+	if tool == "" {
+		t.Logf("no aarch64 objdump found; FP16 (.8H) encodings are accepted unchecked. "+
+			"Install binutils-aarch64-linux-gnu, or set %s=1 to require the cross-check.", requireObjdumpEnv)
+	}
 
 	for _, file := range findArm64Asm(t) {
-		src, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("read %s: %v", file, err)
-		}
-		directives := asmencoding.ScanSource(string(src))
+		checkArm64File(t, file, tool)
+	}
+}
 
-		// Hexes that verified cleanly somewhere in this file; used to accept
-		// uncommented repeats of an already-validated instruction.
-		matched := map[uint32]bool{}
-		for _, d := range directives {
-			if d.Source != asmencoding.NoComment {
-				if asmencoding.Verify(d.Hex, d.Comment).Status == asmencoding.Match {
-					matched[d.Hex] = true
-				}
-			}
-		}
+// checkArm64File validates every WORD directive in one assembly file.
+func checkArm64File(t *testing.T, file, tool string) {
+	t.Helper()
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+	directives := asmencoding.ScanSource(string(src))
 
-		for _, d := range directives {
-			if d.Source == asmencoding.NoComment {
-				if matched[d.Hex] || allowed(file, d.Hex, usedExceptions) {
-					continue
-				}
-				t.Errorf("%s:%d  0x%08X  uncommented WORD, cannot validate (add a comment)", file, d.Line, d.Hex)
+	// matched holds hexes proven to match their comment, whether decoded by
+	// arm64asm or cross-checked by objdump. Uncommented repeats of a matched
+	// hex are then accepted.
+	matched := map[uint32]bool{}
+	var fp16 []fp16Directive
+
+	// Pass 1: every commented directive. Decodable ones are verified now;
+	// undecodable ones (FP16 .8H) are deferred to the objdump cross-check.
+	for _, d := range directives {
+		if d.Source == asmencoding.NoComment {
+			continue
+		}
+		res := asmencoding.Verify(d.Hex, d.Comment)
+		switch res.Status {
+		case asmencoding.Match:
+			matched[d.Hex] = true
+		case asmencoding.Mismatch:
+			t.Errorf("%s:%d  0x%08X  claims=%q  decodes=%q", file, d.Line, d.Hex, res.Claimed, res.Decoded)
+		case asmencoding.Undecodable:
+			// ARMv8.2 FP16 (.8H) SIMD is the only sanctioned reason arm64asm
+			// cannot decode a directive here. Any other undecodable WORD (a
+			// malformed encoding, or a future extension) is a real problem:
+			// fail loudly instead of funneling it into the objdump fallback,
+			// which is lenient when no objdump is installed.
+			if !strings.Contains(strings.ToUpper(d.Comment), ".8H") {
+				t.Errorf("%s:%d  0x%08X  undecodable WORD that is not FP16 (.8H): %q", file, d.Line, d.Hex, d.Comment)
 				continue
 			}
-			res := asmencoding.Verify(d.Hex, d.Comment)
-			switch res.Status {
-			case asmencoding.Match:
-				// ok
-			case asmencoding.Mismatch:
-				if allowed(file, d.Hex, usedExceptions) {
-					continue
-				}
-				t.Errorf("%s:%d  0x%08X  claims=%q  decodes=%q", file, d.Line, d.Hex, res.Claimed, res.Decoded)
-			case asmencoding.Undecodable:
-				if allowed(file, d.Hex, usedExceptions) {
-					continue
-				}
-				t.Errorf("%s:%d  0x%08X  claims=%q  not decodable and not allow-listed (%v)", file, d.Line, d.Hex, d.Comment, res.Err)
-			}
+			fp16 = append(fp16, fp16Directive{line: d.Line, hex: d.Hex, comment: d.Comment})
 		}
 	}
 
-	for i, e := range asmAllowlist {
-		if !usedExceptions[i] {
-			t.Errorf("stale allow-list entry never matched: %s 0x%08X (%s)", e.file, e.hex, e.expect)
+	crossCheckFP16(t, file, tool, fp16, matched)
+
+	// Pass 2: uncommented directives must reuse a hex proven above.
+	for _, d := range directives {
+		if d.Source != asmencoding.NoComment {
+			continue
+		}
+		if matched[d.Hex] {
+			continue
+		}
+		t.Errorf("%s:%d  0x%08X  uncommented WORD, cannot validate (add a comment naming the instruction)", file, d.Line, d.Hex)
+	}
+}
+
+// crossCheckFP16 verifies FP16 (.8H) directives that arm64asm cannot decode by
+// disassembling them with aarch64 objdump and comparing against their comments.
+// When no objdump is available it accepts them (marking each hex matched so
+// uncommented repeats pass) and relies on the warning and SIMD_REQUIRE_OBJDUMP
+// gate in TestArm64WordEncodings.
+func crossCheckFP16(t *testing.T, file, tool string, fp16 []fp16Directive, matched map[uint32]bool) {
+	t.Helper()
+	if len(fp16) == 0 {
+		return
+	}
+	if tool == "" {
+		for _, d := range fp16 {
+			matched[d.hex] = true
+		}
+		return
+	}
+
+	hexes := make([]uint32, 0, len(fp16))
+	for _, d := range fp16 {
+		hexes = append(hexes, d.hex)
+	}
+	decoded, err := asmencoding.DisassembleWords(context.Background(), tool, hexes)
+	if err != nil {
+		t.Fatalf("objdump cross-check of %s failed: %v", file, err)
+	}
+
+	for _, d := range fp16 {
+		got, ok := decoded[d.hex]
+		if !ok {
+			t.Errorf("%s:%d  0x%08X  objdump produced no disassembly", file, d.line, d.hex)
+			continue
+		}
+		if res := asmencoding.VerifyDecoded(got, d.comment); res.Status == asmencoding.Match {
+			matched[d.hex] = true
+		} else {
+			t.Errorf("%s:%d  0x%08X  claims=%q  objdump=%q", file, d.line, d.hex, res.Claimed, res.Decoded)
 		}
 	}
 }
