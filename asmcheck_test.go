@@ -100,6 +100,15 @@ func checkArm64File(t *testing.T, file, tool string) {
 		case asmencoding.Mismatch:
 			t.Errorf("%s:%d  0x%08X  claims=%q  decodes=%q", file, d.Line, d.Hex, res.Claimed, res.Decoded)
 		case asmencoding.Undecodable:
+			// ARMv8.2 FP16 (.8H) SIMD is the only sanctioned reason arm64asm
+			// cannot decode a directive here. Any other undecodable WORD (a
+			// malformed encoding, or a future extension) is a real problem:
+			// fail loudly instead of funneling it into the objdump fallback,
+			// which is lenient when no objdump is installed.
+			if !strings.Contains(strings.ToUpper(d.Comment), ".8H") {
+				t.Errorf("%s:%d  0x%08X  undecodable WORD that is not FP16 (.8H): %q", file, d.Line, d.Hex, d.Comment)
+				continue
+			}
 			fp16 = append(fp16, fp16Directive{line: d.Line, hex: d.Hex, comment: d.Comment})
 		}
 	}

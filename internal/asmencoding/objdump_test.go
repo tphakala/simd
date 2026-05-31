@@ -93,3 +93,15 @@ func TestFindObjdumpProbe(t *testing.T) {
 		t.Fatalf("located objdump %q failed the probe: got %q", tool, res.Decoded)
 	}
 }
+
+// TestDisassembleWordsEmpty checks that an empty word slice returns an empty
+// map without invoking objdump (which rejects empty input files).
+func TestDisassembleWordsEmpty(t *testing.T) {
+	got, err := DisassembleWords(t.Context(), "/nonexistent-objdump", nil)
+	if err != nil {
+		t.Fatalf("empty input should not error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty map, got %v", got)
+	}
+}

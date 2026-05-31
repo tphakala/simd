@@ -89,6 +89,12 @@ func FindObjdump() string {
 // are written little-endian (aarch64 byte order) and decoded with
 // `-D -b binary -m aarch64`. Identical words collapse to a single map entry.
 func DisassembleWords(ctx context.Context, tool string, words []uint32) (map[uint32]string, error) {
+	if len(words) == 0 {
+		// Nothing to decode; avoid running objdump on an empty file, which
+		// GNU binutils rejects ("file format not recognized").
+		return map[uint32]string{}, nil
+	}
+
 	f, err := os.CreateTemp("", "asmencoding-*.bin")
 	if err != nil {
 		return nil, fmt.Errorf("create temp: %w", err)
