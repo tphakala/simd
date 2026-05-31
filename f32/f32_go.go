@@ -464,23 +464,7 @@ func int32ToFloat32ScaleGo(dst []float32, src []int32, scale float32) {
 // int16 values are exactly representable in float32, so this is a single
 // rounding (the multiply); the SIMD paths produce bit-identical results.
 func int16ToFloat32ScaleGo(dst []float32, src []int16, scale float32) {
-	n := len(src)
-	n8 := n &^ unrollMask // Round down to multiple of 8
-
-	// Unrolled loop: 8 elements per iteration
-	for i := 0; i < n8; i += 8 {
-		dst[i] = float32(src[i]) * scale
-		dst[i+1] = float32(src[i+1]) * scale
-		dst[i+2] = float32(src[i+2]) * scale
-		dst[i+3] = float32(src[i+3]) * scale
-		dst[i+4] = float32(src[i+4]) * scale
-		dst[i+5] = float32(src[i+5]) * scale
-		dst[i+6] = float32(src[i+6]) * scale
-		dst[i+7] = float32(src[i+7]) * scale
-	}
-
-	// Handle remainder
-	for i := n8; i < n; i++ {
+	for i := range src {
 		dst[i] = float32(src[i]) * scale
 	}
 }
@@ -494,15 +478,15 @@ func int16ToFloat32ScaleGo(dst []float32, src []int16, scale float32) {
 // architectures. Rounding is round-to-nearest, ties to even (one LSB tighter
 // than a truncating int16(f*scale) cast).
 func float32ToInt16ScaleGo(dst []int16, src []float32, scale float32) {
-	for i := 0; i < len(src); i++ {
+	for i := range src {
 		v := src[i] * scale
 		switch {
 		case v != v: // NaN
 			dst[i] = 0
-		case v >= 32767: // includes +Inf
-			dst[i] = 32767
-		case v <= -32768: // includes -Inf
-			dst[i] = -32768
+		case v >= math.MaxInt16: // includes +Inf
+			dst[i] = math.MaxInt16
+		case v <= math.MinInt16: // includes -Inf
+			dst[i] = math.MinInt16
 		default:
 			dst[i] = int16(math.RoundToEven(float64(v)))
 		}

@@ -610,6 +610,25 @@ func BenchmarkInt32ToFloat32Scale(b *testing.B) {
 // Int16ToFloat32Scale Benchmarks
 // =============================================================================
 
+// benchScalePair runs the SIMD and Go sub-benchmarks for one PCM conversion
+// primitive at a single size. bytesPerElem is the combined read+write width per
+// element, used for the throughput (MB/s) report.
+func benchScalePair(b *testing.B, size, bytesPerElem int, simd, gofb func()) {
+	b.Helper()
+	b.Run(fmt.Sprintf("SIMD_%d", size), func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			simd()
+		}
+		b.SetBytes(int64(size * bytesPerElem))
+	})
+	b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			gofb()
+		}
+		b.SetBytes(int64(size * bytesPerElem))
+	})
+}
+
 func BenchmarkInt16ToFloat32Scale(b *testing.B) {
 	for _, size := range benchSizes {
 		src := make([]int16, size)
@@ -618,21 +637,10 @@ func BenchmarkInt16ToFloat32Scale(b *testing.B) {
 			src[i] = int16((i % 65536) - 32768)
 		}
 		scale := float32(1.0 / 32768.0)
-
-		b.Run(fmt.Sprintf("SIMD_%d", size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				Int16ToFloat32Scale(dst, src, scale)
-			}
-			// Read int16 (2 bytes) + write float32 (4 bytes) = 6 bytes per element
-			b.SetBytes(int64(size * 6))
-		})
-
-		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				int16ToFloat32ScaleGo(dst, src, scale)
-			}
-			b.SetBytes(int64(size * 6))
-		})
+		// Read int16 (2 bytes) + write float32 (4 bytes) = 6 bytes per element.
+		benchScalePair(b, size, 6,
+			func() { Int16ToFloat32Scale(dst, src, scale) },
+			func() { int16ToFloat32ScaleGo(dst, src, scale) })
 	}
 }
 
@@ -648,20 +656,9 @@ func BenchmarkFloat32ToInt16Scale(b *testing.B) {
 			src[i] = float32((i%65536)-32768) / 32768.0
 		}
 		scale := float32(32767.0)
-
-		b.Run(fmt.Sprintf("SIMD_%d", size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				Float32ToInt16Scale(dst, src, scale)
-			}
-			// Read float32 (4 bytes) + write int16 (2 bytes) = 6 bytes per element
-			b.SetBytes(int64(size * 6))
-		})
-
-		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				float32ToInt16ScaleGo(dst, src, scale)
-			}
-			b.SetBytes(int64(size * 6))
-		})
+		// Read float32 (4 bytes) + write int16 (2 bytes) = 6 bytes per element.
+		benchScalePair(b, size, 6,
+			func() { Float32ToInt16Scale(dst, src, scale) },
+			func() { float32ToInt16ScaleGo(dst, src, scale) })
 	}
 }

@@ -1836,9 +1836,28 @@ func TestInt32ToFloat32ScaleUnsafe(t *testing.T) {
 // int16ToFloat32ScaleRef is the scalar reference: dst[i] = float32(src[i]) * scale.
 // int16 values are exactly representable in float32, so a single multiply with
 // the same rounding as the SIMD paths makes results bit-identical.
+// int16Ramp builds an n-element int16 ramp spanning negative and positive values
+// so sized test cases exercise full SIMD blocks plus a scalar remainder.
+func int16Ramp(n int) []int16 {
+	s := make([]int16, n)
+	for i := range s {
+		s[i] = int16((i - n/2) * 1000)
+	}
+	return s
+}
+
+// float32Ramp builds an n-element float32 ramp roughly in [-1, 1).
+func float32Ramp(n int) []float32 {
+	s := make([]float32, n)
+	for i := range s {
+		s[i] = float32(i-n/2) / float32(n/2+1)
+	}
+	return s
+}
+
 func int16ToFloat32ScaleRef(dst []float32, src []int16, scale float32) {
 	n := min(len(dst), len(src))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		dst[i] = float32(src[i]) * scale
 	}
 }
@@ -1855,18 +1874,10 @@ func TestInt16ToFloat32Scale(t *testing.T) {
 		{"seven", []int16{-32768, -16384, -8192, 0, 8192, 16384, 32767}, 1.0 / 32768.0},
 		{"eight", []int16{-32768, -16384, -8192, 0, 8192, 16384, 32767, -1}, 1.0 / 32768.0},
 		{"nine", []int16{-32768, -16384, -8192, 0, 8192, 16384, 32767, -1, 100}, 1.0 / 32768.0},
-		{"sixteen", make([]int16, 16), 1.0 / 32768.0},
-		{"seventeen", make([]int16, 17), 1.0 / 32768.0},
+		{"block16", int16Ramp(16), 1.0 / 32768.0},
+		{"block17", int16Ramp(17), 1.0 / 32768.0},
 		{"boundaries", []int16{-32768, -1, 0, 1, 32767}, 1.0 / 32768.0},
 		{"unit_scale", []int16{-32768, -100, 0, 100, 32767}, 1.0},
-	}
-
-	for i := range testCases {
-		if testCases[i].name == "sixteen" || testCases[i].name == "seventeen" {
-			for j := range testCases[i].src {
-				testCases[i].src[j] = int16((j - len(testCases[i].src)/2) * 1000)
-			}
-		}
 	}
 
 	for _, tc := range testCases {
@@ -1928,7 +1939,7 @@ func TestInt16ToFloat32Scale_LengthMismatch(t *testing.T) {
 		dst2[i] = -999
 	}
 	Int16ToFloat32Scale(dst2, src, scale)
-	for i := 0; i < len(src); i++ {
+	for i := range src {
 		if want := float32(src[i]) * scale; dst2[i] != want {
 			t.Errorf("short src [%d] = %v, want %v", i, dst2[i], want)
 		}
@@ -1967,15 +1978,15 @@ func TestInt16ToFloat32ScaleUnsafe(t *testing.T) {
 // of ARM64 FCVTNS + SQXTN.
 func float32ToInt16ScaleRef(dst []int16, src []float32, scale float32) {
 	n := min(len(dst), len(src))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		v := src[i] * scale
 		switch {
 		case v != v: // NaN
 			dst[i] = 0
-		case v >= 32767: // includes +Inf
-			dst[i] = 32767
-		case v <= -32768: // includes -Inf
-			dst[i] = -32768
+		case v >= math.MaxInt16: // includes +Inf
+			dst[i] = math.MaxInt16
+		case v <= math.MinInt16: // includes -Inf
+			dst[i] = math.MinInt16
 		default:
 			dst[i] = int16(math.RoundToEven(float64(v)))
 		}
@@ -1995,8 +2006,8 @@ func TestFloat32ToInt16Scale(t *testing.T) {
 		{"four", []float32{-1.0, -0.5, 0.0, 1.0}, 32767.0},
 		{"eight", []float32{-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0, 0.999}, 32767.0},
 		{"nine", []float32{-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0, 0.999, -0.001}, 32767.0},
-		{"sixteen", make([]float32, 16), 32767.0},
-		{"seventeen", make([]float32, 17), 32767.0},
+		{"block16", float32Ramp(16), 32767.0},
+		{"block17", float32Ramp(17), 32767.0},
 		// Out-of-range inputs must clamp, not wrap.
 		{"overrange", []float32{2.0, -2.0, 1.5, -1.5, 100.0, -100.0, 5e9, -5e9}, 32767.0},
 		// Infinities and NaN.
@@ -2005,14 +2016,6 @@ func TestFloat32ToInt16Scale(t *testing.T) {
 		{"ties", []float32{0.5, 1.5, 2.5, 3.5, -0.5, -1.5, -2.5, -3.5}, 1.0},
 		// Exact integer products.
 		{"exact", []float32{-32768, -16384, 0, 16384, 32767}, 1.0},
-	}
-
-	for i := range testCases {
-		if testCases[i].name == "sixteen" || testCases[i].name == "seventeen" {
-			for j := range testCases[i].src {
-				testCases[i].src[j] = float32(j-len(testCases[i].src)/2) / 32768.0
-			}
-		}
 	}
 
 	for _, tc := range testCases {
@@ -2119,7 +2122,7 @@ func TestFloat32ToInt16Scale_LengthMismatch(t *testing.T) {
 	Float32ToInt16Scale(dst2, src, scale)
 	want2 := make([]int16, len(src))
 	float32ToInt16ScaleRef(want2, src, scale)
-	for i := 0; i < len(src); i++ {
+	for i := range src {
 		if dst2[i] != want2[i] {
 			t.Errorf("short src [%d] = %d, want %d", i, dst2[i], want2[i])
 		}
