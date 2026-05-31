@@ -197,7 +197,7 @@ add16_loop8:
     ADD $16, R2
 
     // FADD V2.8H, V0.8H, V1.8H
-    WORD $0x4E411402
+    WORD $0x4E411402            // FADD V2.8H, V0.8H, V1.8H
 
     VST1 [V2.H8], (R0)
     ADD $16, R0
@@ -226,7 +226,7 @@ sub16_loop8:
     ADD $16, R2
 
     // FSUB V2.8H, V0.8H, V1.8H
-    WORD $0x4EC11402
+    WORD $0x4EC11402            // FSUB V2.8H, V0.8H, V1.8H
 
     VST1 [V2.H8], (R0)
     ADD $16, R0
@@ -255,7 +255,7 @@ mul16_loop8:
     ADD $16, R2
 
     // FMUL V2.8H, V0.8H, V1.8H
-    WORD $0x6E411C02
+    WORD $0x6E411C02            // FMUL V2.8H, V0.8H, V1.8H
 
     VST1 [V2.H8], (R0)
     ADD $16, R0
@@ -287,7 +287,7 @@ scale16_loop8:
     ADD $16, R1
 
     // FMUL V2.8H, V0.8H, V1.8H
-    WORD $0x6E411C02
+    WORD $0x6E411C02            // FMUL V2.8H, V0.8H, V1.8H
 
     VST1 [V2.H8], (R0)
     ADD $16, R0
@@ -319,7 +319,7 @@ fma16_loop8:
     ADD $16, R3
 
     // FMLA V2.8H, V0.8H, V1.8H (V2 = V0*V1 + V2)
-    WORD $0x4E410C02
+    WORD $0x4E410C02            // FMLA V2.8H, V0.8H, V1.8H
 
     VST1 [V2.H8], (R0)
     ADD $16, R0
@@ -376,7 +376,7 @@ abs16_loop8:
     ADD $16, R1
 
     // FABS V1.8H, V0.8H
-    WORD $0x4EF8F801
+    WORD $0x4EF8F801            // FABS V1.8H, V0.8H
 
     VST1 [V1.H8], (R0)
     ADD $16, R0
@@ -402,7 +402,7 @@ neg16_loop8:
     ADD $16, R1
 
     // FNEG V1.8H, V0.8H
-    WORD $0x6EF8F801
+    WORD $0x6EF8F801            // FNEG V1.8H, V0.8H
 
     VST1 [V1.H8], (R0)
     ADD $16, R0
@@ -431,7 +431,7 @@ relu16_loop8:
     ADD $16, R1
 
     // FMAX V2.8H, V0.8H, V1.8H (V1 is zero)
-    WORD $0x4E413402
+    WORD $0x4E413402            // FMAX V2.8H, V0.8H, V1.8H
 
     VST1 [V2.H8], (R0)
     ADD $16, R0
@@ -461,7 +461,7 @@ min16_loop8:
     ADD $16, R0
 
     // FMIN V4.8H, V4.8H, V0.8H
-    WORD $0x4EC03484
+    WORD $0x4EC03484            // FMIN V4.8H, V4.8H, V0.8H
 
     SUB $1, R3
     CBNZ R3, min16_loop8
@@ -497,7 +497,7 @@ max16_loop8:
     ADD $16, R0
 
     // FMAX V4.8H, V4.8H, V0.8H
-    WORD $0x4E403484
+    WORD $0x4E403484            // FMAX V4.8H, V4.8H, V0.8H
 
     SUB $1, R3
     CBNZ R3, max16_loop8
@@ -532,7 +532,7 @@ div16_loop8:
     ADD $16, R2
 
     // FDIV V2.8H, V0.8H, V1.8H
-    WORD $0x6E413C02
+    WORD $0x6E413C02            // FDIV V2.8H, V0.8H, V1.8H
 
     VST1 [V2.H8], (R0)
     ADD $16, R0
@@ -563,7 +563,7 @@ addscalar16_loop8:
     ADD $16, R1
 
     // FADD V2.8H, V0.8H, V1.8H
-    WORD $0x4E411402
+    WORD $0x4E411402            // FADD V2.8H, V0.8H, V1.8H
 
     VST1 [V2.H8], (R0)
     ADD $16, R0
@@ -599,10 +599,10 @@ clamp16_loop8:
     ADD $16, R1
 
     // FMAX V1.8H, V0.8H, V2.8H (clamp to min)
-    WORD $0x4E423401
+    WORD $0x4E423401            // FMAX V1.8H, V0.8H, V2.8H
 
     // FMIN V1.8H, V1.8H, V3.8H (clamp to max)
-    WORD $0x4EC33421
+    WORD $0x4EC33421            // FMIN V1.8H, V1.8H, V3.8H
 
     VST1 [V1.H8], (R0)
     ADD $16, R0
@@ -628,7 +628,7 @@ sqrt16_loop8:
     ADD $16, R1
 
     // FSQRT V1.8H, V0.8H
-    WORD $0x6EF9F801
+    WORD $0x6EF9F801            // FSQRT V1.8H, V0.8H
 
     VST1 [V1.H8], (R0)
     ADD $16, R0
@@ -661,7 +661,7 @@ recip16_loop8:
     ADD $16, R1
 
     // FDIV V1.8H, V2.8H, V0.8H (1.0 / x)
-    WORD $0x6E403C41
+    WORD $0x6E403C41            // FDIV V1.8H, V2.8H, V0.8H
 
     VST1 [V1.H8], (R0)
     ADD $16, R0
@@ -694,10 +694,10 @@ axpy16_loop8:
     ADD $16, R1
 
     // V2 = alpha * s (FMUL V2.8H, V3.8H, V1.8H)
-    WORD $0x6E411C62
+    WORD $0x6E411C62            // FMUL V2.8H, V3.8H, V1.8H
 
     // dst += V2 (FADD V0.8H, V0.8H, V2.8H)
-    WORD $0x4E421400
+    WORD $0x4E421400            // FADD V0.8H, V0.8H, V2.8H
 
     VST1 [V0.H8], (R0)
     ADD $16, R0
@@ -724,7 +724,7 @@ accadd16_loop8:
     ADD $16, R1
 
     // FADD V0.8H, V0.8H, V1.8H
-    WORD $0x4E411400
+    WORD $0x4E411400            // FADD V0.8H, V0.8H, V1.8H
 
     VST1 [V0.H8], (R0)
     ADD $16, R0
