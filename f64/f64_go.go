@@ -303,6 +303,17 @@ func convolveValid64Go(dst, signal, kernel []float64) {
 	}
 }
 
+// convolveDecimate64Go is the pure-Go decimating valid convolution. It is the
+// correctness oracle for the SIMD paths and the fallback on non-asm platforms.
+func convolveDecimate64Go(dst, signal, kernel []float64, factor, phase int) {
+	kLen := len(kernel)
+	pos := phase
+	for k := range dst {
+		dst[k] = dotProductGo(signal[pos:pos+kLen], kernel)
+		pos += factor
+	}
+}
+
 func accumulateAdd64Go(dst, src []float64) {
 	for i := range dst {
 		dst[i] += src[i]

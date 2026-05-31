@@ -3921,3 +3921,265 @@ round_avx_scalar:
 round_avx_done:
     VZEROUPPER
     RET
+
+// func convolveDecimateAVX(dst, signal, kernel []float64, factor, phase int)
+//
+// Fused decimating valid convolution. For each output k it computes the dot
+// product of signal[pos:pos+kLen] with kernel, then advances pos by factor.
+// The inner dot replicates dotProductAVX exactly (4 accumulators, 16/4/scalar
+// reduction) so results are bit-identical to a per-window DotProductUnsafe.
+// Outer state lives in R8-R14; the inner dot uses SI/DI/CX/AX and Y0-Y5.
+TEXT ·convolveDecimateAVX(SB), NOSPLIT, $0-88
+    MOVQ dst_base+0(FP), R8        // output pointer
+    MOVQ dst_len+8(FP), R9         // n outputs
+    MOVQ signal_base+24(FP), R10   // signal base
+    MOVQ kernel_base+48(FP), R11   // kernel base
+    MOVQ kernel_len+56(FP), R12    // kLen
+    MOVQ factor+72(FP), R13        // factor (elements)
+    MOVQ phase+80(FP), R14         // pos (elements)
+
+    TESTQ R9, R9
+    JZ    cd_avx_ret
+
+cd_avx_outer:
+    LEAQ (R10)(R14*8), SI          // SI = &signal[pos]
+    MOVQ R11, DI                   // DI = &kernel[0]
+
+    VXORPD Y0, Y0, Y0
+    VXORPD Y3, Y3, Y3
+    VXORPD Y4, Y4, Y4
+    VXORPD Y5, Y5, Y5
+
+    MOVQ R12, CX                   // CX = kLen
+    MOVQ CX, AX
+    SHRQ $4, AX                    // kLen / 16
+    JZ   cd_avx_loop4_check
+
+cd_avx_loop16:
+    VMOVUPD (SI), Y1
+    VMOVUPD (DI), Y2
+    VFMADD231PD Y1, Y2, Y0
+    VMOVUPD 32(SI), Y1
+    VMOVUPD 32(DI), Y2
+    VFMADD231PD Y1, Y2, Y3
+    VMOVUPD 64(SI), Y1
+    VMOVUPD 64(DI), Y2
+    VFMADD231PD Y1, Y2, Y4
+    VMOVUPD 96(SI), Y1
+    VMOVUPD 96(DI), Y2
+    VFMADD231PD Y1, Y2, Y5
+    ADDQ $128, SI
+    ADDQ $128, DI
+    DECQ AX
+    JNZ  cd_avx_loop16
+
+    VADDPD Y3, Y0, Y0
+    VADDPD Y4, Y0, Y0
+    VADDPD Y5, Y0, Y0
+
+cd_avx_loop4_check:
+    MOVQ R12, CX
+    ANDQ $15, CX
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   cd_avx_reduce
+
+cd_avx_loop4:
+    VMOVUPD (SI), Y1
+    VMOVUPD (DI), Y2
+    VFMADD231PD Y1, Y2, Y0
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  cd_avx_loop4
+
+cd_avx_reduce:
+    VEXTRACTF128 $1, Y0, X1
+    VADDPD X1, X0, X0
+    VHADDPD X0, X0, X0
+
+    MOVQ R12, CX
+    ANDQ $3, CX
+    JZ   cd_avx_store
+
+cd_avx_scalar:
+    VMOVSD (SI), X1
+    VMOVSD (DI), X2
+    VFMADD231SD X1, X2, X0
+    ADDQ $8, SI
+    ADDQ $8, DI
+    DECQ CX
+    JNZ  cd_avx_scalar
+
+cd_avx_store:
+    VMOVSD X0, (R8)
+    ADDQ $8, R8
+    ADDQ R13, R14                  // pos += factor
+    DECQ R9
+    JNZ  cd_avx_outer
+
+cd_avx_ret:
+    VZEROUPPER
+    RET
+
+// func convolveDecimateAVX512(dst, signal, kernel []float64, factor, phase int)
+//
+// AVX-512 fused decimating valid convolution. Inner dot replicates
+// dotProductAVX512 (4 Z accumulators, 32/8/scalar reduction) for bit-identical
+// results vs a per-window DotProductUnsafe on the AVX-512 path.
+TEXT ·convolveDecimateAVX512(SB), NOSPLIT, $0-88
+    MOVQ dst_base+0(FP), R8
+    MOVQ dst_len+8(FP), R9
+    MOVQ signal_base+24(FP), R10
+    MOVQ kernel_base+48(FP), R11
+    MOVQ kernel_len+56(FP), R12
+    MOVQ factor+72(FP), R13
+    MOVQ phase+80(FP), R14
+
+    TESTQ R9, R9
+    JZ    cd_avx512_ret
+
+cd_avx512_outer:
+    LEAQ (R10)(R14*8), SI
+    MOVQ R11, DI
+
+    VXORPD Z0, Z0, Z0
+    VXORPD Z3, Z3, Z3
+    VXORPD Z4, Z4, Z4
+    VXORPD Z5, Z5, Z5
+
+    MOVQ R12, CX
+    MOVQ CX, AX
+    SHRQ $5, AX                    // kLen / 32
+    JZ   cd_avx512_loop8_check
+
+cd_avx512_loop32:
+    VMOVUPD (SI), Z1
+    VMOVUPD (DI), Z2
+    VFMADD231PD Z1, Z2, Z0
+    VMOVUPD 64(SI), Z1
+    VMOVUPD 64(DI), Z2
+    VFMADD231PD Z1, Z2, Z3
+    VMOVUPD 128(SI), Z1
+    VMOVUPD 128(DI), Z2
+    VFMADD231PD Z1, Z2, Z4
+    VMOVUPD 192(SI), Z1
+    VMOVUPD 192(DI), Z2
+    VFMADD231PD Z1, Z2, Z5
+    ADDQ $256, SI
+    ADDQ $256, DI
+    DECQ AX
+    JNZ  cd_avx512_loop32
+
+    VADDPD Z3, Z0, Z0
+    VADDPD Z4, Z0, Z0
+    VADDPD Z5, Z0, Z0
+
+cd_avx512_loop8_check:
+    MOVQ R12, CX
+    ANDQ $31, CX
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   cd_avx512_reduce
+
+cd_avx512_loop8:
+    VMOVUPD (SI), Z1
+    VMOVUPD (DI), Z2
+    VFMADD231PD Z1, Z2, Z0
+    ADDQ $64, SI
+    ADDQ $64, DI
+    DECQ AX
+    JNZ  cd_avx512_loop8
+
+cd_avx512_reduce:
+    VEXTRACTF64X4 $1, Z0, Y1
+    VADDPD Y1, Y0, Y0
+    VEXTRACTF128 $1, Y0, X1
+    VADDPD X1, X0, X0
+    VHADDPD X0, X0, X0
+
+    MOVQ R12, CX
+    ANDQ $7, CX
+    JZ   cd_avx512_store
+
+cd_avx512_scalar:
+    VMOVSD (SI), X1
+    VMOVSD (DI), X2
+    VFMADD231SD X1, X2, X0
+    ADDQ $8, SI
+    ADDQ $8, DI
+    DECQ CX
+    JNZ  cd_avx512_scalar
+
+cd_avx512_store:
+    VMOVSD X0, (R8)
+    ADDQ $8, R8
+    ADDQ R13, R14
+    DECQ R9
+    JNZ  cd_avx512_outer
+
+cd_avx512_ret:
+    VZEROUPPER
+    RET
+
+// func convolveDecimateSSE2(dst, signal, kernel []float64, factor, phase int)
+//
+// SSE2 fused decimating valid convolution (also used on the AVX-without-FMA
+// path, which selects the SSE2 dot). Inner dot replicates dotProductSSE2
+// (single accumulator, 2-wide loop, SHUFPD horizontal sum) for bit-identical
+// results vs a per-window DotProductUnsafe on those paths.
+TEXT ·convolveDecimateSSE2(SB), NOSPLIT, $0-88
+    MOVQ dst_base+0(FP), R8
+    MOVQ dst_len+8(FP), R9
+    MOVQ signal_base+24(FP), R10
+    MOVQ kernel_base+48(FP), R11
+    MOVQ kernel_len+56(FP), R12
+    MOVQ factor+72(FP), R13
+    MOVQ phase+80(FP), R14
+
+    TESTQ R9, R9
+    JZ    cd_sse2_ret
+
+cd_sse2_outer:
+    LEAQ (R10)(R14*8), SI
+    MOVQ R11, DI
+    XORPD X0, X0
+
+    MOVQ R12, CX
+    MOVQ CX, AX
+    SHRQ $1, AX                    // kLen / 2
+    JZ   cd_sse2_reduce
+
+cd_sse2_loop2:
+    MOVUPD (SI), X1
+    MOVUPD (DI), X2
+    MULPD X2, X1
+    ADDPD X1, X0
+    ADDQ $16, SI
+    ADDQ $16, DI
+    DECQ AX
+    JNZ  cd_sse2_loop2
+
+cd_sse2_reduce:
+    MOVAPD X0, X1
+    SHUFPD $1, X1, X1
+    ADDSD X1, X0
+
+    MOVQ R12, CX
+    ANDQ $1, CX
+    JZ   cd_sse2_store
+
+    MOVSD (SI), X1
+    MOVSD (DI), X2
+    MULSD X2, X1
+    ADDSD X1, X0
+
+cd_sse2_store:
+    MOVSD X0, (R8)
+    ADDQ $8, R8
+    ADDQ R13, R14
+    DECQ R9
+    JNZ  cd_sse2_outer
+
+cd_sse2_ret:
+    RET

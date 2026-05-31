@@ -339,6 +339,37 @@ func ConvolveValid(dst, signal, kernel []float64) {
 	convolveValid64(dst[:n], signal, kernel)
 }
 
+// ConvolveDecimate computes a decimating (strided) valid convolution: it keeps
+// only every factor-th valid-convolution output, starting at phase.
+//
+//	dst[k] = sum_{i=0}^{len(kernel)-1} signal[phase + k*factor + i] * kernel[i]
+//
+// The kernel is applied as a plain dot product; pre-reverse it for true
+// convolution (matching DotProductUnsafe and ConvolveValid usage). factor must
+// be >= 1 (factor == 1 is valid convolution at every position) and phase must be
+// in [0, factor); factor < 1 or phase < 0 are treated as no-ops. With factor == 1
+// and phase == 0 this is exactly ConvolveValid.
+//
+// The number of outputs is the count of strided positions whose full kernel
+// window fits in signal; ConvolveDecimate writes min(len(dst), that count) and
+// leaves the remainder of dst untouched. It allocates nothing and operates on
+// the caller-provided buffers.
+func ConvolveDecimate(dst, signal, kernel []float64, factor, phase int) {
+	kLen := len(kernel)
+	if kLen == 0 || factor < 1 || phase < 0 {
+		return
+	}
+	span := len(signal) - kLen - phase
+	if span < 0 {
+		return
+	}
+	n := min(len(dst), span/factor+1)
+	if n == 0 {
+		return
+	}
+	convolveDecimate64(dst[:n], signal, kernel, factor, phase)
+}
+
 // AccumulateAdd adds src to dst starting at offset: dst[offset:offset+len(src)] += src.
 // This is a key primitive for overlap-add in FFT-based convolution.
 //

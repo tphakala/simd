@@ -18,38 +18,40 @@ var minSIMDElements = minAVXElements
 
 // Function pointer types for SIMD operations
 type (
-	dotProductFunc func(a, b []float32) float32
-	binaryOpFunc   func(dst, a, b []float32)
-	scaleFunc      func(dst, a []float32, s float32)
-	unaryOpFunc    func(dst, a []float32)
-	reduceFunc     func(a []float32) float32
-	reduceIdxFunc  func(a []float32) int
-	fmaFunc        func(dst, a, b, c []float32)
-	clampFunc      func(dst, a []float32, minVal, maxVal float32)
-	addScaledFunc  func(dst []float32, alpha float32, s []float32)
+	dotProductFunc       func(a, b []float32) float32
+	binaryOpFunc         func(dst, a, b []float32)
+	scaleFunc            func(dst, a []float32, s float32)
+	unaryOpFunc          func(dst, a []float32)
+	reduceFunc           func(a []float32) float32
+	reduceIdxFunc        func(a []float32) int
+	fmaFunc              func(dst, a, b, c []float32)
+	clampFunc            func(dst, a []float32, minVal, maxVal float32)
+	addScaledFunc        func(dst []float32, alpha float32, s []float32)
+	convolveDecimateFunc func(dst, signal, kernel []float32, factor, phase int)
 )
 
 // Function pointers - assigned at init time based on CPU features
 var (
-	dotProductImpl dotProductFunc
-	addImpl        binaryOpFunc
-	subImpl        binaryOpFunc
-	mulImpl        binaryOpFunc
-	divImpl        binaryOpFunc
-	scaleImpl      scaleFunc
-	addScalarImpl  scaleFunc
-	sumImpl        reduceFunc
-	minImpl        reduceFunc
-	maxImpl        reduceFunc
-	absImpl        unaryOpFunc
-	negImpl        unaryOpFunc
-	sqrtImpl       unaryOpFunc
-	reciprocalImpl unaryOpFunc
-	fmaImpl        fmaFunc
-	clampImpl      clampFunc
-	minIdxImpl     reduceIdxFunc
-	maxIdxImpl     reduceIdxFunc
-	addScaledImpl  addScaledFunc
+	dotProductImpl       dotProductFunc
+	addImpl              binaryOpFunc
+	subImpl              binaryOpFunc
+	mulImpl              binaryOpFunc
+	divImpl              binaryOpFunc
+	scaleImpl            scaleFunc
+	addScalarImpl        scaleFunc
+	sumImpl              reduceFunc
+	minImpl              reduceFunc
+	maxImpl              reduceFunc
+	absImpl              unaryOpFunc
+	negImpl              unaryOpFunc
+	sqrtImpl             unaryOpFunc
+	reciprocalImpl       unaryOpFunc
+	fmaImpl              fmaFunc
+	clampImpl            clampFunc
+	minIdxImpl           reduceIdxFunc
+	maxIdxImpl           reduceIdxFunc
+	addScaledImpl        addScaledFunc
+	convolveDecimateImpl convolveDecimateFunc
 )
 
 func init() {
@@ -88,6 +90,7 @@ func initAVX512() {
 	minIdxImpl = minIdxGo
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledAVX512
+	convolveDecimateImpl = convolveDecimateAVX512
 }
 
 func initAVX() {
@@ -110,6 +113,7 @@ func initAVX() {
 	minIdxImpl = minIdxGo
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledAVX
+	convolveDecimateImpl = convolveDecimateAVX
 }
 
 func initSSE() {
@@ -132,6 +136,7 @@ func initSSE() {
 	minIdxImpl = minIdxGo
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledSSE
+	convolveDecimateImpl = convolveDecimateSSE
 }
 
 func initGo() {
@@ -154,6 +159,7 @@ func initGo() {
 	minIdxImpl = minIdxGo
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledGo
+	convolveDecimateImpl = convolveDecimate32Go
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -268,6 +274,10 @@ func convolveValid32(dst, signal, kernel []float32) {
 	}
 }
 
+func convolveDecimate32(dst, signal, kernel []float32, factor, phase int) {
+	convolveDecimateImpl(dst, signal, kernel, factor, phase)
+}
+
 func accumulateAdd32(dst, src []float32) {
 	// AccumulateAdd is dst += src, which is the same as add(dst, dst, src)
 	addImpl(dst, dst, src)
@@ -301,6 +311,15 @@ func convolveValidMulti32(dsts [][]float32, signal []float32, kernels [][]float3
 //
 //go:noescape
 func dotProductAVX(a, b []float32) float32
+
+//go:noescape
+func convolveDecimateAVX(dst, signal, kernel []float32, factor, phase int)
+
+//go:noescape
+func convolveDecimateAVX512(dst, signal, kernel []float32, factor, phase int)
+
+//go:noescape
+func convolveDecimateSSE(dst, signal, kernel []float32, factor, phase int)
 
 //go:noescape
 func addAVX(dst, a, b []float32)
