@@ -587,6 +587,74 @@ func Int32ToFloat32ScaleUnsafe(dst []float32, src []int32, scale float32) {
 	int32ToFloat32Scale(dst[:len(src)], src, scale)
 }
 
+// Int16ToFloat32Scale converts int16 samples to float32 and scales in one pass.
+// dst[i] = float32(src[i]) * scale
+//
+// This fuses the 16-bit PCM audio boundary: 16-bit audio normalizes with
+// scale = 1.0/32768.0 to map [-32768, 32767] into [-1, 1). int16 values are
+// exactly representable in float32, so the only rounding is the multiply.
+//
+// Processes min(len(dst), len(src)) elements.
+//
+// Uses AVX2 on AMD64 (8x int16), NEON on ARM64 (4x int16).
+func Int16ToFloat32Scale(dst []float32, src []int16, scale float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	int16ToFloat32Scale(dst[:n], src[:n], scale)
+}
+
+// Int16ToFloat32ScaleUnsafe converts int16 samples to float32 and scales without
+// length validation. This is a low-overhead variant for performance-critical code paths.
+//
+// PRECONDITIONS (caller must ensure):
+//   - len(dst) >= len(src)
+//   - len(src) > 0
+//
+// Violating these preconditions results in undefined behavior.
+// Use Int16ToFloat32Scale for safe operation with automatic length handling.
+func Int16ToFloat32ScaleUnsafe(dst []float32, src []int16, scale float32) {
+	// Slice dst to len(src) to ensure SIMD implementations don't read past src
+	int16ToFloat32Scale(dst[:len(src)], src, scale)
+}
+
+// Float32ToInt16Scale scales float32 samples and converts to int16 PCM in one pass.
+// dst[i] = clamp(roundTiesToEven(src[i]*scale), -32768, 32767)
+//
+// This fuses the float -> 16-bit PCM boundary: normalized audio in [-1, 1] is
+// written back to 16-bit with scale = 32767.0. Behavior is fully specified and
+// identical on every architecture:
+//   - rounding is round-to-nearest, ties to even (one LSB tighter than the
+//     common truncating int16(f*scale) cast);
+//   - out-of-range values saturate to the int16 range rather than wrapping;
+//   - +Inf -> 32767, -Inf -> -32768, NaN -> 0.
+//
+// Processes min(len(dst), len(src)) elements.
+//
+// Uses AVX2 on AMD64 (8x float32), NEON on ARM64 (4x float32).
+func Float32ToInt16Scale(dst []int16, src []float32, scale float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	float32ToInt16Scale(dst[:n], src[:n], scale)
+}
+
+// Float32ToInt16ScaleUnsafe scales float32 samples and converts to int16 without
+// length validation. This is a low-overhead variant for performance-critical code paths.
+//
+// PRECONDITIONS (caller must ensure):
+//   - len(dst) >= len(src)
+//   - len(src) > 0
+//
+// Violating these preconditions results in undefined behavior.
+// Use Float32ToInt16Scale for safe operation with automatic length handling.
+func Float32ToInt16ScaleUnsafe(dst []int16, src []float32, scale float32) {
+	// Slice dst to len(src) to ensure SIMD implementations don't write past dst
+	float32ToInt16Scale(dst[:len(src)], src, scale)
+}
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

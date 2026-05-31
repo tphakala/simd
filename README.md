@@ -128,6 +128,8 @@ fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
 |                 | `CubicInterpDot(hist,a,b,c,d,x)`    | Fused cubic interp dot product| 4x / 2x                             |
 |                 | `Int32ToFloat32Scale(dst,src,s)`    | PCM int32 to normalized float | 8x / 4x                             |
+|                 | `Int16ToFloat32Scale(dst,src,s)`    | PCM int16 to normalized float | 8x (AVX2) / 4x (NEON)               |
+|                 | `Float32ToInt16Scale(dst,src,s)`    | Normalized float to PCM int16 | 8x (AVX2) / 4x (NEON)               |
 
 ### `f32` - float32 Operations
 

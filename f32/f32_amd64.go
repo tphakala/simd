@@ -565,6 +565,30 @@ func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 //go:noescape
 func int32ToFloat32ScaleAVX(dst []float32, src []int32, scale float32)
 
+func int16ToFloat32Scale(dst []float32, src []int16, scale float32) {
+	// AVX2 is required because widening int16 to int32 uses VPMOVSXWD (ymm form).
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements {
+		int16ToFloat32ScaleAVX(dst, src, scale)
+		return
+	}
+	int16ToFloat32ScaleGo(dst, src, scale)
+}
+
+//go:noescape
+func int16ToFloat32ScaleAVX(dst []float32, src []int16, scale float32)
+
+func float32ToInt16Scale(dst []int16, src []float32, scale float32) {
+	// AVX2 path; the saturating pack (VPACKSSDW) needs AVX2's VEXTRACTF128 split.
+	if cpu.X86.AVX2 && len(dst) >= minAVXElements {
+		float32ToInt16ScaleAVX(dst, src, scale)
+		return
+	}
+	float32ToInt16ScaleGo(dst, src, scale)
+}
+
+//go:noescape
+func float32ToInt16ScaleAVX(dst []int16, src []float32, scale float32)
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

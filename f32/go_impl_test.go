@@ -466,3 +466,50 @@ func TestMaxIdxGo(t *testing.T) {
 		})
 	}
 }
+
+func TestInt16ToFloat32ScaleGo(t *testing.T) {
+	srcs := [][]int16{
+		{},
+		{0},
+		{-32768, -1, 0, 1, 32767},
+		{-32768, -16384, -8192, 0, 8192, 16384, 32767, -1, 100},
+	}
+	for _, src := range srcs {
+		dst := make([]float32, len(src))
+		want := make([]float32, len(src))
+		int16ToFloat32ScaleGo(dst, src, 1.0/32768.0)
+		int16ToFloat32ScaleRef(want, src, 1.0/32768.0)
+		for i := range dst {
+			if dst[i] != want[i] {
+				t.Errorf("int16ToFloat32ScaleGo[%d] = %v, want %v (src=%d)", i, dst[i], want[i], src[i])
+			}
+		}
+	}
+}
+
+func TestFloat32ToInt16ScaleGo(t *testing.T) {
+	inf := float32(math.Inf(1))
+
+	// scale 32767: in-range, clamp, and inf/nan handling.
+	src := []float32{-1, -0.5, 0, 0.5, 1, 2, -2, 100, -100, inf, -inf, float32(math.NaN())}
+	dst := make([]int16, len(src))
+	want := make([]int16, len(src))
+	float32ToInt16ScaleGo(dst, src, 32767)
+	float32ToInt16ScaleRef(want, src, 32767)
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("float32ToInt16ScaleGo[%d] (src=%g) = %d, want %d", i, src[i], dst[i], want[i])
+		}
+	}
+
+	// scale 1.0 so the product lands exactly on .5 ties: must round to even.
+	ties := []float32{0.5, 1.5, 2.5, 3.5, -0.5, -1.5, -2.5, -3.5}
+	tdst := make([]int16, len(ties))
+	twant := []int16{0, 2, 2, 4, 0, -2, -2, -4} // ties to even
+	float32ToInt16ScaleGo(tdst, ties, 1.0)
+	for i := range tdst {
+		if tdst[i] != twant[i] {
+			t.Errorf("float32ToInt16ScaleGo ties[%d] (src=%g) = %d, want %d", i, ties[i], tdst[i], twant[i])
+		}
+	}
+}
