@@ -1643,6 +1643,117 @@ i32tof32_neon_scalar_loop:
 i32tof32_neon_done:
     RET
 
+// func int16ToFloat32ScaleNEON(dst []float32, src []int16, scale float32)
+// Converts int16 samples to float32 and multiplies by scale in one pass.
+// dst[i] = float32(src[i]) * scale
+// Optimized for 16-bit PCM audio (e.g., scale = 1.0/32768 to normalize to [-1, 1)).
+//
+// NEON opcodes (hand-encoded; the Go assembler lacks these vector forms):
+// SXTL Vd.4S, Vn.4H:        widen 4 signed int16 to 4 int32
+// SCVTF Vd.4S, Vn.4S:       signed int32 to float32
+// FMUL Vd.4S, Vn.4S, Vm.4S: multiply
+// DUP Vd.4S, Vn.S[0]:       broadcast lane 0
+//
+// Frame: dst(24) + src(24) + scale(4) = 52 bytes
+TEXT ·int16ToFloat32ScaleNEON(SB), NOSPLIT, $0-52
+    MOVD dst_base+0(FP), R0        // R0 = dst pointer (float32 out)
+    MOVD dst_len+8(FP), R3         // R3 = length (len(dst) == len(src))
+    MOVD src_base+24(FP), R1       // R1 = src pointer (int16 in)
+    FMOVS scale+48(FP), F2         // F2 = scale
+
+    // Broadcast scale to all 4 lanes
+    WORD $0x4E040442               // DUP V2.4S, V2.S[0]
+
+    // Process 4 int16 elements per iteration
+    LSR $2, R3, R4                 // R4 = len / 4
+    CBZ R4, i16tof32_neon_scalar
+
+i16tof32_neon_loop4:
+    VLD1.P 8(R1), [V0.H4]          // V0 = 4 x int16 (low 4 halfwords)
+    WORD $0x0F10A401               // SXTL V1.4S, V0.4H
+    WORD $0x4E21D821               // SCVTF V1.4S, V1.4S
+    WORD $0x6E22DC21               // FMUL V1.4S, V1.4S, V2.4S
+    VST1.P [V1.S4], 16(R0)         // store 4 x float32
+    SUB $1, R4
+    CBNZ R4, i16tof32_neon_loop4
+
+i16tof32_neon_scalar:
+    AND $3, R3                     // remainder = len % 4
+    CBZ R3, i16tof32_neon_done
+
+i16tof32_neon_scalar_loop:
+    MOVH (R1), R5                  // load int16, sign-extended
+    SCVTFWS R5, F0                 // convert int32 to float32
+    FMULS F2, F0, F0               // F0 = F0 * scale
+    FMOVS F0, (R0)                 // store float32
+    ADD $4, R0
+    ADD $2, R1
+    SUB $1, R3
+    CBNZ R3, i16tof32_neon_scalar_loop
+
+i16tof32_neon_done:
+    RET
+
+// func float32ToInt16ScaleNEON(dst []int16, src []float32, scale float32)
+// Scales float32 samples and converts to int16 PCM in one pass.
+// dst[i] = clamp(roundTiesToEven(src[i]*scale), -32768, 32767), NaN -> 0.
+// The hardware defines the semantics: FCVTNS rounds to nearest-even and
+// saturates to int32 (NaN -> 0, +-Inf -> int32 min/max); SQXTN then saturates
+// int32 to int16, yielding +Inf -> 32767, -Inf -> -32768.
+//
+// NEON opcodes (hand-encoded; the Go assembler lacks these vector forms):
+// FMUL Vd.4S, Vn.4S, Vm.4S: multiply
+// FCVTNS Vd.4S, Vn.4S:      float32 to signed int32, round to nearest-even, saturating
+// SQXTN Vd.4H, Vn.4S:       signed saturating narrow int32 to int16
+// DUP Vd.4S, Vn.S[0]:       broadcast lane 0
+//
+// The 1-3 element tail reprocesses the final aligned block of 4 (an overlapping
+// store of identical values) so every element goes through the same vector path;
+// the dispatcher guarantees len >= 4.
+//
+// Frame: dst(24) + src(24) + scale(4) = 52 bytes
+TEXT ·float32ToInt16ScaleNEON(SB), NOSPLIT, $0-52
+    MOVD dst_base+0(FP), R0        // R0 = dst pointer (int16 out)
+    MOVD dst_len+8(FP), R3         // R3 = length (len(dst) == len(src))
+    MOVD src_base+24(FP), R1       // R1 = src pointer (float32 in)
+    FMOVS scale+48(FP), F2         // F2 = scale
+
+    // Broadcast scale to all 4 lanes
+    WORD $0x4E040442               // DUP V2.4S, V2.S[0]
+
+    // Process 4 float32 elements per iteration
+    LSR $2, R3, R4                 // R4 = len / 4
+    CBZ R4, f32toi16_neon_tail
+
+f32toi16_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]         // V0 = 4 x float32
+    WORD $0x6E22DC01               // FMUL V1.4S, V0.4S, V2.4S
+    WORD $0x4E21A821               // FCVTNS V1.4S, V1.4S
+    WORD $0x0E614821               // SQXTN V1.4H, V1.4S
+    VST1.P [V1.H4], 8(R0)          // store 4 x int16 (8 bytes)
+    SUB $1, R4
+    CBNZ R4, f32toi16_neon_loop4
+
+f32toi16_neon_tail:
+    AND $3, R3, R5                 // R5 = len % 4
+    CBZ R5, f32toi16_neon_done
+
+    // Back up to the final aligned block of 4 and reprocess it (overlap).
+    MOVD $4, R6
+    SUB R5, R6, R6                 // R6 = 4 - (len % 4)  (1..3)
+    LSL $2, R6, R7                 // R7 = (4 - rem) * 4 src bytes
+    SUB R7, R1, R1                 // R1 -= that many bytes
+    LSL $1, R6, R7                 // R7 = (4 - rem) * 2 dst bytes
+    SUB R7, R0, R0                 // R0 -= that many bytes
+    VLD1 (R1), [V0.S4]            // V0 = final 4 x float32
+    WORD $0x6E22DC01               // FMUL V1.4S, V0.4S, V2.4S
+    WORD $0x4E21A821               // FCVTNS V1.4S, V1.4S
+    WORD $0x0E614821               // SQXTN V1.4H, V1.4S
+    VST1 [V1.H4], (R0)            // store final 4 x int16
+
+f32toi16_neon_done:
+    RET
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

@@ -46,6 +46,10 @@ func tanh32(dst, src []float32)                                 { tanh32Go(dst, 
 func exp32(dst, src []float32)                                  { exp32Go(dst, src) }
 func int32ToFloat32Scale(dst []float32, src []int32, s float32) { int32ToFloat32ScaleGo(dst, src, s) }
 
+func int16ToFloat32Scale(dst []float32, src []int16, s float32) { int16ToFloat32ScaleGo(dst, src, s) }
+
+func float32ToInt16Scale(dst []int16, src []float32, s float32) { float32ToInt16ScaleGo(dst, src, s) }
+
 // Split-format complex operations
 func mulComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 	mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)

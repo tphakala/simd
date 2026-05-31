@@ -459,6 +459,40 @@ func int32ToFloat32ScaleGo(dst []float32, src []int32, scale float32) {
 	}
 }
 
+// int16ToFloat32ScaleGo converts int16 samples to float32 and scales.
+// dst[i] = float32(src[i]) * scale
+// int16 values are exactly representable in float32, so this is a single
+// rounding (the multiply); the SIMD paths produce bit-identical results.
+func int16ToFloat32ScaleGo(dst []float32, src []int16, scale float32) {
+	for i := range src {
+		dst[i] = float32(src[i]) * scale
+	}
+}
+
+// float32ToInt16ScaleGo scales float32 samples and converts to int16 PCM.
+// dst[i] = clamp(roundTiesToEven(src[i]*scale), -32768, 32767), with
+// NaN -> 0, +Inf -> 32767, -Inf -> -32768.
+//
+// These are exactly the results of ARM64 FCVTNS + SQXTN; the AVX2 path and this
+// fallback are written to match that bit-for-bit so output is identical across
+// architectures. Rounding is round-to-nearest, ties to even (one LSB tighter
+// than a truncating int16(f*scale) cast).
+func float32ToInt16ScaleGo(dst []int16, src []float32, scale float32) {
+	for i := range src {
+		v := src[i] * scale
+		switch {
+		case v != v: // NaN
+			dst[i] = 0
+		case v >= math.MaxInt16: // includes +Inf
+			dst[i] = math.MaxInt16
+		case v <= math.MinInt16: // includes -Inf
+			dst[i] = math.MinInt16
+		default:
+			dst[i] = int16(math.RoundToEven(float64(v)))
+		}
+	}
+}
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS (Pure Go)
 // ============================================================================

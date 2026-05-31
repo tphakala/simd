@@ -3521,6 +3521,135 @@ i32tof32_done:
     VZEROUPPER
     RET
 
+// func int16ToFloat32ScaleAVX(dst []float32, src []int16, scale float32)
+// Converts int16 samples to float32 and multiplies by scale in one pass.
+// dst[i] = float32(src[i]) * scale
+// Optimized for 16-bit PCM audio (e.g., scale = 1.0/32768 to normalize to [-1, 1)).
+// Requires AVX2 (VPMOVSXWD ymm form to widen 8 int16 to 8 int32).
+// Frame: dst(24) + src(24) + scale(4) = 52 bytes
+TEXT ·int16ToFloat32ScaleAVX(SB), NOSPLIT, $0-52
+    MOVQ dst_base+0(FP), DX        // DX = dst pointer (float32 out)
+    MOVQ dst_len+8(FP), CX         // CX = length (len(dst) == len(src))
+    MOVQ src_base+24(FP), SI       // SI = src pointer (int16 in)
+
+    // Broadcast scale to all 8 lanes
+    VBROADCASTSS scale+48(FP), Y2  // Y2 = {scale, scale, ..., scale}
+
+    // Process 8 int16 elements per iteration
+    MOVQ CX, AX
+    SHRQ $3, AX                    // len / 8
+    JZ   i16tof32_remainder
+
+i16tof32_loop8:
+    VPMOVSXWD (SI), Y0             // load 8 int16, sign-extend to 8 x int32
+    VCVTDQ2PS Y0, Y1              // convert int32 to float32
+    VMULPS Y2, Y1, Y1            // multiply by scale
+    VMOVUPS Y1, (DX)            // store 8 x float32
+    ADDQ $16, SI               // advance src by 8 x int16 = 16 bytes
+    ADDQ $32, DX               // advance dst by 8 x float32 = 32 bytes
+    DECQ AX
+    JNZ  i16tof32_loop8
+
+i16tof32_remainder:
+    ANDQ $7, CX                    // remainder = len % 8
+    JZ   i16tof32_done
+
+i16tof32_scalar:
+    MOVWLSX (SI), AX               // load int16, sign-extend to 32-bit
+    VCVTSI2SSL AX, X0, X0         // convert int32 to float32
+    VMULSS X2, X0, X0            // multiply by scale (X2 = scale lane 0)
+    VMOVSS X0, (DX)            // store float32
+    ADDQ $2, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  i16tof32_scalar
+
+i16tof32_done:
+    VZEROUPPER
+    RET
+
+// Clamp constants for float32 -> int16 saturation (broadcast per lane).
+DATA f32toi16max<>+0(SB)/4, $0x46FFFE00  // 32767.0
+GLOBL f32toi16max<>(SB), RODATA|NOPTR, $4
+DATA f32toi16min<>+0(SB)/4, $0xC7000000  // -32768.0
+GLOBL f32toi16min<>(SB), RODATA|NOPTR, $4
+
+// func float32ToInt16ScaleAVX(dst []int16, src []float32, scale float32)
+// Scales float32 samples and converts to int16 PCM in one pass.
+// dst[i] = clamp(roundTiesToEven(src[i]*scale), -32768, 32767), NaN -> 0.
+// Requires AVX2.
+//
+// Matches ARM64 FCVTNS+SQXTN bit-for-bit. The hardware VCVTPS2DQ+VPACKSSDW path
+// alone would map NaN and +Inf to -32768, so NaN and the saturation bounds are
+// handled explicitly before the convert:
+//   1. multiply by scale
+//   2. self-compare (VCMPPS EQ) and AND: NaN lanes -> 0
+//   3. VMINPS 32767.0 / VMAXPS -32768.0: clamp, mapping +Inf -> 32767, -Inf -> -32768
+//   4. VCVTPS2DQ: round to nearest-even (in range, so exact)
+//   5. VPACKSSDW (via VEXTRACTF128): pack 8 int32 to 8 int16 in order
+//
+// The 1-7 element tail reprocesses the final aligned block of 8 (an overlapping
+// store of identical values); the dispatcher guarantees len >= 8.
+//
+// Frame: dst(24) + src(24) + scale(4) = 52 bytes
+TEXT ·float32ToInt16ScaleAVX(SB), NOSPLIT, $0-52
+    MOVQ dst_base+0(FP), DX        // DX = dst pointer (int16 out)
+    MOVQ dst_len+8(FP), CX         // CX = length (len(dst) == len(src))
+    MOVQ src_base+24(FP), SI       // SI = src pointer (float32 in)
+
+    VBROADCASTSS scale+48(FP), Y3      // Y3 = scale x8
+    VBROADCASTSS f32toi16max<>(SB), Y4 // Y4 = 32767.0 x8
+    VBROADCASTSS f32toi16min<>(SB), Y5 // Y5 = -32768.0 x8
+
+    MOVQ CX, AX
+    SHRQ $3, AX                    // len / 8
+    JZ   f32toi16_tail
+
+f32toi16_loop8:
+    VMOVUPS (SI), Y0               // 8 x float32
+    VMULPS Y3, Y0, Y0            // * scale
+    VCMPPS $0, Y0, Y0, Y1       // Y1 = (Y0 == Y0) ? ones : 0  (0 for NaN)
+    VANDPS Y1, Y0, Y0          // NaN lanes -> 0
+    VMINPS Y4, Y0, Y0         // clamp high (+Inf -> 32767)
+    VMAXPS Y5, Y0, Y0        // clamp low (-Inf -> -32768)
+    VCVTPS2DQ Y0, Y0         // 8 x int32, round nearest-even
+    VEXTRACTF128 $1, Y0, X1  // high 4 int32 -> X1
+    VPACKSSDW X1, X0, X0     // pack to 8 x int16 (in order)
+    VMOVDQU X0, (DX)         // store 8 x int16 (16 bytes)
+    ADDQ $32, SI            // advance src by 8 x float32
+    ADDQ $16, DX           // advance dst by 8 x int16
+    DECQ AX
+    JNZ  f32toi16_loop8
+
+f32toi16_tail:
+    ANDQ $7, CX                    // remainder = len % 8
+    JZ   f32toi16_done
+
+    // Back up to the final aligned block of 8 and reprocess it (overlap).
+    MOVQ $8, BX
+    SUBQ CX, BX                    // BX = 8 - (len % 8)  (1..7)
+    MOVQ BX, AX
+    SHLQ $2, AX                    // (8 - rem) * 4 src bytes
+    SUBQ AX, SI
+    MOVQ BX, AX
+    SHLQ $1, AX                    // (8 - rem) * 2 dst bytes
+    SUBQ AX, DX
+
+    VMOVUPS (SI), Y0               // final 8 x float32
+    VMULPS Y3, Y0, Y0
+    VCMPPS $0, Y0, Y0, Y1
+    VANDPS Y1, Y0, Y0
+    VMINPS Y4, Y0, Y0
+    VMAXPS Y5, Y0, Y0
+    VCVTPS2DQ Y0, Y0
+    VEXTRACTF128 $1, Y0, X1
+    VPACKSSDW X1, X0, X0
+    VMOVDQU X0, (DX)               // store final 8 x int16
+
+f32toi16_done:
+    VZEROUPPER
+    RET
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

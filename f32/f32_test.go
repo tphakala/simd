@@ -1830,6 +1830,350 @@ func TestInt32ToFloat32ScaleUnsafe(t *testing.T) {
 }
 
 // =============================================================================
+// Int16ToFloat32Scale Tests
+// =============================================================================
+
+// int16ToFloat32ScaleRef is the scalar reference: dst[i] = float32(src[i]) * scale.
+// int16 values are exactly representable in float32, so a single multiply with
+// the same rounding as the SIMD paths makes results bit-identical.
+// int16Ramp builds an n-element int16 ramp spanning negative and positive values
+// so sized test cases exercise full SIMD blocks plus a scalar remainder.
+func int16Ramp(n int) []int16 {
+	s := make([]int16, n)
+	for i := range s {
+		s[i] = int16((i - n/2) * 1000)
+	}
+	return s
+}
+
+// float32Ramp builds an n-element float32 ramp roughly in [-1, 1).
+func float32Ramp(n int) []float32 {
+	s := make([]float32, n)
+	for i := range s {
+		s[i] = float32(i-n/2) / float32(n/2+1)
+	}
+	return s
+}
+
+func int16ToFloat32ScaleRef(dst []float32, src []int16, scale float32) {
+	n := min(len(dst), len(src))
+	for i := range n {
+		dst[i] = float32(src[i]) * scale
+	}
+}
+
+func TestInt16ToFloat32Scale(t *testing.T) {
+	testCases := []struct {
+		name  string
+		src   []int16
+		scale float32
+	}{
+		{"empty", nil, 1.0},
+		{"single", []int16{32767}, 1.0 / 32768.0},
+		{"four", []int16{-32768, -16384, 0, 32767}, 1.0 / 32768.0},
+		{"seven", []int16{-32768, -16384, -8192, 0, 8192, 16384, 32767}, 1.0 / 32768.0},
+		{"eight", []int16{-32768, -16384, -8192, 0, 8192, 16384, 32767, -1}, 1.0 / 32768.0},
+		{"nine", []int16{-32768, -16384, -8192, 0, 8192, 16384, 32767, -1, 100}, 1.0 / 32768.0},
+		{"block16", int16Ramp(16), 1.0 / 32768.0},
+		{"block17", int16Ramp(17), 1.0 / 32768.0},
+		{"boundaries", []int16{-32768, -1, 0, 1, 32767}, 1.0 / 32768.0},
+		{"unit_scale", []int16{-32768, -100, 0, 100, 32767}, 1.0},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := make([]float32, len(tc.src))
+			Int16ToFloat32Scale(dst, tc.src, tc.scale)
+
+			want := make([]float32, len(tc.src))
+			int16ToFloat32ScaleRef(want, tc.src, tc.scale)
+
+			for i := range dst {
+				if dst[i] != want[i] {
+					t.Errorf("Int16ToFloat32Scale()[%d] = %v, want %v (src=%d)", i, dst[i], want[i], tc.src[i])
+				}
+			}
+		})
+	}
+}
+
+func TestInt16ToFloat32Scale_Large(t *testing.T) {
+	for _, size := range []int{63, 100, 1000, 10000} {
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			src := make([]int16, size)
+			for i := range src {
+				src[i] = int16(i%65536 - 32768)
+			}
+			dst := make([]float32, size)
+			want := make([]float32, size)
+			scale := float32(1.0 / 32768.0)
+
+			Int16ToFloat32Scale(dst, src, scale)
+			int16ToFloat32ScaleRef(want, src, scale)
+
+			for i := range dst {
+				if dst[i] != want[i] {
+					t.Fatalf("Int16ToFloat32Scale()[%d] = %v, want %v", i, dst[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestInt16ToFloat32Scale_LengthMismatch(t *testing.T) {
+	src := []int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	scale := float32(1.0 / 32768.0)
+
+	// dst shorter than src: only len(dst) processed.
+	dst := make([]float32, 6)
+	Int16ToFloat32Scale(dst, src, scale)
+	for i := range dst {
+		if want := float32(src[i]) * scale; dst[i] != want {
+			t.Errorf("short dst [%d] = %v, want %v", i, dst[i], want)
+		}
+	}
+
+	// src shorter than dst: only len(src) written, tail untouched.
+	dst2 := make([]float32, 12)
+	for i := range dst2 {
+		dst2[i] = -999
+	}
+	Int16ToFloat32Scale(dst2, src, scale)
+	for i := range src {
+		if want := float32(src[i]) * scale; dst2[i] != want {
+			t.Errorf("short src [%d] = %v, want %v", i, dst2[i], want)
+		}
+	}
+	for i := len(src); i < len(dst2); i++ {
+		if dst2[i] != -999 {
+			t.Errorf("tail [%d] was modified: %v", i, dst2[i])
+		}
+	}
+}
+
+func TestInt16ToFloat32ScaleUnsafe(t *testing.T) {
+	src := []int16{-32768, 0, 32767, -16384, 16384, -8192, 8192, 0, 1}
+	dst := make([]float32, len(src))
+	scale := float32(1.0 / 32768.0)
+
+	Int16ToFloat32ScaleUnsafe(dst, src, scale)
+
+	for i := range dst {
+		if want := float32(src[i]) * scale; dst[i] != want {
+			t.Errorf("Int16ToFloat32ScaleUnsafe()[%d] = %v, want %v", i, dst[i], want)
+		}
+	}
+}
+
+// =============================================================================
+// Float32ToInt16Scale Tests
+// =============================================================================
+
+// float32ToInt16ScaleRef is the canonical scalar reference that defines the
+// semantics every backend (Go fallback, AVX2, NEON) must match bit-for-bit:
+//
+//	dst[i] = clamp(roundTiesToEven(src[i]*scale), -32768, 32767)
+//
+// with NaN -> 0, +Inf -> 32767, -Inf -> -32768. These are exactly the results
+// of ARM64 FCVTNS + SQXTN.
+func float32ToInt16ScaleRef(dst []int16, src []float32, scale float32) {
+	n := min(len(dst), len(src))
+	for i := range n {
+		v := src[i] * scale
+		switch {
+		case v != v: // NaN
+			dst[i] = 0
+		case v >= math.MaxInt16: // includes +Inf
+			dst[i] = math.MaxInt16
+		case v <= math.MinInt16: // includes -Inf
+			dst[i] = math.MinInt16
+		default:
+			dst[i] = int16(math.RoundToEven(float64(v)))
+		}
+	}
+}
+
+func TestFloat32ToInt16Scale(t *testing.T) {
+	inf := float32(math.Inf(1))
+	nan := float32(math.NaN())
+	testCases := []struct {
+		name  string
+		src   []float32
+		scale float32
+	}{
+		{"empty", nil, 32767.0},
+		{"single", []float32{0.5}, 32767.0},
+		{"four", []float32{-1.0, -0.5, 0.0, 1.0}, 32767.0},
+		{"eight", []float32{-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0, 0.999}, 32767.0},
+		{"nine", []float32{-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0, 0.999, -0.001}, 32767.0},
+		{"block16", float32Ramp(16), 32767.0},
+		{"block17", float32Ramp(17), 32767.0},
+		// Out-of-range inputs must clamp, not wrap.
+		{"overrange", []float32{2.0, -2.0, 1.5, -1.5, 100.0, -100.0, 5e9, -5e9}, 32767.0},
+		// Infinities and NaN.
+		{"inf_nan", []float32{inf, -inf, nan, 0.5, -0.5, nan, inf, -inf}, 32767.0},
+		// Rounding ties-to-even around .5 boundaries (scale 1.0 so src == product).
+		{"ties", []float32{0.5, 1.5, 2.5, 3.5, -0.5, -1.5, -2.5, -3.5}, 1.0},
+		// Exact integer products.
+		{"exact", []float32{-32768, -16384, 0, 16384, 32767}, 1.0},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := make([]int16, len(tc.src))
+			Float32ToInt16Scale(dst, tc.src, tc.scale)
+
+			want := make([]int16, len(tc.src))
+			float32ToInt16ScaleRef(want, tc.src, tc.scale)
+
+			for i := range dst {
+				if dst[i] != want[i] {
+					t.Errorf("Float32ToInt16Scale()[%d] = %d, want %d (src=%g, prod=%g)",
+						i, dst[i], want[i], tc.src[i], tc.src[i]*tc.scale)
+				}
+			}
+		})
+	}
+}
+
+func TestFloat32ToInt16Scale_Boundaries(t *testing.T) {
+	// scale = 32767: -1.0 -> -32767, +1.0 -> +32767 (the documented PCM16 output).
+	src := []float32{-1.0, 1.0, 0.0}
+	dst := make([]int16, len(src))
+	Float32ToInt16Scale(dst, src, 32767.0)
+	wantVals := []int16{-32767, 32767, 0}
+	for i := range dst {
+		if dst[i] != wantVals[i] {
+			t.Errorf("[%d] = %d, want %d", i, dst[i], wantVals[i])
+		}
+	}
+}
+
+func TestFloat32ToInt16Scale_NaNInfClamp(t *testing.T) {
+	inf := float32(math.Inf(1))
+	src := []float32{float32(math.NaN()), inf, -inf, 2.0, -2.0}
+	dst := make([]int16, len(src))
+	Float32ToInt16Scale(dst, src, 32767.0)
+	want := []int16{0, 32767, -32768, 32767, -32768}
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("[%d] (src=%g) = %d, want %d", i, src[i], dst[i], want[i])
+		}
+	}
+}
+
+func TestFloat32ToInt16Scale_Large(t *testing.T) {
+	for _, size := range []int{63, 100, 1000, 10000} {
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			src := make([]float32, size)
+			for i := range src {
+				// Sweep [-1.2, 1.2) so some values clamp.
+				src[i] = float32(i%2400-1200) / 1000.0
+			}
+			dst := make([]int16, size)
+			want := make([]int16, size)
+			Float32ToInt16Scale(dst, src, 32767.0)
+			float32ToInt16ScaleRef(want, src, 32767.0)
+			for i := range dst {
+				if dst[i] != want[i] {
+					t.Fatalf("[%d] (src=%g) = %d, want %d", i, src[i], dst[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFloat32ToInt16Scale_RoundTrip(t *testing.T) {
+	// int16 -> float32 -> int16 must come back within 1 LSB.
+	src16 := make([]int16, 0, 65536)
+	for v := -32768; v <= 32767; v++ {
+		src16 = append(src16, int16(v))
+	}
+	f := make([]float32, len(src16))
+	Int16ToFloat32Scale(f, src16, 1.0/32768.0)
+	back := make([]int16, len(src16))
+	Float32ToInt16Scale(back, f, 32767.0)
+	for i := range src16 {
+		d := int(back[i]) - int(src16[i])
+		if d < -1 || d > 1 {
+			t.Fatalf("round-trip [%d]: %d -> %g -> %d (diff %d)", i, src16[i], f[i], back[i], d)
+		}
+	}
+}
+
+func TestFloat32ToInt16Scale_LengthMismatch(t *testing.T) {
+	src := []float32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}
+	scale := float32(32767.0)
+
+	dst := make([]int16, 6)
+	Float32ToInt16Scale(dst, src, scale)
+	want := make([]int16, 6)
+	float32ToInt16ScaleRef(want, src, scale)
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("short dst [%d] = %d, want %d", i, dst[i], want[i])
+		}
+	}
+
+	dst2 := make([]int16, 12)
+	for i := range dst2 {
+		dst2[i] = -999
+	}
+	Float32ToInt16Scale(dst2, src, scale)
+	want2 := make([]int16, len(src))
+	float32ToInt16ScaleRef(want2, src, scale)
+	for i := range src {
+		if dst2[i] != want2[i] {
+			t.Errorf("short src [%d] = %d, want %d", i, dst2[i], want2[i])
+		}
+	}
+	for i := len(src); i < len(dst2); i++ {
+		if dst2[i] != -999 {
+			t.Errorf("tail [%d] modified: %d", i, dst2[i])
+		}
+	}
+}
+
+func TestFloat32ToInt16ScaleUnsafe(t *testing.T) {
+	src := []float32{-1.0, -0.5, 0.0, 0.5, 1.0, 2.0, -2.0, 0.25, -0.25}
+	dst := make([]int16, len(src))
+	scale := float32(32767.0)
+	Float32ToInt16ScaleUnsafe(dst, src, scale)
+	want := make([]int16, len(src))
+	float32ToInt16ScaleRef(want, src, scale)
+	for i := range dst {
+		if dst[i] != want[i] {
+			t.Errorf("Float32ToInt16ScaleUnsafe()[%d] = %d, want %d", i, dst[i], want[i])
+		}
+	}
+}
+
+// TestPCM16Conversion_AllocFree asserts the PCM16 conversion primitives operate
+// purely on caller-provided buffers (the zero-alloc streaming contract).
+func TestPCM16Conversion_AllocFree(t *testing.T) {
+	i16 := make([]int16, 1024)
+	f := make([]float32, 1024)
+	for i := range i16 {
+		i16[i] = int16(i%65536 - 32768)
+		f[i] = float32(i%2400-1200) / 1000.0
+	}
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"Int16ToFloat32Scale", func() { Int16ToFloat32Scale(f, i16, 1.0/32768.0) }},
+		{"Int16ToFloat32ScaleUnsafe", func() { Int16ToFloat32ScaleUnsafe(f, i16, 1.0/32768.0) }},
+		{"Float32ToInt16Scale", func() { Float32ToInt16Scale(i16, f, 32767.0) }},
+		{"Float32ToInt16ScaleUnsafe", func() { Float32ToInt16ScaleUnsafe(i16, f, 32767.0) }},
+	}
+	for _, c := range cases {
+		if a := testing.AllocsPerRun(50, c.fn); a != 0 {
+			t.Errorf("%s allocated %v times per run, want 0", c.name, a)
+		}
+	}
+}
+
+// =============================================================================
 // Split-Format Complex Operations Tests
 // =============================================================================
 
