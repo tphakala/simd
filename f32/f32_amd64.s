@@ -3628,12 +3628,12 @@ f32toi16_tail:
     // Back up to the final aligned block of 8 and reprocess it (overlap).
     MOVQ $8, BX
     SUBQ CX, BX                    // BX = 8 - (len % 8)  (1..7)
-    MOVQ BX, R8
-    SHLQ $2, R8                    // (8 - rem) * 4 src bytes
-    SUBQ R8, SI
-    MOVQ BX, R8
-    SHLQ $1, R8                    // (8 - rem) * 2 dst bytes
-    SUBQ R8, DX
+    MOVQ BX, AX
+    SHLQ $2, AX                    // (8 - rem) * 4 src bytes
+    SUBQ AX, SI
+    MOVQ BX, AX
+    SHLQ $1, AX                    // (8 - rem) * 2 dst bytes
+    SUBQ AX, DX
 
     VMOVUPS (SI), Y0               // final 8 x float32
     VMULPS Y3, Y0, Y0
