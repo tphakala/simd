@@ -236,6 +236,39 @@ func deinterleave2Go(a, b, src []float32) {
 	}
 }
 
+// interleaveNGo is the generic strided interleave: dst[i*nc+c] = srcs[c][i] for
+// nc = len(srcs) streams and n frames. It is the portable fallback and the
+// correctness reference for the SIMD specializations. The caller guarantees
+// len(dst) >= n*nc and len(srcs[c]) >= n for every c.
+func interleaveNGo(dst []float32, srcs [][]float32, n int) {
+	nc := len(srcs)
+	dst = dst[:n*nc]
+	for c := range nc {
+		s := srcs[c][:n]
+		di := c
+		for i := range n {
+			dst[di] = s[i]
+			di += nc
+		}
+	}
+}
+
+// deinterleaveNGo is the generic strided deinterleave: dsts[c][i] = src[i*nc+c]
+// for nc = len(dsts) streams and n frames. The caller guarantees
+// len(src) >= n*nc and len(dsts[c]) >= n for every c.
+func deinterleaveNGo(dsts [][]float32, src []float32, n int) {
+	nc := len(dsts)
+	src = src[:n*nc]
+	for c := range nc {
+		d := dsts[c][:n]
+		si := c
+		for i := range n {
+			d[i] = src[si]
+			si += nc
+		}
+	}
+}
+
 func convolveValidMultiGo(dsts [][]float32, signal []float32, kernels [][]float32, n, _ int) {
 	// Kernel-major loop order: each kernel stays hot in cache for entire signal pass
 	for k, kernel := range kernels {

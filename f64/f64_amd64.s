@@ -2978,6 +2978,93 @@ deinterleave2_sse2_remainder:
 deinterleave2_sse2_done:
     RET
 
+// func interleave4AVX(dst, s0, s1, s2, s3 []float64, n int)
+// Interleaves 4 planar streams (dst[i*4+c] = s_c[i]) via a 4x4 transpose of
+// YMM registers (4 doubles each), 4 frames per iteration. n is a multiple of 4
+// (the caller handles the tail).
+TEXT ·interleave4AVX(SB), NOSPLIT, $0-128
+    MOVQ dst_base+0(FP), DI
+    MOVQ s0_base+24(FP), AX
+    MOVQ s1_base+48(FP), BX
+    MOVQ s2_base+72(FP), CX
+    MOVQ s3_base+96(FP), DX
+    MOVQ n+120(FP), SI
+    SHRQ $2, SI                // SI = n/4 blocks
+    TESTQ SI, SI
+    JZ interleave4_avx_done
+
+interleave4_avx_loop:
+    VMOVUPD (AX), Y0           // r0 = s0[i:i+4]
+    VMOVUPD (BX), Y1           // r1 = s1[i:i+4]
+    VMOVUPD (CX), Y2           // r2 = s2[i:i+4]
+    VMOVUPD (DX), Y3           // r3 = s3[i:i+4]
+    VUNPCKLPD Y1, Y0, Y4       // [r0.0,r1.0,r0.2,r1.2]
+    VUNPCKHPD Y1, Y0, Y5       // [r0.1,r1.1,r0.3,r1.3]
+    VUNPCKLPD Y3, Y2, Y6       // [r2.0,r3.0,r2.2,r3.2]
+    VUNPCKHPD Y3, Y2, Y7       // [r2.1,r3.1,r2.3,r3.3]
+    VPERM2F128 $0x20, Y6, Y4, Y8   // frame0 = [r0.0,r1.0,r2.0,r3.0]
+    VPERM2F128 $0x20, Y7, Y5, Y9   // frame1 = [r0.1,r1.1,r2.1,r3.1]
+    VPERM2F128 $0x31, Y6, Y4, Y10  // frame2 = [r0.2,r1.2,r2.2,r3.2]
+    VPERM2F128 $0x31, Y7, Y5, Y11  // frame3 = [r0.3,r1.3,r2.3,r3.3]
+    VMOVUPD Y8, (DI)
+    VMOVUPD Y9, 32(DI)
+    VMOVUPD Y10, 64(DI)
+    VMOVUPD Y11, 96(DI)
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $32, DX
+    ADDQ $128, DI
+    DECQ SI
+    JNZ interleave4_avx_loop
+
+interleave4_avx_done:
+    VZEROUPPER
+    RET
+
+// func deinterleave4AVX(d0, d1, d2, d3, src []float64, n int)
+// Splits an interleaved 4-stream buffer (d_c[i] = src[i*4+c]) via a 4x4
+// transpose, 4 frames per iteration. n is a multiple of 4.
+TEXT ·deinterleave4AVX(SB), NOSPLIT, $0-128
+    MOVQ d0_base+0(FP), AX
+    MOVQ d1_base+24(FP), BX
+    MOVQ d2_base+48(FP), CX
+    MOVQ d3_base+72(FP), DX
+    MOVQ src_base+96(FP), SI
+    MOVQ n+120(FP), DI
+    SHRQ $2, DI                // DI = n/4 blocks
+    TESTQ DI, DI
+    JZ deinterleave4_avx_done
+
+deinterleave4_avx_loop:
+    VMOVUPD (SI), Y0           // frame0 = src[0:4]
+    VMOVUPD 32(SI), Y1         // frame1
+    VMOVUPD 64(SI), Y2         // frame2
+    VMOVUPD 96(SI), Y3         // frame3
+    VUNPCKLPD Y1, Y0, Y4       // [f0c0,f1c0,f0c2,f1c2]
+    VUNPCKHPD Y1, Y0, Y5       // [f0c1,f1c1,f0c3,f1c3]
+    VUNPCKLPD Y3, Y2, Y6       // [f2c0,f3c0,f2c2,f3c2]
+    VUNPCKHPD Y3, Y2, Y7       // [f2c1,f3c1,f2c3,f3c3]
+    VPERM2F128 $0x20, Y6, Y4, Y8   // chan0 = [f0c0,f1c0,f2c0,f3c0]
+    VPERM2F128 $0x20, Y7, Y5, Y9   // chan1
+    VPERM2F128 $0x31, Y6, Y4, Y10  // chan2
+    VPERM2F128 $0x31, Y7, Y5, Y11  // chan3
+    VMOVUPD Y8, (AX)
+    VMOVUPD Y9, (BX)
+    VMOVUPD Y10, (CX)
+    VMOVUPD Y11, (DX)
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $32, DX
+    ADDQ $128, SI
+    DECQ DI
+    JNZ deinterleave4_avx_loop
+
+deinterleave4_avx_done:
+    VZEROUPPER
+    RET
+
 // ============================================================================
 // ADDSCALED - dst[i] += alpha * s[i] (AXPY operation)
 // ============================================================================

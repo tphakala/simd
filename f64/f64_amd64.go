@@ -361,6 +361,78 @@ func deinterleave2_64(a, b, src []float64) {
 	deinterleave2Go(a, b, src)
 }
 
+// interleaveN64 interleaves nc = len(srcs) planar streams into dst. N == 2
+// reuses the existing Interleave2 SIMD; other small N use shuffle-based
+// transposes (added incrementally); the rest fall back to the generic Go path.
+// Stream counts with dedicated AMD64 SIMD interleave/deinterleave kernels (the
+// 2-stream path reuses interleave2Channels). interleave4BlockMask aligns a
+// frame count down to a whole 4-frame SIMD block; the caller handles the tail.
+const (
+	interleave4Streams   = 4
+	interleave4BlockMask = interleave4Streams - 1
+)
+
+func interleaveN64(dst []float64, srcs [][]float64, n int) {
+	switch len(srcs) {
+	case interleave2Channels:
+		interleave2_64(dst[:n*interleave2Channels], srcs[0][:n], srcs[1][:n])
+	case interleave4Streams:
+		if cpu.X86.AVX && n >= interleave4Streams {
+			blk := n &^ interleave4BlockMask
+			interleave4AVX(dst, srcs[0], srcs[1], srcs[2], srcs[3], blk)
+			interleaveNTailGo(dst, srcs, blk, n)
+			return
+		}
+		interleaveNGo(dst, srcs, n)
+	default:
+		interleaveNGo(dst, srcs, n)
+	}
+}
+
+// interleaveNTailGo writes the trailing frames [from, n) of an N-stream
+// interleave that an asm kernel left after processing whole SIMD blocks,
+// allocation-free.
+func interleaveNTailGo(dst []float64, srcs [][]float64, from, n int) {
+	nc := len(srcs)
+	for i := from; i < n; i++ {
+		base := i * nc
+		for c := range nc {
+			dst[base+c] = srcs[c][i]
+		}
+	}
+}
+
+// deinterleaveNTailGo writes the trailing frames [from, n) of an N-stream
+// deinterleave, allocation-free.
+func deinterleaveNTailGo(dsts [][]float64, src []float64, from, n int) {
+	nc := len(dsts)
+	for i := from; i < n; i++ {
+		base := i * nc
+		for c := range nc {
+			dsts[c][i] = src[base+c]
+		}
+	}
+}
+
+// deinterleaveN64 splits src into nc = len(dsts) planar streams. N == 2 reuses
+// the existing Deinterleave2 SIMD; the rest fall back to the generic Go path.
+func deinterleaveN64(dsts [][]float64, src []float64, n int) {
+	switch len(dsts) {
+	case interleave2Channels:
+		deinterleave2_64(dsts[0][:n], dsts[1][:n], src[:n*interleave2Channels])
+	case interleave4Streams:
+		if cpu.X86.AVX && n >= interleave4Streams {
+			blk := n &^ interleave4BlockMask
+			deinterleave4AVX(dsts[0], dsts[1], dsts[2], dsts[3], src, blk)
+			deinterleaveNTailGo(dsts, src, blk, n)
+			return
+		}
+		deinterleaveNGo(dsts, src, n)
+	default:
+		deinterleaveNGo(dsts, src, n)
+	}
+}
+
 func convolveValidMulti64(dsts [][]float64, signal []float64, kernels [][]float64, n, _ int) {
 	// Kernel-major loop order: each kernel stays hot in cache for entire signal pass
 	for k, kernel := range kernels {
@@ -653,6 +725,12 @@ func interleave2AVX(dst, a, b []float64)
 
 //go:noescape
 func deinterleave2AVX(a, b, src []float64)
+
+//go:noescape
+func interleave4AVX(dst, s0, s1, s2, s3 []float64, n int)
+
+//go:noescape
+func deinterleave4AVX(d0, d1, d2, d3, src []float64, n int)
 
 //go:noescape
 func interleave2SSE2(dst, a, b []float64)

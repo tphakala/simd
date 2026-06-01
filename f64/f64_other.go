@@ -35,6 +35,12 @@ func convolveDecimate64(dst, signal, kernel []float64, factor, phase int) {
 func accumulateAdd64(dst, src []float64)   { accumulateAdd64Go(dst, src) }
 func interleave2_64(dst, a, b []float64)   { interleave2Go(dst, a, b) }
 func deinterleave2_64(a, b, src []float64) { deinterleave2Go(a, b, src) }
+func interleaveN64(dst []float64, srcs [][]float64, n int) {
+	interleaveNGo(dst, srcs, n)
+}
+func deinterleaveN64(dsts [][]float64, src []float64, n int) {
+	deinterleaveNGo(dsts, src, n)
+}
 func convolveValidMulti64(dsts [][]float64, signal []float64, kernels [][]float64, n, kLen int) {
 	convolveValidMultiGo(dsts, signal, kernels, n, kLen)
 }
