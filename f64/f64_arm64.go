@@ -283,6 +283,63 @@ func deinterleave2_64(a, b, src []float64) {
 	deinterleave2Go(a, b, src)
 }
 
+// interleaveN64 interleaves nc = len(srcs) planar streams into dst. N == 2
+// reuses the existing Interleave2 NEON; N in {3,4} use the NEON ST3/ST4
+// structured stores (added incrementally); the rest fall back to generic Go.
+// Stream counts with dedicated ARM64 NEON interleave/deinterleave kernels (the
+// 2-stream path reuses interleave2Channels). neonInterleaveBlock is the NEON
+// structured load/store block size in frames (2 float64 per .2D register).
+const (
+	interleave3Streams  = 3
+	interleave4Streams  = 4
+	neonInterleaveBlock = 2
+)
+
+func interleaveN64(dst []float64, srcs [][]float64, n int) {
+	switch len(srcs) {
+	case interleave2Channels:
+		interleave2_64(dst[:n*interleave2Channels], srcs[0][:n], srcs[1][:n])
+	case interleave3Streams:
+		if hasNEON && n >= neonInterleaveBlock {
+			interleave3NEON(dst, srcs[0], srcs[1], srcs[2], n)
+			return
+		}
+		interleaveNGo(dst, srcs, n)
+	case interleave4Streams:
+		if hasNEON && n >= neonInterleaveBlock {
+			interleave4NEON(dst, srcs[0], srcs[1], srcs[2], srcs[3], n)
+			return
+		}
+		interleaveNGo(dst, srcs, n)
+	default:
+		interleaveNGo(dst, srcs, n)
+	}
+}
+
+// deinterleaveN64 splits src into nc = len(dsts) planar streams. N == 2 reuses
+// the existing Deinterleave2 NEON; N in {3,4} use the NEON LD3/LD4 structured
+// loads (added incrementally); the rest fall back to generic Go.
+func deinterleaveN64(dsts [][]float64, src []float64, n int) {
+	switch len(dsts) {
+	case interleave2Channels:
+		deinterleave2_64(dsts[0][:n], dsts[1][:n], src[:n*interleave2Channels])
+	case interleave3Streams:
+		if hasNEON && n >= neonInterleaveBlock {
+			deinterleave3NEON(dsts[0], dsts[1], dsts[2], src, n)
+			return
+		}
+		deinterleaveNGo(dsts, src, n)
+	case interleave4Streams:
+		if hasNEON && n >= neonInterleaveBlock {
+			deinterleave4NEON(dsts[0], dsts[1], dsts[2], dsts[3], src, n)
+			return
+		}
+		deinterleaveNGo(dsts, src, n)
+	default:
+		deinterleaveNGo(dsts, src, n)
+	}
+}
+
 func convolveValidMulti64(dsts [][]float64, signal []float64, kernels [][]float64, n, _ int) {
 	// Kernel-major loop order: each kernel stays hot in cache for entire signal pass
 	for k, kernel := range kernels {
@@ -295,6 +352,18 @@ func interleave2NEON(dst, a, b []float64)
 
 //go:noescape
 func deinterleave2NEON(a, b, src []float64)
+
+//go:noescape
+func interleave3NEON(dst, s0, s1, s2 []float64, n int)
+
+//go:noescape
+func deinterleave3NEON(d0, d1, d2, src []float64, n int)
+
+//go:noescape
+func interleave4NEON(dst, s0, s1, s2, s3 []float64, n int)
+
+//go:noescape
+func deinterleave4NEON(d0, d1, d2, d3, src []float64, n int)
 
 func minIdx64(a []float64) int {
 	return minIdxGo64(a)

@@ -649,6 +649,184 @@ deinterleave2_neon32_loop1:
 deinterleave2_neon32_done:
     RET
 
+// func interleave3NEON(dst, s0, s1, s2 []float32, n int)
+// Interleaves 3 planar streams (dst[i*3+c] = s_c[i]) with the NEON ST3
+// structured store, 4 frames per iteration, then a scalar tail.
+TEXT ·interleave3NEON(SB), NOSPLIT, $0-104
+    MOVD dst_base+0(FP), R0
+    MOVD s0_base+24(FP), R1
+    MOVD s1_base+48(FP), R2
+    MOVD s2_base+72(FP), R3
+    MOVD n+96(FP), R4
+
+    LSR $2, R4, R5             // R5 = n / 4
+    CBZ R5, interleave3_neon_tail
+
+interleave3_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]     // V0 = s0[i:i+4]
+    VLD1.P 16(R2), [V1.S4]     // V1 = s1[i:i+4]
+    VLD1.P 16(R3), [V2.S4]     // V2 = s2[i:i+4]
+    VST3.P [V0.S4, V1.S4, V2.S4], 48(R0)  // interleaved store of 12 floats
+    SUB $1, R5
+    CBNZ R5, interleave3_neon_loop4
+
+interleave3_neon_tail:
+    AND $3, R4
+    CBZ R4, interleave3_neon_done
+
+interleave3_neon_tail1:
+    FMOVS (R1), F0
+    FMOVS (R2), F1
+    FMOVS (R3), F2
+    FMOVS F0, (R0)
+    FMOVS F1, 4(R0)
+    FMOVS F2, 8(R0)
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R3
+    ADD $12, R0
+    SUB $1, R4
+    CBNZ R4, interleave3_neon_tail1
+
+interleave3_neon_done:
+    RET
+
+// func deinterleave3NEON(d0, d1, d2, src []float32, n int)
+// Splits an interleaved 3-stream buffer (d_c[i] = src[i*3+c]) with the NEON LD3
+// structured load, 4 frames per iteration, then a scalar tail.
+TEXT ·deinterleave3NEON(SB), NOSPLIT, $0-104
+    MOVD d0_base+0(FP), R0
+    MOVD d1_base+24(FP), R1
+    MOVD d2_base+48(FP), R2
+    MOVD src_base+72(FP), R3
+    MOVD n+96(FP), R4
+
+    LSR $2, R4, R5             // R5 = n / 4
+    CBZ R5, deinterleave3_neon_tail
+
+deinterleave3_neon_loop4:
+    VLD3.P 48(R3), [V0.S4, V1.S4, V2.S4]  // de-interleave 12 floats
+    VST1.P [V0.S4], 16(R0)     // d0[i:i+4]
+    VST1.P [V1.S4], 16(R1)     // d1[i:i+4]
+    VST1.P [V2.S4], 16(R2)     // d2[i:i+4]
+    SUB $1, R5
+    CBNZ R5, deinterleave3_neon_loop4
+
+deinterleave3_neon_tail:
+    AND $3, R4
+    CBZ R4, deinterleave3_neon_done
+
+deinterleave3_neon_tail1:
+    FMOVS (R3), F0
+    FMOVS 4(R3), F1
+    FMOVS 8(R3), F2
+    FMOVS F0, (R0)
+    FMOVS F1, (R1)
+    FMOVS F2, (R2)
+    ADD $12, R3
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R2
+    SUB $1, R4
+    CBNZ R4, deinterleave3_neon_tail1
+
+deinterleave3_neon_done:
+    RET
+
+// func interleave4NEON(dst, s0, s1, s2, s3 []float32, n int)
+// Interleaves 4 planar streams (dst[i*4+c] = s_c[i]) with the NEON ST4
+// structured store, 4 frames per iteration, then a scalar tail.
+TEXT ·interleave4NEON(SB), NOSPLIT, $0-128
+    MOVD dst_base+0(FP), R0
+    MOVD s0_base+24(FP), R1
+    MOVD s1_base+48(FP), R2
+    MOVD s2_base+72(FP), R3
+    MOVD s3_base+96(FP), R4
+    MOVD n+120(FP), R5
+
+    LSR $2, R5, R6             // R6 = n / 4
+    CBZ R6, interleave4_neon_tail
+
+interleave4_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]
+    VLD1.P 16(R2), [V1.S4]
+    VLD1.P 16(R3), [V2.S4]
+    VLD1.P 16(R4), [V3.S4]
+    VST4.P [V0.S4, V1.S4, V2.S4, V3.S4], 64(R0)  // interleaved store of 16 floats
+    SUB $1, R6
+    CBNZ R6, interleave4_neon_loop4
+
+interleave4_neon_tail:
+    AND $3, R5
+    CBZ R5, interleave4_neon_done
+
+interleave4_neon_tail1:
+    FMOVS (R1), F0
+    FMOVS (R2), F1
+    FMOVS (R3), F2
+    FMOVS (R4), F3
+    FMOVS F0, (R0)
+    FMOVS F1, 4(R0)
+    FMOVS F2, 8(R0)
+    FMOVS F3, 12(R0)
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R3
+    ADD $4, R4
+    ADD $16, R0
+    SUB $1, R5
+    CBNZ R5, interleave4_neon_tail1
+
+interleave4_neon_done:
+    RET
+
+// func deinterleave4NEON(d0, d1, d2, d3, src []float32, n int)
+// Splits an interleaved 4-stream buffer (d_c[i] = src[i*4+c]) with the NEON LD4
+// structured load, 4 frames per iteration, then a scalar tail.
+TEXT ·deinterleave4NEON(SB), NOSPLIT, $0-128
+    MOVD d0_base+0(FP), R0
+    MOVD d1_base+24(FP), R1
+    MOVD d2_base+48(FP), R2
+    MOVD d3_base+72(FP), R3
+    MOVD src_base+96(FP), R4
+    MOVD n+120(FP), R5
+
+    LSR $2, R5, R6             // R6 = n / 4
+    CBZ R6, deinterleave4_neon_tail
+
+deinterleave4_neon_loop4:
+    VLD4.P 64(R4), [V0.S4, V1.S4, V2.S4, V3.S4]  // de-interleave 16 floats
+    VST1.P [V0.S4], 16(R0)
+    VST1.P [V1.S4], 16(R1)
+    VST1.P [V2.S4], 16(R2)
+    VST1.P [V3.S4], 16(R3)
+    SUB $1, R6
+    CBNZ R6, deinterleave4_neon_loop4
+
+deinterleave4_neon_tail:
+    AND $3, R5
+    CBZ R5, deinterleave4_neon_done
+
+deinterleave4_neon_tail1:
+    FMOVS (R4), F0
+    FMOVS 4(R4), F1
+    FMOVS 8(R4), F2
+    FMOVS 12(R4), F3
+    FMOVS F0, (R0)
+    FMOVS F1, (R1)
+    FMOVS F2, (R2)
+    FMOVS F3, (R3)
+    ADD $16, R4
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R3
+    SUB $1, R5
+    CBNZ R5, deinterleave4_neon_tail1
+
+deinterleave4_neon_done:
+    RET
+
 // Additional NEON operations for f32
 
 // FSQRT Vd.4S, Vn.4S: 0x6EA1F800 | (Vn << 5) | Vd

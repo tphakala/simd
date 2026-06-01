@@ -273,6 +273,62 @@ func Deinterleave2(a, b, src []float32) {
 
 const interleave2Channels = 2
 
+// InterleaveN interleaves N planar streams into a single interleaved buffer:
+//
+//	dst[i*N + c] = srcs[c][i],   N = len(srcs)
+//
+// It is the N-stream generalization of Interleave2. N == 1 copies srcs[0] into
+// dst; N == 2 produces the same result as Interleave2. The number of frames
+// written is min(len(dst)/N, min over c of len(srcs[c])); dst beyond n*N and any
+// ragged source tails are left untouched. An empty srcs is a no-op.
+//
+// This is the planar -> interleaved direction for multichannel audio (for
+// example combining per-phase polyphase outputs into one stream). It allocates
+// nothing and operates on the caller-provided buffers.
+func InterleaveN(dst []float32, srcs [][]float32) {
+	nc := len(srcs)
+	if nc == 0 {
+		return
+	}
+	n := len(dst) / nc
+	for _, s := range srcs {
+		if len(s) < n {
+			n = len(s)
+		}
+	}
+	if n == 0 {
+		return
+	}
+	interleaveN32(dst, srcs, n)
+}
+
+// DeinterleaveN splits one interleaved buffer into N planar streams:
+//
+//	dsts[c][i] = src[i*N + c],   N = len(dsts)
+//
+// It is the inverse of InterleaveN and the N-stream generalization of
+// Deinterleave2. N == 1 copies src into dsts[0]; N == 2 produces the same result
+// as Deinterleave2. The number of frames written is min(len(src)/N, min over c
+// of len(dsts[c])); any ragged destination tails are left untouched. An empty
+// dsts is a no-op. It allocates nothing and operates on the caller-provided
+// buffers.
+func DeinterleaveN(dsts [][]float32, src []float32) {
+	nc := len(dsts)
+	if nc == 0 {
+		return
+	}
+	n := len(src) / nc
+	for _, d := range dsts {
+		if len(d) < n {
+			n = len(d)
+		}
+	}
+	if n == 0 {
+		return
+	}
+	deinterleaveN32(dsts, src, n)
+}
+
 // Sqrt computes element-wise square root: dst[i] = sqrt(a[i]).
 // Processes min(len(dst), len(a)) elements.
 func Sqrt(dst, a []float32) {

@@ -23,9 +23,13 @@ func convolveValid32(dst, signal, kernel []float32) { convolveValid32Go(dst, sig
 func convolveDecimate32(dst, signal, kernel []float32, factor, phase int) {
 	convolveDecimate32Go(dst, signal, kernel, factor, phase)
 }
-func accumulateAdd32(dst, src []float32)                    { accumulateAdd32Go(dst, src) }
-func interleave2_32(dst, a, b []float32)                    { interleave2Go(dst, a, b) }
-func deinterleave2_32(a, b, src []float32)                  { deinterleave2Go(a, b, src) }
+func accumulateAdd32(dst, src []float32)                   { accumulateAdd32Go(dst, src) }
+func interleave2_32(dst, a, b []float32)                   { interleave2Go(dst, a, b) }
+func deinterleave2_32(a, b, src []float32)                 { deinterleave2Go(a, b, src) }
+func interleaveN32(dst []float32, srcs [][]float32, n int) { interleaveNGo(dst, srcs, n) }
+func deinterleaveN32(dsts [][]float32, src []float32, n int) {
+	deinterleaveNGo(dsts, src, n)
+}
 func sqrt32(dst, a []float32)                               { sqrt32Go(dst, a) }
 func reciprocal32(dst, a []float32)                         { reciprocal32Go(dst, a) }
 func minIdx32(a []float32) int                              { return minIdxGo(a) }

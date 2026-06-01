@@ -334,6 +334,39 @@ func deinterleave2Go(a, b, src []float64) {
 	}
 }
 
+// interleaveNGo is the generic strided interleave: dst[i*nc+c] = srcs[c][i] for
+// nc = len(srcs) streams and n frames. It is the portable fallback and the
+// correctness reference for the SIMD specializations. The caller guarantees
+// len(dst) >= n*nc and len(srcs[c]) >= n for every c.
+func interleaveNGo(dst []float64, srcs [][]float64, n int) {
+	nc := len(srcs)
+	dst = dst[:n*nc]
+	for c := range nc {
+		s := srcs[c][:n]
+		di := c
+		for i := range n {
+			dst[di] = s[i]
+			di += nc
+		}
+	}
+}
+
+// deinterleaveNGo is the generic strided deinterleave: dsts[c][i] = src[i*nc+c]
+// for nc = len(dsts) streams and n frames. The caller guarantees
+// len(src) >= n*nc and len(dsts[c]) >= n for every c.
+func deinterleaveNGo(dsts [][]float64, src []float64, n int) {
+	nc := len(dsts)
+	src = src[:n*nc]
+	for c := range nc {
+		d := dsts[c][:n]
+		si := c
+		for i := range n {
+			d[i] = src[si]
+			si += nc
+		}
+	}
+}
+
 // cubicInterpDotGo computes: Σ hist[i] * (a[i] + x*(b[i] + x*(c[i] + x*d[i])))
 // Uses Horner's method for numerical stability.
 func cubicInterpDotGo(hist, a, b, c, d []float64, x float64) float64 {
