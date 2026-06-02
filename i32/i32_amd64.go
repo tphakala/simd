@@ -187,3 +187,17 @@ func lpcResidualEncodeAVX2(res, samples, coeffs []int32, shift uint)
 
 //go:noescape
 func lpcRestoreAVX2(out, residual, rcoeffs []int32, shift uint)
+
+// riceSumsI32 dispatches the Rice per-parameter unary-bit sums. The AVX2 kernel
+// always writes the full riceParamCount (15) FLAC sums, so it is used only for
+// that width; other widths and short inputs use the pure-Go reference.
+func riceSumsI32(sums []uint64, res []int32) {
+	if hasAVX2 && len(sums) == riceParamCount && len(res) >= minAVXElements {
+		riceSumsAVX2(sums, res)
+		return
+	}
+	riceSumsGo(sums, res)
+}
+
+//go:noescape
+func riceSumsAVX2(sums []uint64, res []int32)

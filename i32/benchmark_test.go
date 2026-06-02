@@ -379,3 +379,41 @@ func BenchmarkLPCRestore32Go_1000(b *testing.B) {
 		lpcRestoreGo(dst, src, coeffs, 12)
 	}
 }
+
+// benchRiceRes makes a residual stream with realistic small-magnitude values so
+// the cost-minimizing Rice parameter is interior to the 0..14 scan.
+func benchRiceRes() []int32 {
+	res := make([]int32, benchN)
+	x := uint32(0x12345)
+	for i := range res {
+		x = x*1664525 + 1013904223 // LCG
+		res[i] = int32(x%4096) - 2048
+	}
+	return res
+}
+
+func BenchmarkRiceSums_1000(b *testing.B) {
+	res := benchRiceRes()
+	sums := make([]uint64, riceParamCount)
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		RiceSums(sums, res)
+	}
+}
+
+func BenchmarkRiceSumsGo_1000(b *testing.B) {
+	res := benchRiceRes()
+	sums := make([]uint64, riceParamCount)
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		riceSumsGo(sums, res)
+	}
+}
+
+func BenchmarkRiceBestParam_1000(b *testing.B) {
+	res := benchRiceRes()
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		RiceBestParam(res, riceMaxParam)
+	}
+}

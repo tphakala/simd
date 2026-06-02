@@ -398,3 +398,46 @@ func TestDiff1NEON_NoOverwrite(t *testing.T) {
 		}
 	}
 }
+
+func TestRiceSumsNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range paritySizes {
+		if n < minNEONElements {
+			continue // dispatch routes these to Go; the kernel is not called
+		}
+		res := make([]int32, n)
+		fillRiceRes(res)
+		gotNEON := make([]uint64, riceParamCount)
+		gotGo := make([]uint64, riceParamCount)
+		riceSumsNEON(gotNEON, res)
+		riceSumsGo(gotGo, res)
+		for k := range gotGo {
+			if gotNEON[k] != gotGo[k] {
+				t.Fatalf("n=%d: riceSumsNEON[%d] = %d, want %d (Go)", n, k, gotNEON[k], gotGo[k])
+			}
+		}
+	}
+}
+
+// TestRiceSumsNEON_NoOverwrite guards the fixed 15-wide write: the kernel must
+// fill exactly riceParamCount sums and touch nothing past them.
+func TestRiceSumsNEON_NoOverwrite(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	const n = 100
+	res := make([]int32, n)
+	fillRiceRes(res)
+	sums := make([]uint64, riceParamCount+4)
+	for i := range sums {
+		sums[i] = math.MaxUint64 // sentinel
+	}
+	riceSumsNEON(sums[:riceParamCount], res)
+	for i := riceParamCount; i < len(sums); i++ {
+		if sums[i] != math.MaxUint64 {
+			t.Errorf("riceSumsNEON wrote past end at sums[%d] = %d", i, sums[i])
+		}
+	}
+}
