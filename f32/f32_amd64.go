@@ -364,7 +364,7 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 		return false
 	}
 	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
-	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
+	useAVX := !useAVX512 && cpu.X86.AVX && cpu.X86.FMA
 	if !useAVX512 && !useAVX {
 		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
 		return false
@@ -409,7 +409,7 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 		return false
 	}
 	useAVX512 := cpu.X86.AVX512F && cpu.X86.AVX512VL
-	useAVX := !useAVX512 && cpu.X86.AVX2 && cpu.X86.FMA
+	useAVX := !useAVX512 && cpu.X86.AVX && cpu.X86.FMA
 	if !useAVX512 && !useAVX {
 		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
 		return false

@@ -22,7 +22,10 @@ func TestDotProductBatchMatchesDotProductWideShapes(t *testing.T) {
 				got := make([]float32, rowCount)
 				DotProductBatch(got, rows, vec)
 				for i := range rows {
-					want := DotProduct(rows[i], vec)
+					// Anchor the oracle to the pure-scalar dotProductGo rather than the
+					// dispatched DotProduct, so on amd64 this checks the batched SIMD
+					// kernel against the scalar contract instead of SIMD-vs-SIMD.
+					want := dotProductGo(rows[i], vec)
 					if !closeFloat32(got[i], want) {
 						t.Fatalf("dim=%d rows=%d row=%d got=%g want=%g", dim, rowCount, i, got[i], want)
 					}
@@ -49,6 +52,23 @@ func TestDotProductBatchVariedRowLengths(t *testing.T) {
 		want := DotProduct(rows[i], vec)
 		if !closeFloat32(got[i], want) {
 			t.Fatalf("row=%d len=%d got=%g want=%g", i, len(rows[i]), got[i], want)
+		}
+	}
+}
+
+func TestDotProductBatchAllocs(t *testing.T) {
+	for _, rowCount := range []int{4, 8, 16, 128} {
+		vec := deterministicF32Vector(21, 768)
+		rows := make([][]float32, rowCount)
+		for i := range rows {
+			rows[i] = deterministicF32Vector(2000+i, 768)
+		}
+		results := make([]float32, rowCount)
+		allocs := testing.AllocsPerRun(100, func() {
+			DotProductBatch(results, rows, vec)
+		})
+		if allocs != 0 {
+			t.Fatalf("DotProductBatch rows=%d allocations = %v, want 0", rowCount, allocs)
 		}
 	}
 }

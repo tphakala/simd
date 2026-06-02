@@ -5197,7 +5197,9 @@ dot4_512_reduce:
     VADDPS Z9, Z5, Z5
 
     // Reduce acc0 into X0.
-    VEXTRACTF32X8 $1, Z0, Y1
+    // VEXTRACTF64X4 (AVX512F) extracts the same upper 256 bits as VEXTRACTF32X8
+    // (AVX512DQ) but without requiring DQ, matching the AVX512F+VL dispatch gate.
+    VEXTRACTF64X4 $1, Z0, Y1
     VADDPS Y1, Y0, Y0
     VEXTRACTF128 $1, Y0, X1
     VADDPS X1, X0, X0
@@ -5205,7 +5207,7 @@ dot4_512_reduce:
     VHADDPS X0, X0, X0
 
     // Reduce acc1 into X3.
-    VEXTRACTF32X8 $1, Z3, Y1
+    VEXTRACTF64X4 $1, Z3, Y1
     VADDPS Y1, Y3, Y3
     VEXTRACTF128 $1, Y3, X1
     VADDPS X1, X3, X3
@@ -5213,7 +5215,7 @@ dot4_512_reduce:
     VHADDPS X3, X3, X3
 
     // Reduce acc2 into X4.
-    VEXTRACTF32X8 $1, Z4, Y1
+    VEXTRACTF64X4 $1, Z4, Y1
     VADDPS Y1, Y4, Y4
     VEXTRACTF128 $1, Y4, X1
     VADDPS X1, X4, X4
@@ -5221,7 +5223,7 @@ dot4_512_reduce:
     VHADDPS X4, X4, X4
 
     // Reduce acc3 into X5.
-    VEXTRACTF32X8 $1, Z5, Y1
+    VEXTRACTF64X4 $1, Z5, Y1
     VADDPS Y1, Y5, Y5
     VEXTRACTF128 $1, Y5, X1
     VADDPS X1, X5, X5

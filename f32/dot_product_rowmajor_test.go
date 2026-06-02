@@ -22,10 +22,11 @@ func TestDotProductIndexedRowMajorParity(t *testing.T) {
 				}
 
 				got := make([]float32, rows)
-				want := make([]float32, rows)
-				dotProductIndexedGo(want, base, query, rowIDs, dims)
 				DotProductIndexed(got, base, query, rowIDs, dims)
-				assertCloseSlice(t, got, want)
+				// Compare against a pure-scalar oracle that never touches the
+				// SIMD dispatch path, so a bug shared by the batched and
+				// single-row SIMD kernels cannot slip through.
+				assertCloseSlice(t, got, scalarIndexedOracle(base, query, rowIDs, dims))
 			})
 		}
 	}
@@ -42,10 +43,8 @@ func TestDotProductStridedRowMajorParity(t *testing.T) {
 				query := deterministicF32Vector(400+dims, dims)
 
 				got := make([]float32, rows)
-				want := make([]float32, rows)
-				dotProductStridedGo(want, base, query, rows, dims, stride)
 				DotProductStrided(got, base, query, rows, dims, stride)
-				assertCloseSlice(t, got, want)
+				assertCloseSlice(t, got, scalarStridedOracle(base, query, rows, dims, stride))
 			})
 		}
 	}
@@ -108,7 +107,7 @@ func TestDotProductRowMajorOptimizedStatus(t *testing.T) {
 
 	indexedUsed := DotProductIndexed(indexedDst, base, query, rowIDs, dims)
 	stridedUsed := DotProductStrided(stridedDst, base, query, rows, dims, dims)
-	wantOptimized := runtime.GOARCH == "amd64" && ((cpu.X86.AVX512F && cpu.X86.AVX512VL) || (cpu.X86.AVX2 && cpu.X86.FMA))
+	wantOptimized := runtime.GOARCH == "amd64" && ((cpu.X86.AVX512F && cpu.X86.AVX512VL) || (cpu.X86.AVX && cpu.X86.FMA))
 	if indexedUsed != wantOptimized {
 		t.Fatalf("indexed optimized status = %v, want %v (cpu=%s)", indexedUsed, wantOptimized, cpu.Info())
 	}
@@ -157,4 +156,53 @@ func assertCloseSlice(t *testing.T, got, want []float32) {
 			t.Fatalf("[%d] got=%g want=%g", i, got[i], want[i])
 		}
 	}
+}
+
+// scalarIndexedOracle and scalarStridedOracle recompute the expected scores
+// with the pure-scalar dotProductGo, mirroring the public APIs' row selection,
+// ragged-input clamping, and out-of-range zeroing. They never call the
+// dispatched dotProduct, so they stay independent of the SIMD kernels under
+// test.
+func scalarIndexedOracle(base, query []float32, rowIDs []uint32, dims int) []float32 {
+	dst := make([]float32, len(rowIDs))
+	if dims <= 0 || len(query) == 0 {
+		return dst
+	}
+	for i, id := range rowIDs {
+		off := int(id) * dims
+		if off < 0 || off >= len(base) {
+			continue
+		}
+		n := min(dims, len(query))
+		if rem := len(base) - off; rem < n {
+			n = rem
+		}
+		if n <= 0 {
+			continue
+		}
+		dst[i] = dotProductGo(base[off:off+n], query[:n])
+	}
+	return dst
+}
+
+func scalarStridedOracle(base, query []float32, rowCount, dims, stride int) []float32 {
+	dst := make([]float32, rowCount)
+	if dims <= 0 || stride <= 0 || len(query) == 0 {
+		return dst
+	}
+	for i := range rowCount {
+		off := i * stride
+		if off < 0 || off >= len(base) {
+			continue
+		}
+		n := min(dims, len(query))
+		if rem := len(base) - off; rem < n {
+			n = rem
+		}
+		if n <= 0 {
+			continue
+		}
+		dst[i] = dotProductGo(base[off:off+n], query[:n])
+	}
+	return dst
 }
