@@ -384,6 +384,8 @@ SIMD-accelerated integer-domain operations for codec and integer-DSP hot loops (
 |                     | `Restore1`..`Restore4(dst, src)`        | Order 1-4 fixed-predictor decode (inverse; prefix sum)   | 8x (AVX2) / 4x (NEON) |
 | **LPC**             | `LPCResidualEncode(res, samples, coeffs, shift)` | Quantized-LPC encode residual FIR (parallel across outputs) | 8x (AVX2) / 4x (NEON) |
 |                     | `LPCRestore(out, residual, coeffs, shift)`       | Quantized-LPC decode (serial recurrence; vectorized taps)   | 8x (AVX2) / 4x (NEON) |
+| **Rice**            | `RiceSums(sums, res)`                   | Per-parameter zigzag unary-bit sums `Σ (zigzag(res)>>k)`  | 8x (AVX2) / 4x (NEON) |
+|                     | `RiceBestParam(res, maxParam)`          | Cost-minimizing Rice parameter + its bit count           | 8x (AVX2) / 4x (NEON) |
 
 ```go
 import "github.com/tphakala/simd/i32"
@@ -402,9 +404,11 @@ i32.Restore2(left, res)  // exact inverse: reconstruct the samples
 coeffs := []int32{...}             // quantized LPC coefficients (order = len)
 i32.LPCResidualEncode(res, left, coeffs, shift) // encode FIR residual
 i32.LPCRestore(left, res, coeffs, shift)        // exact inverse: reconstruct
+
+param, bits := i32.RiceBestParam(res, 14) // best Rice parameter and its bit cost
 ```
 
-Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. The decorrelation and fixed-predictor kernels do integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes. `RestoreK` is the exact inverse of `DiffK`: since the order-`K` fixed predictor is the `K`-th forward difference, restoration is `K` cumulative-sum passes built on one SIMD prefix-sum kernel (11x at order 1 down to ~5x at order 4 on AVX2; 6x to 3x on NEON, all zero-allocation). The LPC kernels accumulate the prediction sum in int64 (matching libFLAC), so they stay bit-exact for the full coefficient precision and order: `LPCResidualEncode` is a FIR that vectorizes across output samples (widening `VPMULDQ` / `SMLAL`, ~7-9x on AVX2, ~4-5x on NEON), while `LPCRestore` is a serial recurrence whose per-output tap dot product is vectorized, keeping the just-written newest samples on store-forwardable scalar loads (~1.4-3.9x on AVX2, ~1.8-3.6x on NEON, order 8 to 32). The remaining integer surface (Rice cost search) is tracked in the project issues.
+Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. The decorrelation and fixed-predictor kernels do integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes. `RestoreK` is the exact inverse of `DiffK`: since the order-`K` fixed predictor is the `K`-th forward difference, restoration is `K` cumulative-sum passes built on one SIMD prefix-sum kernel (11x at order 1 down to ~5x at order 4 on AVX2; 6x to 3x on NEON, all zero-allocation). The LPC kernels accumulate the prediction sum in int64 (matching libFLAC), so they stay bit-exact for the full coefficient precision and order: `LPCResidualEncode` is a FIR that vectorizes across output samples (widening `VPMULDQ` / `SMLAL`, ~7-9x on AVX2, ~4-5x on NEON), while `LPCRestore` is a serial recurrence whose per-output tap dot product is vectorized, keeping the just-written newest samples on store-forwardable scalar loads (~1.4-3.9x on AVX2, ~1.8-3.6x on NEON, order 8 to 32). The Rice cost search folds each residual to its unsigned zigzag symbol `(r<<1)^(r>>31)`, widens it to int64, and accumulates `Σ (zigzag(res)>>k)` for every Rice parameter `k` in 0..14 at once (the symbols are halved progressively, exact for the logical shift); `RiceBestParam` adds the `n*(k+1)` code overhead and picks the cheapest `k`. This is the exact bit cost, not the `sum>>k` approximation, and runs ~13x on AVX2 and ~4x on NEON, zero-allocation.
 
 ## Performance
 
@@ -584,8 +588,10 @@ a Raspberry Pi 5):
 | LPCResidualEncode (order 32) | 2397 ns vs 22046 ns (**9.2x**)| 8148 ns vs 40811 ns (**5.0x**) |
 | LPCRestore (order 8)         | 3583 ns vs 4944 ns (**1.4x**) | 6128 ns vs 10889 ns (**1.8x**) |
 | LPCRestore (order 32)        | 4443 ns vs 17529 ns (**3.9x**)| 11303 ns vs 41026 ns (**3.6x**) |
+| RiceSums (k=0..14)           | 810 ns vs 10490 ns (**13.0x**)| 4090 ns vs 17163 ns (**4.2x**) |
+| RiceBestParam (k=0..14)      | 810 ns vs 10490 ns (**13.0x**)| 4081 ns vs 17163 ns (**4.2x**) |
 
-All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The Restore baseline is the pure-Go decode recurrence; `RestoreK` reconstructs samples as `K` SIMD prefix-sum passes (the inverse of the order-`K` forward difference). The LPC kernels accumulate in int64 and are checked against an arbitrary-precision `math.big` oracle and the encode->decode round-trip; `LPCRestore` is the serial decode recurrence (vectorized per-output tap dot product), dispatched to SIMD only at order >= 8 where it beats the scalar path.
+All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The Restore baseline is the pure-Go decode recurrence; `RestoreK` reconstructs samples as `K` SIMD prefix-sum passes (the inverse of the order-`K` forward difference). The LPC kernels accumulate in int64 and are checked against an arbitrary-precision `math.big` oracle and the encode->decode round-trip; `LPCRestore` is the serial decode recurrence (vectorized per-output tap dot product), dispatched to SIMD only at order >= 8 where it beats the scalar path. The Rice kernels compute the exact per-parameter unary-bit sums `Σ (zigzag(res)>>k)` for all 15 FLAC parameters in one pass (15 int64 accumulators; AVX2 sweeps the data twice for its 16-register file, NEON fits one pass in its 32 registers), checked against an independent oracle and brute-force parameter scan.
 
 ### Performance Notes
 

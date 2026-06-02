@@ -25,3 +25,5 @@ func lpcResidualEncodeI32(res, samples, coeffs []int32, shift uint) {
 func lpcRestoreI32(out, residual, coeffs []int32, shift uint) {
 	lpcRestoreGo(out, residual, coeffs, shift)
 }
+
+func riceSumsI32(sums []uint64, res []int32) { riceSumsGo(sums, res) }

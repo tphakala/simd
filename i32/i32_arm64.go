@@ -165,3 +165,17 @@ func lpcResidualEncodeNEON(res, samples, coeffs []int32, shift uint)
 
 //go:noescape
 func lpcRestoreNEON(out, residual, rcoeffs []int32, shift uint)
+
+// riceSumsI32 dispatches the Rice per-parameter unary-bit sums. The NEON kernel
+// always writes the full riceParamCount (15) FLAC sums, so it is used only for
+// that width; other widths and short inputs use the pure-Go reference.
+func riceSumsI32(sums []uint64, res []int32) {
+	if hasNEON && len(sums) == riceParamCount && len(res) >= minNEONElements {
+		riceSumsNEON(sums, res)
+		return
+	}
+	riceSumsGo(sums, res)
+}
+
+//go:noescape
+func riceSumsNEON(sums []uint64, res []int32)

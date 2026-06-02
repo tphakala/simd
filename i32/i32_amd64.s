@@ -847,3 +847,272 @@ lpcdec_pred:
 lpcdec_done:
     VZEROUPPER
     RET
+
+// func riceSumsAVX2(sums []uint64, res []int32)
+// Rice per-parameter unary-bit sums, sums[k] = Σ_i (zigzag(res[i]) >> k) for
+// k = 0..14 (the fixed FLAC 4-bit range; the dispatch guarantees len(sums)==15).
+//
+// Each residual is folded to its unsigned Rice symbol with
+// zigzag(r) = (r<<1) ^ (r>>31) (VPSLLD / VPSRAD / VPXOR), then zero-extended to
+// int64 (VPMOVZXDQ on the low and high 128-bit halves) so the per-k right shifts
+// and the running totals never overflow. The 15 sums need more 64-bit
+// accumulators than the 16 YMM registers allow in one pass, so the data is swept
+// twice: group A computes k=0..7, group B k=8..14. Within a sweep the widened
+// symbols are halved progressively (u>>k is u>>(k-1) shifted once more, exact for
+// the logical VPSRLQ), accumulating into one int64x4 register per k. After each
+// sweep every accumulator's four lanes are folded to a scalar and stored. The
+// (n mod 8) trailing residuals are then added to all 15 sums with a scalar
+// progressive-halving tail. The dispatch gates len(res) >= 8 (>=1 full block).
+TEXT ·riceSumsAVX2(SB), NOSPLIT, $0-48
+    MOVQ sums_base+0(FP), DI
+    MOVQ res_base+24(FP), R8
+    MOVQ res_len+32(FP), CX          // n
+    MOVQ CX, R9
+    SHRQ $3, R9                      // R9 = full 8-element blocks (>=1)
+
+    // ---- group A: k = 0..7 (accumulators Y8..Y15) ----
+    VPXOR Y8, Y8, Y8
+    VPXOR Y9, Y9, Y9
+    VPXOR Y10, Y10, Y10
+    VPXOR Y11, Y11, Y11
+    VPXOR Y12, Y12, Y12
+    VPXOR Y13, Y13, Y13
+    VPXOR Y14, Y14, Y14
+    VPXOR Y15, Y15, Y15
+    MOVQ R8, SI                      // working res ptr
+    MOVQ R9, AX                      // block counter
+riceA_loop:
+    VMOVDQU (SI), Y0                 // v = res[i..i+7]
+    VPSLLD  $1, Y0, Y1               // r<<1
+    VPSRAD  $31, Y0, Y2              // r>>31 (arithmetic)
+    VPXOR   Y2, Y1, Y1               // u = zigzag(r) (int32x8, as uint32)
+    VPMOVZXDQ X1, Y2                 // ulo = zero-extend lanes 0..3 -> int64x4
+    VEXTRACTI128 $1, Y1, X3          // high 128 of u (lanes 4..7)
+    VPMOVZXDQ X3, Y3                 // uhi = zero-extend lanes 4..7 -> int64x4
+    VPADDQ Y2, Y8, Y8               // k=0
+    VPADDQ Y3, Y8, Y8
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y9, Y9               // k=1
+    VPADDQ Y3, Y9, Y9
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y10, Y10            // k=2
+    VPADDQ Y3, Y10, Y10
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y11, Y11            // k=3
+    VPADDQ Y3, Y11, Y11
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y12, Y12            // k=4
+    VPADDQ Y3, Y12, Y12
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y13, Y13            // k=5
+    VPADDQ Y3, Y13, Y13
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y14, Y14            // k=6
+    VPADDQ Y3, Y14, Y14
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y15, Y15            // k=7
+    VPADDQ Y3, Y15, Y15
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  riceA_loop
+
+    // fold each int64x4 accumulator to a scalar and store sums[0..7]
+    VEXTRACTI128 $1, Y8, X0
+    VPADDQ X0, X8, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 0(DI)
+    VEXTRACTI128 $1, Y9, X0
+    VPADDQ X0, X9, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 8(DI)
+    VEXTRACTI128 $1, Y10, X0
+    VPADDQ X0, X10, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 16(DI)
+    VEXTRACTI128 $1, Y11, X0
+    VPADDQ X0, X11, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 24(DI)
+    VEXTRACTI128 $1, Y12, X0
+    VPADDQ X0, X12, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 32(DI)
+    VEXTRACTI128 $1, Y13, X0
+    VPADDQ X0, X13, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 40(DI)
+    VEXTRACTI128 $1, Y14, X0
+    VPADDQ X0, X14, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 48(DI)
+    VEXTRACTI128 $1, Y15, X0
+    VPADDQ X0, X15, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 56(DI)
+
+    // ---- group B: k = 8..14 (accumulators Y8..Y14) ----
+    VPXOR Y8, Y8, Y8
+    VPXOR Y9, Y9, Y9
+    VPXOR Y10, Y10, Y10
+    VPXOR Y11, Y11, Y11
+    VPXOR Y12, Y12, Y12
+    VPXOR Y13, Y13, Y13
+    VPXOR Y14, Y14, Y14
+    MOVQ R8, SI
+    MOVQ R9, AX
+riceB_loop:
+    VMOVDQU (SI), Y0
+    VPSLLD  $1, Y0, Y1
+    VPSRAD  $31, Y0, Y2
+    VPXOR   Y2, Y1, Y1               // u = zigzag(r)
+    VPMOVZXDQ X1, Y2                 // ulo
+    VEXTRACTI128 $1, Y1, X3
+    VPMOVZXDQ X3, Y3                 // uhi
+    VPSRLQ $8, Y2, Y2               // start at k=8
+    VPSRLQ $8, Y3, Y3
+    VPADDQ Y2, Y8, Y8              // k=8
+    VPADDQ Y3, Y8, Y8
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y9, Y9             // k=9
+    VPADDQ Y3, Y9, Y9
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y10, Y10          // k=10
+    VPADDQ Y3, Y10, Y10
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y11, Y11          // k=11
+    VPADDQ Y3, Y11, Y11
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y12, Y12          // k=12
+    VPADDQ Y3, Y12, Y12
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y13, Y13          // k=13
+    VPADDQ Y3, Y13, Y13
+    VPSRLQ $1, Y2, Y2
+    VPSRLQ $1, Y3, Y3
+    VPADDQ Y2, Y14, Y14          // k=14
+    VPADDQ Y3, Y14, Y14
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  riceB_loop
+
+    VEXTRACTI128 $1, Y8, X0
+    VPADDQ X0, X8, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 64(DI)
+    VEXTRACTI128 $1, Y9, X0
+    VPADDQ X0, X9, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 72(DI)
+    VEXTRACTI128 $1, Y10, X0
+    VPADDQ X0, X10, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 80(DI)
+    VEXTRACTI128 $1, Y11, X0
+    VPADDQ X0, X11, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 88(DI)
+    VEXTRACTI128 $1, Y12, X0
+    VPADDQ X0, X12, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 96(DI)
+    VEXTRACTI128 $1, Y13, X0
+    VPADDQ X0, X13, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 104(DI)
+    VEXTRACTI128 $1, Y14, X0
+    VPADDQ X0, X14, X0
+    MOVQ X0, AX
+    VPEXTRQ $1, X0, DX
+    ADDQ DX, AX
+    MOVQ AX, 112(DI)
+
+    // ---- scalar tail: (n mod 8) residuals, add to all 15 sums ----
+    MOVQ CX, AX
+    ANDQ $7, AX                      // tail count
+    JZ   rice_done
+    MOVQ R9, DX
+    SHLQ $5, DX                      // fullBlocks * 32 bytes
+    ADDQ R8, DX                      // tail ptr = &res[fullBlocks*8]
+rice_tail:
+    MOVL (DX), BX                    // r (zero-extended into RBX)
+    MOVL BX, R10
+    SHLL $1, BX                      // r<<1
+    SARL $31, R10                    // r>>31 (arithmetic)
+    XORL R10, BX                     // BX = zigzag(r), RBX zero-extended
+    MOVQ BX, R10                     // cur = u
+    ADDQ R10, 0(DI)
+    SHRQ $1, R10
+    ADDQ R10, 8(DI)
+    SHRQ $1, R10
+    ADDQ R10, 16(DI)
+    SHRQ $1, R10
+    ADDQ R10, 24(DI)
+    SHRQ $1, R10
+    ADDQ R10, 32(DI)
+    SHRQ $1, R10
+    ADDQ R10, 40(DI)
+    SHRQ $1, R10
+    ADDQ R10, 48(DI)
+    SHRQ $1, R10
+    ADDQ R10, 56(DI)
+    SHRQ $1, R10
+    ADDQ R10, 64(DI)
+    SHRQ $1, R10
+    ADDQ R10, 72(DI)
+    SHRQ $1, R10
+    ADDQ R10, 80(DI)
+    SHRQ $1, R10
+    ADDQ R10, 88(DI)
+    SHRQ $1, R10
+    ADDQ R10, 96(DI)
+    SHRQ $1, R10
+    ADDQ R10, 104(DI)
+    SHRQ $1, R10
+    ADDQ R10, 112(DI)
+    ADDQ $4, DX
+    DECQ AX
+    JNZ  rice_tail
+
+rice_done:
+    VZEROUPPER
+    RET

@@ -115,6 +115,32 @@ func lpcResidualEncodeGo(res, samples, coeffs []int32, shift uint) {
 	}
 }
 
+// int32SignShift sign-extends an int32 to its all-zero/all-one mask: r>>31
+// (arithmetic) is 0 for non-negative r and -1 (0xFFFFFFFF) for negative r, the
+// sign-mask half of the zigzag fold.
+const int32SignShift = 31
+
+// riceSumsGo writes the per-parameter Rice unary-bit sums into sums:
+//
+//	sums[k] = Σ_i (zigzag(res[i]) >> k)   for k in [0, len(sums))
+//
+// where zigzag(r) = (r<<1) ^ (r>>31) folds a signed residual to its unsigned
+// Rice symbol. It fully overwrites sums and is the bit-exact source of truth the
+// SIMD kernels are validated against. The fold uses int32 arithmetic (matching
+// the kernels): r<<1 wraps and r>>31 is the arithmetic sign-extension, so a
+// math.MinInt32 residual folds to 2^32-1 before the unsigned widen.
+func riceSumsGo(sums []uint64, res []int32) {
+	for k := range sums {
+		sums[k] = 0
+	}
+	for _, r := range res {
+		u := uint64(uint32((r << 1) ^ (r >> int32SignShift)))
+		for k := range sums {
+			sums[k] += u >> uint(k)
+		}
+	}
+}
+
 // lpcRestoreGo is the exact inverse of lpcResidualEncodeGo: it reconstructs the
 // samples from the [order warm-up | residual] layout via the serial recurrence
 //

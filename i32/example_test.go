@@ -106,3 +106,26 @@ func ExampleLPCRestore() {
 	fmt.Println(samples)
 	// Output: [10 20 34 50]
 }
+
+// ExampleRiceSums shows the per-parameter unary-bit sums. The residuals fold to
+// the zigzag symbols 0,1,2,3,4; sums[k] is the sum of those symbols shifted
+// right by k, the data-dependent part of the Rice code length for parameter k.
+func ExampleRiceSums() {
+	res := []int32{0, -1, 1, -2, 2} // zigzag -> 0,1,2,3,4
+	sums := make([]uint64, 4)
+
+	i32.RiceSums(sums, res)
+	fmt.Println(sums)
+	// Output: [10 4 1 0]
+}
+
+// ExampleRiceBestParam shows the Rice parameter search. For these residuals the
+// total code cost is minimized at parameter 1, which needs 14 bits:
+// cost(0)=15, cost(1)=14, cost(2)=16.
+func ExampleRiceBestParam() {
+	res := []int32{0, -1, 1, -2, 2}
+
+	param, bits := i32.RiceBestParam(res, 14)
+	fmt.Println(param, bits)
+	// Output: 1 14
+}

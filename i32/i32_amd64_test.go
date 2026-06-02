@@ -428,3 +428,46 @@ func TestMidSideEncodeAVX2_NoOverwrite(t *testing.T) {
 		}
 	}
 }
+
+func TestRiceSumsAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range paritySizes {
+		if n < minAVXElements {
+			continue // dispatch routes these to Go; the kernel is not called
+		}
+		res := make([]int32, n)
+		fillRiceRes(res)
+		gotAVX := make([]uint64, riceParamCount)
+		gotGo := make([]uint64, riceParamCount)
+		riceSumsAVX2(gotAVX, res)
+		riceSumsGo(gotGo, res)
+		for k := range gotGo {
+			if gotAVX[k] != gotGo[k] {
+				t.Fatalf("n=%d: riceSumsAVX2[%d] = %d, want %d (Go)", n, k, gotAVX[k], gotGo[k])
+			}
+		}
+	}
+}
+
+// TestRiceSumsAVX2_NoOverwrite guards the fixed 15-wide write: the kernel must
+// fill exactly riceParamCount sums and touch nothing past them.
+func TestRiceSumsAVX2_NoOverwrite(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	const n = 100
+	res := make([]int32, n)
+	fillRiceRes(res)
+	sums := make([]uint64, riceParamCount+4)
+	for i := range sums {
+		sums[i] = math.MaxUint64 // sentinel
+	}
+	riceSumsAVX2(sums[:riceParamCount], res)
+	for i := riceParamCount; i < len(sums); i++ {
+		if sums[i] != math.MaxUint64 {
+			t.Errorf("riceSumsAVX2 wrote past end at sums[%d] = %d", i, sums[i])
+		}
+	}
+}
