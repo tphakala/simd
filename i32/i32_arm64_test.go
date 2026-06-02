@@ -193,6 +193,38 @@ func TestDiffNEON_ParityWithGo(t *testing.T) {
 	}
 }
 
+// TestNEONKernels_AllocFree asserts each NEON kernel runs allocation-free, the
+// repo's zero-allocation contract enforced directly at the kernel boundary
+// (the public-API alloc tests cover the dispatch, these cover the kernels).
+func TestNEONKernels_AllocFree(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	const n = 1024
+	a := make([]int32, n)
+	b := make([]int32, n)
+	dst := make([]int32, n)
+	dst2 := make([]int32, n)
+	checks := []struct {
+		name string
+		fn   func()
+	}{
+		{"addNEON", func() { addNEON(dst, a, b) }},
+		{"subNEON", func() { subNEON(dst, a, b) }},
+		{"midSideEncodeNEON", func() { midSideEncodeNEON(dst, dst2, a, b) }},
+		{"midSideDecodeNEON", func() { midSideDecodeNEON(dst, dst2, a, b) }},
+		{"diff1NEON", func() { diff1NEON(dst, a) }},
+		{"diff2NEON", func() { diff2NEON(dst, a) }},
+		{"diff3NEON", func() { diff3NEON(dst, a) }},
+		{"diff4NEON", func() { diff4NEON(dst, a) }},
+	}
+	for _, c := range checks {
+		if got := testing.AllocsPerRun(100, c.fn); got != 0 {
+			t.Errorf("%s allocated %v times per run, want 0", c.name, got)
+		}
+	}
+}
+
 // TestDiff1NEON_NoOverwrite guards the scalar tail.
 func TestDiff1NEON_NoOverwrite(t *testing.T) {
 	if !cpu.ARM64.NEON {

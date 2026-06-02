@@ -190,6 +190,22 @@ func BenchmarkDiff2Go_1000(b *testing.B) {
 	}
 }
 
+func BenchmarkDiff3_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		Diff3(dst, src)
+	}
+}
+
+func BenchmarkDiff3Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		diff3Go(dst, src)
+	}
+}
+
 func BenchmarkDiff4_1000(b *testing.B) {
 	src, dst := benchSrcDst()
 	b.SetBytes(benchN * 4 * 2)

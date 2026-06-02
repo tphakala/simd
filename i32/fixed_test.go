@@ -34,23 +34,27 @@ func diffResidualRepeated(src []int32, order int) []int32 {
 
 func TestDiffOrders(t *testing.T) {
 	diffs := []func(dst, src []int32){Diff1, Diff2, Diff3, Diff4}
-	src := []int32{3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4}
-	for order := 1; order <= 4; order++ {
-		t.Run([]string{"", "Diff1", "Diff2", "Diff3", "Diff4"}[order], func(t *testing.T) {
-			dst := make([]int32, len(src))
-			diffs[order-1](dst, src)
-			want := diffResidualRepeated(src, order)
-			for i := 0; i < order; i++ {
-				if dst[i] != src[i] {
-					t.Errorf("order %d warm-up dst[%d] = %d, want src %d", order, i, dst[i], src[i])
+	full := []int32{3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4}
+	// Two lengths so both the dispatched SIMD path (len >= block threshold) and
+	// the pure-Go fallback (len < threshold) are exercised through the public API.
+	for _, src := range [][]int32{full, full[:6]} {
+		for order := 1; order <= 4; order++ {
+			t.Run([]string{"", "Diff1", "Diff2", "Diff3", "Diff4"}[order], func(t *testing.T) {
+				dst := make([]int32, len(src))
+				diffs[order-1](dst, src)
+				want := diffResidualRepeated(src, order)
+				for i := 0; i < order; i++ {
+					if dst[i] != src[i] {
+						t.Errorf("len %d order %d warm-up dst[%d] = %d, want src %d", len(src), order, i, dst[i], src[i])
+					}
 				}
-			}
-			for n := order; n < len(src); n++ {
-				if dst[n] != want[n] {
-					t.Errorf("order %d residual dst[%d] = %d, want %d", order, n, dst[n], want[n])
+				for n := order; n < len(src); n++ {
+					if dst[n] != want[n] {
+						t.Errorf("len %d order %d residual dst[%d] = %d, want %d", len(src), order, n, dst[n], want[n])
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 }
 

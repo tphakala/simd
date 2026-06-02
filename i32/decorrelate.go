@@ -21,7 +21,7 @@ package i32
 // len(b)). It reconstructs the left channel in FLAC RIGHT_SIDE decode:
 // Add(left, right, side).
 func Add(dst, a, b []int32) {
-	n := min(len(dst), min(len(a), len(b)))
+	n := min(len(dst), len(a), len(b))
 	if n == 0 {
 		return
 	}
@@ -32,7 +32,7 @@ func Add(dst, a, b []int32) {
 // len(b)). It computes the FLAC side channel (Sub(side, left, right)) and
 // reconstructs the right channel in LEFT_SIDE decode (Sub(right, left, side)).
 func Sub(dst, a, b []int32) {
-	n := min(len(dst), min(len(a), len(b)))
+	n := min(len(dst), len(a), len(b))
 	if n == 0 {
 		return
 	}
@@ -48,7 +48,7 @@ func Sub(dst, a, b []int32) {
 // untouched. MidSideDecode is the exact inverse for inputs within the codec's
 // effective bit depth.
 func MidSideEncode(mid, side, left, right []int32) {
-	n := min(min(len(mid), len(side)), min(len(left), len(right)))
+	n := min(len(mid), len(side), len(left), len(right))
 	if n == 0 {
 		return
 	}
@@ -64,7 +64,7 @@ func MidSideEncode(mid, side, left, right []int32) {
 // The parity bit (side[i] & 1) restores the low bit of left+right that the
 // encoder's >>1 discarded; left+right and left-right always share parity.
 func MidSideDecode(left, right, mid, side []int32) {
-	n := min(min(len(left), len(right)), min(len(mid), len(side)))
+	n := min(len(left), len(right), len(mid), len(side))
 	if n == 0 {
 		return
 	}

@@ -215,6 +215,38 @@ func TestDiff1AVX2_NoOverwrite(t *testing.T) {
 	}
 }
 
+// TestAVX2Kernels_AllocFree asserts each AVX2 kernel runs allocation-free, the
+// repo's zero-allocation contract enforced directly at the kernel boundary
+// (the public-API alloc tests cover the dispatch, these cover the kernels).
+func TestAVX2Kernels_AllocFree(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	const n = 1024
+	a := make([]int32, n)
+	b := make([]int32, n)
+	dst := make([]int32, n)
+	dst2 := make([]int32, n)
+	checks := []struct {
+		name string
+		fn   func()
+	}{
+		{"addAVX2", func() { addAVX2(dst, a, b) }},
+		{"subAVX2", func() { subAVX2(dst, a, b) }},
+		{"midSideEncodeAVX2", func() { midSideEncodeAVX2(dst, dst2, a, b) }},
+		{"midSideDecodeAVX2", func() { midSideDecodeAVX2(dst, dst2, a, b) }},
+		{"diff1AVX2", func() { diff1AVX2(dst, a) }},
+		{"diff2AVX2", func() { diff2AVX2(dst, a) }},
+		{"diff3AVX2", func() { diff3AVX2(dst, a) }},
+		{"diff4AVX2", func() { diff4AVX2(dst, a) }},
+	}
+	for _, c := range checks {
+		if got := testing.AllocsPerRun(100, c.fn); got != 0 {
+			t.Errorf("%s allocated %v times per run, want 0", c.name, got)
+		}
+	}
+}
+
 // TestMidSideEncodeAVX2_NoOverwrite guards both output tails.
 func TestMidSideEncodeAVX2_NoOverwrite(t *testing.T) {
 	if !cpu.X86.AVX2 {
