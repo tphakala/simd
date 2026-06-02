@@ -385,11 +385,11 @@ func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bo
 			continue
 		}
 		for j := range batchDotRows {
-			dst[i+j] = dotProductIndexedTail(base, query, queryFull, rowIDs[i+j], dims, maxRow, usedSIMD)
+			dst[i+j] = dotProductIndexedTail(base, query, queryFull, rowIDs[i+j], dims, maxRow)
 		}
 	}
 	for ; i < n; i++ {
-		dst[i] = dotProductIndexedTail(base, query, queryFull, rowIDs[i], dims, maxRow, usedSIMD)
+		dst[i] = dotProductIndexedTail(base, query, queryFull, rowIDs[i], dims, maxRow)
 	}
 	return usedSIMD
 }
@@ -429,11 +429,11 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 			continue
 		}
 		for j := range batchDotRows {
-			dst[i+j] = dotProductStridedTail(base, query, queryFull, i+j, dims, stride, maxRow, usedSIMD)
+			dst[i+j] = dotProductStridedTail(base, query, queryFull, i+j, dims, stride, maxRow)
 		}
 	}
 	for ; i < n; i++ {
-		dst[i] = dotProductStridedTail(base, query, queryFull, i, dims, stride, maxRow, usedSIMD)
+		dst[i] = dotProductStridedTail(base, query, queryFull, i, dims, stride, maxRow)
 	}
 	return usedSIMD
 }
@@ -500,16 +500,20 @@ func dotProductStridedFallback(dst, base, query []float32, rowCount, dims, strid
 	}
 }
 
-func dotProductIndexedTail(base, query, queryFull []float32, rowID uint32, dims, maxRow int, allowDotProduct bool) float32 {
-	if allowDotProduct && rowIDInFullRange(rowID, maxRow) {
+// dotProductIndexedTail scores one row for the mixed-block and trailing-tail
+// paths. The CPU capability and queryLen >= dims are already verified by the
+// caller, so any in-range row can take the optimized single-row dotProduct;
+// out-of-range rows score zero via the ragged-safe Go path.
+func dotProductIndexedTail(base, query, queryFull []float32, rowID uint32, dims, maxRow int) float32 {
+	if rowIDInFullRange(rowID, maxRow) {
 		off := int(rowID) * dims
 		return dotProduct(base[off:off+dims], queryFull)
 	}
 	return dotProductIndexedOneGo(base, query, rowID, dims)
 }
 
-func dotProductStridedTail(base, query, queryFull []float32, row, dims, stride, maxRow int, allowDotProduct bool) float32 {
-	if allowDotProduct && row >= 0 && row <= maxRow {
+func dotProductStridedTail(base, query, queryFull []float32, row, dims, stride, maxRow int) float32 {
+	if row >= 0 && row <= maxRow {
 		off := row * stride
 		return dotProduct(base[off:off+dims], queryFull)
 	}
