@@ -19,3 +19,65 @@ func deinterleave2Go(a, b, src []int32) {
 		b[i] = src[i*2+1]
 	}
 }
+
+
+func addGo(dst, a, b []int32) {
+	for i := range dst {
+		dst[i] = a[i] + b[i]
+	}
+}
+
+func subGo(dst, a, b []int32) {
+	for i := range dst {
+		dst[i] = a[i] - b[i]
+	}
+}
+
+func midSideEncodeGo(mid, side, left, right []int32) {
+	for i := range mid {
+		mid[i] = (left[i] + right[i]) >> 1
+		side[i] = left[i] - right[i]
+	}
+}
+
+func midSideDecodeGo(left, right, mid, side []int32) {
+	for i := range left {
+		// The encoder's mid = (l+r)>>1 dropped the low bit of l+r. Because l+r
+		// and l-r have the same parity, side&1 restores it.
+		sum := (mid[i] << 1) | (side[i] & 1)
+		left[i] = (sum + side[i]) >> 1
+		right[i] = (sum - side[i]) >> 1
+	}
+}
+
+// The order-K fixed-predictor residual coefficients: the signed binomials
+// (-1)^j * C(K,j) applied to src[n], src[n-1], ..., src[n-K]. The order is the
+// slice length minus one, so diffGo needs no separate order argument.
+var (
+	fixedCoeffs1 = []int32{1, -1}
+	fixedCoeffs2 = []int32{1, -2, 1}
+	fixedCoeffs3 = []int32{1, -3, 3, -1}
+	fixedCoeffs4 = []int32{1, -4, 6, -4, 1}
+)
+
+// diffGo writes the fixed-predictor residual for coefficients c into dst: the
+// first order=len(c)-1 entries are the verbatim warm-up (dst[i]=src[i]) and
+// dst[n] for n>=order is the binomial combination. int32 arithmetic wraps,
+// matching the SIMD kernels.
+func diffGo(dst, src, c []int32) {
+	order := len(c) - 1
+	w := min(order, len(src))
+	copy(dst[:w], src[:w])
+	for n := order; n < len(src); n++ {
+		var acc int32
+		for j, cj := range c {
+			acc += cj * src[n-j]
+		}
+		dst[n] = acc
+	}
+}
+
+func diff1Go(dst, src []int32) { diffGo(dst, src, fixedCoeffs1) }
+func diff2Go(dst, src []int32) { diffGo(dst, src, fixedCoeffs2) }
+func diff3Go(dst, src []int32) { diffGo(dst, src, fixedCoeffs3) }
+func diff4Go(dst, src []int32) { diffGo(dst, src, fixedCoeffs4) }

@@ -36,3 +36,97 @@ func interleave2AVX(dst, a, b []int32)
 
 //go:noescape
 func deinterleave2AVX(a, b, src []int32)
+
+// The arithmetic / decorrelation / fixed-predictor kernels operate on 256-bit
+// integer lanes (VPADDD/VPSUBD/VPSRAD/...), which require AVX2 rather than the
+// AVX1 that suffices for the float-shuffle interleave kernels above. They gate
+// on AVX2 explicitly and fall back to the pure-Go reference otherwise.
+var hasAVX2 = cpu.X86.AVX2
+
+func addI32(dst, a, b []int32) {
+	if hasAVX2 && len(dst) >= minAVXElements {
+		addAVX2(dst, a, b)
+		return
+	}
+	addGo(dst, a, b)
+}
+
+func subI32(dst, a, b []int32) {
+	if hasAVX2 && len(dst) >= minAVXElements {
+		subAVX2(dst, a, b)
+		return
+	}
+	subGo(dst, a, b)
+}
+
+func midSideEncodeI32(mid, side, left, right []int32) {
+	if hasAVX2 && len(mid) >= minAVXElements {
+		midSideEncodeAVX2(mid, side, left, right)
+		return
+	}
+	midSideEncodeGo(mid, side, left, right)
+}
+
+func midSideDecodeI32(left, right, mid, side []int32) {
+	if hasAVX2 && len(left) >= minAVXElements {
+		midSideDecodeAVX2(left, right, mid, side)
+		return
+	}
+	midSideDecodeGo(left, right, mid, side)
+}
+
+func diff1I32(dst, src []int32) {
+	if hasAVX2 && len(dst) >= minAVXElements {
+		diff1AVX2(dst, src)
+		return
+	}
+	diff1Go(dst, src)
+}
+
+func diff2I32(dst, src []int32) {
+	if hasAVX2 && len(dst) >= minAVXElements {
+		diff2AVX2(dst, src)
+		return
+	}
+	diff2Go(dst, src)
+}
+
+func diff3I32(dst, src []int32) {
+	if hasAVX2 && len(dst) >= minAVXElements {
+		diff3AVX2(dst, src)
+		return
+	}
+	diff3Go(dst, src)
+}
+
+func diff4I32(dst, src []int32) {
+	if hasAVX2 && len(dst) >= minAVXElements {
+		diff4AVX2(dst, src)
+		return
+	}
+	diff4Go(dst, src)
+}
+
+//go:noescape
+func addAVX2(dst, a, b []int32)
+
+//go:noescape
+func subAVX2(dst, a, b []int32)
+
+//go:noescape
+func midSideEncodeAVX2(mid, side, left, right []int32)
+
+//go:noescape
+func midSideDecodeAVX2(left, right, mid, side []int32)
+
+//go:noescape
+func diff1AVX2(dst, src []int32)
+
+//go:noescape
+func diff2AVX2(dst, src []int32)
+
+//go:noescape
+func diff3AVX2(dst, src []int32)
+
+//go:noescape
+func diff4AVX2(dst, src []int32)
