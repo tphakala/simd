@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -200,5 +201,76 @@ func TestNoUncheckedAmd64Encodings(t *testing.T) {
 	if len(hits) > 0 {
 		t.Logf("WARNING: %d hand-encoded amd64 directive(s) are not decoder-checked:\n  %s",
 			len(hits), strings.Join(hits, "\n  "))
+	}
+}
+
+// TestNoGoroutineRegisterClobber fails if any hand-written assembly uses the
+// register that holds the current goroutine pointer g as an instruction
+// operand. Clobbering g is the single biggest footgun in hand-written Go
+// assembly (see CLAUDE.md): a latent, GC-time crash the moment the function
+// gains a CALL into the runtime or a stack map. This is the regression guard
+// for the hazard fixed in #57 (ConvolveDecimate) and #58 (realFFTUnpackAVX):
+// scratch math must live in a non-reserved register (e.g. BX on amd64).
+//
+// Only operands are flagged; comments that name the register for documentation
+// (the "BX (not R14) ..." convention notes) are ignored, so those reminders
+// stay legal. R15 on amd64 is intentionally not flagged: it is sanctioned
+// static scratch in this repo (see CLAUDE.md), unlike g.
+func TestNoGoroutineRegisterClobber(t *testing.T) {
+	// g lives in R14 on amd64 and R28 on arm64 (W28 is the 32-bit view; a
+	// write to it zero-extends over g all the same).
+	gReg := []struct {
+		suffix string
+		name   string
+		re     *regexp.Regexp
+	}{
+		{"_amd64.s", "R14", regexp.MustCompile(`\bR14\b`)},
+		{"_arm64.s", "R28/W28", regexp.MustCompile(`\b[RW]28\b`)},
+	}
+
+	var violations []string
+	err := filepath.WalkDir(".", func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".s") {
+			return nil
+		}
+		var name string
+		var re *regexp.Regexp
+		for _, g := range gReg {
+			if strings.HasSuffix(p, g.suffix) {
+				name, re = g.name, g.re
+				break
+			}
+		}
+		if re == nil {
+			return nil
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			code := line
+			// Drop the line comment; documentation references to the register
+			// are fine, only operands are a hazard.
+			if j := strings.Index(code, "//"); j >= 0 {
+				code = code[:j]
+			}
+			if re.MatchString(code) {
+				violations = append(violations, filepath.ToSlash(p)+":"+strconv.Itoa(i+1)+
+					"  uses "+name+" (goroutine g):  "+strings.TrimSpace(line))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(violations) > 0 {
+		t.Errorf("goroutine-pointer register used as an operand in %d location(s); move scratch "+
+			"to a non-reserved register (BX on amd64) and keep g untouched, see CLAUDE.md:\n  %s",
+			len(violations), strings.Join(violations, "\n  "))
 	}
 }
