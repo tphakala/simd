@@ -268,7 +268,7 @@ mul16_done:
 
 // func scaleNEON(dst, a []Float16, s Float16)
 // Length must be multiple of 8.
-TEXT ·scaleNEON(SB), NOSPLIT, $0-52
+TEXT ·scaleNEON(SB), NOSPLIT, $0-50
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
     MOVD a_base+24(FP), R1
@@ -545,7 +545,7 @@ div16_done:
 
 // func addScalarNEON(dst, a []Float16, s Float16)
 // Add scalar to each element. Length must be multiple of 8.
-TEXT ·addScalarNEON(SB), NOSPLIT, $0-52
+TEXT ·addScalarNEON(SB), NOSPLIT, $0-50
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
     MOVD a_base+24(FP), R1
@@ -576,7 +576,7 @@ addscalar16_done:
 
 // func clampNEON(dst, a []Float16, minVal, maxVal Float16)
 // Clamp each element to [minVal, maxVal]. Length must be multiple of 8.
-TEXT ·clampNEON(SB), NOSPLIT, $0-56
+TEXT ·clampNEON(SB), NOSPLIT, $0-52
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
     MOVD a_base+24(FP), R1

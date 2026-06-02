@@ -201,8 +201,8 @@ TEXT ·scaleNEON(SB), NOSPLIT, $0-64
     MOVD a_base+24(FP), R2
 
     // Load and broadcast scalar s to vectors
-    FMOVD s+48(FP), F20          // F20 = sr
-    FMOVD s+56(FP), F21          // F21 = si
+    FMOVD s_real+48(FP), F20     // F20 = sr
+    FMOVD s_imag+56(FP), F21     // F21 = si
 
     // Broadcast to vectors for SIMD ops
     VDUP V20.D[0], V20.D2        // V20 = [sr, sr]
@@ -372,7 +372,7 @@ sub_neon_done:
 // ============================================================================
 
 // func absNEON(dst []float64, a []complex128)
-TEXT ·absNEON(SB), NOSPLIT, $0-56
+TEXT ·absNEON(SB), NOSPLIT, $0-48
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R1
     MOVD a_base+24(FP), R2
@@ -441,7 +441,7 @@ abs_neon_done:
 // ============================================================================
 
 // func absSqNEON(dst []float64, a []complex128)
-TEXT ·absSqNEON(SB), NOSPLIT, $0-56
+TEXT ·absSqNEON(SB), NOSPLIT, $0-48
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R1
     MOVD a_base+24(FP), R2
@@ -501,7 +501,7 @@ abssq_neon_done:
 // ============================================================================
 
 // func conjNEON(dst, a []complex128)
-TEXT ·conjNEON(SB), NOSPLIT, $0-72
+TEXT ·conjNEON(SB), NOSPLIT, $0-48
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R1
     MOVD a_base+24(FP), R2
