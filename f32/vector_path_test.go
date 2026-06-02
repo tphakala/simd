@@ -307,7 +307,7 @@ func TestVectorPathInterleave2_32(t *testing.T) {
 		want := make([]float32, 2*n)
 		Interleave2(got, a, b)
 		interleave2Go(want, a, b)
-		vpCheck32(t, "Interleave2", n, got, want, vpClose32)
+		vpCheck32(t, "Interleave2", 2*n, got, want, vpClose32)
 
 		src := vpSeq32(2*n, 22)
 		gotA := make([]float32, n)
