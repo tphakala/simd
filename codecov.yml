@@ -1,0 +1,24 @@
+# codecov configuration
+#
+# This is a hand-written SIMD library: every primitive dispatches through
+# CPU-feature-gated branches (AVX-512 vs AVX vs scalar). On any single CI runner
+# only the branch matching that runner's CPU executes, so the other ISA arms are
+# permanently uncovered, and the hand-written .s kernels are not measured by Go
+# coverage at all. Patch coverage therefore cannot reach 100% for ISA-gated
+# dispatch on one CPU. Keep coverage visible and useful for the Go reference,
+# fallback, and validation code, but never let it block a PR: mark project and
+# patch status informational.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+ignore:
+  - "**/*_test.go"
+
+comment:
+  layout: "reach, diff, files"
