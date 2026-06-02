@@ -7,7 +7,7 @@
 // ZIP1/ZIP2/UZP1/UZP2 on .8H operands and the VLD1/VST1 .H8 loads/stores all
 // move 16-bit lanes by bit pattern, so these kernels mirror the int32 .4S
 // kernels in ../i32/i32_arm64.s with the lane width halved (8 lanes per 128-bit
-// register instead of 4); only the scalar tails differ (16-bit MOVW). The
+// register instead of 4); only the scalar tails differ (16-bit MOVH). The
 // ZIP/UZP instructions are hand-encoded as WORD because the Go assembler lacks
 // mnemonics for them; the trailing comment is the decoded form and is
 // cross-checked by asmcheck_test.go.
