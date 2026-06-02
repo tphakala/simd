@@ -23,6 +23,12 @@ package i32
 // less parallel. Both have SIMD kernels where they pay off, with a pure-Go
 // fallback that is the bit-exact source of truth.
 
+// maxLPCShift is the largest shift the kernels handle. A 64-bit accumulator
+// shifted by 63 already saturates to 0 or -1, and the SIMD kernels' emulated
+// arithmetic shift (and x86's shift-count masking) are only correct for counts
+// in [0, 63], so the public functions clamp shift to this value.
+const maxLPCShift = 63
+
 // maxLPCRestoreOrder caps the predictor order the SIMD decode kernels accept. It
 // matches FLAC's maximum LPC order (32) and sizes the stack array the dispatch
 // reverses the coefficients into, so the reversal stays allocation-free. Orders
@@ -37,6 +43,11 @@ const maxLPCRestoreOrder = 32
 // where order = len(coeffs). It processes n = min(len(res), len(samples)) and
 // leaves any trailing capacity in res untouched. An empty coeffs (order 0) or
 // fewer than order+1 samples yields all warm-up (res is samples verbatim).
+//
+// shift is the quantization right-shift (FLAC uses 0..31). It is clamped to 63
+// so the result stays consistent across the Go and SIMD paths: a shift of 63 or
+// more of a 64-bit accumulator already yields 0 or -1, and the SIMD kernels'
+// emulated shift is only valid for counts in [0, 63].
 func LPCResidualEncode(res, samples, coeffs []int32, shift uint) {
 	n := min(len(res), len(samples))
 	if n == 0 {
@@ -45,6 +56,9 @@ func LPCResidualEncode(res, samples, coeffs []int32, shift uint) {
 	if order := len(coeffs); order == 0 || order >= n {
 		copy(res[:n], samples[:n])
 		return
+	}
+	if shift > maxLPCShift {
+		shift = maxLPCShift
 	}
 	lpcResidualEncodeI32(res[:n], samples[:n], coeffs, shift)
 }
@@ -57,7 +71,8 @@ func LPCResidualEncode(res, samples, coeffs []int32, shift uint) {
 //
 // where order = len(coeffs). It processes n = min(len(out), len(residual)) and
 // leaves any trailing capacity in out untouched. Given the same coeffs and shift,
-// LPCRestore(LPCResidualEncode(samples)) == samples.
+// LPCRestore(LPCResidualEncode(samples)) == samples. shift is clamped to 63, as
+// in LPCResidualEncode, so encode and decode stay matched across all paths.
 func LPCRestore(out, residual, coeffs []int32, shift uint) {
 	n := min(len(out), len(residual))
 	if n == 0 {
@@ -66,6 +81,9 @@ func LPCRestore(out, residual, coeffs []int32, shift uint) {
 	if order := len(coeffs); order == 0 || order >= n {
 		copy(out[:n], residual[:n])
 		return
+	}
+	if shift > maxLPCShift {
+		shift = maxLPCShift
 	}
 	lpcRestoreI32(out[:n], residual[:n], coeffs, shift)
 }

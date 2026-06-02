@@ -292,6 +292,36 @@ func TestLPC_ZeroOrder(t *testing.T) {
 	}
 }
 
+// TestLPC_ShiftClamp checks that an out-of-range shift (>= 64) is clamped to 63
+// at the public boundary, so the Go and SIMD paths stay consistent (FLAC never
+// uses such shifts; this guards a caller passing a bad value). It also confirms
+// the round-trip still holds and that shift 64..67 all behave like 63.
+func TestLPC_ShiftClamp(t *testing.T) {
+	const n = 200
+	samples := make([]int32, n)
+	fillLPCSamples(samples)
+	coeffs := []int32{6000, -4000, 3000, -2000, 1500, -1000, 700, -300}
+
+	ref := make([]int32, n)
+	LPCResidualEncode(ref, samples, coeffs, 63)
+	for _, shift := range []uint{64, 65, 100, 1 << 20} {
+		got := make([]int32, n)
+		LPCResidualEncode(got, samples, coeffs, shift)
+		for i := range got {
+			if got[i] != ref[i] {
+				t.Fatalf("shift=%d not clamped to 63: res[%d] = %d, want %d", shift, i, got[i], ref[i])
+			}
+		}
+		out := make([]int32, n)
+		LPCRestore(out, got, coeffs, shift)
+		for i := range samples {
+			if out[i] != samples[i] {
+				t.Fatalf("shift=%d round-trip[%d] = %d, want %d", shift, i, out[i], samples[i])
+			}
+		}
+	}
+}
+
 func TestLPC_Empty(t *testing.T) {
 	coeffs := []int32{1, -1}
 	LPCResidualEncode(nil, nil, coeffs, 0)
