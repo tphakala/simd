@@ -156,6 +156,10 @@ streams do not map onto a clean register transpose) on top of the shared N=2/4 (
 and N=2/3/4 (NEON) kernels; all other stream counts use the allocation-free generic
 path. The N=3 case is the 16k -> 48k upsample hot path: the AVX2 gather/blend kernel
 runs roughly 2.8x (interleave) and 3.2x (deinterleave) over the generic loop on AVX2.
+`f64` mirrors the same N=3 and N=8 AVX coverage, processing 4 frames per block (a YMM
+holds 4 doubles): N=3 uses immediate `VPERMPD` gathers merged with `VBLENDPD`, and N=8
+runs two stacked 4x4 transposes (streams 0-3 fill each frame's low YMM, streams 4-7 the
+high YMM).
 
 **Row-major batch dot products** (for flat vector stores):
 

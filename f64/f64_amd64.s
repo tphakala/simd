@@ -3384,6 +3384,255 @@ deinterleave4_avx_done:
     VZEROUPPER
     RET
 
+// func interleave3AVX(dst, s0, s1, s2 []float64, n int)
+// Interleaves 3 planar streams (dst[i*3+c] = s_c[i]) into 12 contiguous doubles
+// per 4 frames via per-stream VPERMPD gathers + VBLENDPD merges (3 streams do
+// not map onto a clean register transpose like N=4 does). n is a multiple of 4
+// (the caller handles the tail). Requires AVX2.
+//
+// Per 4-frame block, with a=s0/b=s1/c=s2, the 3 output rows (4 doubles each) are
+//   O0 = [a0,b0,c0,a1]  O1 = [b1,c1,a2,b2]  O2 = [c2,a3,b3,c3].
+// VPERMPD imm bits [2k+1:2k] pick output lane k's source lane; VBLENDPD imm
+// bit k selects the first source operand for lane k (the gathered value).
+TEXT ·interleave3AVX(SB), NOSPLIT, $0-104
+    MOVQ dst_base+0(FP), DI
+    MOVQ s0_base+24(FP), AX
+    MOVQ s1_base+48(FP), BX
+    MOVQ s2_base+72(FP), CX
+    MOVQ n+96(FP), SI
+    SHRQ $2, SI                // SI = n/4 blocks
+    TESTQ SI, SI
+    JZ interleave3_avx_done
+
+interleave3_avx_loop:
+    VMOVUPD (AX), Y0           // A = s0[i:i+4]
+    VMOVUPD (BX), Y1           // B = s1[i:i+4]
+    VMOVUPD (CX), Y2           // C = s2[i:i+4]
+    VPERMPD $0x40, Y0, Y3      // O0 base: [a0,a0,a0,a1]
+    VPERMPD $0x00, Y1, Y4      // [b0,b0,b0,b0]
+    VPERMPD $0x00, Y2, Y5      // [c0,c0,c0,c0]
+    VBLENDPD $0x2, Y4, Y3, Y3  // lane1 <- b0
+    VBLENDPD $0x4, Y5, Y3, Y3  // lane2 <- c0
+    VMOVUPD Y3, (DI)           // O0 = [a0,b0,c0,a1]
+    VPERMPD $0x81, Y1, Y4      // O1 base: [b1,b0,b0,b2]
+    VPERMPD $0x04, Y2, Y5      // [c0,c1,c0,c0]
+    VPERMPD $0x20, Y0, Y3      // [a0,a0,a2,a0]
+    VBLENDPD $0x2, Y5, Y4, Y4  // lane1 <- c1
+    VBLENDPD $0x4, Y3, Y4, Y4  // lane2 <- a2
+    VMOVUPD Y4, 32(DI)         // O1 = [b1,c1,a2,b2]
+    VPERMPD $0xC2, Y2, Y5      // O2 base: [c2,c0,c0,c3]
+    VPERMPD $0x0C, Y0, Y3      // [a0,a3,a0,a0]
+    VPERMPD $0x30, Y1, Y4      // [b0,b0,b3,b0]
+    VBLENDPD $0x2, Y3, Y5, Y5  // lane1 <- a3
+    VBLENDPD $0x4, Y4, Y5, Y5  // lane2 <- b3
+    VMOVUPD Y5, 64(DI)         // O2 = [c2,a3,b3,c3]
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $96, DI
+    DECQ SI
+    JNZ interleave3_avx_loop
+
+interleave3_avx_done:
+    VZEROUPPER
+    RET
+
+// func deinterleave3AVX(d0, d1, d2, src []float64, n int)
+// Splits a 3-stream interleaved buffer (d_c[i] = src[i*3+c]) into planar streams,
+// 4 frames per iteration, via per-stream VPERMPD gathers + VBLENDPD merges. n is
+// a multiple of 4 (the caller handles the tail). Requires AVX2.
+//
+// Per block the 3 input rows are S0=[a0,b0,c0,a1] S1=[b1,c1,a2,b2] S2=[c2,a3,b3,c3]
+// and the planar outputs are A=[a0,a1,a2,a3] B=[b0,b1,b2,b3] C=[c0,c1,c2,c3].
+TEXT ·deinterleave3AVX(SB), NOSPLIT, $0-104
+    MOVQ d0_base+0(FP), AX
+    MOVQ d1_base+24(FP), BX
+    MOVQ d2_base+48(FP), CX
+    MOVQ src_base+72(FP), SI
+    MOVQ n+96(FP), DI
+    SHRQ $2, DI                // DI = n/4 blocks
+    TESTQ DI, DI
+    JZ deinterleave3_avx_done
+
+deinterleave3_avx_loop:
+    VMOVUPD (SI), Y0           // S0 = src[0:4]
+    VMOVUPD 32(SI), Y1         // S1 = src[4:8]
+    VMOVUPD 64(SI), Y2         // S2 = src[8:12]
+    VPERMPD $0x0C, Y0, Y3      // A base: [a0,a1,a0,a0]
+    VPERMPD $0x20, Y1, Y4      // [.,.,a2,.]
+    VPERMPD $0x40, Y2, Y5      // [.,.,.,a3]
+    VBLENDPD $0x4, Y4, Y3, Y3  // lane2 <- a2
+    VBLENDPD $0x8, Y5, Y3, Y3  // lane3 <- a3
+    VMOVUPD Y3, (AX)           // A = [a0,a1,a2,a3]
+    VPERMPD $0x01, Y0, Y3      // B base: [b0,a0,a0,a0]
+    VPERMPD $0x30, Y1, Y4      // [b1,b1,b2,.]
+    VPERMPD $0x80, Y2, Y5      // [.,.,.,b3]
+    VBLENDPD $0x6, Y4, Y3, Y3  // lanes1,2 <- b1,b2
+    VBLENDPD $0x8, Y5, Y3, Y3  // lane3 <- b3
+    VMOVUPD Y3, (BX)           // B = [b0,b1,b2,b3]
+    VPERMPD $0x02, Y0, Y3      // C base: [c0,.,.,.]
+    VPERMPD $0x04, Y1, Y4      // [.,c1,.,.]
+    VPERMPD $0xC0, Y2, Y5      // [c2,.,c2,c3]
+    VBLENDPD $0x2, Y4, Y3, Y3  // lane1 <- c1
+    VBLENDPD $0xC, Y5, Y3, Y3  // lanes2,3 <- c2,c3
+    VMOVUPD Y3, (CX)           // C = [c0,c1,c2,c3]
+    ADDQ $96, SI
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    DECQ DI
+    JNZ deinterleave3_avx_loop
+
+deinterleave3_avx_done:
+    VZEROUPPER
+    RET
+
+// func interleave8AVX(dst []float64, srcs [][]float64, n int)
+// Interleaves 8 planar streams (dst[i*8+c] = srcs[c][i]) into 32 doubles per 4
+// frames. A YMM holds 4 doubles, so each output frame spans two YMM rows; the
+// kernel runs two independent 4x4 transposes (interleave4AVX's algorithm):
+// streams 0-3 produce each frame's low YMM, streams 4-7 the high YMM. n is a
+// multiple of 4 (the caller handles the tail). srcs must have exactly 8 elements.
+TEXT ·interleave8AVX(SB), NOSPLIT, $0-56
+    MOVQ srcs_base+24(FP), R12   // R12 = &srcs[0] (array of slice headers)
+    MOVQ 0(R12), AX              // srcs[0].ptr
+    MOVQ 24(R12), BX             // srcs[1].ptr
+    MOVQ 48(R12), CX             // srcs[2].ptr
+    MOVQ 72(R12), DX             // srcs[3].ptr
+    MOVQ 96(R12), R8             // srcs[4].ptr
+    MOVQ 120(R12), R9            // srcs[5].ptr
+    MOVQ 144(R12), R10           // srcs[6].ptr
+    MOVQ 168(R12), R11           // srcs[7].ptr
+    MOVQ dst_base+0(FP), DI
+    MOVQ n+48(FP), SI
+    SHRQ $2, SI                  // SI = n/4 blocks
+    TESTQ SI, SI
+    JZ interleave8_avx_done
+
+interleave8_avx_loop:
+    // streams 0-3 -> low YMM of frames 0..3
+    VMOVUPD (AX), Y0             // s0[i:i+4]
+    VMOVUPD (BX), Y1             // s1
+    VMOVUPD (CX), Y2             // s2
+    VMOVUPD (DX), Y3             // s3
+    VUNPCKLPD Y1, Y0, Y4         // [s0.0,s1.0,s0.2,s1.2]
+    VUNPCKHPD Y1, Y0, Y5         // [s0.1,s1.1,s0.3,s1.3]
+    VUNPCKLPD Y3, Y2, Y6         // [s2.0,s3.0,s2.2,s3.2]
+    VUNPCKHPD Y3, Y2, Y7         // [s2.1,s3.1,s2.3,s3.3]
+    VPERM2F128 $0x20, Y6, Y4, Y8    // f0 lo = [s0.0,s1.0,s2.0,s3.0]
+    VPERM2F128 $0x20, Y7, Y5, Y9    // f1 lo
+    VPERM2F128 $0x31, Y6, Y4, Y10   // f2 lo
+    VPERM2F128 $0x31, Y7, Y5, Y11   // f3 lo
+    VMOVUPD Y8, (DI)             // dst[0:4]
+    VMOVUPD Y9, 64(DI)           // dst[8:12]
+    VMOVUPD Y10, 128(DI)         // dst[16:20]
+    VMOVUPD Y11, 192(DI)         // dst[24:28]
+    // streams 4-7 -> high YMM of frames 0..3
+    VMOVUPD (R8), Y0             // s4
+    VMOVUPD (R9), Y1             // s5
+    VMOVUPD (R10), Y2            // s6
+    VMOVUPD (R11), Y3            // s7
+    VUNPCKLPD Y1, Y0, Y4
+    VUNPCKHPD Y1, Y0, Y5
+    VUNPCKLPD Y3, Y2, Y6
+    VUNPCKHPD Y3, Y2, Y7
+    VPERM2F128 $0x20, Y6, Y4, Y8    // f0 hi = [s4.0,s5.0,s6.0,s7.0]
+    VPERM2F128 $0x20, Y7, Y5, Y9    // f1 hi
+    VPERM2F128 $0x31, Y6, Y4, Y10   // f2 hi
+    VPERM2F128 $0x31, Y7, Y5, Y11   // f3 hi
+    VMOVUPD Y8, 32(DI)           // dst[4:8]
+    VMOVUPD Y9, 96(DI)           // dst[12:16]
+    VMOVUPD Y10, 160(DI)         // dst[20:24]
+    VMOVUPD Y11, 224(DI)         // dst[28:32]
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $32, DX
+    ADDQ $32, R8
+    ADDQ $32, R9
+    ADDQ $32, R10
+    ADDQ $32, R11
+    ADDQ $256, DI
+    DECQ SI
+    JNZ interleave8_avx_loop
+
+interleave8_avx_done:
+    VZEROUPPER
+    RET
+
+// func deinterleave8AVX(dsts [][]float64, src []float64, n int)
+// Splits an interleaved 8-stream buffer (dsts[c][i] = src[i*8+c]) into planar
+// streams, 4 frames per iteration. Each frame spans two YMM rows; the low rows
+// (src[f*8:f*8+4]) transpose into streams 0-3 and the high rows
+// (src[f*8+4:f*8+8]) into streams 4-7. n is a multiple of 4 (the caller handles
+// the tail). dsts must have exactly 8 elements.
+TEXT ·deinterleave8AVX(SB), NOSPLIT, $0-56
+    MOVQ dsts_base+0(FP), R12    // R12 = &dsts[0] (array of slice headers)
+    MOVQ 0(R12), AX              // dsts[0].ptr
+    MOVQ 24(R12), BX             // dsts[1].ptr
+    MOVQ 48(R12), CX             // dsts[2].ptr
+    MOVQ 72(R12), DX             // dsts[3].ptr
+    MOVQ 96(R12), R8             // dsts[4].ptr
+    MOVQ 120(R12), R9            // dsts[5].ptr
+    MOVQ 144(R12), R10           // dsts[6].ptr
+    MOVQ 168(R12), R11           // dsts[7].ptr
+    MOVQ src_base+24(FP), SI
+    MOVQ n+48(FP), DI
+    SHRQ $2, DI                  // DI = n/4 blocks
+    TESTQ DI, DI
+    JZ deinterleave8_avx_done
+
+deinterleave8_avx_loop:
+    // low rows of frames 0..3 -> streams 0-3
+    VMOVUPD (SI), Y0             // f0 lo = [s0.0,s1.0,s2.0,s3.0]
+    VMOVUPD 64(SI), Y1           // f1 lo
+    VMOVUPD 128(SI), Y2          // f2 lo
+    VMOVUPD 192(SI), Y3          // f3 lo
+    VUNPCKLPD Y1, Y0, Y4
+    VUNPCKHPD Y1, Y0, Y5
+    VUNPCKLPD Y3, Y2, Y6
+    VUNPCKHPD Y3, Y2, Y7
+    VPERM2F128 $0x20, Y6, Y4, Y8    // s0 = [s0.0,s0.1,s0.2,s0.3]
+    VPERM2F128 $0x20, Y7, Y5, Y9    // s1
+    VPERM2F128 $0x31, Y6, Y4, Y10   // s2
+    VPERM2F128 $0x31, Y7, Y5, Y11   // s3
+    VMOVUPD Y8, (AX)
+    VMOVUPD Y9, (BX)
+    VMOVUPD Y10, (CX)
+    VMOVUPD Y11, (DX)
+    // high rows of frames 0..3 -> streams 4-7
+    VMOVUPD 32(SI), Y0           // f0 hi = [s4.0,s5.0,s6.0,s7.0]
+    VMOVUPD 96(SI), Y1           // f1 hi
+    VMOVUPD 160(SI), Y2          // f2 hi
+    VMOVUPD 224(SI), Y3          // f3 hi
+    VUNPCKLPD Y1, Y0, Y4
+    VUNPCKHPD Y1, Y0, Y5
+    VUNPCKLPD Y3, Y2, Y6
+    VUNPCKHPD Y3, Y2, Y7
+    VPERM2F128 $0x20, Y6, Y4, Y8    // s4
+    VPERM2F128 $0x20, Y7, Y5, Y9    // s5
+    VPERM2F128 $0x31, Y6, Y4, Y10   // s6
+    VPERM2F128 $0x31, Y7, Y5, Y11   // s7
+    VMOVUPD Y8, (R8)
+    VMOVUPD Y9, (R9)
+    VMOVUPD Y10, (R10)
+    VMOVUPD Y11, (R11)
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $32, DX
+    ADDQ $32, R8
+    ADDQ $32, R9
+    ADDQ $32, R10
+    ADDQ $32, R11
+    ADDQ $256, SI
+    DECQ DI
+    JNZ deinterleave8_avx_loop
+
+deinterleave8_avx_done:
+    VZEROUPPER
+    RET
+
 // ============================================================================
 // ADDSCALED - dst[i] += alpha * s[i] (AXPY operation)
 // ============================================================================
