@@ -198,6 +198,99 @@ func dotProductBatch32Go(results []float32, rows [][]float32, vec []float32) {
 	}
 }
 
+func dotProductIndexedGo(dst, base, query []float32, rowIDs []uint32, dims int) {
+	n := min(len(dst), len(rowIDs))
+	if n == 0 {
+		return
+	}
+	if dims <= 0 || len(query) == 0 {
+		clear(dst[:n])
+		return
+	}
+	for i := range n {
+		dst[i] = dotProductIndexedOneGo(base, query, rowIDs[i], dims)
+	}
+}
+
+func dotProductIndexedOneGo(base, query []float32, rowID uint32, dims int) float32 {
+	if dims <= 0 || len(query) == 0 {
+		return 0
+	}
+	offset, ok := rowOffsetUint32InBase(rowID, dims, len(base))
+	if !ok {
+		return 0
+	}
+	n := min(dims, len(query))
+	if remaining := len(base) - offset; remaining < n {
+		n = remaining
+	}
+	if n <= 0 {
+		return 0
+	}
+	return dotProduct(base[offset:offset+n], query[:n])
+}
+
+func dotProductStridedGo(dst, base, query []float32, rowCount, dims, stride int) {
+	if rowCount <= 0 || len(dst) == 0 {
+		return
+	}
+	n := min(len(dst), rowCount)
+	if dims <= 0 || stride <= 0 || len(query) == 0 {
+		clear(dst[:n])
+		return
+	}
+	for i := range n {
+		dst[i] = dotProductStridedOneGo(base, query, i, dims, stride)
+	}
+}
+
+func dotProductStridedOneGo(base, query []float32, row, dims, stride int) float32 {
+	if row < 0 || dims <= 0 || stride <= 0 || len(query) == 0 {
+		return 0
+	}
+	offset, ok := rowOffsetStrideInBase(row, stride, len(base))
+	if !ok {
+		return 0
+	}
+	n := min(dims, len(query))
+	if remaining := len(base) - offset; remaining < n {
+		n = remaining
+	}
+	if n <= 0 {
+		return 0
+	}
+	return dotProduct(base[offset:offset+n], query[:n])
+}
+
+func rowOffsetUint32InBase(rowID uint32, stride, baseLen int) (int, bool) {
+	if stride <= 0 || baseLen <= 0 {
+		return 0, false
+	}
+	offset, ok := mulUint64(uint64(rowID), uint64(stride))
+	if !ok || offset >= uint64(baseLen) {
+		return 0, false
+	}
+	return int(offset), true
+}
+
+func rowOffsetStrideInBase(row, stride, baseLen int) (int, bool) {
+	if row < 0 || stride <= 0 || baseLen <= 0 {
+		return 0, false
+	}
+	offset, ok := mulUint64(uint64(row), uint64(stride))
+	if !ok || offset >= uint64(baseLen) {
+		return 0, false
+	}
+	return int(offset), true
+}
+
+func mulUint64(a, b uint64) (uint64, bool) {
+	if a != 0 && b > ^uint64(0)/a {
+		return 0, false
+	}
+	return a * b, true
+}
+
 func convolveValid32Go(dst, signal, kernel []float32) {
 	kLen := len(kernel)
 	for i := range dst {

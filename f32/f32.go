@@ -178,6 +178,42 @@ func DotProductBatch(results []float32, rows [][]float32, vec []float32) {
 	dotProductBatch32(results[:n], rows[:n], vec)
 }
 
+// DotProductIndexed computes dot products between query and selected rows in a
+// flat row-major base slice. For each processed row i:
+//
+//	dst[i] = dot(base[rowIDs[i]*dims : rowIDs[i]*dims+dims], query[:dims])
+//
+// The number of processed rows is min(len(dst), len(rowIDs)). Ragged inputs are
+// safe: if query is shorter than dims or a row extends past base, the dot uses
+// the available common prefix; out-of-range row IDs, non-positive dims, or an
+// empty query produce a zero score for that row. The function returns true when
+// at least one optimized platform SIMD batch kernel was used; false means the
+// per-row fallback handled the call.
+func DotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bool {
+	n := min(len(dst), len(rowIDs))
+	if n == 0 {
+		return false
+	}
+	return dotProductIndexed(dst[:n], base, query, rowIDs[:n], dims)
+}
+
+// DotProductStrided computes dot products between query and rowCount rows in a
+// flat base slice where row i starts at base[i*stride]. dims and stride are in
+// float32 elements, not bytes; use stride >= dims for non-overlapping rows.
+// The number of processed rows is
+// min(len(dst), rowCount). Ragged inputs are safe: if query is shorter than dims
+// or a row extends past base, the dot uses the available common prefix;
+// non-positive rowCount/dims/stride or an empty query produce zero scores for
+// processed rows. The function returns true when at least one optimized platform
+// SIMD batch kernel was used; false means the per-row fallback handled the call.
+func DotProductStrided(dst, base, query []float32, rowCount, dims, stride int) bool {
+	if rowCount <= 0 || len(dst) == 0 {
+		return false
+	}
+	n := min(len(dst), rowCount)
+	return dotProductStrided(dst[:n], base, query, n, dims, stride)
+}
+
 // ConvolveValid computes valid convolution of signal with kernel.
 // dst[i] = sum(signal[i+j] * kernel[j]) for j in 0..len(kernel)-1.
 // Output length is len(signal) - len(kernel) + 1.

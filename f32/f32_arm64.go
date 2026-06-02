@@ -128,6 +128,16 @@ func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	}
 }
 
+func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bool {
+	dotProductIndexedGo(dst, base, query, rowIDs, dims)
+	return false
+}
+
+func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) bool {
+	dotProductStridedGo(dst, base, query, rowCount, dims, stride)
+	return false
+}
+
 func convolveValid32(dst, signal, kernel []float32) {
 	kLen := len(kernel)
 	for i := range dst {
