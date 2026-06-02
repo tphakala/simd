@@ -159,11 +159,11 @@ runs roughly 2.8x (interleave) and 3.2x (deinterleave) over the generic loop on 
 The 6-stream AVX2 path (the 8k -> 48k upsample) zips stream pairs into three
 double-wide pair streams, then reuses the f64 N=3 interleave on those pairs, so it
 needs no index tables; it runs roughly 2x (interleave and deinterleave) on AVX2.
-`f64` mirrors the same N=3, N=6, and N=8 AVX coverage, processing 4 frames per block (a
-YMM holds 4 doubles): N=3 uses immediate `VPERMPD` gathers merged with `VBLENDPD`, N=6
-zips pairs at 128-bit-lane granularity with `VPERM2F128` (roughly 4x interleave, 1.5x
-deinterleave), and N=8 runs two stacked 4x4 transposes (streams 0-3 fill each frame's
-low YMM, streams 4-7 the high YMM).
+`f64` adds N=3 and N=6 (AVX2) plus N=8 (AVX), processing 4 frames per block (a YMM holds
+4 doubles): N=3 uses immediate `VPERMPD` gathers merged with `VBLENDPD`, N=6 zips pairs
+at 128-bit-lane granularity with `VPERM2F128` (roughly 4x interleave, 1.5x deinterleave),
+and N=8 runs two stacked 4x4 transposes (streams 0-3 fill each frame's low YMM, streams
+4-7 the high YMM).
 
 **Row-major batch dot products** (for flat vector stores):
 
