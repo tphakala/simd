@@ -20,7 +20,6 @@ func deinterleave2Go(a, b, src []int32) {
 	}
 }
 
-
 func addGo(dst, a, b []int32) {
 	for i := range dst {
 		dst[i] = a[i] + b[i]
@@ -81,3 +80,14 @@ func diff1Go(dst, src []int32) { diffGo(dst, src, fixedCoeffs1) }
 func diff2Go(dst, src []int32) { diffGo(dst, src, fixedCoeffs2) }
 func diff3Go(dst, src []int32) { diffGo(dst, src, fixedCoeffs3) }
 func diff4Go(dst, src []int32) { diffGo(dst, src, fixedCoeffs4) }
+
+// cumsumGo is the in-place inclusive prefix sum (cumulative sum): a[i] becomes
+// a[0]+...+a[i], with a[0] left unchanged. It is the building block the
+// SIMD-accelerated Restore kernels compose: the order-K fixed predictor is the
+// K-th forward difference, so its inverse is K cumulative-sum passes. int32
+// arithmetic wraps, matching the SIMD kernels.
+func cumsumGo(a []int32) {
+	for i := 1; i < len(a); i++ {
+		a[i] += a[i-1]
+	}
+}

@@ -119,6 +119,17 @@ func midSideEncodeAVX2(mid, side, left, right []int32)
 //go:noescape
 func midSideDecodeAVX2(left, right, mid, side []int32)
 
+func cumsumI32(a []int32) {
+	if hasAVX2 && len(a) >= minAVXElements {
+		cumsumAVX2(a)
+		return
+	}
+	cumsumGo(a)
+}
+
+//go:noescape
+func cumsumAVX2(a []int32)
+
 //go:noescape
 func diff1AVX2(dst, src []int32)
 

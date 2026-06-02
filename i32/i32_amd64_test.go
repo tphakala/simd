@@ -103,9 +103,9 @@ func TestAddSubAVX2_ParityWithGo(t *testing.T) {
 		b := make([]int32, n)
 		fillPattern(a, b)
 		for _, tc := range []struct {
-			name   string
-			simd   func(dst, a, b []int32)
-			ref    func(dst, a, b []int32)
+			name string
+			simd func(dst, a, b []int32)
+			ref  func(dst, a, b []int32)
 		}{
 			{"add", addAVX2, addGo},
 			{"sub", subAVX2, subGo},
@@ -194,6 +194,52 @@ func TestDiffAVX2_ParityWithGo(t *testing.T) {
 	}
 }
 
+func TestCumsumAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range paritySizes {
+		if n < minAVXElements {
+			continue // the dispatch routes shorter inputs to the Go path; the
+			// kernel assumes at least one full block (its scalar tail reads the
+			// previous cumulative value from a[-1] of the tail).
+		}
+		gotAVX := make([]int32, n)
+		gotGo := make([]int32, n)
+		fillDiffSrc(gotAVX)
+		copy(gotGo, gotAVX)
+		cumsumAVX2(gotAVX)
+		cumsumGo(gotGo)
+		for i := range gotGo {
+			if gotAVX[i] != gotGo[i] {
+				t.Fatalf("n=%d: cumsumAVX2[%d] = %d, want %d (Go)", n, i, gotAVX[i], gotGo[i])
+			}
+		}
+	}
+}
+
+// TestCumsumAVX2_NoOverwrite guards the scalar tail: the in-place kernel must
+// touch exactly n elements when n is not a multiple of the block.
+func TestCumsumAVX2_NoOverwrite(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	const n = 17
+	buf := make([]int32, n+4)
+	for i := range buf {
+		buf[i] = math.MaxInt32 // sentinel
+	}
+	in := make([]int32, n)
+	fillDiffSrc(in)
+	copy(buf[:n], in)
+	cumsumAVX2(buf[:n])
+	for i := n; i < len(buf); i++ {
+		if buf[i] != math.MaxInt32 {
+			t.Errorf("cumsumAVX2 wrote past end at buf[%d] = %d", i, buf[i])
+		}
+	}
+}
+
 // TestDiff1AVX2_NoOverwrite guards the scalar tail: the kernel must write exactly
 // n elements and not run past the end when n is not a multiple of the block.
 func TestDiff1AVX2_NoOverwrite(t *testing.T) {
@@ -239,6 +285,7 @@ func TestAVX2Kernels_AllocFree(t *testing.T) {
 		{"diff2AVX2", func() { diff2AVX2(dst, a) }},
 		{"diff3AVX2", func() { diff3AVX2(dst, a) }},
 		{"diff4AVX2", func() { diff4AVX2(dst, a) }},
+		{"cumsumAVX2", func() { cumsumAVX2(dst) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(100, c.fn); got != 0 {

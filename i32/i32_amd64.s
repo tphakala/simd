@@ -560,3 +560,57 @@ diff4_scalar:
 diff4_done:
     VZEROUPPER
     RET
+
+// func cumsumAVX2(a []int32)
+// In-place inclusive prefix sum: a[i] += a[i-1] for i in 1..n-1 (a[0] kept).
+// This is the order-1 fixed-predictor restore and the building block the
+// Restore1..Restore4 wrappers compose. Each 256-bit block computes a standalone
+// 8-element inclusive prefix sum (two within-128 shift-adds plus one cross-128
+// carry), adds the running total of all earlier blocks, then broadcasts its own
+// last lane as the running total for the next block. The scalar tail reads the
+// previous cumulative value straight from memory, so it needs no vector carry.
+TEXT ·cumsumAVX2(SB), NOSPLIT, $0-24
+    MOVQ a_base+0(FP), DX
+    MOVQ a_len+8(FP), CX
+
+    MOVQ CX, AX
+    SHRQ $3, AX                // AX = n / 8 (block count; >=1, dispatch gates n>=8)
+    JZ   cumsum_remainder
+
+    VPXOR Y3, Y3, Y3           // Y3 = running carry (total of earlier blocks) = 0
+
+cumsum_loop8:
+    VMOVDQU (DX), Y0           // block [x0..x7]
+    VPSLLDQ $4, Y0, Y1         // shift each 128-bit half left 1 lane (zero fill)
+    VPADDD  Y1, Y0, Y0         // partial within-128 prefix
+    VPSLLDQ $8, Y0, Y1         // shift each 128-bit half left 2 lanes
+    VPADDD  Y1, Y0, Y0         // low/high halves each hold a 4-elem prefix sum
+    VPSHUFD $0xFF, Y0, Y2      // broadcast lane 3 of each half: low=[L3..], high=[H3..]
+    VPERM2I128 $0x08, Y2, Y2, Y2 // low half -> 0, high half -> [L3,L3,L3,L3]
+    VPADDD  Y2, Y0, Y0         // fold low-half total into high half: full 8-elem prefix
+    VPADDD  Y3, Y0, Y0         // add carry accumulated from earlier blocks
+    VMOVDQU Y0, (DX)
+    VPSHUFD $0xFF, Y0, Y2      // high half = [lane7 x4]
+    VPERM2I128 $0x11, Y2, Y2, Y3 // Y3 = [lane7 x8] = new running total
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  cumsum_loop8
+
+cumsum_remainder:
+    ANDQ $7, CX
+    JZ   cumsum_done
+
+    MOVL -4(DX), BX            // carry = previous cumulative value (a[i-1] in memory)
+
+cumsum_scalar:
+    MOVL (DX), AX
+    ADDL BX, AX
+    MOVL AX, (DX)
+    MOVL AX, BX
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  cumsum_scalar
+
+cumsum_done:
+    VZEROUPPER
+    RET
