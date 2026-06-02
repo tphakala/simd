@@ -87,6 +87,119 @@ dot32_reduce:
     FMOVS F0, ret+48(FP)
     RET
 
+// func dotProduct4NEON(results, row0, row1, row2, row3, vec *float32, n int)
+// Scores four rows against the same vec, reusing each vec load across the
+// group instead of reloading the query per row. Two accumulator banks per row
+// (V0-V3 bank a, V4-V7 bank b) hide FMLA latency over an 8-element main loop;
+// V16/V17 hold the two query chunks, V18-V21 the four row chunks.
+TEXT ·dotProduct4NEON(SB), NOSPLIT, $0-56
+    MOVD results+0(FP), R0
+    MOVD row0+8(FP), R1
+    MOVD row1+16(FP), R2
+    MOVD row2+24(FP), R3
+    MOVD row3+32(FP), R4
+    MOVD vec+40(FP), R5
+    MOVD n+48(FP), R6
+
+    VEOR V0.B16, V0.B16, V0.B16
+    VEOR V1.B16, V1.B16, V1.B16
+    VEOR V2.B16, V2.B16, V2.B16
+    VEOR V3.B16, V3.B16, V3.B16
+    VEOR V4.B16, V4.B16, V4.B16
+    VEOR V5.B16, V5.B16, V5.B16
+    VEOR V6.B16, V6.B16, V6.B16
+    VEOR V7.B16, V7.B16, V7.B16
+
+    // Process 8 elements per row (2 NEON chunks) per iteration.
+    LSR $3, R6, R7             // R7 = n / 8
+    CBZ R7, dot4n_rem4_check
+
+dot4n_loop8:
+    // chunk a: vec[0:4] -> V16, accumulate into bank a (V0-V3)
+    VLD1.P 16(R5), [V16.S4]
+    VLD1.P 16(R1), [V18.S4]
+    WORD $0x4E30CE40           // FMLA V0.4S, V18.4S, V16.4S
+    VLD1.P 16(R2), [V19.S4]
+    WORD $0x4E30CE61           // FMLA V1.4S, V19.4S, V16.4S
+    VLD1.P 16(R3), [V20.S4]
+    WORD $0x4E30CE82           // FMLA V2.4S, V20.4S, V16.4S
+    VLD1.P 16(R4), [V21.S4]
+    WORD $0x4E30CEA3           // FMLA V3.4S, V21.4S, V16.4S
+    // chunk b: vec[4:8] -> V17, accumulate into bank b (V4-V7)
+    VLD1.P 16(R5), [V17.S4]
+    VLD1.P 16(R1), [V18.S4]
+    WORD $0x4E31CE44           // FMLA V4.4S, V18.4S, V17.4S
+    VLD1.P 16(R2), [V19.S4]
+    WORD $0x4E31CE65           // FMLA V5.4S, V19.4S, V17.4S
+    VLD1.P 16(R3), [V20.S4]
+    WORD $0x4E31CE86           // FMLA V6.4S, V20.4S, V17.4S
+    VLD1.P 16(R4), [V21.S4]
+    WORD $0x4E31CEA7           // FMLA V7.4S, V21.4S, V17.4S
+    SUB $1, R7
+    CBNZ R7, dot4n_loop8
+
+    // Fold bank b into bank a (only reached when the main loop ran).
+    WORD $0x4E24D400           // FADD V0.4S, V0.4S, V4.4S
+    WORD $0x4E25D421           // FADD V1.4S, V1.4S, V5.4S
+    WORD $0x4E26D442           // FADD V2.4S, V2.4S, V6.4S
+    WORD $0x4E27D463           // FADD V3.4S, V3.4S, V7.4S
+
+dot4n_rem4_check:
+    AND $7, R6, R8
+    LSR $2, R8, R9             // R9 = (n & 7) / 4
+    CBZ R9, dot4n_reduce
+
+    // One 4-element chunk into bank a.
+    VLD1.P 16(R5), [V16.S4]
+    VLD1.P 16(R1), [V18.S4]
+    WORD $0x4E30CE40           // FMLA V0.4S, V18.4S, V16.4S
+    VLD1.P 16(R2), [V19.S4]
+    WORD $0x4E30CE61           // FMLA V1.4S, V19.4S, V16.4S
+    VLD1.P 16(R3), [V20.S4]
+    WORD $0x4E30CE82           // FMLA V2.4S, V20.4S, V16.4S
+    VLD1.P 16(R4), [V21.S4]
+    WORD $0x4E30CEA3           // FMLA V3.4S, V21.4S, V16.4S
+
+dot4n_reduce:
+    // Reduce each bank-a accumulator to a scalar (S0..S3) BEFORE any scalar FMA,
+    // since scalar ops zero the upper lanes of the V register.
+    WORD $0x6E20D400           // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800           // FADDP S0, V0.2S
+    WORD $0x6E21D421           // FADDP V1.4S, V1.4S, V1.4S
+    WORD $0x7E30D821           // FADDP S1, V1.2S
+    WORD $0x6E22D442           // FADDP V2.4S, V2.4S, V2.4S
+    WORD $0x7E30D842           // FADDP S2, V2.2S
+    WORD $0x6E23D463           // FADDP V3.4S, V3.4S, V3.4S
+    WORD $0x7E30D863           // FADDP S3, V3.2S
+
+    AND $3, R6, R8             // R8 = n & 3 (scalar tail count)
+    CBZ R8, dot4n_store
+
+dot4n_scalar:
+    FMOVS (R5), F18
+    FMOVS (R1), F19
+    FMADDS F18, F0, F19, F0    // F0 = F19 * F18 + F0
+    FMOVS (R2), F19
+    FMADDS F18, F1, F19, F1
+    FMOVS (R3), F19
+    FMADDS F18, F2, F19, F2
+    FMOVS (R4), F19
+    FMADDS F18, F3, F19, F3
+    ADD $4, R5
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R3
+    ADD $4, R4
+    SUB $1, R8
+    CBNZ R8, dot4n_scalar
+
+dot4n_store:
+    FMOVS F0, (R0)
+    FMOVS F1, 4(R0)
+    FMOVS F2, 8(R0)
+    FMOVS F3, 12(R0)
+    RET
+
 // func addNEON(dst, a, b []float32)
 TEXT ·addNEON(SB), NOSPLIT, $0-72
     MOVD dst_base+0(FP), R0
