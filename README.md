@@ -4,7 +4,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/simd)](https://goreportcard.com/report/github.com/tphakala/simd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, complex128, and complex64 slices.
+A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, int32, complex128, and complex64 slices.
 
 ## Features
 
@@ -368,6 +368,28 @@ c64.Mul(result, signalFFT, kernelFFT)     // Complex multiply
 c64.Abs(magnitude, signalFFT)              // Extract magnitude
 ```
 
+### `i32` - int32 Operations
+
+SIMD-accelerated integer-domain operations for codec and integer-DSP hot loops (for example a pure-Go FLAC encoder/decoder), where the per-sample work is integer arithmetic and channel (de)interleaving rather than floating-point math:
+
+| Category        | Function                  | Description                                  | SIMD Width                          |
+| --------------- | ------------------------- | -------------------------------------------- | ----------------------------------- |
+| **Interleave**  | `Interleave2(dst, a, b)`  | Pack two channels into interleaved stereo    | 8x (AVX) / 4x (NEON)                |
+|                 | `Deinterleave2(a, b, src)`| Split interleaved stereo into two channels   | 8x (AVX) / 4x (NEON)                |
+
+```go
+import "github.com/tphakala/simd/i32"
+
+left := make([]int32, n)
+right := make([]int32, n)
+stereo := make([]int32, n*2)
+
+i32.Interleave2(stereo, left, right)   // [l0, r0, l1, r1, ...]
+i32.Deinterleave2(left, right, stereo) // inverse: split back to channels
+```
+
+Interleaving is pure 32-bit-lane movement, so the kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. This is the first slice of a broader integer surface (decorrelation, fixed-predictor differences, LPC FIR) tracked in the project issues.
+
 ## Performance
 
 ### AMD64 (Intel Core i7-1260P, AVX+FMA)
@@ -531,6 +553,15 @@ a Raspberry Pi 5):
 | DotProduct (f64) | 1000 | 513 ns | 1353 ns | **2.6x** |
 | Add (f32)        | 1000 | 389 ns | 2015 ns | **5.2x** |
 | Sum (f32)        | 1000 | 343 ns | 1327 ns | **3.9x** |
+
+### int32 (i32) - SIMD vs Pure Go (1000 elements)
+
+| Operation     | AMD64 (AVX)                  | ARM64 (NEON, Pi 5)            |
+| ------------- | ---------------------------- | ----------------------------- |
+| Interleave2   | 121 ns vs 487 ns (**4.0x**)  | 322 ns vs 1679 ns (**5.2x**)  |
+| Deinterleave2 | 228 ns vs 482 ns (**2.1x**)  | 322 ns vs 1682 ns (**5.2x**)  |
+
+All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes).
 
 ### Performance Notes
 
