@@ -267,52 +267,69 @@ func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 		}
 		return
 	}
-	if cpu.X86.AVX512F && cpu.X86.AVX512VL && len(rows) >= 4 && vecLen >= minAVX512Elements {
-		i := 0
-		for i+3 < len(rows) {
-			row0, row1, row2, row3 := rows[i], rows[i+1], rows[i+2], rows[i+3]
-			if len(row0) >= vecLen && len(row1) >= vecLen && len(row2) >= vecLen && len(row3) >= vecLen {
-				dotProduct4AVX512(
-					(*float32)(unsafe.Pointer(&results[i])),
-					(*float32)(unsafe.Pointer(&row0[0])),
-					(*float32)(unsafe.Pointer(&row1[0])),
-					(*float32)(unsafe.Pointer(&row2[0])),
-					(*float32)(unsafe.Pointer(&row3[0])),
-					(*float32)(unsafe.Pointer(&vec[0])),
-					vecLen,
-				)
-				i += 4
-				continue
-			}
-			for j := range 4 {
-				row := rows[i+j]
-				n := min(len(row), vecLen)
-				if n == 0 {
-					results[i+j] = 0
-				} else {
-					results[i+j] = dotProduct(row[:n], vec[:n])
-				}
-			}
-			i += 4
-		}
-		for ; i < len(rows); i++ {
-			row := rows[i]
+	switch {
+	case cpu.X86.AVX512F && cpu.X86.AVX512VL && len(rows) >= 4 && vecLen >= minAVX512Elements:
+		dotProductBatchKernel(true, results, rows, vec, vecLen)
+	case cpu.X86.AVX2 && cpu.X86.FMA && len(rows) >= 4 && vecLen >= minAVXElements:
+		dotProductBatchKernel(false, results, rows, vec, vecLen)
+	default:
+		for i, row := range rows {
 			n := min(len(row), vecLen)
 			if n == 0 {
 				results[i] = 0
+				continue
+			}
+			results[i] = dotProduct(row[:n], vec[:n])
+		}
+	}
+}
+
+// dotProductBatchKernel scores every row in rows against vec, writing result i
+// to results[i]. Rows are processed in groups of four so the query vector stays
+// resident in registers across the group instead of being re-loaded per row;
+// useAVX512 selects the AVX-512 kernel over the AVX2/FMA one. A group whose four
+// rows are each at least vecLen long takes the fused 4-row kernel; any shorter
+// or trailing row falls back to the per-row dotProduct dispatch (scoring 0 when
+// empty). The caller guarantees the selected ISA is available, len(rows) >= 4,
+// and vecLen meets the kernel's minimum width.
+func dotProductBatchKernel(useAVX512 bool, results []float32, rows [][]float32, vec []float32, vecLen int) {
+	i := 0
+	for i+3 < len(rows) {
+		row0, row1, row2, row3 := rows[i], rows[i+1], rows[i+2], rows[i+3]
+		if len(row0) >= vecLen && len(row1) >= vecLen && len(row2) >= vecLen && len(row3) >= vecLen {
+			res := (*float32)(unsafe.Pointer(&results[i]))
+			r0 := (*float32)(unsafe.Pointer(&row0[0]))
+			r1 := (*float32)(unsafe.Pointer(&row1[0]))
+			r2 := (*float32)(unsafe.Pointer(&row2[0]))
+			r3 := (*float32)(unsafe.Pointer(&row3[0]))
+			q := (*float32)(unsafe.Pointer(&vec[0]))
+			if useAVX512 {
+				dotProduct4AVX512(res, r0, r1, r2, r3, q, vecLen)
 			} else {
-				results[i] = dotProduct(row[:n], vec[:n])
+				dotProduct4AVX(res, r0, r1, r2, r3, q, vecLen)
+			}
+			i += 4
+			continue
+		}
+		for j := range 4 {
+			row := rows[i+j]
+			n := min(len(row), vecLen)
+			if n == 0 {
+				results[i+j] = 0
+			} else {
+				results[i+j] = dotProduct(row[:n], vec[:n])
 			}
 		}
-		return
+		i += 4
 	}
-	for i, row := range rows {
+	for ; i < len(rows); i++ {
+		row := rows[i]
 		n := min(len(row), vecLen)
 		if n == 0 {
 			results[i] = 0
-			continue
+		} else {
+			results[i] = dotProduct(row[:n], vec[:n])
 		}
-		results[i] = dotProduct(row[:n], vec[:n])
 	}
 }
 
