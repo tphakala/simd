@@ -37,3 +37,8 @@ testdata/*.txt
 
 # Benchmark output
 *.bench
+
+# Agent and tooling caches (Serena, Claude, CodeRabbit)
+.claude/
+.serena/
+cache/
