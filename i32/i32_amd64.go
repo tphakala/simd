@@ -10,9 +10,9 @@ const minAVXElements = 8
 
 // hasAVX gates the SIMD kernels. The interleave kernels use only AVX1
 // instructions (VUNPCKLPS / VPERM2F128 / VSHUFPS), so AVX without AVX2 is
-// sufficient. Unlike f32's interleave path this checks the CPU feature
-// explicitly rather than relying on length alone, so the package is safe on the
-// (now rare) AVX-less amd64 baseline.
+// sufficient. This checks the CPU feature explicitly rather than relying on
+// length alone, so the package is safe on the (now rare) AVX-less amd64
+// baseline.
 var hasAVX = cpu.X86.AVX
 
 func interleave2I32(dst, a, b []int32) {

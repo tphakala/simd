@@ -32,6 +32,8 @@ type (
 	clampFunc            func(dst, a []float32, minVal, maxVal float32)
 	addScaledFunc        func(dst []float32, alpha float32, s []float32)
 	convolveDecimateFunc func(dst, signal, kernel []float32, factor, phase int)
+	interleave2Func      func(dst, a, b []float32)
+	deinterleave2Func    func(a, b, src []float32)
 )
 
 // Function pointers - assigned at init time based on CPU features
@@ -56,6 +58,8 @@ var (
 	maxIdxImpl           reduceIdxFunc
 	addScaledImpl        addScaledFunc
 	convolveDecimateImpl convolveDecimateFunc
+	interleave2Impl      interleave2Func
+	deinterleave2Impl    deinterleave2Func
 )
 
 func init() {
@@ -95,6 +99,8 @@ func initAVX512() {
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledAVX512
 	convolveDecimateImpl = convolveDecimateAVX512
+	// AVX-512 CPUs also support AVX, so the AVX1 interleave kernels are safe.
+	interleave2Impl, deinterleave2Impl = interleave2Kernels(true)
 }
 
 func initAVX() {
@@ -118,6 +124,7 @@ func initAVX() {
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledAVX
 	convolveDecimateImpl = convolveDecimateAVX
+	interleave2Impl, deinterleave2Impl = interleave2Kernels(true)
 }
 
 func initSSE() {
@@ -141,6 +148,9 @@ func initSSE() {
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledSSE
 	convolveDecimateImpl = convolveDecimateSSE
+	// No SSE2 interleave2 kernel exists; the AVX kernel would SIGILL here, so
+	// fall back to the scalar Go path on AVX-less CPUs (birdnet-go issue #3353).
+	interleave2Impl, deinterleave2Impl = interleave2Kernels(false)
 }
 
 func initGo() {
@@ -164,6 +174,7 @@ func initGo() {
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledGo
 	convolveDecimateImpl = convolveDecimate32Go
+	interleave2Impl, deinterleave2Impl = interleave2Kernels(false)
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -456,10 +467,28 @@ func accumulateAdd32(dst, src []float32) {
 	addImpl(dst, dst, src)
 }
 
+// interleave2Kernels returns the interleave2 / deinterleave2 implementations for
+// a CPU with (avx == true) or without (avx == false) AVX support. The kernels
+// are VEX-encoded AVX1 (VUNPCKLPS / VPERM2F128 / VSHUFPS) and there is no SSE2
+// variant, so an AVX-less CPU must use the scalar Go fallback rather than the
+// AVX kernel (which would SIGILL). init() picks the impl once via this helper,
+// the same way every other f32 kernel is selected; routing interleave2 through
+// the same selection is what fixes birdnet-go issue #3353. Splitting it out lets
+// the gate test pin the selection without re-running init or mutating globals.
+func interleave2Kernels(avx bool) (interleave2Func, deinterleave2Func) {
+	if avx {
+		return interleave2AVX, deinterleave2AVX
+	}
+	return interleave2Go, deinterleave2Go
+}
+
 func interleave2_32(dst, a, b []float32) {
-	// Need at least 8 pairs for SIMD to be worthwhile (AVX processes 8 at a time)
+	// Need at least 8 pairs for SIMD to be worthwhile (AVX processes 8 at a time).
+	// interleave2Impl is the AVX kernel only on AVX-capable CPUs (chosen in init,
+	// like every other f32 kernel); on AVX-less CPUs it is interleave2Go, so this
+	// never issues an AVX instruction on a CPU without AVX (birdnet-go #3353).
 	if len(a) >= minAVXElements {
-		interleave2AVX(dst, a, b)
+		interleave2Impl(dst, a, b)
 		return
 	}
 	interleave2Go(dst, a, b)
@@ -467,7 +496,7 @@ func interleave2_32(dst, a, b []float32) {
 
 func deinterleave2_32(a, b, src []float32) {
 	if len(a) >= minAVXElements {
-		deinterleave2AVX(a, b, src)
+		deinterleave2Impl(a, b, src)
 		return
 	}
 	deinterleave2Go(a, b, src)
