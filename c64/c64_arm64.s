@@ -200,8 +200,8 @@ TEXT ·scaleNEON(SB), NOSPLIT, $0-56
     MOVD a_base+24(FP), R2
 
     // Load scalar s and broadcast to vectors
-    FMOVS s+48(FP), F20          // F20 = sr
-    FMOVS s+52(FP), F21          // F21 = si
+    FMOVS s_real+48(FP), F20     // F20 = sr
+    FMOVS s_imag+52(FP), F21     // F21 = si
 
     // Broadcast to vectors
     VDUP V20.S[0], V20.S4        // V20 = [sr, sr, sr, sr]
