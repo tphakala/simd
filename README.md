@@ -134,6 +134,11 @@ fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
 |                 | `Int16ToFloat32Scale(dst,src,s)`    | PCM int16 to normalized float | 8x (AVX2) / 4x (NEON)               |
 |                 | `Float32ToInt16Scale(dst,src,s)`    | Normalized float to PCM int16 | 8x (AVX2) / 4x (NEON)               |
 
+`DotProductBatch` scores its `[][]float64` rows in groups of four, keeping the
+query vector resident in registers across each group via a fused 4-row kernel on
+AMD64 (AVX-512 and AVX+FMA) instead of re-loading it per row. Short, ragged, or
+sub-SIMD-width rows fall back to the per-row dot product, with identical results.
+
 ### `f32` - float32 Operations
 
 Same API as `f64` but for `float32` with wider SIMD:
@@ -156,13 +161,13 @@ use the allocation-free generic path.
 | `DotProductIndexed(dst, base, query, rowIDs, dims) bool` | Scores selected row-major rows by `uint32` row ID without building `[][]float32`; returns whether an optimized SIMD batch kernel handled at least one batch. |
 | `DotProductStrided(dst, base, query, rowCount, dims, stride) bool` | Scores contiguous or fixed-stride row-major rows; returns whether an optimized SIMD batch kernel handled at least one batch. |
 
-Both APIs are allocation-free and include per-row fallback semantics for unsupported CPUs, tiny shapes, tails, and ragged inputs.
+Both APIs are allocation-free. The batched SIMD kernel covers AMD64 (AVX-512 / AVX+FMA) and ARM64 (NEON); unsupported CPUs, tiny shapes, tails, and ragged inputs use the per-row fallback.
 
 `DotProductBatch` scores its `[][]float32` rows in groups of four, keeping the
 query vector resident in registers across each group instead of re-loading it
-for every row. The fused 4-row kernel runs on both AVX-512 and AVX+FMA; short,
-ragged, or sub-SIMD-width rows fall back to the per-row dot product. Results are
-identical to the per-row path either way.
+for every row. The fused 4-row kernel runs on AVX-512, AVX+FMA, and ARM64 NEON;
+short, ragged, or sub-SIMD-width rows fall back to the per-row dot product.
+Results are identical to the per-row path either way.
 
 **Additional split-format complex operations** (for FFT pipelines with separate real/imag arrays):
 
