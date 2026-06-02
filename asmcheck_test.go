@@ -233,6 +233,9 @@ func TestNoGoroutineRegisterClobber(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		// Normalize to forward slashes at the boundary so the suffix checks and
+		// reporting are identical on Windows (WalkDir yields backslashes).
+		p = filepath.ToSlash(p)
 		if d.IsDir() || !strings.HasSuffix(p, ".s") {
 			return nil
 		}
@@ -259,7 +262,7 @@ func TestNoGoroutineRegisterClobber(t *testing.T) {
 				code = code[:j]
 			}
 			if re.MatchString(code) {
-				violations = append(violations, filepath.ToSlash(p)+":"+strconv.Itoa(i+1)+
+				violations = append(violations, p+":"+strconv.Itoa(i+1)+
 					"  uses "+name+" (goroutine g):  "+strings.TrimSpace(line))
 			}
 		}

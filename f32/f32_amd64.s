@@ -4265,16 +4265,7 @@ TEXT ·realFFTUnpackAVX(SB), NOSPLIT, $0-152
     SHRQ $3, AX                      // AX = (n-1) / 8 = number of SIMD iterations
     JZ   realfft_remainder           // Skip SIMD loop if < 8 elements
 
-    // Set up reverse pointers: zRe[n-8], zIm[n-8]
-    MOVQ CX, R9
-    SUBQ $8, R9                      // R9 = n - 8
-    SHLQ $2, R9                      // R9 = (n-8) * 4 bytes
-    MOVQ DI, R9                      // R9 = zRe base
-    ADDQ CX, R9
-    SUBQ $8, R9
-    SHLQ $2, R9                      // Wrong, redo this
-
-    // Recalculate: R9 = &zRe[n-8], R10 = &zIm[n-8]
+    // Set up reverse pointers: R9 = &zRe[n-8], R10 = &zIm[n-8].
     // BX (not R14) holds byte offsets: R14 is the goroutine g pointer on Go amd64.
     MOVQ CX, BX                      // BX = n
     SUBQ $8, BX                      // BX = n - 8
@@ -4290,20 +4281,8 @@ TEXT ·realFFTUnpackAVX(SB), NOSPLIT, $0-152
     ADDQ $4, DX                      // DX = &outRe[1]
     ADDQ $4, SI                      // SI = &outIm[1]
 
-    // Load constants
-    // Reverse permutation mask: [7, 6, 5, 4, 3, 2, 1, 0]
-    MOVQ $0x0001000200030004, BX
-    MOVQ BX, X14
-    MOVQ $0x0005000600070000, BX     // Wrong format, need 32-bit indices
-
-    // Actually, VPERMPS uses 32-bit indices. Let me use a different approach.
-    // Create reverse mask in YMM register
-    VPCMPEQD Y15, Y15, Y15           // Y15 = all 1s (will use for sign flip)
-    VPSRLD $1, Y15, Y15              // Y15 = 0x7FFFFFFF (clear sign bit for abs mask)
-
-    // For reverse permutation, we'll construct it differently
-    // Use VPERMPD for 64-bit permute then shuffle within lanes
-    // Actually, let's load the permutation mask from memory (cleaner)
+    // Load constants. The reverse permutation is performed per iteration in the
+    // loop with VPERM2F128 + VPERMILPS, so no permutation mask is needed here.
 
     // Broadcast 0.5 (0x3F000000 = 0.5f)
     MOVL $0x3F000000, BX
