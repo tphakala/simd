@@ -160,7 +160,7 @@ Both APIs are allocation-free and include per-row fallback semantics for unsuppo
 
 `DotProductBatch` scores its `[][]float32` rows in groups of four, keeping the
 query vector resident in registers across each group instead of re-loading it
-for every row. The fused 4-row kernel runs on both AVX-512 and AVX2/FMA; short,
+for every row. The fused 4-row kernel runs on both AVX-512 and AVX+FMA; short,
 ragged, or sub-SIMD-width rows fall back to the per-row dot product. Results are
 identical to the per-row path either way.
 

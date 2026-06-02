@@ -9,13 +9,13 @@ import (
 )
 
 // kernelBatchModes returns the SIMD batch-of-4 modes that the current CPU can
-// actually execute. dotProductBatchKernel(false, ...) runs the AVX2/FMA kernel
+// actually execute. dotProductBatchKernel(false, ...) runs the AVX+FMA kernel
 // and dotProductBatchKernel(true, ...) the AVX-512 one, so calling either on a
 // CPU without the matching ISA would fault. Tests use this to exercise every
-// kernel the host supports, including the AVX2 path that issue #64 adds.
+// kernel the host supports, including the AVX+FMA path that issue #64 adds.
 func kernelBatchModes() []bool {
 	var modes []bool
-	if cpu.X86.AVX2 && cpu.X86.FMA {
+	if cpu.X86.AVX && cpu.X86.FMA {
 		modes = append(modes, false)
 	}
 	if cpu.X86.AVX512F && cpu.X86.AVX512VL {

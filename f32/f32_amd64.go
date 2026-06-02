@@ -270,7 +270,7 @@ func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	switch {
 	case cpu.X86.AVX512F && cpu.X86.AVX512VL && len(rows) >= 4 && vecLen >= minAVX512Elements:
 		dotProductBatchKernel(true, results, rows, vec, vecLen)
-	case cpu.X86.AVX2 && cpu.X86.FMA && len(rows) >= 4 && vecLen >= minAVXElements:
+	case cpu.X86.AVX && cpu.X86.FMA && len(rows) >= 4 && vecLen >= minAVXElements:
 		dotProductBatchKernel(false, results, rows, vec, vecLen)
 	default:
 		for i, row := range rows {
@@ -287,7 +287,7 @@ func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 // dotProductBatchKernel scores every row in rows against vec, writing result i
 // to results[i]. Rows are processed in groups of four so the query vector stays
 // resident in registers across the group instead of being re-loaded per row;
-// useAVX512 selects the AVX-512 kernel over the AVX2/FMA one. A group whose four
+// useAVX512 selects the AVX-512 kernel over the AVX+FMA one. A group whose four
 // rows are each at least vecLen long takes the fused 4-row kernel; any shorter
 // or trailing row falls back to the per-row dotProduct dispatch (scoring 0 when
 // empty). The caller guarantees the selected ISA is available, len(rows) >= 4,
