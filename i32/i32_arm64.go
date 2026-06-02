@@ -129,3 +129,39 @@ func diff3NEON(dst, src []int32)
 
 //go:noescape
 func diff4NEON(dst, src []int32)
+
+// minNEONRestoreOrder is the smallest predictor order at which the SIMD decode
+// recurrence kernel beats the scalar Go recurrence on NEON (tuned from the
+// Raspberry Pi 5 benchmarks). Below it the serial dependency leaves too little
+// per-output tap work to amortize the horizontal reduction.
+const minNEONRestoreOrder = 8
+
+func lpcResidualEncodeI32(res, samples, coeffs []int32, shift uint) {
+	if hasNEON && len(res)-len(coeffs) >= minNEONElements {
+		lpcResidualEncodeNEON(res, samples, coeffs, shift)
+		return
+	}
+	lpcResidualEncodeGo(res, samples, coeffs, shift)
+}
+
+func lpcRestoreI32(out, residual, coeffs []int32, shift uint) {
+	order := len(coeffs)
+	if hasNEON && order >= minNEONRestoreOrder && order <= maxLPCRestoreOrder && len(out)-order >= 1 {
+		// The kernel dots the ascending window with the coefficients reversed,
+		// so reverse once into a stack array (no heap alloc; the array does not
+		// escape through the //go:noescape kernel).
+		var rc [maxLPCRestoreOrder]int32
+		for k := range order {
+			rc[k] = coeffs[order-1-k]
+		}
+		lpcRestoreNEON(out, residual, rc[:order], shift)
+		return
+	}
+	lpcRestoreGo(out, residual, coeffs, shift)
+}
+
+//go:noescape
+func lpcResidualEncodeNEON(res, samples, coeffs []int32, shift uint)
+
+//go:noescape
+func lpcRestoreNEON(out, residual, rcoeffs []int32, shift uint)

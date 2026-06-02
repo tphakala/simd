@@ -80,3 +80,29 @@ func ExampleRestore1() {
 	fmt.Println(samples)
 	// Output: [10 13 13 8 20]
 }
+
+// ExampleLPCResidualEncode shows the quantized-LPC encode FIR. With order-2
+// coefficients {2,-1} and shift 1 the prediction is (2*s[i-1] - s[i-2]) >> 1;
+// res holds the order-2 warm-up samples verbatim, then samples[i] - prediction.
+func ExampleLPCResidualEncode() {
+	samples := []int32{10, 20, 34, 50}
+	coeffs := []int32{2, -1}
+	res := make([]int32, len(samples))
+
+	i32.LPCResidualEncode(res, samples, coeffs, 1)
+	fmt.Println(res)
+	// Output: [10 20 19 26]
+}
+
+// ExampleLPCRestore shows decode-side restoration: LPCRestore inverts
+// LPCResidualEncode with the same coefficients and shift, reconstructing the
+// samples from the [warm-up | residual] layout.
+func ExampleLPCRestore() {
+	res := []int32{10, 20, 19, 26}
+	coeffs := []int32{2, -1}
+	samples := make([]int32, len(res))
+
+	i32.LPCRestore(samples, res, coeffs, 1)
+	fmt.Println(samples)
+	// Output: [10 20 34 50]
+}

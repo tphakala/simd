@@ -91,3 +91,47 @@ func cumsumGo(a []int32) {
 		a[i] += a[i-1]
 	}
 }
+
+// lpcResidualEncodeGo writes the quantized-LPC residual for an order-len(coeffs)
+// predictor. The first order entries are the verbatim warm-up; for i >= order,
+//
+//	res[i] = samples[i] - int32((Σ_j coeffs[j]*samples[i-1-j]) >> shift)
+//
+// The prediction sum is accumulated in int64 (matching libFLAC) so it does not
+// overflow for FLAC's coefficient precision and order; only the shifted result
+// is truncated to int32. res and samples are the caller-clamped equal-length
+// slices; res must not alias samples. int32 truncation wraps, matching the SIMD
+// kernels.
+func lpcResidualEncodeGo(res, samples, coeffs []int32, shift uint) {
+	order := len(coeffs)
+	w := min(order, len(res))
+	copy(res[:w], samples[:w])
+	for i := order; i < len(res); i++ {
+		var acc int64
+		for j, c := range coeffs {
+			acc += int64(c) * int64(samples[i-1-j])
+		}
+		res[i] = samples[i] - int32(acc>>shift)
+	}
+}
+
+// lpcRestoreGo is the exact inverse of lpcResidualEncodeGo: it reconstructs the
+// samples from the [order warm-up | residual] layout via the serial recurrence
+//
+//	out[i] = residual[i] + int32((Σ_j coeffs[j]*out[i-1-j]) >> shift)
+//
+// Each out[i] depends on the order previously reconstructed outputs, so unlike
+// the encode FIR this cannot be vectorized across i. out and residual are the
+// caller-clamped equal-length slices; out must not alias residual.
+func lpcRestoreGo(out, residual, coeffs []int32, shift uint) {
+	order := len(coeffs)
+	w := min(order, len(out))
+	copy(out[:w], residual[:w])
+	for i := order; i < len(out); i++ {
+		var acc int64
+		for j, c := range coeffs {
+			acc += int64(c) * int64(out[i-1-j])
+		}
+		out[i] = residual[i] + int32(acc>>shift)
+	}
+}

@@ -17,3 +17,11 @@ func diff1I32(dst, src []int32) { diff1Go(dst, src) }
 func diff2I32(dst, src []int32) { diff2Go(dst, src) }
 func diff3I32(dst, src []int32) { diff3Go(dst, src) }
 func diff4I32(dst, src []int32) { diff4Go(dst, src) }
+
+func lpcResidualEncodeI32(res, samples, coeffs []int32, shift uint) {
+	lpcResidualEncodeGo(res, samples, coeffs, shift)
+}
+
+func lpcRestoreI32(out, residual, coeffs []int32, shift uint) {
+	lpcRestoreGo(out, residual, coeffs, shift)
+}
