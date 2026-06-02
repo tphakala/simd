@@ -4,7 +4,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/simd)](https://goreportcard.com/report/github.com/tphakala/simd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, int32, complex128, and complex64 slices.
+A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, int32, int16, complex128, and complex64 slices.
 
 ## Features
 
@@ -410,6 +410,28 @@ param, bits := i32.RiceBestParam(res, 14) // best Rice parameter and its bit cos
 
 Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. The decorrelation and fixed-predictor kernels do integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes. `RestoreK` is the exact inverse of `DiffK`: since the order-`K` fixed predictor is the `K`-th forward difference, restoration is `K` cumulative-sum passes built on one SIMD prefix-sum kernel (11x at order 1 down to ~5x at order 4 on AVX2; 6x to 3x on NEON, all zero-allocation). The LPC kernels accumulate the prediction sum in int64 (matching libFLAC), so they stay bit-exact for the full coefficient precision and order: `LPCResidualEncode` is a FIR that vectorizes across output samples (widening `VPMULDQ` / `SMLAL`, ~7-9x on AVX2, ~4-5x on NEON), while `LPCRestore` is a serial recurrence whose per-output tap dot product is vectorized, keeping the just-written newest samples on store-forwardable scalar loads (~1.4-3.9x on AVX2, ~1.8-3.6x on NEON, order 8 to 32). The Rice cost search folds each residual to its unsigned zigzag symbol `(r<<1)^(r>>31)`, widens it to int64, and accumulates `Σ (zigzag(res)>>k)` for every Rice parameter `k` in 0..14 at once (the symbols are halved progressively, exact for the logical shift); `RiceBestParam` adds the `n*(k+1)` code overhead and picks the cheapest `k`. This is the exact bit cost, not the `sum>>k` approximation, and runs ~13x on AVX2 and ~4x on NEON, zero-allocation.
 
+### `i16` - int16 Operations
+
+The 16-bit integer counterpart to `i32`, for raw-PCM hot loops (such as a pure-Go FLAC codec) where the source samples are 16-bit and the cheapest place to vectorize is the channel (de)interleaving that happens before samples are widened to int32. FLAC decorrelation widens samples (the side and mid channels can exceed the source bit depth by one bit), so the arithmetic primitives live in `i32`; this package carries only the operations that provably help at 16-bit width:
+
+| Category       | Function                   | Description                                | SIMD Width                         |
+| -------------- | -------------------------- | ------------------------------------------ | ---------------------------------- |
+| **Interleave** | `Interleave2(dst, a, b)`   | Pack two channels into interleaved stereo  | 16x (AVX2) / 8x (SSE2) / 8x (NEON) |
+|                | `Deinterleave2(a, b, src)` | Split interleaved stereo into two channels | 16x (AVX2) / 8x (SSE2) / 8x (NEON) |
+
+```go
+import "github.com/tphakala/simd/i16"
+
+left := make([]int16, n)
+right := make([]int16, n)
+stereo := make([]int16, n*2)
+
+i16.Interleave2(stereo, left, right)   // [l0, r0, l1, r1, ...]
+i16.Deinterleave2(left, right, stereo) // inverse: split back to channels
+```
+
+Like the `i32` interleave kernels, these are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plus a lane permute, NEON `ZIP`/`UZP` on `.8H`), so the bit pattern of each lane is irrelevant and every value round-trips exactly: negative values and the int16 extremes are preserved. Both kernels are zero-allocation.
+
 ## Performance
 
 ### AMD64 (Intel Core i7-1260P, AVX+FMA)
@@ -590,6 +612,15 @@ a Raspberry Pi 5):
 | LPCRestore (order 32)        | 4443 ns vs 17529 ns (**3.9x**)| 11303 ns vs 41026 ns (**3.6x**) |
 | RiceSums (k=0..14)           | 810 ns vs 10490 ns (**13.0x**)| 4090 ns vs 17163 ns (**4.2x**) |
 | RiceBestParam (k=0..14)      | 810 ns vs 10490 ns (**13.0x**)| 4081 ns vs 17163 ns (**4.2x**) |
+
+### int16 (i16) - SIMD vs Pure Go (1000 elements)
+
+| Operation     | AMD64 (AVX2/SSE2)           | ARM64 (NEON, Pi 5)            |
+| ------------- | --------------------------- | ----------------------------- |
+| Interleave2   | 60 ns vs 585 ns (**9.8x**)  | 165 ns vs 2106 ns (**12.8x**) |
+| Deinterleave2 | 59 ns vs 640 ns (**10.9x**) | 165 ns vs 2120 ns (**12.9x**) |
+
+Both i16 kernels are zero-allocation and bit-exact against the pure-Go reference (verified with negative values and the int16 extremes); they move whole 16-bit lanes, so the bit pattern of each sample is irrelevant to correctness.
 
 All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The Restore baseline is the pure-Go decode recurrence; `RestoreK` reconstructs samples as `K` SIMD prefix-sum passes (the inverse of the order-`K` forward difference). The LPC kernels accumulate in int64 and are checked against an arbitrary-precision `math.big` oracle and the encode->decode round-trip; `LPCRestore` is the serial decode recurrence (vectorized per-output tap dot product), dispatched to SIMD only at order >= 8 where it beats the scalar path. The Rice kernels compute the exact per-parameter unary-bit sums `Σ (zigzag(res)>>k)` for all 15 FLAC parameters in one pass (15 int64 accumulators; AVX2 sweeps the data twice for its 16-register file, NEON fits one pass in its 32 registers), checked against an independent oracle and brute-force parameter scan.
 
