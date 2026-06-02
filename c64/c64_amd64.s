@@ -1113,7 +1113,7 @@ TEXT ·conjAVX512(SB), NOSPLIT, $0-48
 
 conj_avx512_loop8:
     VMOVUPS (SI), Z0
-    VXORPS Z15, Z0, Z0       // Negate imag parts via sign bit XOR
+    VPXORD Z15, Z0, Z0       // Negate imag parts via sign-bit XOR (VPXORD: AVX512F, avoids VXORPS AVX512DQ dep)
     VMOVUPS Z0, (DX)
 
     ADDQ $64, SI
