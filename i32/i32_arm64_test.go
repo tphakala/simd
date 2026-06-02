@@ -193,6 +193,52 @@ func TestDiffNEON_ParityWithGo(t *testing.T) {
 	}
 }
 
+func TestCumsumNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range paritySizes {
+		if n < minNEONElements {
+			continue // the dispatch routes shorter inputs to the Go path; the
+			// kernel assumes at least one full block (its scalar tail reads the
+			// previous cumulative value from a[-1] of the tail).
+		}
+		gotNEON := make([]int32, n)
+		gotGo := make([]int32, n)
+		fillDiffSrc(gotNEON)
+		copy(gotGo, gotNEON)
+		cumsumNEON(gotNEON)
+		cumsumGo(gotGo)
+		for i := range gotGo {
+			if gotNEON[i] != gotGo[i] {
+				t.Fatalf("n=%d: cumsumNEON[%d] = %d, want %d (Go)", n, i, gotNEON[i], gotGo[i])
+			}
+		}
+	}
+}
+
+// TestCumsumNEON_NoOverwrite guards the scalar tail: the in-place kernel must
+// touch exactly n elements when n is not a multiple of the 4-lane block.
+func TestCumsumNEON_NoOverwrite(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	const n = 17
+	buf := make([]int32, n+4)
+	for i := range buf {
+		buf[i] = math.MaxInt32 // sentinel
+	}
+	in := make([]int32, n)
+	fillDiffSrc(in)
+	copy(buf[:n], in)
+	cumsumNEON(buf[:n])
+	for i := n; i < len(buf); i++ {
+		if buf[i] != math.MaxInt32 {
+			t.Errorf("cumsumNEON wrote past end at buf[%d] = %d", i, buf[i])
+		}
+	}
+}
+
 // TestNEONKernels_AllocFree asserts each NEON kernel runs allocation-free, the
 // repo's zero-allocation contract enforced directly at the kernel boundary
 // (the public-API alloc tests cover the dispatch, these cover the kernels).
@@ -217,6 +263,7 @@ func TestNEONKernels_AllocFree(t *testing.T) {
 		{"diff2NEON", func() { diff2NEON(dst, a) }},
 		{"diff3NEON", func() { diff3NEON(dst, a) }},
 		{"diff4NEON", func() { diff4NEON(dst, a) }},
+		{"cumsumNEON", func() { cumsumNEON(dst) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(100, c.fn); got != 0 {

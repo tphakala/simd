@@ -504,3 +504,54 @@ diff4_neon_loop1:
 
 diff4_neon_done:
     RET
+
+// func cumsumNEON(a []int32)
+// In-place inclusive prefix sum: a[i] += a[i-1] for i in 1..n-1 (a[0] kept).
+// This is the order-1 fixed-predictor restore and the building block the
+// Restore1..Restore4 wrappers compose. Each .4S block computes a standalone
+// 4-element inclusive prefix sum (two zero-filled EXT shift-adds), adds the
+// running total of earlier blocks, then broadcasts its last lane as the next
+// block's running total. The scalar tail reads the previous cumulative value
+// from memory, so it needs no vector carry. EXT/DUP/MOVI and ADD .4S are
+// hand-encoded as WORD (the Go assembler lacks these mnemonics); the trailing
+// comment is the decoded form, cross-checked by asmcheck_test.go.
+TEXT ·cumsumNEON(SB), NOSPLIT, $0-24
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R3
+
+    LSR $2, R3, R4             // R4 = n / 4 (block count; >=1, dispatch gates n>=4)
+    CBZ R4, cumsum_neon_remainder
+
+    WORD $0x4F000407           // MOVI V7.4S, #0x0   (zero source for the EXT shifts)
+    WORD $0x4F000408           // MOVI V8.4S, #0x0   (running carry = 0)
+
+cumsum_neon_loop4:
+    VLD1 (R0), [V0.S4]         // block [x0, x1, x2, x3]
+    WORD $0x6E0060E1           // EXT V1.16B, V7.16B, V0.16B, #12   ([0, x0, x1, x2])
+    WORD $0x4EA18400           // ADD V0.4S, V0.4S, V1.4S
+    WORD $0x6E0040E1           // EXT V1.16B, V7.16B, V0.16B, #8    ([0, 0, y0, y1])
+    WORD $0x4EA18400           // ADD V0.4S, V0.4S, V1.4S   (4-elem inclusive prefix)
+    WORD $0x4EA88400           // ADD V0.4S, V0.4S, V8.4S   (+ carry from earlier blocks)
+    VST1 [V0.S4], (R0)
+    WORD $0x4E1C0408           // DUP V8.4S, V0.S[3]        (carry = last lane)
+    ADD $16, R0
+    SUB $1, R4
+    CBNZ R4, cumsum_neon_loop4
+
+cumsum_neon_remainder:
+    AND $3, R3
+    CBZ R3, cumsum_neon_done
+
+    MOVW -4(R0), R5            // carry = previous cumulative value from memory
+
+cumsum_neon_loop1:
+    MOVW (R0), R6
+    ADDW R5, R6, R6
+    MOVW R6, (R0)
+    MOVW R6, R5
+    ADD $4, R0
+    SUB $1, R3
+    CBNZ R3, cumsum_neon_loop1
+
+cumsum_neon_done:
+    RET

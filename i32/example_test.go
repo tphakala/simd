@@ -69,3 +69,14 @@ func ExampleDiff1() {
 	fmt.Println(res)
 	// Output: [10 3 0 -5 12]
 }
+
+// ExampleRestore1 shows decode-side restoration: Restore1 inverts Diff1,
+// reconstructing the samples from the [warm-up | residuals] layout.
+func ExampleRestore1() {
+	res := []int32{10, 3, 0, -5, 12}
+	samples := make([]int32, len(res))
+
+	i32.Restore1(samples, res)
+	fmt.Println(samples)
+	// Output: [10 13 13 8 20]
+}

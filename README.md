@@ -372,10 +372,16 @@ c64.Abs(magnitude, signalFFT)              // Extract magnitude
 
 SIMD-accelerated integer-domain operations for codec and integer-DSP hot loops (for example a pure-Go FLAC encoder/decoder), where the per-sample work is integer arithmetic and channel (de)interleaving rather than floating-point math:
 
-| Category        | Function                  | Description                                  | SIMD Width                          |
-| --------------- | ------------------------- | -------------------------------------------- | ----------------------------------- |
-| **Interleave**  | `Interleave2(dst, a, b)`  | Pack two channels into interleaved stereo    | 8x (AVX) / 4x (NEON)                |
-|                 | `Deinterleave2(a, b, src)`| Split interleaved stereo into two channels   | 8x (AVX) / 4x (NEON)                |
+| Category            | Function                                | Description                                              | SIMD Width            |
+| ------------------- | --------------------------------------- | -------------------------------------------------------- | --------------------- |
+| **Interleave**      | `Interleave2(dst, a, b)`                | Pack two channels into interleaved stereo                | 8x (AVX) / 4x (NEON)  |
+|                     | `Deinterleave2(a, b, src)`              | Split interleaved stereo into two channels               | 8x (AVX) / 4x (NEON)  |
+| **Decorrelation**   | `Add(dst, a, b)`                        | Element-wise add (RIGHT_SIDE decode)                     | 8x (AVX2) / 4x (NEON) |
+|                     | `Sub(dst, a, b)`                        | Element-wise subtract (side channel / LEFT_SIDE decode)  | 8x (AVX2) / 4x (NEON) |
+|                     | `MidSideEncode(mid, side, left, right)` | Mid/side forward decorrelation                           | 8x (AVX2) / 4x (NEON) |
+|                     | `MidSideDecode(left, right, mid, side)` | Mid/side inverse (parity-bit reconstruction)             | 8x (AVX2) / 4x (NEON) |
+| **Fixed predictor** | `Diff1`..`Diff4(dst, src)`              | Order 1-4 fixed-predictor encode residual (forward diff) | 8x (AVX2) / 4x (NEON) |
+|                     | `Restore1`..`Restore4(dst, src)`        | Order 1-4 fixed-predictor decode (inverse; prefix sum)   | 8x (AVX2) / 4x (NEON) |
 
 ```go
 import "github.com/tphakala/simd/i32"
@@ -386,9 +392,13 @@ stereo := make([]int32, n*2)
 
 i32.Interleave2(stereo, left, right)   // [l0, r0, l1, r1, ...]
 i32.Deinterleave2(left, right, stereo) // inverse: split back to channels
+
+res := make([]int32, n)
+i32.Diff2(res, left)     // order-2 fixed-predictor encode residual
+i32.Restore2(left, res)  // exact inverse: reconstruct the samples
 ```
 
-Interleaving is pure 32-bit-lane movement, so the kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. This is the first slice of a broader integer surface (decorrelation, fixed-predictor differences, LPC FIR) tracked in the project issues.
+Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. The decorrelation and fixed-predictor kernels do integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes. `RestoreK` is the exact inverse of `DiffK`: since the order-`K` fixed predictor is the `K`-th forward difference, restoration is `K` cumulative-sum passes built on one SIMD prefix-sum kernel (11x at order 1 down to ~5x at order 4 on AVX2; 6x to 3x on NEON, all zero-allocation). The remaining integer surface (LPC FIR encode/decode, Rice cost search) is tracked in the project issues.
 
 ## Performance
 
@@ -556,12 +566,16 @@ a Raspberry Pi 5):
 
 ### int32 (i32) - SIMD vs Pure Go (1000 elements)
 
-| Operation     | AMD64 (AVX)                  | ARM64 (NEON, Pi 5)            |
+| Operation     | AMD64 (AVX/AVX2)             | ARM64 (NEON, Pi 5)            |
 | ------------- | ---------------------------- | ----------------------------- |
 | Interleave2   | 121 ns vs 487 ns (**4.0x**)  | 322 ns vs 1679 ns (**5.2x**)  |
 | Deinterleave2 | 228 ns vs 482 ns (**2.1x**)  | 322 ns vs 1682 ns (**5.2x**)  |
+| Restore1      | 181 ns vs 2019 ns (**11.2x**)| 605 ns vs 3763 ns (**6.2x**)  |
+| Restore2      | 320 ns vs 2296 ns (**7.2x**) | 1101 ns vs 4592 ns (**4.2x**) |
+| Restore3      | 462 ns vs 2493 ns (**5.4x**) | 1608 ns vs 5421 ns (**3.4x**) |
+| Restore4      | 575 ns vs 2778 ns (**4.8x**) | 2093 ns vs 6245 ns (**3.0x**) |
 
-All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes).
+All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The Restore baseline is the pure-Go decode recurrence; `RestoreK` reconstructs samples as `K` SIMD prefix-sum passes (the inverse of the order-`K` forward difference).
 
 ### Performance Notes
 

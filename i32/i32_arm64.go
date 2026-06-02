@@ -107,6 +107,17 @@ func midSideEncodeNEON(mid, side, left, right []int32)
 //go:noescape
 func midSideDecodeNEON(left, right, mid, side []int32)
 
+func cumsumI32(a []int32) {
+	if hasNEON && len(a) >= minNEONElements {
+		cumsumNEON(a)
+		return
+	}
+	cumsumGo(a)
+}
+
+//go:noescape
+func cumsumNEON(a []int32)
+
 //go:noescape
 func diff1NEON(dst, src []int32)
 

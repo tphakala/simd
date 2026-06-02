@@ -221,3 +221,72 @@ func BenchmarkDiff4Go_1000(b *testing.B) {
 		diff4Go(dst, src)
 	}
 }
+
+// Restore benchmarks pair the SIMD cumulative-sum decomposition (RestoreK)
+// against restoreKGo, the pure-Go direct decode recurrence a scalar FLAC decoder
+// would use, so the speedup of the prefix-sum kernel (and the K-pass cost at
+// higher orders) is visible honestly.
+
+func BenchmarkRestore1_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		Restore1(dst, src)
+	}
+}
+
+func BenchmarkRestore1Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		restore1Go(dst, src)
+	}
+}
+
+func BenchmarkRestore2_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		Restore2(dst, src)
+	}
+}
+
+func BenchmarkRestore2Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		restore2Go(dst, src)
+	}
+}
+
+func BenchmarkRestore3_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		Restore3(dst, src)
+	}
+}
+
+func BenchmarkRestore3Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		restore3Go(dst, src)
+	}
+}
+
+func BenchmarkRestore4_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		Restore4(dst, src)
+	}
+}
+
+func BenchmarkRestore4Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		restore4Go(dst, src)
+	}
+}
