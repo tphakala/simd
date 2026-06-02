@@ -6,6 +6,7 @@
 //   - [github.com/tphakala/simd/cpu] - CPU feature detection
 //   - [github.com/tphakala/simd/f64] - float64 SIMD operations
 //   - [github.com/tphakala/simd/f32] - float32 SIMD operations
+//   - [github.com/tphakala/simd/i32] - int32 SIMD operations (integer DSP)
 //   - [github.com/tphakala/simd/c128] - complex128 SIMD operations
 //
 // # Architecture Support
@@ -51,6 +52,8 @@
 // Activation functions: Sigmoid, ReLU, Tanh, Exp, ClampScale
 //
 // Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
+//
+// Integer DSP (i32): Interleave2, Deinterleave2
 //
 // Complex (c128): Add, Sub, Mul, MulConj, Conj, Abs, AbsSq, Scale
 //
