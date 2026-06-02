@@ -2,7 +2,11 @@
 
 package f32
 
-import "github.com/tphakala/simd/cpu"
+import (
+	"unsafe"
+
+	"github.com/tphakala/simd/cpu"
+)
 
 var (
 	hasNEON = cpu.ARM64.NEON
@@ -118,6 +122,19 @@ func clamp32(dst, a []float32, minVal, maxVal float32) {
 
 func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	vecLen := len(vec)
+	if vecLen == 0 {
+		for i := range rows {
+			results[i] = 0
+		}
+		return
+	}
+	// Mirror dotProduct's NEON length threshold (>= 4): the batch-of-4 kernel
+	// keeps the query vector resident across the group instead of reloading it
+	// per row, which is the only win here since the per-row path is already NEON.
+	if hasNEON && len(rows) >= batchDotRows && vecLen >= 4 {
+		dotProductBatchKernel(results, rows, vec, vecLen)
+		return
+	}
 	for i, row := range rows {
 		n := min(len(row), vecLen)
 		if n == 0 {
@@ -128,14 +145,136 @@ func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	}
 }
 
+// dotProductBatchKernel scores rows against vec in groups of four, keeping the
+// query vector resident across each group via dotProduct4NEON instead of
+// reloading it per row. Rows shorter than vecLen (and any tail past the last
+// full group of four) fall back to the per-row dotProduct, so results stay
+// anchored to the scalar contract regardless of row shape.
+func dotProductBatchKernel(results []float32, rows [][]float32, vec []float32, vecLen int) {
+	i := 0
+	for i+3 < len(rows) {
+		row0, row1, row2, row3 := rows[i], rows[i+1], rows[i+2], rows[i+3]
+		if len(row0) >= vecLen && len(row1) >= vecLen && len(row2) >= vecLen && len(row3) >= vecLen {
+			res := (*float32)(unsafe.Pointer(&results[i]))
+			r0 := (*float32)(unsafe.Pointer(&row0[0]))
+			r1 := (*float32)(unsafe.Pointer(&row1[0]))
+			r2 := (*float32)(unsafe.Pointer(&row2[0]))
+			r3 := (*float32)(unsafe.Pointer(&row3[0]))
+			q := (*float32)(unsafe.Pointer(&vec[0]))
+			dotProduct4NEON(res, r0, r1, r2, r3, q, vecLen)
+			i += 4
+			continue
+		}
+		for j := range 4 {
+			row := rows[i+j]
+			n := min(len(row), vecLen)
+			if n == 0 {
+				results[i+j] = 0
+			} else {
+				results[i+j] = dotProduct(row[:n], vec[:n])
+			}
+		}
+		i += 4
+	}
+	for ; i < len(rows); i++ {
+		row := rows[i]
+		n := min(len(row), vecLen)
+		if n == 0 {
+			results[i] = 0
+		} else {
+			results[i] = dotProduct(row[:n], vec[:n])
+		}
+	}
+}
+
 func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bool {
-	dotProductIndexedGo(dst, base, query, rowIDs, dims)
-	return false
+	n := min(len(dst), len(rowIDs))
+	if n == 0 {
+		return false
+	}
+	if !hasNEON || !batchDotIndexedSIMDEligible(n, dims, len(query)) {
+		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
+		return false
+	}
+	maxRow := fullRowMaxIndex(len(base), dims, dims)
+	if maxRow < 0 {
+		dotProductIndexedFallback(dst[:n], base, query, rowIDs[:n], dims)
+		return false
+	}
+
+	queryFull := query[:dims]
+	usedSIMD := false
+	i := 0
+	for ; i+batchDotRows-1 < n; i += batchDotRows {
+		id0, id1, id2, id3 := rowIDs[i], rowIDs[i+1], rowIDs[i+2], rowIDs[i+3]
+		if rowIDInFullRange(id0, maxRow) && rowIDInFullRange(id1, maxRow) && rowIDInFullRange(id2, maxRow) && rowIDInFullRange(id3, maxRow) {
+			off0 := int(id0) * dims
+			off1 := int(id1) * dims
+			off2 := int(id2) * dims
+			off3 := int(id3) * dims
+			dotProduct4Batch(dst, i, base, off0, off1, off2, off3, queryFull, dims)
+			usedSIMD = true
+			continue
+		}
+		for j := range batchDotRows {
+			dst[i+j] = dotProductIndexedTail(base, query, queryFull, rowIDs[i+j], dims, maxRow)
+		}
+	}
+	for ; i < n; i++ {
+		dst[i] = dotProductIndexedTail(base, query, queryFull, rowIDs[i], dims, maxRow)
+	}
+	return usedSIMD
 }
 
 func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) bool {
-	dotProductStridedGo(dst, base, query, rowCount, dims, stride)
-	return false
+	if rowCount <= 0 || len(dst) == 0 {
+		return false
+	}
+	n := min(len(dst), rowCount)
+	if !hasNEON || !batchDotStridedSIMDEligible(n, dims, stride, len(query)) {
+		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
+		return false
+	}
+	maxRow := fullRowMaxIndex(len(base), dims, stride)
+	if maxRow < 0 {
+		dotProductStridedFallback(dst[:n], base, query, n, dims, stride)
+		return false
+	}
+
+	queryFull := query[:dims]
+	usedSIMD := false
+	i := 0
+	for ; i+batchDotRows-1 < n; i += batchDotRows {
+		if i+batchDotRows-1 <= maxRow {
+			off0 := i * stride
+			off1 := off0 + stride
+			off2 := off1 + stride
+			off3 := off2 + stride
+			dotProduct4Batch(dst, i, base, off0, off1, off2, off3, queryFull, dims)
+			usedSIMD = true
+			continue
+		}
+		for j := range batchDotRows {
+			dst[i+j] = dotProductStridedTail(base, query, queryFull, i+j, dims, stride, maxRow)
+		}
+	}
+	for ; i < n; i++ {
+		dst[i] = dotProductStridedTail(base, query, queryFull, i, dims, stride, maxRow)
+	}
+	return usedSIMD
+}
+
+// dotProduct4Batch scores four full rows (base[off0..off3], each dims long)
+// against query and writes the four results starting at dst[di], centralizing
+// the unsafe pointer setup shared by the indexed and strided batch loops.
+func dotProduct4Batch(dst []float32, di int, base []float32, off0, off1, off2, off3 int, query []float32, dims int) {
+	results := (*float32)(unsafe.Pointer(&dst[di]))
+	r0 := (*float32)(unsafe.Pointer(&base[off0]))
+	r1 := (*float32)(unsafe.Pointer(&base[off1]))
+	r2 := (*float32)(unsafe.Pointer(&base[off2]))
+	r3 := (*float32)(unsafe.Pointer(&base[off3]))
+	q := (*float32)(unsafe.Pointer(&query[0]))
+	dotProduct4NEON(results, r0, r1, r2, r3, q, dims)
 }
 
 func convolveValid32(dst, signal, kernel []float32) {
@@ -169,6 +308,9 @@ func accumulateAdd32(dst, src []float32) {
 
 //go:noescape
 func dotProductNEON(a, b []float32) float32
+
+//go:noescape
+func dotProduct4NEON(results, row0, row1, row2, row3, vec *float32, n int)
 
 //go:noescape
 func addNEON(dst, a, b []float32)

@@ -2,7 +2,11 @@
 
 package f64
 
-import "github.com/tphakala/simd/cpu"
+import (
+	"unsafe"
+
+	"github.com/tphakala/simd/cpu"
+)
 
 // Minimum number of float64 elements required for SIMD operations.
 // AVX processes 4 float64 values per 256-bit register.
@@ -317,13 +321,72 @@ func cumulativeSum64(dst, a []float64) {
 
 func dotProductBatch64(results []float64, rows [][]float64, vec []float64) {
 	vecLen := len(vec)
-	for i, row := range rows {
+	if vecLen == 0 {
+		for i := range rows {
+			results[i] = 0
+		}
+		return
+	}
+	switch {
+	case cpu.X86.AVX512F && cpu.X86.AVX512VL && len(rows) >= 4 && vecLen >= minAVX512Elements:
+		dotProductBatchKernel(true, results, rows, vec, vecLen)
+	case cpu.X86.AVX && cpu.X86.FMA && len(rows) >= 4 && vecLen >= minAVXElements:
+		dotProductBatchKernel(false, results, rows, vec, vecLen)
+	default:
+		for i, row := range rows {
+			n := min(len(row), vecLen)
+			if n == 0 {
+				results[i] = 0
+				continue
+			}
+			results[i] = dotProduct(row[:n], vec[:n])
+		}
+	}
+}
+
+// dotProductBatchKernel scores rows against vec in groups of four, keeping the
+// query vector resident across each group via dotProduct4AVX/dotProduct4AVX512
+// instead of reloading it per row. Rows shorter than vecLen (and any tail past
+// the last full group of four) fall back to the per-row dotProduct, so results
+// stay anchored to the scalar contract regardless of row shape.
+func dotProductBatchKernel(useAVX512 bool, results []float64, rows [][]float64, vec []float64, vecLen int) {
+	i := 0
+	for i+3 < len(rows) {
+		row0, row1, row2, row3 := rows[i], rows[i+1], rows[i+2], rows[i+3]
+		if len(row0) >= vecLen && len(row1) >= vecLen && len(row2) >= vecLen && len(row3) >= vecLen {
+			res := (*float64)(unsafe.Pointer(&results[i]))
+			r0 := (*float64)(unsafe.Pointer(&row0[0]))
+			r1 := (*float64)(unsafe.Pointer(&row1[0]))
+			r2 := (*float64)(unsafe.Pointer(&row2[0]))
+			r3 := (*float64)(unsafe.Pointer(&row3[0]))
+			q := (*float64)(unsafe.Pointer(&vec[0]))
+			if useAVX512 {
+				dotProduct4AVX512(res, r0, r1, r2, r3, q, vecLen)
+			} else {
+				dotProduct4AVX(res, r0, r1, r2, r3, q, vecLen)
+			}
+			i += 4
+			continue
+		}
+		for j := range 4 {
+			row := rows[i+j]
+			n := min(len(row), vecLen)
+			if n == 0 {
+				results[i+j] = 0
+			} else {
+				results[i+j] = dotProduct(row[:n], vec[:n])
+			}
+		}
+		i += 4
+	}
+	for ; i < len(rows); i++ {
+		row := rows[i]
 		n := min(len(row), vecLen)
 		if n == 0 {
 			results[i] = 0
-			continue
+		} else {
+			results[i] = dotProduct(row[:n], vec[:n])
 		}
-		results[i] = dotProduct(row[:n], vec[:n])
 	}
 }
 
@@ -532,6 +595,9 @@ func sigmoidAVX(dst, src []float64)
 func dotProductAVX(a, b []float64) float64
 
 //go:noescape
+func dotProduct4AVX(results, row0, row1, row2, row3, vec *float64, n int)
+
+//go:noescape
 func convolveDecimateAVX(dst, signal, kernel []float64, factor, phase int)
 
 //go:noescape
@@ -604,6 +670,9 @@ func addScaledAVX(dst []float64, alpha float64, s []float64)
 //
 //go:noescape
 func dotProductAVX512(a, b []float64) float64
+
+//go:noescape
+func dotProduct4AVX512(results, row0, row1, row2, row3, vec *float64, n int)
 
 //go:noescape
 func addAVX512(dst, a, b []float64)

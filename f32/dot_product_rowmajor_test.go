@@ -107,7 +107,8 @@ func TestDotProductRowMajorOptimizedStatus(t *testing.T) {
 
 	indexedUsed := DotProductIndexed(indexedDst, base, query, rowIDs, dims)
 	stridedUsed := DotProductStrided(stridedDst, base, query, rows, dims, dims)
-	wantOptimized := runtime.GOARCH == "amd64" && ((cpu.X86.AVX512F && cpu.X86.AVX512VL) || (cpu.X86.AVX && cpu.X86.FMA))
+	wantOptimized := (runtime.GOARCH == "amd64" && ((cpu.X86.AVX512F && cpu.X86.AVX512VL) || (cpu.X86.AVX && cpu.X86.FMA))) ||
+		(runtime.GOARCH == "arm64" && cpu.HasNEON())
 	if indexedUsed != wantOptimized {
 		t.Fatalf("indexed optimized status = %v, want %v (cpu=%s)", indexedUsed, wantOptimized, cpu.Info())
 	}

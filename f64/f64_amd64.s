@@ -1176,6 +1176,324 @@ dot_512_done:
     VZEROUPPER
     RET
 
+// func dotProduct4AVX(results, row0, row1, row2, row3, vec *float64, n int)
+// Computes four dot products against the same vec, reusing each vec load.
+// Two accumulator banks per row (a/b) hide FMA latency; 16 doubles per row per
+// main iteration (4 chunks of 4 lanes). Tail reuses dotProductAVX's reduction.
+TEXT ·dotProduct4AVX(SB), NOSPLIT, $0-56
+    MOVQ results+0(FP), DX
+    MOVQ row0+8(FP), SI
+    MOVQ row1+16(FP), R8
+    MOVQ row2+24(FP), R9
+    MOVQ row3+32(FP), R10
+    MOVQ vec+40(FP), DI
+    MOVQ n+48(FP), CX
+
+    VXORPD Y0, Y0, Y0          // acc0a
+    VXORPD Y3, Y3, Y3          // acc1a
+    VXORPD Y4, Y4, Y4          // acc2a
+    VXORPD Y5, Y5, Y5          // acc3a
+    VXORPD Y6, Y6, Y6          // acc0b
+    VXORPD Y7, Y7, Y7          // acc1b
+    VXORPD Y8, Y8, Y8          // acc2b
+    VXORPD Y9, Y9, Y9          // acc3b
+
+    MOVQ CX, AX
+    SHRQ $4, AX                // n / 16
+    JZ   dot4_avx_loop4_check
+
+dot4_avx_loop16:
+    VMOVUPD (DI), Y1
+    VMOVUPD (SI), Y2
+    VFMADD231PD Y1, Y2, Y0
+    VMOVUPD (R8), Y2
+    VFMADD231PD Y1, Y2, Y3
+    VMOVUPD (R9), Y2
+    VFMADD231PD Y1, Y2, Y4
+    VMOVUPD (R10), Y2
+    VFMADD231PD Y1, Y2, Y5
+
+    VMOVUPD 32(DI), Y1
+    VMOVUPD 32(SI), Y2
+    VFMADD231PD Y1, Y2, Y6
+    VMOVUPD 32(R8), Y2
+    VFMADD231PD Y1, Y2, Y7
+    VMOVUPD 32(R9), Y2
+    VFMADD231PD Y1, Y2, Y8
+    VMOVUPD 32(R10), Y2
+    VFMADD231PD Y1, Y2, Y9
+
+    VMOVUPD 64(DI), Y1
+    VMOVUPD 64(SI), Y2
+    VFMADD231PD Y1, Y2, Y0
+    VMOVUPD 64(R8), Y2
+    VFMADD231PD Y1, Y2, Y3
+    VMOVUPD 64(R9), Y2
+    VFMADD231PD Y1, Y2, Y4
+    VMOVUPD 64(R10), Y2
+    VFMADD231PD Y1, Y2, Y5
+
+    VMOVUPD 96(DI), Y1
+    VMOVUPD 96(SI), Y2
+    VFMADD231PD Y1, Y2, Y6
+    VMOVUPD 96(R8), Y2
+    VFMADD231PD Y1, Y2, Y7
+    VMOVUPD 96(R9), Y2
+    VFMADD231PD Y1, Y2, Y8
+    VMOVUPD 96(R10), Y2
+    VFMADD231PD Y1, Y2, Y9
+
+    ADDQ $128, DI
+    ADDQ $128, SI
+    ADDQ $128, R8
+    ADDQ $128, R9
+    ADDQ $128, R10
+    DECQ AX
+    JNZ  dot4_avx_loop16
+
+dot4_avx_loop4_check:
+    ANDQ $15, CX
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   dot4_avx_reduce
+
+dot4_avx_loop4:
+    VMOVUPD (DI), Y1
+    VMOVUPD (SI), Y2
+    VFMADD231PD Y1, Y2, Y0
+    VMOVUPD (R8), Y2
+    VFMADD231PD Y1, Y2, Y3
+    VMOVUPD (R9), Y2
+    VFMADD231PD Y1, Y2, Y4
+    VMOVUPD (R10), Y2
+    VFMADD231PD Y1, Y2, Y5
+    ADDQ $32, DI
+    ADDQ $32, SI
+    ADDQ $32, R8
+    ADDQ $32, R9
+    ADDQ $32, R10
+    DECQ AX
+    JNZ  dot4_avx_loop4
+
+dot4_avx_reduce:
+    VADDPD Y6, Y0, Y0
+    VADDPD Y7, Y3, Y3
+    VADDPD Y8, Y4, Y4
+    VADDPD Y9, Y5, Y5
+
+    // Reduce acc0 into X0.
+    VEXTRACTF128 $1, Y0, X1
+    VADDPD X1, X0, X0
+    VHADDPD X0, X0, X0
+
+    // Reduce acc1 into X3.
+    VEXTRACTF128 $1, Y3, X1
+    VADDPD X1, X3, X3
+    VHADDPD X3, X3, X3
+
+    // Reduce acc2 into X4.
+    VEXTRACTF128 $1, Y4, X1
+    VADDPD X1, X4, X4
+    VHADDPD X4, X4, X4
+
+    // Reduce acc3 into X5.
+    VEXTRACTF128 $1, Y5, X1
+    VADDPD X1, X5, X5
+    VHADDPD X5, X5, X5
+
+    ANDQ $3, CX
+    JZ   dot4_avx_done
+
+dot4_avx_scalar:
+    VMOVSD (DI), X1
+    VMOVSD (SI), X2
+    VFMADD231SD X1, X2, X0
+    VMOVSD (R8), X2
+    VFMADD231SD X1, X2, X3
+    VMOVSD (R9), X2
+    VFMADD231SD X1, X2, X4
+    VMOVSD (R10), X2
+    VFMADD231SD X1, X2, X5
+    ADDQ $8, DI
+    ADDQ $8, SI
+    ADDQ $8, R8
+    ADDQ $8, R9
+    ADDQ $8, R10
+    DECQ CX
+    JNZ  dot4_avx_scalar
+
+dot4_avx_done:
+    VMOVSD X0, (DX)
+    VMOVSD X3, 8(DX)
+    VMOVSD X4, 16(DX)
+    VMOVSD X5, 24(DX)
+    VZEROUPPER
+    RET
+
+// func dotProduct4AVX512(results, row0, row1, row2, row3, vec *float64, n int)
+// Computes four dot products against the same vec, reusing each vec load.
+// Two accumulator banks per row (a/b); 32 doubles per row per main iteration
+// (4 chunks of 8 lanes). Reduction stays on AVX512F (VEXTRACTF64X4, no DQ),
+// matching the AVX512F+VL dispatch gate.
+TEXT ·dotProduct4AVX512(SB), NOSPLIT, $0-56
+    MOVQ results+0(FP), DX
+    MOVQ row0+8(FP), SI
+    MOVQ row1+16(FP), R8
+    MOVQ row2+24(FP), R9
+    MOVQ row3+32(FP), R10
+    MOVQ vec+40(FP), DI
+    MOVQ n+48(FP), CX
+
+    VPXORQ Z0, Z0, Z0          // acc0a
+    VPXORQ Z3, Z3, Z3          // acc1a
+    VPXORQ Z4, Z4, Z4          // acc2a
+    VPXORQ Z5, Z5, Z5          // acc3a
+    VPXORQ Z6, Z6, Z6          // acc0b
+    VPXORQ Z7, Z7, Z7          // acc1b
+    VPXORQ Z8, Z8, Z8          // acc2b
+    VPXORQ Z9, Z9, Z9          // acc3b
+
+    MOVQ CX, AX
+    SHRQ $5, AX                // n / 32
+    JZ   dot4_512_loop8_check
+
+dot4_512_loop32:
+    VMOVUPD (DI), Z1
+    VMOVUPD (SI), Z2
+    VFMADD231PD Z1, Z2, Z0
+    VMOVUPD (R8), Z2
+    VFMADD231PD Z1, Z2, Z3
+    VMOVUPD (R9), Z2
+    VFMADD231PD Z1, Z2, Z4
+    VMOVUPD (R10), Z2
+    VFMADD231PD Z1, Z2, Z5
+
+    VMOVUPD 64(DI), Z1
+    VMOVUPD 64(SI), Z2
+    VFMADD231PD Z1, Z2, Z6
+    VMOVUPD 64(R8), Z2
+    VFMADD231PD Z1, Z2, Z7
+    VMOVUPD 64(R9), Z2
+    VFMADD231PD Z1, Z2, Z8
+    VMOVUPD 64(R10), Z2
+    VFMADD231PD Z1, Z2, Z9
+
+    VMOVUPD 128(DI), Z1
+    VMOVUPD 128(SI), Z2
+    VFMADD231PD Z1, Z2, Z0
+    VMOVUPD 128(R8), Z2
+    VFMADD231PD Z1, Z2, Z3
+    VMOVUPD 128(R9), Z2
+    VFMADD231PD Z1, Z2, Z4
+    VMOVUPD 128(R10), Z2
+    VFMADD231PD Z1, Z2, Z5
+
+    VMOVUPD 192(DI), Z1
+    VMOVUPD 192(SI), Z2
+    VFMADD231PD Z1, Z2, Z6
+    VMOVUPD 192(R8), Z2
+    VFMADD231PD Z1, Z2, Z7
+    VMOVUPD 192(R9), Z2
+    VFMADD231PD Z1, Z2, Z8
+    VMOVUPD 192(R10), Z2
+    VFMADD231PD Z1, Z2, Z9
+
+    ADDQ $256, DI
+    ADDQ $256, SI
+    ADDQ $256, R8
+    ADDQ $256, R9
+    ADDQ $256, R10
+    DECQ AX
+    JNZ  dot4_512_loop32
+
+dot4_512_loop8_check:
+    ANDQ $31, CX
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   dot4_512_reduce
+
+dot4_512_loop8:
+    VMOVUPD (DI), Z1
+    VMOVUPD (SI), Z2
+    VFMADD231PD Z1, Z2, Z0
+    VMOVUPD (R8), Z2
+    VFMADD231PD Z1, Z2, Z3
+    VMOVUPD (R9), Z2
+    VFMADD231PD Z1, Z2, Z4
+    VMOVUPD (R10), Z2
+    VFMADD231PD Z1, Z2, Z5
+    ADDQ $64, DI
+    ADDQ $64, SI
+    ADDQ $64, R8
+    ADDQ $64, R9
+    ADDQ $64, R10
+    DECQ AX
+    JNZ  dot4_512_loop8
+
+dot4_512_reduce:
+    VADDPD Z6, Z0, Z0
+    VADDPD Z7, Z3, Z3
+    VADDPD Z8, Z4, Z4
+    VADDPD Z9, Z5, Z5
+
+    // Reduce acc0 into X0. VEXTRACTF64X4 (AVX512F) keeps the upper-256 extract
+    // off the AVX512DQ path, matching the AVX512F+VL dispatch gate.
+    VEXTRACTF64X4 $1, Z0, Y1
+    VADDPD Y1, Y0, Y0
+    VEXTRACTF128 $1, Y0, X1
+    VADDPD X1, X0, X0
+    VHADDPD X0, X0, X0
+
+    // Reduce acc1 into X3.
+    VEXTRACTF64X4 $1, Z3, Y1
+    VADDPD Y1, Y3, Y3
+    VEXTRACTF128 $1, Y3, X1
+    VADDPD X1, X3, X3
+    VHADDPD X3, X3, X3
+
+    // Reduce acc2 into X4.
+    VEXTRACTF64X4 $1, Z4, Y1
+    VADDPD Y1, Y4, Y4
+    VEXTRACTF128 $1, Y4, X1
+    VADDPD X1, X4, X4
+    VHADDPD X4, X4, X4
+
+    // Reduce acc3 into X5.
+    VEXTRACTF64X4 $1, Z5, Y1
+    VADDPD Y1, Y5, Y5
+    VEXTRACTF128 $1, Y5, X1
+    VADDPD X1, X5, X5
+    VHADDPD X5, X5, X5
+
+    ANDQ $7, CX
+    JZ   dot4_512_done
+
+dot4_512_scalar:
+    VMOVSD (DI), X1
+    VMOVSD (SI), X2
+    VFMADD231SD X1, X2, X0
+    VMOVSD (R8), X2
+    VFMADD231SD X1, X2, X3
+    VMOVSD (R9), X2
+    VFMADD231SD X1, X2, X4
+    VMOVSD (R10), X2
+    VFMADD231SD X1, X2, X5
+    ADDQ $8, DI
+    ADDQ $8, SI
+    ADDQ $8, R8
+    ADDQ $8, R9
+    ADDQ $8, R10
+    DECQ CX
+    JNZ  dot4_512_scalar
+
+dot4_512_done:
+    VMOVSD X0, (DX)
+    VMOVSD X3, 8(DX)
+    VMOVSD X4, 16(DX)
+    VMOVSD X5, 24(DX)
+    VZEROUPPER
+    RET
+
 // func addAVX512(dst, a, b []float64)
 TEXT ·addAVX512(SB), NOSPLIT, $0-72
     MOVQ dst_base+0(FP), DX
