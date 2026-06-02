@@ -728,10 +728,10 @@ TEXT ·dotProductAVX512(SB), NOSPLIT, $0-52
     MOVQ b_base+24(FP), DI
 
     // Initialize 4 independent accumulators
-    VXORPS Z0, Z0, Z0          // acc0
-    VXORPS Z3, Z3, Z3          // acc1
-    VXORPS Z4, Z4, Z4          // acc2
-    VXORPS Z5, Z5, Z5          // acc3
+    VPXORD Z0, Z0, Z0          // acc0
+    VPXORD Z3, Z3, Z3          // acc1
+    VPXORD Z4, Z4, Z4          // acc2
+    VPXORD Z5, Z5, Z5          // acc3
 
     // Process 64 elements per iteration (4 vectors × 16 floats)
     MOVQ CX, AX
@@ -788,7 +788,8 @@ dot32_512_loop16:
     JNZ  dot32_512_loop16
 
 dot32_512_remainder:
-    VEXTRACTF32X8 $1, Z0, Y1
+    // VEXTRACTF64X4 (AVX512F): same upper-256 extract as VEXTRACTF32X8, no AVX512DQ dep.
+    VEXTRACTF64X4 $1, Z0, Y1
     VADDPS Y1, Y0, Y0
     VEXTRACTF128 $1, Y0, X1
     VADDPS X1, X0, X0
@@ -1091,10 +1092,10 @@ TEXT ·sumAVX512(SB), NOSPLIT, $0-28
     MOVQ a_len+8(FP), CX
 
     // Initialize 4 independent accumulators
-    VXORPS Z0, Z0, Z0          // acc0
-    VXORPS Z3, Z3, Z3          // acc1
-    VXORPS Z4, Z4, Z4          // acc2
-    VXORPS Z5, Z5, Z5          // acc3
+    VPXORD Z0, Z0, Z0          // acc0
+    VPXORD Z3, Z3, Z3          // acc1
+    VPXORD Z4, Z4, Z4          // acc2
+    VPXORD Z5, Z5, Z5          // acc3
 
     // Process 64 elements per iteration (4 vectors × 16 floats)
     MOVQ CX, AX
@@ -1128,7 +1129,8 @@ sum32_512_loop16:
     JNZ  sum32_512_loop16
 
 sum32_512_remainder:
-    VEXTRACTF32X8 $1, Z0, Y1
+    // VEXTRACTF64X4 (AVX512F): same upper-256 extract as VEXTRACTF32X8, no AVX512DQ dep.
+    VEXTRACTF64X4 $1, Z0, Y1
     VADDPS Y1, Y0, Y0
     VEXTRACTF128 $1, Y0, X1
     VADDPS X1, X0, X0
@@ -1171,7 +1173,8 @@ min32_512_loop16:
     JNZ  min32_512_loop16
 
 min32_512_reduce:
-    VEXTRACTF32X8 $1, Z0, Y1
+    // VEXTRACTF64X4 (AVX512F): same upper-256 extract as VEXTRACTF32X8, no AVX512DQ dep.
+    VEXTRACTF64X4 $1, Z0, Y1
     VMINPS Y0, Y1, Y0
     VEXTRACTF128 $1, Y0, X1
     VMINPS X0, X1, X0
@@ -1216,7 +1219,8 @@ max32_512_loop16:
     JNZ  max32_512_loop16
 
 max32_512_reduce:
-    VEXTRACTF32X8 $1, Z0, Y1
+    // VEXTRACTF64X4 (AVX512F): same upper-256 extract as VEXTRACTF32X8, no AVX512DQ dep.
+    VEXTRACTF64X4 $1, Z0, Y1
     VMAXPS Y0, Y1, Y0
     VEXTRACTF128 $1, Y0, X1
     VMAXPS X0, X1, X0
@@ -1284,7 +1288,7 @@ TEXT ·negAVX512(SB), NOSPLIT, $0-48
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
-    VXORPS Z2, Z2, Z2
+    VPXORD Z2, Z2, Z2
 
     MOVQ CX, AX
     SHRQ $4, AX
@@ -4788,10 +4792,10 @@ cd_avx512_outer:
     LEAQ (R10)(BX*4), SI
     MOVQ R11, DI
 
-    VXORPS Z0, Z0, Z0
-    VXORPS Z3, Z3, Z3
-    VXORPS Z4, Z4, Z4
-    VXORPS Z5, Z5, Z5
+    VPXORD Z0, Z0, Z0
+    VPXORD Z3, Z3, Z3
+    VPXORD Z4, Z4, Z4
+    VPXORD Z5, Z5, Z5
 
     MOVQ R12, CX
     MOVQ CX, AX
@@ -4837,7 +4841,8 @@ cd_avx512_loop16:
     JNZ  cd_avx512_loop16
 
 cd_avx512_reduce:
-    VEXTRACTF32X8 $1, Z0, Y1
+    // VEXTRACTF64X4 (AVX512F): same upper-256 extract as VEXTRACTF32X8, no AVX512DQ dep.
+    VEXTRACTF64X4 $1, Z0, Y1
     VADDPS Y1, Y0, Y0
     VEXTRACTF128 $1, Y0, X1
     VADDPS X1, X0, X0
@@ -5104,14 +5109,14 @@ TEXT ·dotProduct4AVX512(SB), NOSPLIT, $0-56
     MOVQ vec+40(FP), DI
     MOVQ n+48(FP), CX
 
-    VXORPS Z0, Z0, Z0          // acc0a
-    VXORPS Z3, Z3, Z3          // acc1a
-    VXORPS Z4, Z4, Z4          // acc2a
-    VXORPS Z5, Z5, Z5          // acc3a
-    VXORPS Z6, Z6, Z6          // acc0b
-    VXORPS Z7, Z7, Z7          // acc1b
-    VXORPS Z8, Z8, Z8          // acc2b
-    VXORPS Z9, Z9, Z9          // acc3b
+    VPXORD Z0, Z0, Z0          // acc0a
+    VPXORD Z3, Z3, Z3          // acc1a
+    VPXORD Z4, Z4, Z4          // acc2a
+    VPXORD Z5, Z5, Z5          // acc3a
+    VPXORD Z6, Z6, Z6          // acc0b
+    VPXORD Z7, Z7, Z7          // acc1b
+    VPXORD Z8, Z8, Z8          // acc2b
+    VPXORD Z9, Z9, Z9          // acc3b
 
     MOVQ CX, AX
     SHRQ $6, AX                // n / 64

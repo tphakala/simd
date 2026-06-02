@@ -1094,10 +1094,10 @@ TEXT ·dotProductAVX512(SB), NOSPLIT, $0-56
     MOVQ b_base+24(FP), DI
 
     // Initialize 4 independent accumulators
-    VXORPD Z0, Z0, Z0          // acc0
-    VXORPD Z3, Z3, Z3          // acc1
-    VXORPD Z4, Z4, Z4          // acc2
-    VXORPD Z5, Z5, Z5          // acc3
+    VPXORQ Z0, Z0, Z0          // acc0
+    VPXORQ Z3, Z3, Z3          // acc1
+    VPXORQ Z4, Z4, Z4          // acc2
+    VPXORQ Z5, Z5, Z5          // acc3
 
     // Process 32 elements per iteration (4 vectors × 8 doubles)
     MOVQ CX, AX
@@ -1455,10 +1455,10 @@ TEXT ·sumAVX512(SB), NOSPLIT, $0-32
     MOVQ a_len+8(FP), CX
 
     // Initialize 4 independent accumulators
-    VXORPD Z0, Z0, Z0          // acc0
-    VXORPD Z3, Z3, Z3          // acc1
-    VXORPD Z4, Z4, Z4          // acc2
-    VXORPD Z5, Z5, Z5          // acc3
+    VPXORQ Z0, Z0, Z0          // acc0
+    VPXORQ Z3, Z3, Z3          // acc1
+    VPXORQ Z4, Z4, Z4          // acc2
+    VPXORQ Z5, Z5, Z5          // acc3
 
     // Process 32 elements per iteration (4 vectors × 8 doubles)
     MOVQ CX, AX
@@ -1613,7 +1613,8 @@ TEXT ·absAVX512(SB), NOSPLIT, $0-48
 
 abs_512_loop8:
     VMOVUPD (SI), Z0
-    VANDPD Z0, Z2, Z1
+    // VPANDQ (AVX512F) integer-domain AND: identical bits to VANDPD (AVX512DQ), no DQ dep.
+    VPANDQ Z0, Z2, Z1
     VMOVUPD Z1, (DX)
     ADDQ $64, SI
     ADDQ $64, DX
@@ -1643,7 +1644,7 @@ TEXT ·negAVX512(SB), NOSPLIT, $0-48
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
-    VXORPD Z2, Z2, Z2
+    VPXORQ Z2, Z2, Z2
 
     MOVQ CX, AX
     SHRQ $3, AX
@@ -1908,10 +1909,10 @@ TEXT ·varianceAVX512(SB), NOSPLIT, $0-40
     VBROADCASTSD mean+24(FP), Z2
 
     // Initialize 4 accumulators for parallel reduction
-    VXORPD Z0, Z0, Z0
-    VXORPD Z3, Z3, Z3
-    VXORPD Z4, Z4, Z4
-    VXORPD Z5, Z5, Z5
+    VPXORQ Z0, Z0, Z0
+    VPXORQ Z3, Z3, Z3
+    VPXORQ Z4, Z4, Z4
+    VPXORQ Z5, Z5, Z5
 
     // Process 32 elements (4 vectors of 8) per iteration
     MOVQ CX, AX
@@ -1994,10 +1995,10 @@ TEXT ·euclideanDistanceAVX512(SB), NOSPLIT, $0-56
     MOVQ b_base+24(FP), DI
 
     // Initialize 4 independent accumulators
-    VXORPD Z0, Z0, Z0          // acc0
-    VXORPD Z3, Z3, Z3          // acc1
-    VXORPD Z4, Z4, Z4          // acc2
-    VXORPD Z5, Z5, Z5          // acc3
+    VPXORQ Z0, Z0, Z0          // acc0
+    VPXORQ Z3, Z3, Z3          // acc1
+    VPXORQ Z4, Z4, Z4          // acc2
+    VPXORQ Z5, Z5, Z5          // acc3
 
     // Process 32 elements per iteration
     MOVQ CX, AX
@@ -4132,10 +4133,10 @@ cd_avx512_outer:
     LEAQ (R10)(BX*8), SI
     MOVQ R11, DI
 
-    VXORPD Z0, Z0, Z0
-    VXORPD Z3, Z3, Z3
-    VXORPD Z4, Z4, Z4
-    VXORPD Z5, Z5, Z5
+    VPXORQ Z0, Z0, Z0
+    VPXORQ Z3, Z3, Z3
+    VPXORQ Z4, Z4, Z4
+    VPXORQ Z5, Z5, Z5
 
     MOVQ R12, CX
     MOVQ CX, AX
