@@ -4275,13 +4275,14 @@ TEXT ·realFFTUnpackAVX(SB), NOSPLIT, $0-152
     SHLQ $2, R9                      // Wrong, redo this
 
     // Recalculate: R9 = &zRe[n-8], R10 = &zIm[n-8]
-    MOVQ CX, R14                     // R14 = n
-    SUBQ $8, R14                     // R14 = n - 8
-    SHLQ $2, R14                     // R14 = (n-8) * 4 = byte offset
+    // BX (not R14) holds byte offsets: R14 is the goroutine g pointer on Go amd64.
+    MOVQ CX, BX                      // BX = n
+    SUBQ $8, BX                      // BX = n - 8
+    SHLQ $2, BX                      // BX = (n-8) * 4 = byte offset
     MOVQ DI, R9
-    ADDQ R14, R9                     // R9 = &zRe[n-8]
+    ADDQ BX, R9                      // R9 = &zRe[n-8]
     MOVQ R8, R10
-    ADDQ R14, R10                    // R10 = &zIm[n-8]
+    ADDQ BX, R10                     // R10 = &zIm[n-8]
 
     // Offset forward pointers to start at index 1
     ADDQ $4, DI                      // DI = &zRe[1]
@@ -4291,9 +4292,9 @@ TEXT ·realFFTUnpackAVX(SB), NOSPLIT, $0-152
 
     // Load constants
     // Reverse permutation mask: [7, 6, 5, 4, 3, 2, 1, 0]
-    MOVQ $0x0001000200030004, R14
-    MOVQ R14, X14
-    MOVQ $0x0005000600070000, R14    // Wrong format, need 32-bit indices
+    MOVQ $0x0001000200030004, BX
+    MOVQ BX, X14
+    MOVQ $0x0005000600070000, BX     // Wrong format, need 32-bit indices
 
     // Actually, VPERMPS uses 32-bit indices. Let me use a different approach.
     // Create reverse mask in YMM register
@@ -4305,8 +4306,8 @@ TEXT ·realFFTUnpackAVX(SB), NOSPLIT, $0-152
     // Actually, let's load the permutation mask from memory (cleaner)
 
     // Broadcast 0.5 (0x3F000000 = 0.5f)
-    MOVL $0x3F000000, R14
-    MOVD R14, X13
+    MOVL $0x3F000000, BX
+    MOVD BX, X13
     VBROADCASTSS X13, Y13            // Y13 = 0.5 broadcast
 
     // Sign mask for negation (0x80000000)
@@ -4408,25 +4409,25 @@ realfft_remainder:
     INCQ AX                          // AX = 1 + 8 * num_full_iterations = starting k
 
     // Offset pointers to starting k
-    MOVQ AX, R14
-    SHLQ $2, R14                     // R14 = k * 4 bytes
-    ADDQ R14, DX                     // DX = &outRe[k]
-    ADDQ R14, SI                     // SI = &outIm[k]
-    ADDQ R14, DI                     // DI = &zRe[k]
-    ADDQ R14, R8                     // R8 = &zIm[k]
+    MOVQ AX, BX
+    SHLQ $2, BX                      // BX = k * 4 bytes
+    ADDQ BX, DX                      // DX = &outRe[k]
+    ADDQ BX, SI                      // SI = &outIm[k]
+    ADDQ BX, DI                      // DI = &zRe[k]
+    ADDQ BX, R8                      // R8 = &zIm[k]
 
     // Twiddle offset is (k-1)
     DECQ AX
-    MOVQ AX, R14
-    SHLQ $2, R14
-    ADDQ R14, R11                    // R11 = &twRe[k-1]
-    ADDQ R14, R12                    // R12 = &twIm[k-1]
+    MOVQ AX, BX
+    SHLQ $2, BX
+    ADDQ BX, R11                     // R11 = &twRe[k-1]
+    ADDQ BX, R12                     // R12 = &twIm[k-1]
     INCQ AX                          // Restore AX = k
 
 realfft_scalar:
     // Calculate mirror index: nk = n - k
-    MOVQ CX, R14
-    SUBQ AX, R14                     // R14 = n - k = nk
+    MOVQ CX, BX
+    SUBQ AX, BX                      // BX = n - k = nk
 
     // Load Z[k]
     VMOVSS (DI), X0                  // X0 = zRe[k]
@@ -4434,7 +4435,7 @@ realfft_scalar:
 
     // Load conj(Z[n-k])
     MOVQ zRe_base+48(FP), R15
-    MOVQ R14, R9
+    MOVQ BX, R9
     SHLQ $2, R9
     ADDQ R9, R15
     VMOVSS (R15), X2                 // X2 = zRe[nk]
@@ -4444,8 +4445,8 @@ realfft_scalar:
     VMOVSS (R15), X3                 // X3 = zIm[nk]
 
     // Load 0.5 constant (0x3F000000 = 0.5f)
-    MOVL $0x3F000000, R14
-    MOVD R14, X13
+    MOVL $0x3F000000, BX
+    MOVD BX, X13
 
     // Negate X3 for conjugate: znkIm = -zIm[nk]
     VXORPS X14, X14, X14
