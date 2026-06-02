@@ -435,6 +435,7 @@ func deinterleave2_64(a, b, src []float64) {
 const (
 	interleave3Streams = 3
 	interleave4Streams = 4
+	interleave6Streams = 6
 	interleave8Streams = 8
 
 	interleaveBlockFrames = 4
@@ -457,6 +458,14 @@ func interleaveN64(dst []float64, srcs [][]float64, n int) {
 		if cpu.X86.AVX && n >= interleaveBlockFrames {
 			blk := n &^ interleaveBlockMask
 			interleave4AVX(dst, srcs[0], srcs[1], srcs[2], srcs[3], blk)
+			interleaveNTailGo(dst, srcs, blk, n)
+			return
+		}
+		interleaveNGo(dst, srcs, n)
+	case interleave6Streams:
+		if cpu.X86.AVX2 && n >= interleaveBlockFrames {
+			blk := n &^ interleaveBlockMask
+			interleave6AVX(dst, srcs[0], srcs[1], srcs[2], srcs[3], srcs[4], srcs[5], blk)
 			interleaveNTailGo(dst, srcs, blk, n)
 			return
 		}
@@ -517,6 +526,14 @@ func deinterleaveN64(dsts [][]float64, src []float64, n int) {
 		if cpu.X86.AVX && n >= interleaveBlockFrames {
 			blk := n &^ interleaveBlockMask
 			deinterleave4AVX(dsts[0], dsts[1], dsts[2], dsts[3], src, blk)
+			deinterleaveNTailGo(dsts, src, blk, n)
+			return
+		}
+		deinterleaveNGo(dsts, src, n)
+	case interleave6Streams:
+		if cpu.X86.AVX2 && n >= interleaveBlockFrames {
+			blk := n &^ interleaveBlockMask
+			deinterleave6AVX(dsts[0], dsts[1], dsts[2], dsts[3], dsts[4], dsts[5], src, blk)
 			deinterleaveNTailGo(dsts, src, blk, n)
 			return
 		}
@@ -844,6 +861,12 @@ func interleave4AVX(dst, s0, s1, s2, s3 []float64, n int)
 
 //go:noescape
 func deinterleave4AVX(d0, d1, d2, d3, src []float64, n int)
+
+//go:noescape
+func interleave6AVX(dst, s0, s1, s2, s3, s4, s5 []float64, n int)
+
+//go:noescape
+func deinterleave6AVX(d0, d1, d2, d3, d4, d5, src []float64, n int)
 
 //go:noescape
 func interleave8AVX(dst []float64, srcs [][]float64, n int)

@@ -127,8 +127,8 @@ fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
-|                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4,8 AVX, N=3 AVX2 / N=2,3,4 NEON; else Go |
-|                 | `DeinterleaveN(dsts, src)`          | Unpack N interleaved streams (any N) | N=2,4,8 AVX, N=3 AVX2 / N=2,3,4 NEON; else Go |
+|                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
+|                 | `DeinterleaveN(dsts, src)`          | Unpack N interleaved streams (any N) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
 |                 | `CubicInterpDot(hist,a,b,c,d,x)`    | Fused cubic interp dot product| 4x / 2x                             |
 |                 | `Int32ToFloat32Scale(dst,src,s)`    | PCM int32 to normalized float | 8x / 4x                             |
 |                 | `Int16ToFloat32Scale(dst,src,s)`    | PCM int16 to normalized float | 8x (AVX2) / 4x (NEON)               |
@@ -156,10 +156,14 @@ streams do not map onto a clean register transpose) on top of the shared N=2/4 (
 and N=2/3/4 (NEON) kernels; all other stream counts use the allocation-free generic
 path. The N=3 case is the 16k -> 48k upsample hot path: the AVX2 gather/blend kernel
 runs roughly 2.8x (interleave) and 3.2x (deinterleave) over the generic loop on AVX2.
-`f64` mirrors the same N=3 and N=8 AVX coverage, processing 4 frames per block (a YMM
-holds 4 doubles): N=3 uses immediate `VPERMPD` gathers merged with `VBLENDPD`, and N=8
-runs two stacked 4x4 transposes (streams 0-3 fill each frame's low YMM, streams 4-7 the
-high YMM).
+The 6-stream AVX2 path (the 8k -> 48k upsample) zips stream pairs into three
+double-wide pair streams, then reuses the f64 N=3 interleave on those pairs, so it
+needs no index tables; it runs roughly 2x (interleave and deinterleave) on AVX2.
+`f64` mirrors the same N=3, N=6, and N=8 AVX coverage, processing 4 frames per block (a
+YMM holds 4 doubles): N=3 uses immediate `VPERMPD` gathers merged with `VBLENDPD`, N=6
+zips pairs at 128-bit-lane granularity with `VPERM2F128` (roughly 4x interleave, 1.5x
+deinterleave), and N=8 runs two stacked 4x4 transposes (streams 0-3 fill each frame's
+low YMM, streams 4-7 the high YMM).
 
 **Row-major batch dot products** (for flat vector stores):
 
