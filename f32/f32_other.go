@@ -19,6 +19,14 @@ func clamp32(dst, a []float32, minVal, maxVal float32) { clampGo(dst, a, minVal,
 func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	dotProductBatch32Go(results, rows, vec)
 }
+func dotProductIndexed(dst, base, query []float32, rowIDs []uint32, dims int) bool {
+	dotProductIndexedGo(dst, base, query, rowIDs, dims)
+	return false
+}
+func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) bool {
+	dotProductStridedGo(dst, base, query, rowCount, dims, stride)
+	return false
+}
 func convolveValid32(dst, signal, kernel []float32) { convolveValid32Go(dst, signal, kernel) }
 func convolveDecimate32(dst, signal, kernel []float32, factor, phase int) {
 	convolveDecimate32Go(dst, signal, kernel, factor, phase)

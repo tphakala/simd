@@ -42,7 +42,7 @@
 //
 // Core arithmetic: Add, Sub, Mul, Div, Scale, AddScalar, AddScaled, FMA
 //
-// Reductions: Sum, DotProduct, DotProductBatch, Min, Max, MinIdx, MaxIdx
+// Reductions: Sum, DotProduct, DotProductBatch, DotProductIndexed, DotProductStrided, Min, Max, MinIdx, MaxIdx
 //
 // Statistics: Mean, Variance, StdDev, EuclideanDistance, Normalize
 //

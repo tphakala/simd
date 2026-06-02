@@ -149,6 +149,15 @@ Same API as `f64` but for `float32` with wider SIMD:
 top of the shared N=2/4 (AVX) and N=2/3/4 (NEON) kernels; all other stream counts
 use the allocation-free generic path.
 
+**Row-major batch dot products** (for flat vector stores):
+
+| Function | Description |
+| --- | --- |
+| `DotProductIndexed(dst, base, query, rowIDs, dims) bool` | Scores selected row-major rows by `uint32` row ID without building `[][]float32`; returns whether an optimized SIMD batch kernel handled at least one batch. |
+| `DotProductStrided(dst, base, query, rowCount, dims, stride) bool` | Scores contiguous or fixed-stride row-major rows; returns whether an optimized SIMD batch kernel handled at least one batch. |
+
+Both APIs are allocation-free and include per-row fallback semantics for unsupported CPUs, tiny shapes, tails, and ragged inputs.
+
 **Additional split-format complex operations** (for FFT pipelines with separate real/imag arrays):
 
 | Category   | Function                              | Description                        | SIMD Width       |
