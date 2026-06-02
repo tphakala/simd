@@ -113,6 +113,28 @@ func TestRiceBestParamMatchesBruteForce(t *testing.T) {
 	}
 }
 
+// TestRiceSumsWide covers the pure-Go path for parameter counts beyond the
+// SIMD fast path's fixed 15-wide range (FLAC's 5-bit method scans k up to 30).
+func TestRiceSumsWide(t *testing.T) {
+	rng := rand.New(rand.NewSource(3))
+	for _, params := range []int{20, 31} {
+		for _, n := range []int{0, 1, 8, 9, 100, 1000} {
+			res := make([]int32, n)
+			for i := range res {
+				res[i] = int32(rng.Uint32())
+			}
+			sums := make([]uint64, params)
+			RiceSums(sums, res)
+			want := riceSumsOracle(res, params)
+			for k := range want {
+				if sums[k] != want[k] {
+					t.Fatalf("params=%d n=%d RiceSums[%d] = %d, want %d", params, n, k, sums[k], want[k])
+				}
+			}
+		}
+	}
+}
+
 func TestRiceBestParamEmpty(t *testing.T) {
 	k, bits := RiceBestParam(nil, 14)
 	if k != 0 || bits != 0 {
