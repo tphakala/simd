@@ -555,3 +555,188 @@ cumsum_neon_loop1:
 
 cumsum_neon_done:
     RET
+
+// func lpcResidualEncodeNEON(res, samples, coeffs []int32, shift uint)
+// Quantized-LPC encode FIR, vectorized across 4 output samples per iteration:
+//
+//	res[i] = samples[i] - int32((Σ_j coeffs[j]*samples[i-1-j]) >> shift)
+//
+// For each tap j the 4-sample window samples[i-1-j..i+2-j] is widened to int64
+// (SMLAL on the low two lanes, SMLAL2 on the high two) and multiply-accumulated
+// into two int64x2 accumulators. After the tap loop each accumulator is
+// arithmetic-shifted right by shift (SSHL by the broadcast -shift, NEON's native
+// signed 64-bit shift), the int64 predictions are narrowed back to int32 (XTN /
+// XTN2) and subtracted from samples[i..i+3]. The first 'order' samples are the
+// verbatim warm-up; the (n-order) mod 4 trailing outputs use a scalar int64
+// recurrence. The dispatch guarantees order >= 1 and n-order >= 4.
+TEXT ·lpcResidualEncodeNEON(SB), NOSPLIT, $0-80
+    MOVD res_base+0(FP), R0
+    MOVD res_len+8(FP), R4           // n
+    MOVD samples_base+24(FP), R1
+    MOVD coeffs_base+48(FP), R2
+    MOVD coeffs_len+56(FP), R3       // order
+    MOVD shift+72(FP), R6
+
+    // warm-up: res[0:order] = samples[0:order]
+    MOVD R1, R10
+    MOVD R0, R11
+    MOVD R3, R9
+lpcenc_neon_warmup:
+    MOVW.P 4(R10), R12
+    MOVW.P R12, 4(R11)
+    SUB $1, R9
+    CBNZ R9, lpcenc_neon_warmup
+
+    SUB $1, R3, R10
+    LSL $2, R10, R10
+    ADD R1, R10, R5                  // winBase = &samples[order-1]
+    LSL $2, R3, R10
+    ADD R0, R10, R0                  // R0 = &res[order]
+    SUB R3, R4, R4                   // residual count = n - order
+    LSR $2, R4, R7                   // R7 = full 4-blocks
+    AND $3, R4, R8                   // R8 = remaining tail outputs
+    NEG R6, R12
+    WORD $0x4e080d84                 // DUP V4.2D, X12   (-shift, for the SSHL)
+
+    CBZ R7, lpcenc_neon_tail
+lpcenc_neon_block:
+    WORD $0x6f00e400                 // MOVI V0.2D, #0x0   (acc_lo = 0)
+    WORD $0x6f00e401                 // MOVI V1.2D, #0x0   (acc_hi = 0)
+    MOVD R5, R10                     // window ptr = winBase - j*4
+    MOVD R2, R11                     // coeff ptr
+    MOVD R3, R9                      // j = order
+lpcenc_neon_tap:
+    VLD1 (R10), [V2.S4]              // S = samples[i-1-j..i+2-j]
+    MOVW (R11), R12                  // coeff[j]
+    WORD $0x4e040d83                 // DUP V3.4S, W12
+    WORD $0x0ea38040                 // SMLAL V0.2D, V2.2S, V3.2S
+    WORD $0x4ea38041                 // SMLAL2 V1.2D, V2.4S, V3.4S
+    ADD $4, R11
+    SUB $4, R10
+    SUB $1, R9
+    CBNZ R9, lpcenc_neon_tap
+
+    WORD $0x4ee44400                 // SSHL V0.2D, V0.2D, V4.2D   (>>shift arithmetic)
+    WORD $0x4ee44421                 // SSHL V1.2D, V1.2D, V4.2D
+    WORD $0x0ea12805                 // XTN V5.2S, V0.2D
+    WORD $0x4ea12825                 // XTN2 V5.4S, V1.2D
+    ADD $4, R5, R10                  // &samples[i]
+    VLD1 (R10), [V6.S4]              // samples[i..i+3]
+    WORD $0x6ea584c6                 // SUB V6.4S, V6.4S, V5.4S    (res = samples - pred)
+    VST1.P [V6.S4], 16(R0)
+    ADD $16, R5                      // winBase += 4 samples
+    SUB $1, R7
+    CBNZ R7, lpcenc_neon_block
+
+lpcenc_neon_tail:
+    CBZ R8, lpcenc_neon_done
+lpcenc_neon_tail_out:
+    MOVD ZR, R4                      // acc = 0 (int64)
+    MOVD R5, R10                     // window ptr
+    MOVD R2, R11                     // coeff ptr
+    MOVD R3, R9                      // j = order
+lpcenc_neon_tail_tap:
+    MOVW (R10), R12                  // sign-extend samples[i-1-j]
+    MOVW (R11), R13                  // sign-extend coeff[j]
+    MUL R12, R13, R13
+    ADD R13, R4, R4                  // acc += coeff[j]*samples[i-1-j]
+    ADD $4, R11
+    SUB $4, R10
+    SUB $1, R9
+    CBNZ R9, lpcenc_neon_tail_tap
+    ASR R6, R4, R4                   // pred = acc >> shift (arithmetic)
+    ADD $4, R5, R10
+    MOVW (R10), R12                  // samples[i]
+    SUBW R4, R12, R12                // - pred
+    MOVW.P R12, 4(R0)
+    ADD $4, R5                       // winBase += 1 sample
+    SUB $1, R8
+    CBNZ R8, lpcenc_neon_tail_out
+
+lpcenc_neon_done:
+    RET
+
+// func lpcRestoreNEON(out, residual, rcoeffs []int32, shift uint)
+// Quantized-LPC decode recurrence:
+//
+//	out[i] = residual[i] + int32((Σ_j coeffs[j]*out[i-1-j]) >> shift)
+//
+// Serial across i, so only the per-output tap dot product is vectorized. The
+// caller passes rcoeffs (coeffs reversed), so the ascending window out[i-order..]
+// and rcoeffs line up. The newest scalarTaps taps (which include the just-stored
+// out[i-1]) are summed scalar to keep them on forwardable narrow loads; the
+// oldest vecTaps (a multiple of 4) are widened (SMLAL/SMLAL2) into int64
+// accumulators, summed (ADD.2D), and folded to a scalar (ADDP). scalarTaps =
+// ((order+2) & 3) + 2 keeps the newest 2..5 taps scalar. The dispatch gates order
+// in [minNEONRestoreOrder, 32] and n-order >= 1.
+TEXT ·lpcRestoreNEON(SB), NOSPLIT, $0-80
+    MOVD out_base+0(FP), R5
+    MOVD out_len+8(FP), R4           // n
+    MOVD residual_base+24(FP), R1
+    MOVD rcoeffs_base+48(FP), R2
+    MOVD rcoeffs_len+56(FP), R3      // order
+    MOVD shift+72(FP), R6
+
+    // warm-up: out[0:order] = residual[0:order]
+    MOVD R5, R10
+    MOVD R1, R11
+    MOVD R3, R9
+lpcdec_neon_warmup:
+    MOVW.P 4(R11), R12
+    MOVW.P R12, 4(R10)
+    SUB $1, R9
+    CBNZ R9, lpcdec_neon_warmup
+
+    LSL $2, R4, R10
+    ADD R5, R10, R0                  // R0 = &out[n] (end sentinel)
+    MOVD R5, R7                      // R7 = &out[i-order] (window base, i=order -> &out[0])
+    LSL $2, R3, R10
+    ADD R5, R10, R5                  // R5 = &out[order]
+    ADD R1, R10, R1                  // R1 = &residual[order]
+    // scalarTaps = ((order+2) & 3) + 2 ; vecTaps = order - scalarTaps ; numVec = vecTaps/4
+    ADD $2, R3, R10
+    AND $3, R10, R10
+    ADD $2, R10, R10                 // scalarTaps (2..5)
+    SUB R10, R3, R8                  // vecTaps (multiple of 4)
+    LSR $2, R8, R8                   // R8 = numVec
+
+lpcdec_neon_out:
+    CMP R0, R5
+    BHS lpcdec_neon_done
+    WORD $0x6f00e400                 // MOVI V0.2D, #0x0   (acc_lo)
+    WORD $0x6f00e401                 // MOVI V1.2D, #0x0   (acc_hi)
+    MOVD R7, R10                     // window ptr = &out[i-order]
+    MOVD R2, R11                     // rcoeffs ptr
+    MOVD R8, R13                     // groups remaining = numVec
+    CBZ R13, lpcdec_neon_reduce
+lpcdec_neon_vec:
+    VLD1.P 16(R10), [V2.S4]          // W = out[i-order + g*4 ..]
+    VLD1.P 16(R11), [V3.S4]          // rcoeffs[g*4 ..]
+    WORD $0x0ea38040                 // SMLAL V0.2D, V2.2S, V3.2S
+    WORD $0x4ea38041                 // SMLAL2 V1.2D, V2.4S, V3.4S
+    SUB $1, R13
+    CBNZ R13, lpcdec_neon_vec
+lpcdec_neon_reduce:
+    WORD $0x4ee18400                 // ADD V0.2D, V0.2D, V1.2D
+    WORD $0x5ef1b800                 // ADDP D0, V0.2D
+    FMOVD F0, R12                    // R12 = vector partial sum (int64)
+    // scalar leftover taps: R10/R11 already advanced to tap = vecTaps
+lpcdec_neon_rem:
+    CMP R5, R10
+    BHS lpcdec_neon_pred
+    MOVW.P 4(R10), R13               // out[i-order+k]
+    MOVW.P 4(R11), R9                // rcoeffs[k]
+    MUL R13, R9, R13
+    ADD R13, R12, R12                // acc += rcoeffs[k]*out[i-order+k]
+    B   lpcdec_neon_rem
+lpcdec_neon_pred:
+    ASR R6, R12, R12                 // pred = acc >> shift (arithmetic)
+    MOVW (R1), R13                   // residual[i]
+    ADDW R12, R13, R13               // + pred
+    MOVW.P R13, 4(R5)                // out[i]
+    ADD $4, R1                       // &residual[i]++
+    ADD $4, R7                       // window base++
+    B   lpcdec_neon_out
+
+lpcdec_neon_done:
+    RET

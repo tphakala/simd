@@ -286,10 +286,119 @@ func TestAVX2Kernels_AllocFree(t *testing.T) {
 		{"diff3AVX2", func() { diff3AVX2(dst, a) }},
 		{"diff4AVX2", func() { diff4AVX2(dst, a) }},
 		{"cumsumAVX2", func() { cumsumAVX2(dst) }},
+		{"lpcResidualEncodeAVX2", func() { lpcResidualEncodeAVX2(dst, a, lpcAllocCoeffs, 12) }},
+		{"lpcRestoreAVX2", func() { lpcRestoreAVX2(dst, a, lpcAllocCoeffs, 12) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(100, c.fn); got != 0 {
 			t.Errorf("%s allocated %v times per run, want 0", c.name, got)
+		}
+	}
+}
+
+func TestLPCResidualEncodeAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range paritySizes {
+		samples := make([]int32, n)
+		fillLPCSamples(samples)
+		for _, coeffs := range lpcCoeffSets() {
+			order := len(coeffs)
+			if n-order < minAVXElements {
+				continue // the dispatch routes these to the Go path; the kernel
+				// assumes order >= 1 and at least one full 8-output block.
+			}
+			for _, shift := range lpcShifts {
+				gotAVX := make([]int32, n)
+				gotGo := make([]int32, n)
+				lpcResidualEncodeAVX2(gotAVX, samples, coeffs, shift)
+				lpcResidualEncodeGo(gotGo, samples, coeffs, shift)
+				for i := range gotGo {
+					if gotAVX[i] != gotGo[i] {
+						t.Fatalf("n=%d order=%d shift=%d lpcResidualEncodeAVX2[%d] = %d, want %d (Go)",
+							n, order, shift, i, gotAVX[i], gotGo[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestLPCResidualEncodeAVX2_NoOverwrite guards the scalar tail: an order-4
+// predictor over 23 samples is 2 full 8-output blocks plus a 3-output tail, so a
+// kernel that ran past n would be caught here.
+func TestLPCResidualEncodeAVX2_NoOverwrite(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	const n = 23
+	coeffs := []int32{8000, -5000, 2000, -512}
+	samples := make([]int32, n)
+	fillLPCSamples(samples)
+	res := make([]int32, n+4)
+	for i := range res {
+		res[i] = math.MaxInt32 // sentinel
+	}
+	lpcResidualEncodeAVX2(res[:n], samples, coeffs, 9)
+	for i := n; i < len(res); i++ {
+		if res[i] != math.MaxInt32 {
+			t.Errorf("lpcResidualEncodeAVX2 wrote past end at res[%d] = %d", i, res[i])
+		}
+	}
+}
+
+func TestLPCRestoreAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range paritySizes {
+		res := make([]int32, n)
+		fillLPCSamples(res) // arbitrary residual stream
+		for _, coeffs := range lpcCoeffSets() {
+			order := len(coeffs)
+			if order < minLPCRestoreOrder || order > maxLPCRestoreOrder || n-order < 1 {
+				continue // dispatch routes these to the Go recurrence
+			}
+			rc := reverseCoeffs(coeffs)
+			for _, shift := range lpcShifts {
+				gotAVX := make([]int32, n)
+				gotGo := make([]int32, n)
+				lpcRestoreAVX2(gotAVX, res, rc, shift)
+				lpcRestoreGo(gotGo, res, coeffs, shift)
+				for i := range gotGo {
+					if gotAVX[i] != gotGo[i] {
+						t.Fatalf("n=%d order=%d shift=%d lpcRestoreAVX2[%d] = %d, want %d (Go)",
+							n, order, shift, i, gotAVX[i], gotGo[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestLPCRestoreAVX2_NoOverwrite guards the output tail: an order-12 predictor
+// over 35 outputs exercises both the vector groups and the scalar tap remainder.
+func TestLPCRestoreAVX2_NoOverwrite(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	const n = 35
+	coeffs := make([]int32, 12)
+	for j := range coeffs {
+		coeffs[j] = int32(1000 - 137*j)
+	}
+	res := make([]int32, n)
+	fillLPCSamples(res)
+	rc := reverseCoeffs(coeffs)
+	out := make([]int32, n+4)
+	for i := range out {
+		out[i] = math.MaxInt32 // sentinel
+	}
+	lpcRestoreAVX2(out[:n], res, rc, 10)
+	for i := n; i < len(out); i++ {
+		if out[i] != math.MaxInt32 {
+			t.Errorf("lpcRestoreAVX2 wrote past end at out[%d] = %d", i, out[i])
 		}
 	}
 }

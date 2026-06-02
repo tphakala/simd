@@ -290,3 +290,92 @@ func BenchmarkRestore4Go_1000(b *testing.B) {
 		restore4Go(dst, src)
 	}
 }
+
+// LPC benchmarks pair the dispatched path against the pure-Go reference at two
+// representative FLAC predictor orders. LPCResidualEncode is a parallel FIR;
+// LPCRestore is the serial decode recurrence (vectorized only across taps, and
+// only above minLPCRestoreOrder), benched honestly so the difference is visible.
+
+func benchLPCCoeffs(order int) []int32 {
+	c := make([]int32, order)
+	for j := range c {
+		v := int32(16000 >> (j / 4))
+		if j%2 == 1 {
+			v = -v
+		}
+		c[j] = v
+	}
+	return c
+}
+
+func BenchmarkLPCResidualEncode8_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	coeffs := benchLPCCoeffs(8)
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		LPCResidualEncode(dst, src, coeffs, 12)
+	}
+}
+
+func BenchmarkLPCResidualEncode8Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	coeffs := benchLPCCoeffs(8)
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		lpcResidualEncodeGo(dst, src, coeffs, 12)
+	}
+}
+
+func BenchmarkLPCResidualEncode32_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	coeffs := benchLPCCoeffs(32)
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		LPCResidualEncode(dst, src, coeffs, 12)
+	}
+}
+
+func BenchmarkLPCResidualEncode32Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	coeffs := benchLPCCoeffs(32)
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		lpcResidualEncodeGo(dst, src, coeffs, 12)
+	}
+}
+
+func BenchmarkLPCRestore8_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	coeffs := benchLPCCoeffs(8)
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		LPCRestore(dst, src, coeffs, 12)
+	}
+}
+
+func BenchmarkLPCRestore8Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	coeffs := benchLPCCoeffs(8)
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		lpcRestoreGo(dst, src, coeffs, 12)
+	}
+}
+
+func BenchmarkLPCRestore32_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	coeffs := benchLPCCoeffs(32)
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		LPCRestore(dst, src, coeffs, 12)
+	}
+}
+
+func BenchmarkLPCRestore32Go_1000(b *testing.B) {
+	src, dst := benchSrcDst()
+	coeffs := benchLPCCoeffs(32)
+	b.SetBytes(benchN * 4 * 2)
+	for b.Loop() {
+		lpcRestoreGo(dst, src, coeffs, 12)
+	}
+}

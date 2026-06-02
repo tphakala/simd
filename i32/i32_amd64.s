@@ -614,3 +614,236 @@ cumsum_scalar:
 cumsum_done:
     VZEROUPPER
     RET
+
+// func lpcResidualEncodeAVX2(res, samples, coeffs []int32, shift uint)
+// Quantized-LPC encode FIR, vectorized across 8 output samples per iteration:
+//
+//	res[i] = samples[i] - int32((Σ_j coeffs[j]*samples[i-1-j]) >> shift)
+//
+// For each tap j the 8-sample window samples[i-1-j..i+6-j] is widened to int64
+// (VPMULDQ on the even int32 lanes, then again on the odd lanes shifted into
+// place) and multiply-accumulated into two int64x4 accumulators: Y0 holds output
+// lanes {0,2,4,6}, Y1 holds {1,3,5,7}. After the tap loop each accumulator is
+// arithmetic-shifted right by shift, then the low 32 bits are recombined into the
+// int32x8 prediction and subtracted from samples[i..i+7].
+//
+// AVX2 has no 64-bit arithmetic shift, so it is emulated as
+// asr(x,s) = ((x XOR 2^63) >>u s) - 2^(63-s), with VPSRLVQ supplying the logical
+// shift by the broadcast count. The first 'order' samples are the verbatim
+// warm-up; the (n-order) mod 8 trailing outputs use a scalar int64 recurrence.
+// The dispatch guarantees order >= 1 and n-order >= 8 (at least one full block).
+TEXT ·lpcResidualEncodeAVX2(SB), NOSPLIT, $0-80
+    MOVQ res_base+0(FP), DI
+    MOVQ res_len+8(FP), DX          // n
+    MOVQ samples_base+24(FP), SI
+    MOVQ coeffs_base+48(FP), R9
+    MOVQ coeffs_len+56(FP), R10      // order
+
+    // warm-up: res[0:order] = samples[0:order]
+    XORQ AX, AX
+lpcenc_warmup:
+    MOVL (SI)(AX*4), CX
+    MOVL CX, (DI)(AX*4)
+    INCQ AX
+    CMPQ AX, R10
+    JL   lpcenc_warmup
+
+    LEAQ -4(SI)(R10*4), BX           // winBase = &samples[order-1]
+    LEAQ (DI)(R10*4), DI             // DI = &res[order]
+    SUBQ R10, DX                     // residual count = n - order
+    MOVQ DX, R12
+    SHRQ $3, R12                     // R12 = full 8-blocks (>=1)
+    ANDQ $7, DX
+    MOVQ DX, R13                     // R13 = remaining tail outputs
+
+    // Build the shift constants once. Y8 = broadcast count; Y9 = 2^(63-s)
+    // offset; Y7 = 2^63 bias; Y6 = low-32 mask 0x00000000FFFFFFFF.
+    VPCMPEQD Y10, Y10, Y10           // all ones
+    VPSLLQ   $63, Y10, Y7            // bias = 0x8000000000000000 per qword
+    VPSRLQ   $32, Y10, Y6            // mask = 0x00000000FFFFFFFF per qword
+    MOVQ shift+72(FP), AX
+    MOVQ AX, X8
+    VPBROADCASTQ X8, Y8              // count vector (shift per qword)
+    MOVQ $63, CX
+    SUBQ AX, CX                      // CX = 63 - shift
+    MOVQ $1, AX
+    SHLQ CX, AX                      // AX = 1 << (63 - shift)
+    MOVQ AX, X9
+    VPBROADCASTQ X9, Y9              // offset vector
+
+lpcenc_block:
+    VPXOR Y0, Y0, Y0                 // acc_even = 0
+    VPXOR Y1, Y1, Y1                 // acc_odd  = 0
+    XORQ R11, R11                    // j = 0
+    MOVQ BX, AX                      // window ptr = winBase - j*4
+lpcenc_tap:
+    VMOVDQU (AX), Y2                 // S = samples[i-1-j .. i+6-j]
+    VPBROADCASTD (R9)(R11*4), Y3     // C = coeffs[j] in all lanes
+    VPMULDQ Y3, Y2, Y5               // Peven = S_even * C  (int64x4, lanes 0,2,4,6)
+    VPSRLQ  $32, Y2, Y4              // bring odd int32 lanes into the low halves
+    VPMULDQ Y3, Y4, Y4               // Podd  = S_odd  * C  (int64x4, lanes 1,3,5,7)
+    VPADDQ  Y5, Y0, Y0               // acc_even += Peven
+    VPADDQ  Y4, Y1, Y1               // acc_odd  += Podd
+    SUBQ $4, AX                      // window for tap j+1 starts one sample earlier
+    INCQ R11
+    CMPQ R11, R10
+    JL   lpcenc_tap
+
+    // acc_even: arithmetic shift right by shift, then keep low 32 of each qword.
+    VPXOR   Y7, Y0, Y0               // x XOR bias
+    VPSRLVQ Y8, Y0, Y0               // >>u shift (per lane)
+    VPSUBQ  Y9, Y0, Y0               // - 2^(63-shift)  => arithmetic shift result
+    VPAND   Y6, Y0, Y0               // keep low 32 (even predictions at lanes 0,2,4,6)
+    // acc_odd: same shift, then move low 32 into the high half of each qword.
+    VPXOR   Y7, Y1, Y1
+    VPSRLVQ Y8, Y1, Y1
+    VPSUBQ  Y9, Y1, Y1
+    VPSLLQ  $32, Y1, Y1              // odd predictions at lanes 1,3,5,7
+    VPOR    Y1, Y0, Y0               // pred = int32x8 [p0..p7]
+    VMOVDQU 4(BX), Y2                // samples[i..i+7]
+    VPSUBD  Y0, Y2, Y2               // res = samples - pred
+    VMOVDQU Y2, (DI)
+
+    ADDQ $32, BX
+    ADDQ $32, DI
+    DECQ R12
+    JNZ  lpcenc_block
+
+    TESTQ R13, R13
+    JZ    lpcenc_done
+    MOVQ shift+72(FP), CX            // CL = shift for the scalar SARQ
+lpcenc_tail_out:
+    XORQ R8, R8                      // acc = 0 (int64)
+    XORQ R11, R11                    // j = 0
+    MOVQ BX, AX                      // window ptr
+lpcenc_tail_tap:
+    MOVLQSX (AX), DX                 // sign-extend samples[i-1-j]
+    MOVLQSX (R9)(R11*4), SI          // sign-extend coeffs[j] (SI is free after warm-up)
+    IMULQ   SI, DX
+    ADDQ    DX, R8                   // acc += coeffs[j]*samples[i-1-j]
+    SUBQ    $4, AX
+    INCQ    R11
+    CMPQ    R11, R10
+    JL      lpcenc_tail_tap
+    MOVQ R8, AX
+    SARQ CX, AX                      // pred = acc >> shift (arithmetic)
+    MOVL 4(BX), DX                   // samples[i]
+    SUBL AX, DX                      // - pred (low 32)
+    MOVL DX, (DI)
+    ADDQ $4, BX
+    ADDQ $4, DI
+    DECQ R13
+    JNZ  lpcenc_tail_out
+
+lpcenc_done:
+    VZEROUPPER
+    RET
+
+// func lpcRestoreAVX2(out, residual, rcoeffs []int32, shift uint)
+// Quantized-LPC decode recurrence:
+//
+//	out[i] = residual[i] + int32((Σ_j coeffs[j]*out[i-1-j]) >> shift)
+//
+// Each out[i] feeds the next prediction, so this cannot vectorize across i; only
+// the per-output tap dot product is vectorized. The caller passes rcoeffs, the
+// coefficients reversed (rcoeffs[k] = coeffs[order-1-k]), so the window
+// out[i-order..i-1] and rcoeffs line up as ascending contiguous loads:
+// Σ_k rcoeffs[k]*out[i-order+k] = Σ_j coeffs[j]*out[i-1-j]. The oldest vecTaps
+// taps are widened (VPMULDQ even/odd) into int64 accumulators and horizontally
+// summed; the newest scalarTaps are added scalar.
+//
+// The split is not order mod 8: the newest samples out[i-1], out[i-2], ... were
+// just written by this loop's narrow 4-byte stores, and a wide 32-byte vector
+// load that overlaps a store still in the store buffer cannot forward and stalls
+// for ~15 cycles every output. So scalarTaps = ((order+6) & 7) + 2 always keeps
+// the newest 2..9 taps (which include out[i-1]) on forwardable scalar loads and
+// leaves vecTaps = order - scalarTaps (a multiple of 8) for the vector loop,
+// whose oldest samples have long since drained to L1. This is ~3x faster on the
+// order-is-a-multiple-of-8 cases than a naive order/8 split.
+// The dispatch gates order in [minLPCRestoreOrder, 32] and n-order >= 1.
+TEXT ·lpcRestoreAVX2(SB), NOSPLIT, $0-80
+    MOVQ out_base+0(FP), R8
+    MOVQ out_len+8(FP), R12          // n
+    MOVQ residual_base+24(FP), SI
+    MOVQ rcoeffs_base+48(FP), R9
+    MOVQ rcoeffs_len+56(FP), R10      // order
+    MOVQ shift+72(FP), CX
+
+    // warm-up: out[0:order] = residual[0:order]
+    XORQ AX, AX
+lpcdec_warmup:
+    MOVL (SI)(AX*4), DX
+    MOVL DX, (R8)(AX*4)
+    INCQ AX
+    CMPQ AX, R10
+    JL   lpcdec_warmup
+
+    LEAQ (R8)(R10*4), DI             // DI = &out[i],          i = order
+    MOVQ R8, BX                      // BX = &out[i-order],    = &out[0]
+    LEAQ (SI)(R10*4), SI             // SI = &residual[i]
+    LEAQ (R8)(R12*4), R8             // R8 = &out[n] (end sentinel; R12 still = n)
+
+    // scalarTaps = ((order+6) & 7) + 2 ; vecTaps = order - scalarTaps ; numVec = vecTaps/8.
+    // vecTaps = numVec*8, so the scalar leftover starts at tap numVec*8 (R13<<3).
+    MOVQ R10, AX
+    ADDQ $6, AX
+    ANDQ $7, AX
+    ADDQ $2, AX                      // AX = scalarTaps (2..9)
+    MOVQ R10, R13
+    SUBQ AX, R13                     // R13 = vecTaps (>=0, multiple of 8)
+    SHRQ $3, R13                     // R13 = numVec
+
+lpcdec_out:
+    CMPQ DI, R8
+    JGE  lpcdec_done
+    VPXOR Y0, Y0, Y0                 // acc_even = 0
+    VPXOR Y1, Y1, Y1                 // acc_odd  = 0
+    XORQ R11, R11                    // byte offset into window/coeffs
+    MOVQ R13, AX                     // groups remaining
+    TESTQ AX, AX
+    JZ   lpcdec_reduce
+lpcdec_vec:
+    VMOVDQU (BX)(R11*1), Y2          // W = out[i-order+gi*8 ..]
+    VMOVDQU (R9)(R11*1), Y3          // C = rcoeffs[gi*8 ..]
+    VPMULDQ Y3, Y2, Y5              // even lanes products
+    VPADDQ  Y5, Y0, Y0
+    VPSRLQ  $32, Y2, Y4             // odd int32 lanes into low halves
+    VPSRLQ  $32, Y3, Y6
+    VPMULDQ Y6, Y4, Y4             // odd lanes products
+    VPADDQ  Y4, Y1, Y1
+    ADDQ $32, R11
+    DECQ AX
+    JNZ  lpcdec_vec
+lpcdec_reduce:
+    VPADDQ Y1, Y0, Y0               // S = acc_even + acc_odd (int64x4)
+    VEXTRACTI128 $1, Y0, X2         // high 128
+    VPADDQ X2, X0, X0              // [s0,s1] = low2 + high2
+    VPSHUFD $0xEE, X0, X2          // [s1,s1,..]
+    VPADDQ X2, X0, X0             // low qword = s0 + s1
+    MOVQ X0, AX                    // AX = vector partial sum (int64)
+    // scalar leftover taps k = numVec*8 .. order-1
+    MOVQ R13, DX
+    SHLQ $3, DX                    // DX = k
+lpcdec_rem:
+    CMPQ DX, R10
+    JGE  lpcdec_pred
+    MOVLQSX (R9)(DX*4), R11        // rcoeffs[k]
+    MOVLQSX (BX)(DX*4), CX         // out[i-order+k] (CX reloaded as shift below)
+    IMULQ   CX, R11
+    ADDQ    R11, AX
+    INCQ    DX
+    JMP     lpcdec_rem
+lpcdec_pred:
+    MOVQ shift+72(FP), CX          // CL = shift
+    SARQ CX, AX                    // pred = sum >> shift (arithmetic)
+    MOVL (SI), DX                  // residual[i]
+    ADDL AX, DX                    // + pred (low 32)
+    MOVL DX, (DI)                  // out[i]
+    ADDQ $4, DI
+    ADDQ $4, BX
+    ADDQ $4, SI
+    JMP  lpcdec_out
+
+lpcdec_done:
+    VZEROUPPER
+    RET

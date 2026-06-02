@@ -264,10 +264,117 @@ func TestNEONKernels_AllocFree(t *testing.T) {
 		{"diff3NEON", func() { diff3NEON(dst, a) }},
 		{"diff4NEON", func() { diff4NEON(dst, a) }},
 		{"cumsumNEON", func() { cumsumNEON(dst) }},
+		{"lpcResidualEncodeNEON", func() { lpcResidualEncodeNEON(dst, a, lpcAllocCoeffs, 12) }},
+		{"lpcRestoreNEON", func() { lpcRestoreNEON(dst, a, lpcAllocCoeffs, 12) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(100, c.fn); got != 0 {
 			t.Errorf("%s allocated %v times per run, want 0", c.name, got)
+		}
+	}
+}
+
+func TestLPCResidualEncodeNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range paritySizes {
+		samples := make([]int32, n)
+		fillLPCSamples(samples)
+		for _, coeffs := range lpcCoeffSets() {
+			order := len(coeffs)
+			if n-order < minNEONElements {
+				continue // the dispatch routes these to the Go path
+			}
+			for _, shift := range lpcShifts {
+				gotNEON := make([]int32, n)
+				gotGo := make([]int32, n)
+				lpcResidualEncodeNEON(gotNEON, samples, coeffs, shift)
+				lpcResidualEncodeGo(gotGo, samples, coeffs, shift)
+				for i := range gotGo {
+					if gotNEON[i] != gotGo[i] {
+						t.Fatalf("n=%d order=%d shift=%d lpcResidualEncodeNEON[%d] = %d, want %d (Go)",
+							n, order, shift, i, gotNEON[i], gotGo[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestLPCRestoreNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range paritySizes {
+		res := make([]int32, n)
+		fillLPCSamples(res)
+		for _, coeffs := range lpcCoeffSets() {
+			order := len(coeffs)
+			if order < minNEONRestoreOrder || order > maxLPCRestoreOrder || n-order < 1 {
+				continue
+			}
+			rc := reverseCoeffs(coeffs)
+			for _, shift := range lpcShifts {
+				gotNEON := make([]int32, n)
+				gotGo := make([]int32, n)
+				lpcRestoreNEON(gotNEON, res, rc, shift)
+				lpcRestoreGo(gotGo, res, coeffs, shift)
+				for i := range gotGo {
+					if gotNEON[i] != gotGo[i] {
+						t.Fatalf("n=%d order=%d shift=%d lpcRestoreNEON[%d] = %d, want %d (Go)",
+							n, order, shift, i, gotNEON[i], gotGo[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestLPCResidualEncodeNEON_NoOverwrite guards the scalar tail: an order-4
+// predictor over 23 outputs is 4 full 4-output blocks plus a 3-output tail.
+func TestLPCResidualEncodeNEON_NoOverwrite(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	const n = 23
+	coeffs := []int32{8000, -5000, 2000, -512}
+	samples := make([]int32, n)
+	fillLPCSamples(samples)
+	res := make([]int32, n+4)
+	for i := range res {
+		res[i] = math.MaxInt32 // sentinel
+	}
+	lpcResidualEncodeNEON(res[:n], samples, coeffs, 9)
+	for i := n; i < len(res); i++ {
+		if res[i] != math.MaxInt32 {
+			t.Errorf("lpcResidualEncodeNEON wrote past end at res[%d] = %d", i, res[i])
+		}
+	}
+}
+
+// TestLPCRestoreNEON_NoOverwrite guards the output tail: an order-12 predictor
+// over 35 outputs exercises both the vector groups and the scalar tap remainder.
+func TestLPCRestoreNEON_NoOverwrite(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	const n = 35
+	coeffs := make([]int32, 12)
+	for j := range coeffs {
+		coeffs[j] = int32(1000 - 137*j)
+	}
+	res := make([]int32, n)
+	fillLPCSamples(res)
+	rc := reverseCoeffs(coeffs)
+	out := make([]int32, n+4)
+	for i := range out {
+		out[i] = math.MaxInt32 // sentinel
+	}
+	lpcRestoreNEON(out[:n], res, rc, 10)
+	for i := n; i < len(out); i++ {
+		if out[i] != math.MaxInt32 {
+			t.Errorf("lpcRestoreNEON wrote past end at out[%d] = %d", i, out[i])
 		}
 	}
 }

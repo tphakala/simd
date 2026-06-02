@@ -43,6 +43,13 @@ func deinterleave2AVX(a, b, src []int32)
 // on AVX2 explicitly and fall back to the pure-Go reference otherwise.
 var hasAVX2 = cpu.X86.AVX2
 
+// minLPCRestoreOrder is the smallest predictor order at which the SIMD decode
+// recurrence kernel beats the scalar Go recurrence. The recurrence is serial
+// (each output feeds the next), so SIMD only helps once the per-output tap dot
+// product has enough work to amortize its horizontal reduction; below this the
+// scalar path wins. Tuned from the benchmarks.
+const minLPCRestoreOrder = 8
+
 func addI32(dst, a, b []int32) {
 	if hasAVX2 && len(dst) >= minAVXElements {
 		addAVX2(dst, a, b)
@@ -141,3 +148,42 @@ func diff3AVX2(dst, src []int32)
 
 //go:noescape
 func diff4AVX2(dst, src []int32)
+
+// lpcResidualEncodeI32 dispatches the quantized-LPC encode FIR. The kernel
+// vectorizes across output samples and accumulates the prediction in int64, so
+// it gates on AVX2 (VPMULDQ widening multiply) and needs at least one full
+// 8-output block past the warm-up.
+func lpcResidualEncodeI32(res, samples, coeffs []int32, shift uint) {
+	if hasAVX2 && len(res)-len(coeffs) >= minAVXElements {
+		lpcResidualEncodeAVX2(res, samples, coeffs, shift)
+		return
+	}
+	lpcResidualEncodeGo(res, samples, coeffs, shift)
+}
+
+// lpcRestoreI32 dispatches the quantized-LPC decode recurrence. Each output
+// feeds the next prediction, so the kernel vectorizes only the per-output tap
+// dot product and pays off only once the order is large enough to amortize the
+// horizontal reduction; below that it stays on the scalar Go recurrence.
+func lpcRestoreI32(out, residual, coeffs []int32, shift uint) {
+	order := len(coeffs)
+	if hasAVX2 && order >= minLPCRestoreOrder && order <= maxLPCRestoreOrder && len(out)-order >= 1 {
+		// The kernel dots the ascending window out[i-order..i-1] with the
+		// coefficients reversed, so it lines up two contiguous loads. Reverse
+		// once into a stack array (no heap alloc; the array does not escape
+		// through the //go:noescape kernel).
+		var rc [maxLPCRestoreOrder]int32
+		for k := range order {
+			rc[k] = coeffs[order-1-k]
+		}
+		lpcRestoreAVX2(out, residual, rc[:order], shift)
+		return
+	}
+	lpcRestoreGo(out, residual, coeffs, shift)
+}
+
+//go:noescape
+func lpcResidualEncodeAVX2(res, samples, coeffs []int32, shift uint)
+
+//go:noescape
+func lpcRestoreAVX2(out, residual, rcoeffs []int32, shift uint)
