@@ -480,8 +480,10 @@ func deinterleave2_32(a, b, src []float32) {
 // 2-stream path reuses interleave2Channels). interleave4BlockMask/8 align a
 // frame count down to a whole SIMD block; the caller handles the remainder.
 const (
+	interleave3Streams   = 3
 	interleave4Streams   = 4
 	interleave8Streams   = 8
+	interleave3BlockMask = interleave8Streams - 1 // N=3 gathers 8 frames per block
 	interleave4BlockMask = interleave4Streams - 1
 	interleave8BlockMask = interleave8Streams - 1
 )
@@ -490,6 +492,14 @@ func interleaveN32(dst []float32, srcs [][]float32, n int) {
 	switch len(srcs) {
 	case interleave2Channels:
 		interleave2_32(dst[:n*interleave2Channels], srcs[0][:n], srcs[1][:n])
+	case interleave3Streams:
+		if cpu.X86.AVX2 && n >= interleave8Streams {
+			blk := n &^ interleave3BlockMask
+			interleave3AVX(dst, srcs[0], srcs[1], srcs[2], blk)
+			interleaveNTailGo(dst, srcs, blk, n)
+			return
+		}
+		interleaveNGo(dst, srcs, n)
 	case interleave4Streams:
 		if cpu.X86.AVX && n >= interleave4Streams {
 			blk := n &^ interleave4BlockMask
@@ -542,6 +552,14 @@ func deinterleaveN32(dsts [][]float32, src []float32, n int) {
 	switch len(dsts) {
 	case interleave2Channels:
 		deinterleave2_32(dsts[0][:n], dsts[1][:n], src[:n*interleave2Channels])
+	case interleave3Streams:
+		if cpu.X86.AVX2 && n >= interleave8Streams {
+			blk := n &^ interleave3BlockMask
+			deinterleave3AVX(dsts[0], dsts[1], dsts[2], src, blk)
+			deinterleaveNTailGo(dsts, src, blk, n)
+			return
+		}
+		deinterleaveNGo(dsts, src, n)
 	case interleave4Streams:
 		if cpu.X86.AVX && n >= interleave4Streams {
 			blk := n &^ interleave4BlockMask
@@ -754,6 +772,12 @@ func interleave2AVX(dst, a, b []float32)
 
 //go:noescape
 func deinterleave2AVX(a, b, src []float32)
+
+//go:noescape
+func interleave3AVX(dst, s0, s1, s2 []float32, n int)
+
+//go:noescape
+func deinterleave3AVX(d0, d1, d2, src []float32, n int)
 
 //go:noescape
 func interleave4AVX(dst, s0, s1, s2, s3 []float32, n int)

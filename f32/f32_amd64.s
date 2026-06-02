@@ -2123,6 +2123,300 @@ deinterleave2_avx32_done:
     VZEROUPPER
     RET
 
+// 3-stream interleave/deinterleave gather indices (AVX2 VPERMPS).
+//
+// N=3 does not map onto a clean register transpose the way N=4 (4x4) and N=8
+// (8x8) do, because 8 frames span 24 interleaved slots that straddle the
+// 128-bit lane boundaries. Instead each 256-bit output is assembled from three
+// VPERMPS gathers (one per source stream), merged with two VPBLENDD masks. The
+// index vectors are loop-invariant, so the kernels load all nine into YMM
+// registers once before the loop. "don't care" lanes are 0; the blend discards
+// them. See interleave3AVX / deinterleave3AVX below for the slot maps.
+
+// interleave: per 8 frames, dst = [a0 b0 c0 a1 b1 c1 ... a7 b7 c7].
+// O0 = dst[0:8]   A@{0,3,6} B@{1,4,7} C@{2,5}
+DATA il3idxA0<>+0(SB)/4, $0
+DATA il3idxA0<>+4(SB)/4, $0
+DATA il3idxA0<>+8(SB)/4, $0
+DATA il3idxA0<>+12(SB)/4, $1
+DATA il3idxA0<>+16(SB)/4, $0
+DATA il3idxA0<>+20(SB)/4, $0
+DATA il3idxA0<>+24(SB)/4, $2
+DATA il3idxA0<>+28(SB)/4, $0
+GLOBL il3idxA0<>(SB), RODATA|NOPTR, $32
+DATA il3idxB0<>+0(SB)/4, $0
+DATA il3idxB0<>+4(SB)/4, $0
+DATA il3idxB0<>+8(SB)/4, $0
+DATA il3idxB0<>+12(SB)/4, $0
+DATA il3idxB0<>+16(SB)/4, $1
+DATA il3idxB0<>+20(SB)/4, $0
+DATA il3idxB0<>+24(SB)/4, $0
+DATA il3idxB0<>+28(SB)/4, $2
+GLOBL il3idxB0<>(SB), RODATA|NOPTR, $32
+DATA il3idxC0<>+0(SB)/4, $0
+DATA il3idxC0<>+4(SB)/4, $0
+DATA il3idxC0<>+8(SB)/4, $0
+DATA il3idxC0<>+12(SB)/4, $0
+DATA il3idxC0<>+16(SB)/4, $0
+DATA il3idxC0<>+20(SB)/4, $1
+DATA il3idxC0<>+24(SB)/4, $0
+DATA il3idxC0<>+28(SB)/4, $0
+GLOBL il3idxC0<>(SB), RODATA|NOPTR, $32
+// O1 = dst[8:16]  C@{0,3,6} A@{1,4,7} B@{2,5}
+DATA il3idxA1<>+0(SB)/4, $0
+DATA il3idxA1<>+4(SB)/4, $3
+DATA il3idxA1<>+8(SB)/4, $0
+DATA il3idxA1<>+12(SB)/4, $0
+DATA il3idxA1<>+16(SB)/4, $4
+DATA il3idxA1<>+20(SB)/4, $0
+DATA il3idxA1<>+24(SB)/4, $0
+DATA il3idxA1<>+28(SB)/4, $5
+GLOBL il3idxA1<>(SB), RODATA|NOPTR, $32
+DATA il3idxB1<>+0(SB)/4, $0
+DATA il3idxB1<>+4(SB)/4, $0
+DATA il3idxB1<>+8(SB)/4, $3
+DATA il3idxB1<>+12(SB)/4, $0
+DATA il3idxB1<>+16(SB)/4, $0
+DATA il3idxB1<>+20(SB)/4, $4
+DATA il3idxB1<>+24(SB)/4, $0
+DATA il3idxB1<>+28(SB)/4, $0
+GLOBL il3idxB1<>(SB), RODATA|NOPTR, $32
+DATA il3idxC1<>+0(SB)/4, $2
+DATA il3idxC1<>+4(SB)/4, $0
+DATA il3idxC1<>+8(SB)/4, $0
+DATA il3idxC1<>+12(SB)/4, $3
+DATA il3idxC1<>+16(SB)/4, $0
+DATA il3idxC1<>+20(SB)/4, $0
+DATA il3idxC1<>+24(SB)/4, $4
+DATA il3idxC1<>+28(SB)/4, $0
+GLOBL il3idxC1<>(SB), RODATA|NOPTR, $32
+// O2 = dst[16:24] B@{0,3,6} C@{1,4,7} A@{2,5}
+DATA il3idxA2<>+0(SB)/4, $0
+DATA il3idxA2<>+4(SB)/4, $0
+DATA il3idxA2<>+8(SB)/4, $6
+DATA il3idxA2<>+12(SB)/4, $0
+DATA il3idxA2<>+16(SB)/4, $0
+DATA il3idxA2<>+20(SB)/4, $7
+DATA il3idxA2<>+24(SB)/4, $0
+DATA il3idxA2<>+28(SB)/4, $0
+GLOBL il3idxA2<>(SB), RODATA|NOPTR, $32
+DATA il3idxB2<>+0(SB)/4, $5
+DATA il3idxB2<>+4(SB)/4, $0
+DATA il3idxB2<>+8(SB)/4, $0
+DATA il3idxB2<>+12(SB)/4, $6
+DATA il3idxB2<>+16(SB)/4, $0
+DATA il3idxB2<>+20(SB)/4, $0
+DATA il3idxB2<>+24(SB)/4, $7
+DATA il3idxB2<>+28(SB)/4, $0
+GLOBL il3idxB2<>(SB), RODATA|NOPTR, $32
+DATA il3idxC2<>+0(SB)/4, $0
+DATA il3idxC2<>+4(SB)/4, $5
+DATA il3idxC2<>+8(SB)/4, $0
+DATA il3idxC2<>+12(SB)/4, $0
+DATA il3idxC2<>+16(SB)/4, $6
+DATA il3idxC2<>+20(SB)/4, $0
+DATA il3idxC2<>+24(SB)/4, $0
+DATA il3idxC2<>+28(SB)/4, $7
+GLOBL il3idxC2<>(SB), RODATA|NOPTR, $32
+
+// deinterleave: src = [a0 b0 c0 a1 ...]; S0=src[0:8] S1=src[8:16] S2=src[16:24].
+// A=d0[0:8]  A@out{0,1,2}<-S0{0,3,6}  {3,4,5}<-S1{1,4,7}  {6,7}<-S2{2,5}
+DATA dl3idxS0A<>+0(SB)/4, $0
+DATA dl3idxS0A<>+4(SB)/4, $3
+DATA dl3idxS0A<>+8(SB)/4, $6
+DATA dl3idxS0A<>+12(SB)/4, $0
+DATA dl3idxS0A<>+16(SB)/4, $0
+DATA dl3idxS0A<>+20(SB)/4, $0
+DATA dl3idxS0A<>+24(SB)/4, $0
+DATA dl3idxS0A<>+28(SB)/4, $0
+GLOBL dl3idxS0A<>(SB), RODATA|NOPTR, $32
+DATA dl3idxS1A<>+0(SB)/4, $0
+DATA dl3idxS1A<>+4(SB)/4, $0
+DATA dl3idxS1A<>+8(SB)/4, $0
+DATA dl3idxS1A<>+12(SB)/4, $1
+DATA dl3idxS1A<>+16(SB)/4, $4
+DATA dl3idxS1A<>+20(SB)/4, $7
+DATA dl3idxS1A<>+24(SB)/4, $0
+DATA dl3idxS1A<>+28(SB)/4, $0
+GLOBL dl3idxS1A<>(SB), RODATA|NOPTR, $32
+DATA dl3idxS2A<>+0(SB)/4, $0
+DATA dl3idxS2A<>+4(SB)/4, $0
+DATA dl3idxS2A<>+8(SB)/4, $0
+DATA dl3idxS2A<>+12(SB)/4, $0
+DATA dl3idxS2A<>+16(SB)/4, $0
+DATA dl3idxS2A<>+20(SB)/4, $0
+DATA dl3idxS2A<>+24(SB)/4, $2
+DATA dl3idxS2A<>+28(SB)/4, $5
+GLOBL dl3idxS2A<>(SB), RODATA|NOPTR, $32
+// B=d1  {0,1,2}<-S0{1,4,7}  {3,4}<-S1{2,5}  {5,6,7}<-S2{0,3,6}
+DATA dl3idxS0B<>+0(SB)/4, $1
+DATA dl3idxS0B<>+4(SB)/4, $4
+DATA dl3idxS0B<>+8(SB)/4, $7
+DATA dl3idxS0B<>+12(SB)/4, $0
+DATA dl3idxS0B<>+16(SB)/4, $0
+DATA dl3idxS0B<>+20(SB)/4, $0
+DATA dl3idxS0B<>+24(SB)/4, $0
+DATA dl3idxS0B<>+28(SB)/4, $0
+GLOBL dl3idxS0B<>(SB), RODATA|NOPTR, $32
+DATA dl3idxS1B<>+0(SB)/4, $0
+DATA dl3idxS1B<>+4(SB)/4, $0
+DATA dl3idxS1B<>+8(SB)/4, $0
+DATA dl3idxS1B<>+12(SB)/4, $2
+DATA dl3idxS1B<>+16(SB)/4, $5
+DATA dl3idxS1B<>+20(SB)/4, $0
+DATA dl3idxS1B<>+24(SB)/4, $0
+DATA dl3idxS1B<>+28(SB)/4, $0
+GLOBL dl3idxS1B<>(SB), RODATA|NOPTR, $32
+DATA dl3idxS2B<>+0(SB)/4, $0
+DATA dl3idxS2B<>+4(SB)/4, $0
+DATA dl3idxS2B<>+8(SB)/4, $0
+DATA dl3idxS2B<>+12(SB)/4, $0
+DATA dl3idxS2B<>+16(SB)/4, $0
+DATA dl3idxS2B<>+20(SB)/4, $0
+DATA dl3idxS2B<>+24(SB)/4, $3
+DATA dl3idxS2B<>+28(SB)/4, $6
+GLOBL dl3idxS2B<>(SB), RODATA|NOPTR, $32
+// C=d2  {0,1}<-S0{2,5}  {2,3,4}<-S1{0,3,6}  {5,6,7}<-S2{1,4,7}
+DATA dl3idxS0C<>+0(SB)/4, $2
+DATA dl3idxS0C<>+4(SB)/4, $5
+DATA dl3idxS0C<>+8(SB)/4, $0
+DATA dl3idxS0C<>+12(SB)/4, $0
+DATA dl3idxS0C<>+16(SB)/4, $0
+DATA dl3idxS0C<>+20(SB)/4, $0
+DATA dl3idxS0C<>+24(SB)/4, $0
+DATA dl3idxS0C<>+28(SB)/4, $0
+GLOBL dl3idxS0C<>(SB), RODATA|NOPTR, $32
+DATA dl3idxS1C<>+0(SB)/4, $0
+DATA dl3idxS1C<>+4(SB)/4, $0
+DATA dl3idxS1C<>+8(SB)/4, $0
+DATA dl3idxS1C<>+12(SB)/4, $3
+DATA dl3idxS1C<>+16(SB)/4, $6
+DATA dl3idxS1C<>+20(SB)/4, $0
+DATA dl3idxS1C<>+24(SB)/4, $0
+DATA dl3idxS1C<>+28(SB)/4, $0
+GLOBL dl3idxS1C<>(SB), RODATA|NOPTR, $32
+DATA dl3idxS2C<>+0(SB)/4, $0
+DATA dl3idxS2C<>+4(SB)/4, $0
+DATA dl3idxS2C<>+8(SB)/4, $0
+DATA dl3idxS2C<>+12(SB)/4, $0
+DATA dl3idxS2C<>+16(SB)/4, $0
+DATA dl3idxS2C<>+20(SB)/4, $1
+DATA dl3idxS2C<>+24(SB)/4, $4
+DATA dl3idxS2C<>+28(SB)/4, $7
+GLOBL dl3idxS2C<>(SB), RODATA|NOPTR, $32
+
+// func interleave3AVX(dst, s0, s1, s2 []float32, n int)
+// Interleaves 3 planar streams (dst[i*3+c] = s_c[i]) into 24 contiguous floats
+// per 8 frames via per-stream VPERMPS gathers + VPBLENDD merges. n is a
+// multiple of 8 (the caller handles the tail). Requires AVX2.
+TEXT ·interleave3AVX(SB), NOSPLIT, $0-104
+    MOVQ dst_base+0(FP), DI
+    MOVQ s0_base+24(FP), AX
+    MOVQ s1_base+48(FP), BX
+    MOVQ s2_base+72(FP), CX
+    MOVQ n+96(FP), SI
+    SHRQ $3, SI                // SI = n/8 blocks
+    TESTQ SI, SI
+    JZ interleave3_avx_done
+    VMOVUPS il3idxA0<>(SB), Y3
+    VMOVUPS il3idxB0<>(SB), Y4
+    VMOVUPS il3idxC0<>(SB), Y5
+    VMOVUPS il3idxA1<>(SB), Y6
+    VMOVUPS il3idxB1<>(SB), Y7
+    VMOVUPS il3idxC1<>(SB), Y8
+    VMOVUPS il3idxA2<>(SB), Y9
+    VMOVUPS il3idxB2<>(SB), Y10
+    VMOVUPS il3idxC2<>(SB), Y11
+
+interleave3_avx_loop:
+    VMOVUPS (AX), Y0           // A = s0[i:i+8]
+    VMOVUPS (BX), Y1           // B = s1[i:i+8]
+    VMOVUPS (CX), Y2           // C = s2[i:i+8]
+    VPERMPS Y0, Y3, Y12        // O0: gather A
+    VPERMPS Y1, Y4, Y15        // gather B
+    VPBLENDD $0x92, Y15, Y12, Y12
+    VPERMPS Y2, Y5, Y15        // gather C
+    VPBLENDD $0x24, Y15, Y12, Y12
+    VMOVUPS Y12, (DI)
+    VPERMPS Y0, Y6, Y12        // O1
+    VPERMPS Y1, Y7, Y15
+    VPBLENDD $0x24, Y15, Y12, Y12
+    VPERMPS Y2, Y8, Y15
+    VPBLENDD $0x49, Y15, Y12, Y12
+    VMOVUPS Y12, 32(DI)
+    VPERMPS Y0, Y9, Y12        // O2
+    VPERMPS Y1, Y10, Y15
+    VPBLENDD $0x49, Y15, Y12, Y12
+    VPERMPS Y2, Y11, Y15
+    VPBLENDD $0x92, Y15, Y12, Y12
+    VMOVUPS Y12, 64(DI)
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $96, DI
+    DECQ SI
+    JNZ interleave3_avx_loop
+
+interleave3_avx_done:
+    VZEROUPPER
+    RET
+
+// func deinterleave3AVX(d0, d1, d2, src []float32, n int)
+// Splits a 3-stream interleaved buffer (d_c[i] = src[i*3+c]) into planar
+// streams, 8 frames per iteration, via per-stream VPERMPS gathers + VPBLENDD
+// merges. n is a multiple of 8 (the caller handles the tail). Requires AVX2.
+TEXT ·deinterleave3AVX(SB), NOSPLIT, $0-104
+    MOVQ d0_base+0(FP), AX
+    MOVQ d1_base+24(FP), BX
+    MOVQ d2_base+48(FP), CX
+    MOVQ src_base+72(FP), SI
+    MOVQ n+96(FP), DI
+    SHRQ $3, DI                // DI = n/8 blocks
+    TESTQ DI, DI
+    JZ deinterleave3_avx_done
+    VMOVUPS dl3idxS0A<>(SB), Y3
+    VMOVUPS dl3idxS1A<>(SB), Y4
+    VMOVUPS dl3idxS2A<>(SB), Y5
+    VMOVUPS dl3idxS0B<>(SB), Y6
+    VMOVUPS dl3idxS1B<>(SB), Y7
+    VMOVUPS dl3idxS2B<>(SB), Y8
+    VMOVUPS dl3idxS0C<>(SB), Y9
+    VMOVUPS dl3idxS1C<>(SB), Y10
+    VMOVUPS dl3idxS2C<>(SB), Y11
+
+deinterleave3_avx_loop:
+    VMOVUPS (SI), Y0           // S0 = src[0:8]
+    VMOVUPS 32(SI), Y1         // S1 = src[8:16]
+    VMOVUPS 64(SI), Y2         // S2 = src[16:24]
+    VPERMPS Y0, Y3, Y12        // d0 = A
+    VPERMPS Y1, Y4, Y15
+    VPBLENDD $0x38, Y15, Y12, Y12
+    VPERMPS Y2, Y5, Y15
+    VPBLENDD $0xC0, Y15, Y12, Y12
+    VMOVUPS Y12, (AX)
+    VPERMPS Y0, Y6, Y12        // d1 = B
+    VPERMPS Y1, Y7, Y15
+    VPBLENDD $0x18, Y15, Y12, Y12
+    VPERMPS Y2, Y8, Y15
+    VPBLENDD $0xE0, Y15, Y12, Y12
+    VMOVUPS Y12, (BX)
+    VPERMPS Y0, Y9, Y12        // d2 = C
+    VPERMPS Y1, Y10, Y15
+    VPBLENDD $0x1C, Y15, Y12, Y12
+    VPERMPS Y2, Y11, Y15
+    VPBLENDD $0xE0, Y15, Y12, Y12
+    VMOVUPS Y12, (CX)
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $96, SI
+    DECQ DI
+    JNZ deinterleave3_avx_loop
+
+deinterleave3_avx_done:
+    VZEROUPPER
+    RET
+
 // func interleave4AVX(dst, s0, s1, s2, s3 []float32, n int)
 // Interleaves 4 planar streams (dst[i*4+c] = s_c[i]) via a 4x4 transpose of
 // XMM registers, 4 frames per iteration. n is a multiple of 4 (the caller

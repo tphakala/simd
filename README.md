@@ -127,8 +127,8 @@ fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
-|                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4 AVX / N=2,3,4 NEON; else Go |
-|                 | `DeinterleaveN(dsts, src)`          | Unpack N interleaved streams (any N) | N=2,4 AVX / N=2,3,4 NEON; else Go |
+|                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4,8 AVX, N=3 AVX2 / N=2,3,4 NEON; else Go |
+|                 | `DeinterleaveN(dsts, src)`          | Unpack N interleaved streams (any N) | N=2,4,8 AVX, N=3 AVX2 / N=2,3,4 NEON; else Go |
 |                 | `CubicInterpDot(hist,a,b,c,d,x)`    | Fused cubic interp dot product| 4x / 2x                             |
 |                 | `Int32ToFloat32Scale(dst,src,s)`    | PCM int32 to normalized float | 8x / 4x                             |
 |                 | `Int16ToFloat32Scale(dst,src,s)`    | PCM int16 to normalized float | 8x (AVX2) / 4x (NEON)               |
@@ -150,9 +150,12 @@ Same API as `f64` but for `float32` with wider SIMD:
 | AMD64 (SSE2)    | 4x float32  |
 | ARM64 (NEON)    | 4x float32  |
 
-`InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) on
-top of the shared N=2/4 (AVX) and N=2/3/4 (NEON) kernels; all other stream counts
-use the allocation-free generic path.
+`InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
+a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
+streams do not map onto a clean register transpose) on top of the shared N=2/4 (AVX)
+and N=2/3/4 (NEON) kernels; all other stream counts use the allocation-free generic
+path. The N=3 case is the 16k -> 48k upsample hot path: the AVX2 gather/blend kernel
+runs roughly 2.8x (interleave) and 3.2x (deinterleave) over the generic loop on AVX2.
 
 **Row-major batch dot products** (for flat vector stores):
 
