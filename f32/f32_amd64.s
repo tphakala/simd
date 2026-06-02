@@ -2658,6 +2658,194 @@ deinterleave8_avx_done:
     VZEROUPPER
     RET
 
+// func interleave6AVX(dst, s0, s1, s2, s3, s4, s5 []float32, n int)
+// Interleaves 6 planar streams (dst[i*6+c] = s_c[i]) into 48 contiguous floats
+// per 8 frames. N=6 has no clean register transpose, so the kernel zips each
+// stream pair (s0,s1)(s2,s3)(s4,s5) into a float64-pair stream via VUNPCKLPS/
+// VUNPCKHPS + VPERM2F128, then runs the f64 N=3 interleave (immediate VPERMPD/
+// VBLENDPD on those pairs) twice: once for frames 0-3, once for frames 4-7. n is
+// a multiple of 8 (the caller handles the tail). Requires AVX2.
+//
+// After the zip, PA=[a0,b0,a1,b1,...] holds pair k = (s0[k],s1[k]) as one f64
+// lane; PB/PC hold (s2,s3)/(s4,s5). Interleaving the three pair-streams with the
+// f64 N=3 rows O0=[A0,B0,C0,A1] O1=[B1,C1,A2,B2] O2=[C2,A3,B3,C3] lays the six
+// streams down frame-by-frame.
+TEXT ·interleave6AVX(SB), NOSPLIT, $0-176
+    MOVQ dst_base+0(FP), DI
+    MOVQ s0_base+24(FP), AX
+    MOVQ s1_base+48(FP), BX
+    MOVQ s2_base+72(FP), CX
+    MOVQ s3_base+96(FP), DX
+    MOVQ s4_base+120(FP), R8
+    MOVQ s5_base+144(FP), R9
+    MOVQ n+168(FP), SI
+    SHRQ $3, SI                  // SI = n/8 blocks
+    TESTQ SI, SI
+    JZ interleave6_avx_done
+
+interleave6_avx_loop:
+    VMOVUPS (AX), Y0             // s0[i:i+8]
+    VMOVUPS (BX), Y1             // s1
+    VMOVUPS (CX), Y2             // s2
+    VMOVUPS (DX), Y3             // s3
+    VMOVUPS (R8), Y4             // s4
+    VMOVUPS (R9), Y5             // s5
+    VUNPCKLPS Y1, Y0, Y6         // zip (s0,s1): [a0,b0,a1,b1|a4,b4,a5,b5]
+    VUNPCKHPS Y1, Y0, Y7         // [a2,b2,a3,b3|a6,b6,a7,b7]
+    VPERM2F128 $0x20, Y7, Y6, Y8 // PA_lo=[a0,b0,a1,b1,a2,b2,a3,b3]
+    VPERM2F128 $0x31, Y7, Y6, Y9 // PA_hi=[a4,b4,a5,b5,a6,b6,a7,b7]
+    VUNPCKLPS Y3, Y2, Y6         // zip (s2,s3)
+    VUNPCKHPS Y3, Y2, Y7
+    VPERM2F128 $0x20, Y7, Y6, Y10 // PB_lo
+    VPERM2F128 $0x31, Y7, Y6, Y11 // PB_hi
+    VUNPCKLPS Y5, Y4, Y6         // zip (s4,s5)
+    VUNPCKHPS Y5, Y4, Y7
+    VPERM2F128 $0x20, Y7, Y6, Y12 // PC_lo
+    VPERM2F128 $0x31, Y7, Y6, Y13 // PC_hi
+    // interleave3 of pairs (frames 0-3): a=PA_lo b=PB_lo c=PC_lo
+    VPERMPD $0x40, Y8, Y0        // [a0,a0,a0,a1]
+    VPERMPD $0x00, Y10, Y1       // [b0,b0,b0,b0]
+    VPERMPD $0x00, Y12, Y2       // [c0,c0,c0,c0]
+    VBLENDPD $0x2, Y1, Y0, Y0    // lane1 <- b0
+    VBLENDPD $0x4, Y2, Y0, Y0    // lane2 <- c0
+    VMOVUPD Y0, (DI)             // O0=[a0,b0,c0,a1]
+    VPERMPD $0x81, Y10, Y1       // [b1,b0,b0,b2]
+    VPERMPD $0x04, Y12, Y2       // [c0,c1,c0,c0]
+    VPERMPD $0x20, Y8, Y0        // [a0,a0,a2,a0]
+    VBLENDPD $0x2, Y2, Y1, Y1    // lane1 <- c1
+    VBLENDPD $0x4, Y0, Y1, Y1    // lane2 <- a2
+    VMOVUPD Y1, 32(DI)           // O1=[b1,c1,a2,b2]
+    VPERMPD $0xC2, Y12, Y2       // [c2,c0,c0,c3]
+    VPERMPD $0x0C, Y8, Y0        // [a0,a3,a0,a0]
+    VPERMPD $0x30, Y10, Y1       // [b0,b0,b3,b0]
+    VBLENDPD $0x2, Y0, Y2, Y2    // lane1 <- a3
+    VBLENDPD $0x4, Y1, Y2, Y2    // lane2 <- b3
+    VMOVUPD Y2, 64(DI)           // O2=[c2,a3,b3,c3]
+    // interleave3 of pairs (frames 4-7): a=PA_hi b=PB_hi c=PC_hi
+    VPERMPD $0x40, Y9, Y0
+    VPERMPD $0x00, Y11, Y1
+    VPERMPD $0x00, Y13, Y2
+    VBLENDPD $0x2, Y1, Y0, Y0
+    VBLENDPD $0x4, Y2, Y0, Y0
+    VMOVUPD Y0, 96(DI)
+    VPERMPD $0x81, Y11, Y1
+    VPERMPD $0x04, Y13, Y2
+    VPERMPD $0x20, Y9, Y0
+    VBLENDPD $0x2, Y2, Y1, Y1
+    VBLENDPD $0x4, Y0, Y1, Y1
+    VMOVUPD Y1, 128(DI)
+    VPERMPD $0xC2, Y13, Y2
+    VPERMPD $0x0C, Y9, Y0
+    VPERMPD $0x30, Y11, Y1
+    VBLENDPD $0x2, Y0, Y2, Y2
+    VBLENDPD $0x4, Y1, Y2, Y2
+    VMOVUPD Y2, 160(DI)
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $32, DX
+    ADDQ $32, R8
+    ADDQ $32, R9
+    ADDQ $192, DI
+    DECQ SI
+    JNZ interleave6_avx_loop
+
+interleave6_avx_done:
+    VZEROUPPER
+    RET
+
+// func deinterleave6AVX(d0, d1, d2, d3, d4, d5, src []float32, n int)
+// Splits a 6-stream interleaved buffer (d_c[i] = src[i*6+c]) into planar streams,
+// 8 frames per iteration. The inverse of interleave6AVX: reinterpreting src as a
+// 3-stream interleaved float64-pair buffer, the f64 N=3 deinterleave recovers the
+// three pair-streams PA/PB/PC, then VSHUFPS/VPERMPD unzip each pair back into its
+// two float32 planar streams. n is a multiple of 8 (the caller handles the tail).
+// Requires AVX2.
+TEXT ·deinterleave6AVX(SB), NOSPLIT, $0-176
+    MOVQ d0_base+0(FP), AX
+    MOVQ d1_base+24(FP), BX
+    MOVQ d2_base+48(FP), CX
+    MOVQ d3_base+72(FP), DX
+    MOVQ d4_base+96(FP), R8
+    MOVQ d5_base+120(FP), R9
+    MOVQ src_base+144(FP), SI
+    MOVQ n+168(FP), DI
+    SHRQ $3, DI                  // DI = n/8 blocks
+    TESTQ DI, DI
+    JZ deinterleave6_avx_done
+
+deinterleave6_avx_loop:
+    VMOVUPD (SI), Y0             // S0=[A0,B0,C0,A1] (frames 0-3, pair-interleaved)
+    VMOVUPD 32(SI), Y1           // S1=[B1,C1,A2,B2]
+    VMOVUPD 64(SI), Y2           // S2=[C2,A3,B3,C3]
+    VMOVUPD 96(SI), Y3           // S3..S5 = frames 4-7
+    VMOVUPD 128(SI), Y4
+    VMOVUPD 160(SI), Y5
+    // f64 N=3 deinterleave (frames 0-3) -> PA_lo,PB_lo,PC_lo
+    VPERMPD $0x0C, Y0, Y8        // A base [a0,a1,a0,a0]
+    VPERMPD $0x20, Y1, Y6        // [.,.,a2,.]
+    VPERMPD $0x40, Y2, Y7        // [.,.,.,a3]
+    VBLENDPD $0x4, Y6, Y8, Y8    // lane2 <- a2
+    VBLENDPD $0x8, Y7, Y8, Y8    // lane3 <- a3; PA_lo=[a0,a1,a2,a3]
+    VPERMPD $0x01, Y0, Y10       // B base [b0,a0,a0,a0]
+    VPERMPD $0x30, Y1, Y6        // [b1,b1,b2,.]
+    VPERMPD $0x80, Y2, Y7        // [.,.,.,b3]
+    VBLENDPD $0x6, Y6, Y10, Y10  // lanes1,2 <- b1,b2
+    VBLENDPD $0x8, Y7, Y10, Y10  // lane3 <- b3; PB_lo=[b0,b1,b2,b3]
+    VPERMPD $0x02, Y0, Y12       // C base [c0,.,.,.]
+    VPERMPD $0x04, Y1, Y6        // [.,c1,.,.]
+    VPERMPD $0xC0, Y2, Y7        // [c2,.,c2,c3]
+    VBLENDPD $0x2, Y6, Y12, Y12  // lane1 <- c1
+    VBLENDPD $0xC, Y7, Y12, Y12  // lanes2,3 <- c2,c3; PC_lo=[c0,c1,c2,c3]
+    // f64 N=3 deinterleave (frames 4-7) -> PA_hi,PB_hi,PC_hi
+    VPERMPD $0x0C, Y3, Y9
+    VPERMPD $0x20, Y4, Y6
+    VPERMPD $0x40, Y5, Y7
+    VBLENDPD $0x4, Y6, Y9, Y9
+    VBLENDPD $0x8, Y7, Y9, Y9
+    VPERMPD $0x01, Y3, Y11
+    VPERMPD $0x30, Y4, Y6
+    VPERMPD $0x80, Y5, Y7
+    VBLENDPD $0x6, Y6, Y11, Y11
+    VBLENDPD $0x8, Y7, Y11, Y11
+    VPERMPD $0x02, Y3, Y13
+    VPERMPD $0x04, Y4, Y6
+    VPERMPD $0xC0, Y5, Y7
+    VBLENDPD $0x2, Y6, Y13, Y13
+    VBLENDPD $0xC, Y7, Y13, Y13
+    // unzip pair-streams back to planar float32 (a even lanes, b odd lanes)
+    VSHUFPS $0x88, Y9, Y8, Y0    // [a0,a1,a4,a5,a2,a3,a6,a7]
+    VSHUFPS $0xDD, Y9, Y8, Y1    // [b0,b1,b4,b5,b2,b3,b6,b7]
+    VPERMPD $0xD8, Y0, Y0        // s0=[a0..a7]
+    VPERMPD $0xD8, Y1, Y1        // s1=[b0..b7]
+    VMOVUPS Y0, (AX)
+    VMOVUPS Y1, (BX)
+    VSHUFPS $0x88, Y11, Y10, Y2
+    VSHUFPS $0xDD, Y11, Y10, Y6
+    VPERMPD $0xD8, Y2, Y2        // s2
+    VPERMPD $0xD8, Y6, Y6        // s3
+    VMOVUPS Y2, (CX)
+    VMOVUPS Y6, (DX)
+    VSHUFPS $0x88, Y13, Y12, Y3
+    VSHUFPS $0xDD, Y13, Y12, Y7
+    VPERMPD $0xD8, Y3, Y3        // s4
+    VPERMPD $0xD8, Y7, Y7        // s5
+    VMOVUPS Y3, (R8)
+    VMOVUPS Y7, (R9)
+    ADDQ $192, SI
+    ADDQ $32, AX
+    ADDQ $32, BX
+    ADDQ $32, CX
+    ADDQ $32, DX
+    ADDQ $32, R8
+    ADDQ $32, R9
+    DECQ DI
+    JNZ deinterleave6_avx_loop
+
+deinterleave6_avx_done:
+    VZEROUPPER
+    RET
+
 // ============================================================================
 // SQRT, RECIPROCAL, ADDSCALED IMPLEMENTATIONS
 // ============================================================================
