@@ -158,9 +158,16 @@ jobs:
           models=("Conroe" "qemu64,-pni,-ssse3,-sse4.1,-sse4.2,-avx,-avx2")
           fail=0
           for pkg in $(go list ./...); do
+            # Skip packages with no test files; a compile failure in a real test
+            # package must fail the job, not be silently swallowed.
+            read -r ntest nxtest <<<"$(go list -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' "$pkg")"
+            if [ "$ntest" -eq 0 ] && [ "$nxtest" -eq 0 ]; then continue; fi
             bin="/tmp/$(echo "$pkg" | tr '/.' '__').test"
-            CGO_ENABLED=0 go test -c -o "$bin" "$pkg" 2>/dev/null || true
-            [ -f "$bin" ] || continue   # package has no test files
+            if ! CGO_ENABLED=0 go test -c -o "$bin" "$pkg"; then
+              echo "::error::failed to compile tests for $pkg"
+              fail=1
+              continue
+            fi
             for m in "${models[@]}"; do
               echo "::group::$pkg @ qemu -cpu $m"
               if qemu-x86_64 -cpu "$m" "$bin" -test.v; then

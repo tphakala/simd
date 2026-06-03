@@ -97,9 +97,22 @@ func TestSSE2KernelsAreBaselineSSE2(t *testing.T) {
 		if strings.HasSuffix(mnemonic, ":") { // label
 			continue
 		}
-		if isa, bad := postSSE2Mnemonics[mnemonic]; bad {
-			t.Errorf("%s:%d: %s uses %s (%s); c128 dispatches *SSE2 kernels on plain SSE2, so this SIGILLs on CPUs without %s",
-				asmFile, lineNo+1, curFunc, mnemonic, isa, isa)
+		// VEX/EVEX (V-prefixed) and AVX-512 opmask (K-prefixed) instructions
+		// require AVX / AVX-512 and SIGILL on plain SSE2. No SSE2 mnemonic or
+		// Plan9 pseudo-op starts with V or K, so a blanket prefix check catches
+		// any AVX instruction the named denylist below would miss.
+		switch {
+		case strings.HasPrefix(mnemonic, "V"):
+			t.Errorf("%s:%d: %s uses VEX/EVEX instruction %s; an SSE2 kernel must not use AVX (SIGILLs on CPUs without AVX)",
+				asmFile, lineNo+1, curFunc, mnemonic)
+		case strings.HasPrefix(mnemonic, "K"):
+			t.Errorf("%s:%d: %s uses AVX-512 opmask instruction %s; an SSE2 kernel must not use AVX-512 (SIGILLs on CPUs without AVX-512)",
+				asmFile, lineNo+1, curFunc, mnemonic)
+		default:
+			if isa, bad := postSSE2Mnemonics[mnemonic]; bad {
+				t.Errorf("%s:%d: %s uses %s (%s); c128 dispatches *SSE2 kernels on plain SSE2, so this SIGILLs on CPUs without %s",
+					asmFile, lineNo+1, curFunc, mnemonic, isa, isa)
+			}
 		}
 	}
 	if scanned == 0 {
