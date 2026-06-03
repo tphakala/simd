@@ -545,7 +545,7 @@ mul_sse2_loop:
     SUBPD X3, X5                 // [ar*br-ai*bi, ar*bi-ai*br]
     ADDPD X3, X2                 // [ar*br+ai*bi, ar*bi+ai*br]
 
-    BLENDPD $0x02, X2, X5        // Take lane 1 from X2 (add result)
+    SHUFPD $0x2, X2, X5          // re<-X5[0] (sub), im<-X2[1] (add); SSE2 form of BLENDPD $0x02
 
     MOVUPD X5, (DX)
 
@@ -589,7 +589,7 @@ mulconj_sse2_loop:
     MOVAPD X3, X6
     SUBPD X2, X6                 // [ai*bi-ar*br, ai*br-ar*bi]
 
-    BLENDPD $0x02, X6, X5        // Take lane 1 from X6
+    SHUFPD $0x2, X6, X5          // re<-X5[0] (add), im<-X6[1] (sub); SSE2 form of BLENDPD $0x02
 
     MOVUPD X5, (DX)
 
@@ -633,7 +633,7 @@ scale_sse2_loop:
     SUBPD X3, X4                 // [ar*sr-ai*si, ar*si-ai*sr]
     ADDPD X3, X2                 // [ar*sr+ai*si, ar*si+ai*sr]
 
-    BLENDPD $0x02, X2, X4
+    SHUFPD $0x2, X2, X4          // re<-X4[0] (sub), im<-X2[1] (add); SSE2 form of BLENDPD $0x02
 
     MOVUPD X4, (DX)
 
@@ -833,8 +833,8 @@ abs_sse2_loop:
     MOVUPD (SI), X0        // Load one complex128 [real, imag]
 
     // X0 = [real, imag]
-    MOVDDUP X0, X1         // X1 = [real, real]
-    SHUFPD $1, X0, X0      // X0 = [imag, imag]
+    MOVAPD X0, X1          // X1[0]=real; high lane discarded by MOVSD store (SSE2 form of MOVDDUP)
+    SHUFPD $1, X0, X0      // X0[0]=imag
 
     MULPD X1, X1           // real²
     MULPD X0, X0           // imag²
@@ -988,8 +988,8 @@ abssq_sse2_loop:
 
     MULPD X0, X0           // [r², i²]
 
-    MOVDDUP X0, X1         // [r², r²]
-    SHUFPD $1, X0, X0      // [i², i²]
+    MOVAPD X0, X1          // X1[0]=r²; high lane discarded by MOVSD store (SSE2 form of MOVDDUP)
+    SHUFPD $1, X0, X0      // X0[0]=i²
     ADDPD X0, X1           // r² + i²
 
     MOVSD X1, (DX)

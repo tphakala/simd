@@ -71,20 +71,46 @@ func TestSubFromScalarGo_EmptyDst(_ *testing.T) {
 	subFromScalarGo(nil, []float64{1, 2}, 0)
 }
 
-// TestSigmoid64Go_Saturation hits both saturation branches (x > +threshold
-// and x < -threshold) in the new BCE-hinted sigmoid64Go fallback.
+// TestSigmoid64Go_Saturation hits both exponent-clamp branches (|x| beyond
+// expOverflowThreshold) in the sigmoid64Go fallback and confirms it saturates
+// smoothly: +large -> 1, -large -> a tiny positive value (NOT a hard 0).
 func TestSigmoid64Go_Saturation(t *testing.T) {
-	src := []float64{sigmoidClampThreshold + 1, -sigmoidClampThreshold - 1, 0}
+	src := []float64{expOverflowThreshold + 1, -(expOverflowThreshold + 1), 0}
 	dst := make([]float64, len(src))
 	sigmoid64Go(dst, src)
 	if dst[0] != 1.0 {
 		t.Errorf("sigmoid64Go(+large) = %v, want 1", dst[0])
 	}
-	if dst[1] != 0.0 {
-		t.Errorf("sigmoid64Go(-large) = %v, want 0", dst[1])
+	// With z = -x clamped to expOverflowThreshold, sigmoid(-large) is
+	// 1/(1+exp(709)) ~ 1.2e-308: vanishingly small but strictly positive.
+	wantNeg := 1.0 / (1.0 + math.Exp(expOverflowThreshold))
+	if dst[1] != wantNeg {
+		t.Errorf("sigmoid64Go(-large) = %v, want %v", dst[1], wantNeg)
 	}
 	if dst[2] != 0.5 {
 		t.Errorf("sigmoid64Go(0) = %v, want 0.5", dst[2])
+	}
+}
+
+// TestSigmoid64Go_NoFlushToZero guards the regression fixed here: the scalar
+// fallback used to hard-clamp to 0 for x < -20, diverging from the accurate
+// exp-based SIMD kernels (issue #33). It calls sigmoid64Go directly so it runs
+// on every host, unlike the dispatched TestSigmoidAccuracy which only exercises
+// whichever kernel the CPU selects (the AVX2 kernel on CI, never this fallback).
+// sigmoid(-25) is ~1.39e-11; flushing it to 0 is a relative error of 1.
+func TestSigmoid64Go_NoFlushToZero(t *testing.T) {
+	src := []float64{-30, -27.5, -25, -22, -20.5}
+	dst := make([]float64, len(src))
+	sigmoid64Go(dst, src)
+	for i, x := range src {
+		want := 1.0 / (1.0 + math.Exp(-x))
+		if dst[i] <= 0 {
+			t.Errorf("sigmoid64Go(%v) = %v, want positive ~%v", x, dst[i], want)
+			continue
+		}
+		if relErr := math.Abs(dst[i]-want) / want; relErr > 1e-9 {
+			t.Errorf("sigmoid64Go(%v) = %v, want %v (relErr %v)", x, dst[i], want, relErr)
+		}
 	}
 }
 

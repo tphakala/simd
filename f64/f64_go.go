@@ -10,9 +10,8 @@ const (
 
 // Numerical stability thresholds
 const (
-	sigmoidClampThreshold = 20.0  // sigmoid(±20) ≈ 1.0 - 2e-9 (float64 precision limit)
-	tanhClampThreshold    = 2.5   // fast approximation threshold: tanh(±2.5) saturates to ±1
-	expOverflowThreshold  = 709.0 // exp(709.78) = max float64; clamp to prevent overflow
+	tanhClampThreshold   = 2.5   // fast approximation threshold: tanh(±2.5) saturates to ±1
+	expOverflowThreshold = 709.0 // exp(709.78) = max float64; clamp to prevent overflow
 )
 
 // Pure Go implementations - used as fallback on all architectures
@@ -452,16 +451,21 @@ func sigmoid64Go(dst, src []float64) {
 	}
 	_ = src[len(dst)-1]
 	for i := range dst {
-		x := src[i]
-		// Clamp extreme values for numerical stability
+		// sigmoid(x) = 1/(1+e^-x). Clamp the exponent to ±expOverflowThreshold so
+		// e^z cannot overflow to +Inf; the quotient then saturates smoothly to 0
+		// (x -> -inf) or 1 (x -> +inf). This matches the accurate exp-based SIMD
+		// kernels (issue #33) within tolerance. The previous hard flush to 0 for
+		// x < -20 diverged from those kernels (sigmoid(-25) is ~1.4e-11, not 0),
+		// so TestSigmoidAccuracy failed on the scalar fallback path that runs on
+		// CPUs without AVX2.
+		z := -src[i]
 		switch {
-		case x > sigmoidClampThreshold:
-			dst[i] = 1.0
-		case x < -sigmoidClampThreshold:
-			dst[i] = 0.0
-		default:
-			dst[i] = 1.0 / (1.0 + math.Exp(-x))
+		case z > expOverflowThreshold:
+			z = expOverflowThreshold
+		case z < -expOverflowThreshold:
+			z = -expOverflowThreshold
 		}
+		dst[i] = 1.0 / (1.0 + math.Exp(z))
 	}
 }
 

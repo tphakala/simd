@@ -127,3 +127,57 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
+
+  cross-isa:
+    # Run the amd64 test suite under qemu on CPU models that lack AVX (and, for
+    # Conroe, SSE4.1) so the SSE2/SSE4.x fallback dispatch paths are actually
+    # exercised. Every CI/dev host has AVX, so without this leg the fallback
+    # kernels are never run: a fallback that issues an unsupported instruction
+    # (SIGILL) or diverges from the SIMD kernel ships undetected. qemu-x86_64
+    # v7+ enforces the -cpu feature set, raising #UD for out-of-baseline ops.
+    name: Cross-ISA (no-AVX fallbacks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install qemu-user
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      - name: Run amd64 tests under no-AVX CPU models
+        run: |
+          set -uo pipefail
+          # Conroe: SSSE3, no SSE4.1, no AVX (catches the c128 BLENDPD SIGILL).
+          # qemu64 stripped to SSE2: the amd64 baseline (catches SSE3+ ops like
+          # MOVDDUP and any non-SSE2 instruction in an SSE2-gated kernel).
+          models=("Conroe" "qemu64,-pni,-ssse3,-sse4.1,-sse4.2,-avx,-avx2")
+          fail=0
+          for pkg in $(go list ./...); do
+            # Skip packages with no test files; a compile failure in a real test
+            # package must fail the job, not be silently swallowed.
+            read -r ntest nxtest <<<"$(go list -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' "$pkg")"
+            if [ "$ntest" -eq 0 ] && [ "$nxtest" -eq 0 ]; then continue; fi
+            bin="/tmp/$(echo "$pkg" | tr '/.' '__').test"
+            if ! CGO_ENABLED=0 go test -c -o "$bin" "$pkg"; then
+              echo "::error::failed to compile tests for $pkg"
+              fail=1
+              continue
+            fi
+            for m in "${models[@]}"; do
+              echo "::group::$pkg @ qemu -cpu $m"
+              if qemu-x86_64 -cpu "$m" "$bin" -test.v; then
+                echo "ok"
+              else
+                echo "::error::$pkg failed under qemu -cpu $m"
+                fail=1
+              fi
+              echo "::endgroup::"
+            done
+            rm -f "$bin"
+          done
+          exit "$fail"
