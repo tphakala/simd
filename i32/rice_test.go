@@ -167,7 +167,103 @@ func TestRiceAllocFree(t *testing.T) {
 	if got := testing.AllocsPerRun(100, func() { RiceSums(sums, res) }); got != 0 {
 		t.Errorf("RiceSums allocated %v times per run, want 0", got)
 	}
+	wideSums := make([]uint64, riceMaxParam5+1)
+	if got := testing.AllocsPerRun(100, func() { RiceSums(wideSums, res) }); got != 0 {
+		t.Errorf("RiceSums (5-bit width) allocated %v times per run, want 0", got)
+	}
 	if got := testing.AllocsPerRun(100, func() { RiceBestParam(res, 14) }); got != 0 {
 		t.Errorf("RiceBestParam allocated %v times per run, want 0", got)
+	}
+	if got := testing.AllocsPerRun(100, func() { RiceBestParam(res, riceMaxParam5) }); got != 0 {
+		t.Errorf("RiceBestParam (5-bit range) allocated %v times per run, want 0", got)
+	}
+}
+
+// TestZigzagSumMatchesOracle checks ZigzagSum against an independent sum of the
+// zigzag fold across the block-straddling sizes.
+func TestZigzagSumMatchesOracle(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	for _, n := range []int{0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 33, 100, 1000, 1024, 1025} {
+		res := make([]int32, n)
+		for i := range res {
+			res[i] = int32(rng.Uint32())
+		}
+		var want uint64
+		for _, r := range res {
+			want += zigzag(r)
+		}
+		if got := ZigzagSum(res); got != want {
+			t.Fatalf("n=%d ZigzagSum = %d, want %d", n, got, want)
+		}
+	}
+}
+
+// TestZigzagSumExtremes exercises the int32 sign bit and the zigzag overflow at
+// math.MinInt32 (zigzag = 2^32-1), the worst case for the unsigned widening.
+func TestZigzagSumExtremes(t *testing.T) {
+	res := []int32{math.MinInt32, math.MaxInt32, -1, 0, math.MinInt32, math.MaxInt32, 1, -2, 3}
+	var want uint64
+	for _, r := range res {
+		want += zigzag(r)
+	}
+	if got := ZigzagSum(res); got != want {
+		t.Errorf("ZigzagSum extremes = %d, want %d", got, want)
+	}
+}
+
+// TestZigzagSumEqualsRiceSums0 pins the invariant that ZigzagSum is exactly the
+// k=0 column of RiceSums (Σ_i zigzag(res[i]) >> 0), so the two kernels cannot
+// drift apart.
+func TestZigzagSumEqualsRiceSums0(t *testing.T) {
+	rng := rand.New(rand.NewSource(8))
+	for _, n := range []int{0, 1, 8, 9, 100, 1000, 1025} {
+		res := make([]int32, n)
+		for i := range res {
+			res[i] = int32(rng.Uint32())
+		}
+		sums := make([]uint64, riceParamCount)
+		RiceSums(sums, res)
+		if got := ZigzagSum(res); got != sums[0] {
+			t.Fatalf("n=%d ZigzagSum = %d, want RiceSums[0] = %d", n, got, sums[0])
+		}
+	}
+}
+
+func TestZigzagSumEmpty(t *testing.T) {
+	if got := ZigzagSum(nil); got != 0 {
+		t.Errorf("ZigzagSum(nil) = %d, want 0", got)
+	}
+}
+
+func TestZigzagSumAllocFree(t *testing.T) {
+	res := make([]int32, 1024)
+	for i := range res {
+		res[i] = int32(i*7 - 3)
+	}
+	if got := testing.AllocsPerRun(100, func() { ZigzagSum(res) }); got != 0 {
+		t.Errorf("ZigzagSum allocated %v times per run, want 0", got)
+	}
+}
+
+// TestRiceSumsWideDispatchGuard exercises riceSumsWideI32's exact-width gate:
+// only a full 31-wide slice may reach the fixed-width SIMD kernels (which write
+// exactly riceParamCount and 16 columns), so any other width must fall back to
+// the pure-Go reference and still be correct. A regression here would surface as
+// an out-of-bounds asm write rather than a wrong value.
+func TestRiceSumsWideDispatchGuard(t *testing.T) {
+	rng := rand.New(rand.NewSource(9))
+	res := make([]int32, 64)
+	for i := range res {
+		res[i] = int32(rng.Uint32())
+	}
+	for _, m := range []int{16, 20, riceMaxParam5 + 1} {
+		got := make([]uint64, m)
+		riceSumsWideI32(got, res)
+		want := riceSumsOracle(res, m)
+		for k := range want {
+			if got[k] != want[k] {
+				t.Fatalf("m=%d riceSumsWideI32[%d] = %d, want %d", m, k, got[k], want[k])
+			}
+		}
 	}
 }

@@ -919,3 +919,411 @@ rice_neon_tail_k:
 
 rice_neon_done:
     RET
+
+// func zigzagSumNEON(res []int32) uint64
+// Returns Σ_i zigzag(res[i]) where zigzag(r) = (r<<1) ^ (r>>31), the k=0 column
+// of riceSumsNEON exposed on its own. VSHL gives r<<1 and the arithmetic r>>31
+// is built without a signed-shift mnemonic as -(r>>>31), the logical sign bit
+// negated (VUSHR then VSUB from zero). The fold is zero-extended to int64
+// (VUSHLL / VUSHLL2 on the low and high S-lane pairs) and added into two
+// int64x2 accumulators (the low and high lanes form independent chains for ILP).
+// After the loop the accumulators are combined and the two lanes folded (VADDP)
+// to a scalar; the (n mod 4) trailing residuals are folded in with a scalar
+// tail. The dispatch gates len(res) >= 4.
+TEXT ·zigzagSumNEON(SB), NOSPLIT, $0-32
+    MOVD res_base+0(FP), R2
+    MOVD res_len+8(FP), R3
+    LSR  $2, R3, R4                  // R4 = full 4-element blocks (>=1)
+    VEOR V7.B16, V7.B16, V7.B16      // V7 = 0 (zero source for the sign negate)
+    VEOR V8.B16, V8.B16, V8.B16      // acc for lanes 0,1
+    VEOR V9.B16, V9.B16, V9.B16      // acc for lanes 2,3
+zzsum_neon_loop:
+    VLD1.P 16(R2), [V0.S4]           // v = res[i..i+3]
+    VSHL   $1, V0.S4, V1.S4          // r<<1
+    VUSHR  $31, V0.S4, V4.S4         // (uint32)r >> 31  (sign bit, 0 or 1)
+    VSUB   V4.S4, V7.S4, V4.S4       // mask = 0 - signbit = (r>>31 arithmetic)
+    VEOR   V4.B16, V1.B16, V1.B16    // u = zigzag(r)
+    VUSHLL  $0, V1.S2, V2.D2         // zero-extend lanes 0,1 -> int64x2
+    VUSHLL2 $0, V1.S4, V3.D2         // zero-extend lanes 2,3 -> int64x2
+    VADD V2.D2, V8.D2, V8.D2
+    VADD V3.D2, V9.D2, V9.D2
+    SUB  $1, R4
+    CBNZ R4, zzsum_neon_loop
+
+    VADD  V9.D2, V8.D2, V8.D2        // combine the two accumulators
+    VADDP V8.D2, V8.D2, V1.D2        // fold the two lanes -> lane 0
+    FMOVD F1, R5                     // R5 = sum over all full blocks
+
+    // scalar tail: (n mod 4) residuals
+    AND  $3, R3, R4
+    CBZ  R4, zzsum_neon_done
+zzsum_neon_tail:
+    MOVW (R2), R6                    // sign-extend r
+    ADDW R6, R6, R7                  // r<<1
+    ASRW $31, R6, R8                 // r>>31 (arithmetic)
+    EORW R8, R7, R7                  // u = zigzag(r) (zero-extended)
+    ADD  R7, R5, R5                  // sum += u
+    ADD  $4, R2
+    SUB  $1, R4
+    CBNZ R4, zzsum_neon_tail
+
+zzsum_neon_done:
+    MOVD R5, ret+24(FP)
+    RET
+
+// func fixedAbsSumsNEON(src []int32, sums *[5]uint64)
+// Five fixed-predictor residual abs-sums in one pass:
+//
+//	sums[order] = Σ_{i>=order} |e_order[i]|   for order in 0..4
+//
+// where e_order is the order-th forward finite difference of src, computed in
+// int64 (a 4th difference of int32 samples reaches ~2^35, beyond int32). The
+// first 4 warm-up samples (where the higher orders are not yet active) are done
+// with a scalar p-recurrence prologue matching the reference's masking. From
+// index 4 the differences are well-defined for every order, so the vector body
+// reads five overlapping windows (FMOVD loads two int32 then SXTL sign-extends to
+// int64x2) and forms e0..e4 with a triangular subtract cascade; int64 abs is the
+// single ABS .2D op. SXTL and ABS .2D have no Go assembler mnemonic, so they are
+// hand-encoded WORD directives (comment cross-checked against arm64asm). The two
+// lanes of each of the five accumulators are folded (VADDP) and added into sums;
+// the (n-4) mod 2 trailing sample uses a scalar windowed cascade. The dispatch
+// gates len(src) >= 4 so the prologue's 4 samples always exist.
+TEXT ·fixedAbsSumsNEON(SB), NOSPLIT, $0-32
+    MOVD src_base+0(FP), R2
+    MOVD src_len+8(FP), R1           // n
+    MOVD sums+24(FP), R0
+
+    // zero the five sums (prologue/body/tail accumulate into memory via RMW)
+    MOVD ZR, 0(R0)
+    MOVD ZR, 8(R0)
+    MOVD ZR, 16(R0)
+    MOVD ZR, 24(R0)
+    MOVD ZR, 32(R0)
+
+    // ---- prologue: i = 0,1,2,3 (scalar p-recurrence; n>=4 so they exist) ----
+    // p1,p2,p3 = R5,R6,R7. abs-and-add uses R12 (value), R13 (mask), R14 (mem).
+
+    // i=0: e0=src[0]; p1=e0; s0+=|e0|
+    MOVW 0(R2), R8
+    MOVD R8, R5                      // p1 = e0
+    MOVD R8, R12
+    ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 0(R0), R14; ADD R12, R14, R14; MOVD R14, 0(R0)
+
+    // i=1: e0=src[1]; e1=e0-p1; p1=e0; p2=e1; s0,s1
+    MOVW 4(R2), R8
+    SUB R5, R8, R9                   // e1
+    MOVD R8, R5                      // p1 = e0
+    MOVD R9, R6                      // p2 = e1
+    MOVD R8, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 0(R0), R14; ADD R12, R14, R14; MOVD R14, 0(R0)
+    MOVD R9, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 8(R0), R14; ADD R12, R14, R14; MOVD R14, 8(R0)
+
+    // i=2: e0=src[2]; e1=e0-p1; e2=e1-p2; p1,p2,p3; s0,s1,s2
+    MOVW 8(R2), R8
+    SUB R5, R8, R9                   // e1
+    SUB R6, R9, R10                  // e2
+    MOVD R10, R7                     // p3 = e2
+    MOVD R9, R6                      // p2 = e1
+    MOVD R8, R5                      // p1 = e0
+    MOVD R8, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 0(R0), R14; ADD R12, R14, R14; MOVD R14, 0(R0)
+    MOVD R9, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 8(R0), R14; ADD R12, R14, R14; MOVD R14, 8(R0)
+    MOVD R10, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 16(R0), R14; ADD R12, R14, R14; MOVD R14, 16(R0)
+
+    // i=3: e0=src[3]; e1; e2; e3; s0,s1,s2,s3 (p's discarded after)
+    MOVW 12(R2), R8
+    SUB R5, R8, R9                   // e1
+    SUB R6, R9, R10                  // e2
+    SUB R7, R10, R11                 // e3
+    MOVD R8, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 0(R0), R14; ADD R12, R14, R14; MOVD R14, 0(R0)
+    MOVD R9, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 8(R0), R14; ADD R12, R14, R14; MOVD R14, 8(R0)
+    MOVD R10, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 16(R0), R14; ADD R12, R14, R14; MOVD R14, 16(R0)
+    MOVD R11, R12; ASR $63, R12, R13; EOR R13, R12, R12; SUB R13, R12, R12
+    MOVD 24(R0), R14; ADD R12, R14, R14; MOVD R14, 24(R0)
+
+    // ---- vector body: nBlocks = (n-4)/2 blocks of 2 lanes from i=4 ----
+    ADD $16, R2, R2                  // window base = &src[4]
+    SUB $4, R1, R1                   // n-4
+    LSR $1, R1, R3                   // nBlocks
+    AND $1, R1, R4                   // tailCount = (n-4) mod 2
+    VEOR V8.B16, V8.B16, V8.B16      // s0
+    VEOR V9.B16, V9.B16, V9.B16      // s1
+    VEOR V10.B16, V10.B16, V10.B16   // s2
+    VEOR V11.B16, V11.B16, V11.B16   // s3
+    VEOR V12.B16, V12.B16, V12.B16   // s4
+    CBZ  R3, fas_neon_reduce
+fas_neon_body:
+    FMOVD   0(R2), F0; WORD $0x0F20A400 // sxtl v0.2d, v0.2s   (a0 = src[i..i+1])
+    FMOVD  -4(R2), F1; WORD $0x0F20A421 // sxtl v1.2d, v1.2s   (a1)
+    FMOVD  -8(R2), F2; WORD $0x0F20A442 // sxtl v2.2d, v2.2s   (a2)
+    FMOVD -12(R2), F3; WORD $0x0F20A463 // sxtl v3.2d, v3.2s   (a3)
+    FMOVD -16(R2), F4; WORD $0x0F20A484 // sxtl v4.2d, v4.2s   (a4)
+    // order 0: e0 = a0
+    WORD $0x4EE0B807                     // abs v7.2d, v0.2d
+    VADD V7.D2, V8.D2, V8.D2
+    // level 1: b0=a0-a1, b1=a1-a2, b2=a2-a3, b3=a3-a4  (b0=e1)
+    VSUB V1.D2, V0.D2, V5.D2             // b0
+    VSUB V2.D2, V1.D2, V6.D2             // b1
+    VSUB V3.D2, V2.D2, V0.D2             // b2 (a0 dead)
+    VSUB V4.D2, V3.D2, V1.D2             // b3 (a1 dead)
+    WORD $0x4EE0B8A7                     // abs v7.2d, v5.2d   (|e1|)
+    VADD V7.D2, V9.D2, V9.D2
+    // level 2: c0=b0-b1, c1=b1-b2, c2=b2-b3  (c0=e2)
+    VSUB V6.D2, V5.D2, V2.D2             // c0 (a2 dead)
+    VSUB V0.D2, V6.D2, V3.D2             // c1 (a3 dead; V0=b2)
+    VSUB V1.D2, V0.D2, V4.D2             // c2 (a4 dead; V1=b3, V0=b2)
+    WORD $0x4EE0B847                     // abs v7.2d, v2.2d   (|e2|)
+    VADD V7.D2, V10.D2, V10.D2
+    // level 3: d0=c0-c1, d1=c1-c2  (d0=e3)
+    VSUB V3.D2, V2.D2, V5.D2             // d0 (V2=c0, V3=c1)
+    VSUB V4.D2, V3.D2, V6.D2             // d1 (V3=c1, V4=c2)
+    WORD $0x4EE0B8A7                     // abs v7.2d, v5.2d   (|e3|)
+    VADD V7.D2, V11.D2, V11.D2
+    // level 4: e4 = d0 - d1
+    VSUB V6.D2, V5.D2, V0.D2             // e4 (V5=d0, V6=d1)
+    WORD $0x4EE0B807                     // abs v7.2d, v0.2d   (|e4|)
+    VADD V7.D2, V12.D2, V12.D2
+    ADD  $8, R2
+    SUB  $1, R3
+    CBNZ R3, fas_neon_body
+
+fas_neon_reduce:
+    // fold each accumulator's two lanes and add into sums[order]
+    VADDP V8.D2, V8.D2, V0.D2
+    FMOVD F0, R12; MOVD 0(R0), R14; ADD R12, R14, R14; MOVD R14, 0(R0)
+    VADDP V9.D2, V9.D2, V0.D2
+    FMOVD F0, R12; MOVD 8(R0), R14; ADD R12, R14, R14; MOVD R14, 8(R0)
+    VADDP V10.D2, V10.D2, V0.D2
+    FMOVD F0, R12; MOVD 16(R0), R14; ADD R12, R14, R14; MOVD R14, 16(R0)
+    VADDP V11.D2, V11.D2, V0.D2
+    FMOVD F0, R12; MOVD 24(R0), R14; ADD R12, R14, R14; MOVD R14, 24(R0)
+    VADDP V12.D2, V12.D2, V0.D2
+    FMOVD F0, R12; MOVD 32(R0), R14; ADD R12, R14, R14; MOVD R14, 32(R0)
+
+    // ---- scalar tail: (n-4) mod 2 sample from i=bodyEnd, all orders active ----
+    CBZ  R4, fas_neon_done           // R2 = &src[bodyEnd]
+fas_neon_tail:
+    MOVW   0(R2), R5                 // a0
+    MOVW  -4(R2), R6                 // a1
+    MOVW  -8(R2), R7                 // a2
+    MOVW -12(R2), R8                 // a3
+    MOVW -16(R2), R9                 // a4
+    // e0 = a0
+    MOVD R5, R10; ASR $63, R10, R11; EOR R11, R10, R10; SUB R11, R10, R10
+    MOVD 0(R0), R14; ADD R10, R14, R14; MOVD R14, 0(R0)
+    // e1 = a0 - a1
+    SUB R6, R5, R10
+    ASR $63, R10, R11; EOR R11, R10, R10; SUB R11, R10, R10
+    MOVD 8(R0), R14; ADD R10, R14, R14; MOVD R14, 8(R0)
+    // e2 = a0 - 2a1 + a2
+    ADD R7, R5, R10; SUB R6, R10, R10; SUB R6, R10, R10
+    ASR $63, R10, R11; EOR R11, R10, R10; SUB R11, R10, R10
+    MOVD 16(R0), R14; ADD R10, R14, R14; MOVD R14, 16(R0)
+    // e3 = (a0 - a3) + 3*(a2 - a1)
+    SUB R6, R7, R10                  // a2 - a1
+    LSL $1, R10, R12; ADD R10, R12, R10  // 3*(a2-a1)
+    ADD R5, R10, R10; SUB R8, R10, R10   // + a0 - a3
+    ASR $63, R10, R11; EOR R11, R10, R10; SUB R11, R10, R10
+    MOVD 24(R0), R14; ADD R10, R14, R14; MOVD R14, 24(R0)
+    // e4 = (a0 + a4) + 6*a2 - 4*(a1 + a3)
+    ADD R9, R5, R10                  // a0 + a4
+    LSL $1, R7, R12; ADD R12, R10, R10   // + 2*a2
+    LSL $2, R7, R12; ADD R12, R10, R10   // + 4*a2
+    ADD R8, R6, R12; LSL $2, R12, R12; SUB R12, R10, R10  // - 4*(a1+a3)
+    ASR $63, R10, R11; EOR R11, R10, R10; SUB R11, R10, R10
+    MOVD 32(R0), R14; ADD R10, R14, R14; MOVD R14, 32(R0)
+    ADD  $4, R2
+    SUB  $1, R4
+    CBNZ R4, fas_neon_tail
+
+fas_neon_done:
+    RET
+
+// func riceSumsHighNEON(sums []uint64, res []int32)
+// The upper half of the FLAC 5-bit Rice sweep: sums[j] = Σ_i (zigzag(res[i]) >>
+// (15+j)) for j = 0..15 (columns k=15..30; the dispatch guarantees len(sums)==16).
+// Identical in shape to riceSumsNEON, but the widened symbols are pre-shifted by
+// 15 so the 16 progressively halved int64x2 accumulators (V8..V23, which fit in
+// one sweep) hold k=15..30. The (n mod 4) trailing residuals are added to all 16
+// columns with a scalar progressive-halving tail starting at >>15. The dispatch
+// gates len(res) >= 4.
+TEXT ·riceSumsHighNEON(SB), NOSPLIT, $0-48
+    MOVD sums_base+0(FP), R0
+    MOVD res_base+24(FP), R2
+    MOVD res_len+32(FP), R3
+    LSR  $2, R3, R4                  // R4 = full 4-element blocks (>=1)
+    VEOR V7.B16, V7.B16, V7.B16      // V7 = 0 (sign negate source)
+    VEOR V8.B16, V8.B16, V8.B16
+    VEOR V9.B16, V9.B16, V9.B16
+    VEOR V10.B16, V10.B16, V10.B16
+    VEOR V11.B16, V11.B16, V11.B16
+    VEOR V12.B16, V12.B16, V12.B16
+    VEOR V13.B16, V13.B16, V13.B16
+    VEOR V14.B16, V14.B16, V14.B16
+    VEOR V15.B16, V15.B16, V15.B16
+    VEOR V16.B16, V16.B16, V16.B16
+    VEOR V17.B16, V17.B16, V17.B16
+    VEOR V18.B16, V18.B16, V18.B16
+    VEOR V19.B16, V19.B16, V19.B16
+    VEOR V20.B16, V20.B16, V20.B16
+    VEOR V21.B16, V21.B16, V21.B16
+    VEOR V22.B16, V22.B16, V22.B16
+    VEOR V23.B16, V23.B16, V23.B16
+
+rice_neon_hi_loop:
+    VLD1.P 16(R2), [V0.S4]
+    VSHL   $1, V0.S4, V1.S4
+    VUSHR  $31, V0.S4, V4.S4
+    VSUB   V4.S4, V7.S4, V4.S4
+    VEOR   V4.B16, V1.B16, V1.B16    // u = zigzag(r)
+    VUSHLL  $0, V1.S2, V2.D2         // ulo
+    VUSHLL2 $0, V1.S4, V3.D2         // uhi
+    VUSHR $15, V2.D2, V2.D2          // start at k=15
+    VUSHR $15, V3.D2, V3.D2
+    VADD V2.D2, V8.D2, V8.D2          // k=15
+    VADD V3.D2, V8.D2, V8.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V9.D2, V9.D2          // k=16
+    VADD V3.D2, V9.D2, V9.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V10.D2, V10.D2        // k=17
+    VADD V3.D2, V10.D2, V10.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V11.D2, V11.D2        // k=18
+    VADD V3.D2, V11.D2, V11.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V12.D2, V12.D2        // k=19
+    VADD V3.D2, V12.D2, V12.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V13.D2, V13.D2        // k=20
+    VADD V3.D2, V13.D2, V13.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V14.D2, V14.D2        // k=21
+    VADD V3.D2, V14.D2, V14.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V15.D2, V15.D2        // k=22
+    VADD V3.D2, V15.D2, V15.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V16.D2, V16.D2        // k=23
+    VADD V3.D2, V16.D2, V16.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V17.D2, V17.D2        // k=24
+    VADD V3.D2, V17.D2, V17.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V18.D2, V18.D2        // k=25
+    VADD V3.D2, V18.D2, V18.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V19.D2, V19.D2        // k=26
+    VADD V3.D2, V19.D2, V19.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V20.D2, V20.D2        // k=27
+    VADD V3.D2, V20.D2, V20.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V21.D2, V21.D2        // k=28
+    VADD V3.D2, V21.D2, V21.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V22.D2, V22.D2        // k=29
+    VADD V3.D2, V22.D2, V22.D2
+    VUSHR $1, V2.D2, V2.D2
+    VUSHR $1, V3.D2, V3.D2
+    VADD V2.D2, V23.D2, V23.D2        // k=30
+    VADD V3.D2, V23.D2, V23.D2
+    SUB  $1, R4
+    CBNZ R4, rice_neon_hi_loop
+
+    // fold each int64x2 accumulator and store sums[0..15] (k=15..30)
+    VADDP V8.D2, V8.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 0(R0)
+    VADDP V9.D2, V9.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 8(R0)
+    VADDP V10.D2, V10.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 16(R0)
+    VADDP V11.D2, V11.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 24(R0)
+    VADDP V12.D2, V12.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 32(R0)
+    VADDP V13.D2, V13.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 40(R0)
+    VADDP V14.D2, V14.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 48(R0)
+    VADDP V15.D2, V15.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 56(R0)
+    VADDP V16.D2, V16.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 64(R0)
+    VADDP V17.D2, V17.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 72(R0)
+    VADDP V18.D2, V18.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 80(R0)
+    VADDP V19.D2, V19.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 88(R0)
+    VADDP V20.D2, V20.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 96(R0)
+    VADDP V21.D2, V21.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 104(R0)
+    VADDP V22.D2, V22.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 112(R0)
+    VADDP V23.D2, V23.D2, V1.D2
+    FMOVD F1, R5
+    MOVD  R5, 120(R0)
+
+    // scalar tail: (n mod 4) residuals, add to all 16 columns from >>15
+    AND  $3, R3, R4
+    CBZ  R4, rice_neon_hi_done
+rice_neon_hi_tail_out:
+    MOVW (R2), R5
+    ADDW R5, R5, R6                  // r<<1
+    ASRW $31, R5, R7                 // r>>31 (arithmetic)
+    EORW R7, R6, R6                  // u = zigzag(r) (zero-extended)
+    LSR  $15, R6, R6                 // u >> 15 (k=15 start)
+    MOVD R0, R8                      // sums ptr
+    MOVD $16, R9                     // column counter
+rice_neon_hi_tail_k:
+    MOVD (R8), R7
+    ADD  R6, R7, R7
+    MOVD R7, (R8)
+    LSR  $1, R6, R6
+    ADD  $8, R8
+    SUB  $1, R9
+    CBNZ R9, rice_neon_hi_tail_k
+    ADD  $4, R2
+    SUB  $1, R4
+    CBNZ R4, rice_neon_hi_tail_out
+
+rice_neon_hi_done:
+    RET

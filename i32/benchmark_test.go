@@ -410,10 +410,64 @@ func BenchmarkRiceSumsGo_1000(b *testing.B) {
 	}
 }
 
+// Wide variants exercise the FLAC 5-bit range (31 columns, k=0..30): the SIMD
+// path now vectorizes all of it, where it previously fell back to scalar.
+func BenchmarkRiceSumsWide_1000(b *testing.B) {
+	res := benchRiceRes()
+	sums := make([]uint64, riceMaxParam5+1)
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		RiceSums(sums, res)
+	}
+}
+
+func BenchmarkRiceSumsWideGo_1000(b *testing.B) {
+	res := benchRiceRes()
+	sums := make([]uint64, riceMaxParam5+1)
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		riceSumsGo(sums, res)
+	}
+}
+
 func BenchmarkRiceBestParam_1000(b *testing.B) {
 	res := benchRiceRes()
 	b.SetBytes(benchN * 4)
 	for b.Loop() {
 		RiceBestParam(res, riceMaxParam)
+	}
+}
+
+func BenchmarkZigzagSum_1000(b *testing.B) {
+	res := benchRiceRes()
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		ZigzagSum(res)
+	}
+}
+
+func BenchmarkZigzagSumGo_1000(b *testing.B) {
+	res := benchRiceRes()
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		zigzagSumGo(res)
+	}
+}
+
+func BenchmarkFixedAbsSums_1000(b *testing.B) {
+	src, _ := benchSrcDst()
+	var sums [5]uint64
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		FixedAbsSums(src, &sums)
+	}
+}
+
+func BenchmarkFixedAbsSumsGo_1000(b *testing.B) {
+	src, _ := benchSrcDst()
+	var sums [5]uint64
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		fixedAbsSumsGo(src, &sums)
 	}
 }

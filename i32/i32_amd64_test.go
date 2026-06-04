@@ -273,6 +273,8 @@ func TestAVX2Kernels_AllocFree(t *testing.T) {
 	b := make([]int32, n)
 	dst := make([]int32, n)
 	dst2 := make([]int32, n)
+	var fasSums [5]uint64
+	riceHi := make([]uint64, riceMaxParam5+1-riceParamCount)
 	checks := []struct {
 		name string
 		fn   func()
@@ -286,6 +288,9 @@ func TestAVX2Kernels_AllocFree(t *testing.T) {
 		{"diff3AVX2", func() { diff3AVX2(dst, a) }},
 		{"diff4AVX2", func() { diff4AVX2(dst, a) }},
 		{"cumsumAVX2", func() { cumsumAVX2(dst) }},
+		{"zigzagSumAVX2", func() { _ = zigzagSumAVX2(a) }},
+		{"fixedAbsSumsAVX2", func() { fixedAbsSumsAVX2(a, &fasSums) }},
+		{"riceSumsHighAVX2", func() { riceSumsHighAVX2(riceHi, a) }},
 		{"lpcResidualEncodeAVX2", func() { lpcResidualEncodeAVX2(dst, a, lpcAllocCoeffs, 12) }},
 		{"lpcRestoreAVX2", func() { lpcRestoreAVX2(dst, a, lpcAllocCoeffs, 12) }},
 	}
@@ -468,6 +473,90 @@ func TestRiceSumsAVX2_NoOverwrite(t *testing.T) {
 	for i := riceParamCount; i < len(sums); i++ {
 		if sums[i] != math.MaxUint64 {
 			t.Errorf("riceSumsAVX2 wrote past end at sums[%d] = %d", i, sums[i])
+		}
+	}
+}
+
+func TestZigzagSumAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range paritySizes {
+		if n < minAVXElements {
+			continue // dispatch routes these to Go; the kernel is not called
+		}
+		res := make([]int32, n)
+		fillRiceRes(res)
+		got := zigzagSumAVX2(res)
+		want := zigzagSumGo(res)
+		if got != want {
+			t.Fatalf("n=%d: zigzagSumAVX2 = %d, want %d (Go)", n, got, want)
+		}
+	}
+}
+
+func TestFixedAbsSumsAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range paritySizes {
+		if n < minAVXElements {
+			continue // dispatch routes these to Go; the kernel is not called
+		}
+		src := make([]int32, n)
+		fillDiffSrc(src) // sign-exercising values incl. MinInt32/MaxInt32 extremes
+		var gotAVX, gotGo [5]uint64
+		fixedAbsSumsAVX2(src, &gotAVX)
+		fixedAbsSumsGo(src, &gotGo)
+		if gotAVX != gotGo {
+			t.Fatalf("n=%d: fixedAbsSumsAVX2 = %v, want %v (Go)", n, gotAVX, gotGo)
+		}
+	}
+}
+
+// TestRiceSumsHighAVX2_ParityWithGo checks the upper-half kernel (columns
+// 15..30) against the pure-Go reference's matching columns.
+func TestRiceSumsHighAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	const lo = riceParamCount         // 15
+	const hi = riceMaxParam5 + 1 - lo // 16 columns: k=15..30
+	for _, n := range paritySizes {
+		if n < minAVXElements {
+			continue // dispatch routes these to Go; the kernel is not called
+		}
+		res := make([]int32, n)
+		fillRiceRes(res)
+		gotHigh := make([]uint64, hi)
+		riceSumsHighAVX2(gotHigh, res)
+		full := make([]uint64, riceMaxParam5+1)
+		riceSumsGo(full, res)
+		for j := range gotHigh {
+			if gotHigh[j] != full[lo+j] {
+				t.Fatalf("n=%d: riceSumsHighAVX2[%d] (k=%d) = %d, want %d (Go)", n, j, lo+j, gotHigh[j], full[lo+j])
+			}
+		}
+	}
+}
+
+// TestRiceSumsHighAVX2_NoOverwrite guards the fixed 16-wide write.
+func TestRiceSumsHighAVX2_NoOverwrite(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	const hi = riceMaxParam5 + 1 - riceParamCount // 16
+	const n = 100
+	res := make([]int32, n)
+	fillRiceRes(res)
+	sums := make([]uint64, hi+4)
+	for i := range sums {
+		sums[i] = math.MaxUint64 // sentinel
+	}
+	riceSumsHighAVX2(sums[:hi], res)
+	for i := hi; i < len(sums); i++ {
+		if sums[i] != math.MaxUint64 {
+			t.Errorf("riceSumsHighAVX2 wrote past end at sums[%d] = %d", i, sums[i])
 		}
 	}
 }

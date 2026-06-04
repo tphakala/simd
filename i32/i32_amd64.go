@@ -199,5 +199,53 @@ func riceSumsI32(sums []uint64, res []int32) {
 	riceSumsGo(sums, res)
 }
 
+// zigzagSumI32 dispatches the residual zigzag-fold sum (RiceSums' k=0 column).
+// The AVX2 kernel widens to int64 lanes; it gates on AVX2 and at least one full
+// 8-element block, falling back to the pure-Go reference otherwise.
+func zigzagSumI32(res []int32) uint64 {
+	if hasAVX2 && len(res) >= minAVXElements {
+		return zigzagSumAVX2(res)
+	}
+	return zigzagSumGo(res)
+}
+
+//go:noescape
+func zigzagSumAVX2(res []int32) uint64
+
+// fixedAbsSumsI32 dispatches the five fixed-predictor residual abs-sums. The
+// AVX2 kernel computes the order-0..4 finite differences in int64 lanes via a
+// windowed sign-extending cascade, so it gates on AVX2 and at least one full
+// 8-element block (the kernel handles the first 4 warm-up samples and the tail
+// scalar). Shorter inputs use the pure-Go reference.
+func fixedAbsSumsI32(src []int32, sums *[5]uint64) {
+	if hasAVX2 && len(src) >= minAVXElements {
+		fixedAbsSumsAVX2(src, sums)
+		return
+	}
+	fixedAbsSumsGo(src, sums)
+}
+
+//go:noescape
+func fixedAbsSumsAVX2(src []int32, sums *[5]uint64)
+
 //go:noescape
 func riceSumsAVX2(sums []uint64, res []int32)
+
+// riceSumsWideI32 dispatches the FLAC 5-bit Rice sums (len(sums) ==
+// riceMaxParam5+1 = 31). The AVX2 path reuses the 15-wide kernel for columns
+// 0..14 and a high kernel for columns 15..30, so the whole range is vectorized
+// instead of falling to the scalar tail; both gate on AVX2 and one full block.
+func riceSumsWideI32(sums []uint64, res []int32) {
+	// The exact-width gate mirrors riceSumsI32: riceSumsHighAVX2 is a fixed
+	// 16-column writer, so only dispatch it when sums is the full 31-wide slice;
+	// any other length goes to the pure-Go reference (which handles all widths).
+	if hasAVX2 && len(sums) == riceMaxParam5+1 && len(res) >= minAVXElements {
+		riceSumsAVX2(sums[:riceParamCount], res)     // columns 0..14
+		riceSumsHighAVX2(sums[riceParamCount:], res) // columns 15..30
+		return
+	}
+	riceSumsGo(sums, res)
+}
+
+//go:noescape
+func riceSumsHighAVX2(sums []uint64, res []int32)

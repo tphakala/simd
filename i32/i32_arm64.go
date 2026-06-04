@@ -177,5 +177,53 @@ func riceSumsI32(sums []uint64, res []int32) {
 	riceSumsGo(sums, res)
 }
 
+// zigzagSumI32 dispatches the residual zigzag-fold sum (RiceSums' k=0 column).
+// The NEON kernel widens to int64 lanes; it gates on NEON and at least one full
+// 4-element block, falling back to the pure-Go reference otherwise.
+func zigzagSumI32(res []int32) uint64 {
+	if hasNEON && len(res) >= minNEONElements {
+		return zigzagSumNEON(res)
+	}
+	return zigzagSumGo(res)
+}
+
+//go:noescape
+func zigzagSumNEON(res []int32) uint64
+
+// fixedAbsSumsI32 dispatches the five fixed-predictor residual abs-sums. The
+// NEON kernel computes the order-0..4 finite differences in int64 lanes via a
+// windowed sign-extending cascade; it handles the first 4 warm-up samples and
+// the tail scalar, so it only needs the warm-up samples to exist. Shorter inputs
+// use the pure-Go reference.
+func fixedAbsSumsI32(src []int32, sums *[5]uint64) {
+	if hasNEON && len(src) >= minNEONElements {
+		fixedAbsSumsNEON(src, sums)
+		return
+	}
+	fixedAbsSumsGo(src, sums)
+}
+
+//go:noescape
+func fixedAbsSumsNEON(src []int32, sums *[5]uint64)
+
 //go:noescape
 func riceSumsNEON(sums []uint64, res []int32)
+
+// riceSumsWideI32 dispatches the FLAC 5-bit Rice sums (len(sums) ==
+// riceMaxParam5+1 = 31). The NEON path reuses the 15-wide kernel for columns
+// 0..14 and a high kernel for columns 15..30, so the whole range is vectorized
+// instead of falling to the scalar tail; both gate on NEON and one full block.
+func riceSumsWideI32(sums []uint64, res []int32) {
+	// The exact-width gate mirrors riceSumsI32: riceSumsHighNEON is a fixed
+	// 16-column writer, so only dispatch it when sums is the full 31-wide slice;
+	// any other length goes to the pure-Go reference (which handles all widths).
+	if hasNEON && len(sums) == riceMaxParam5+1 && len(res) >= minNEONElements {
+		riceSumsNEON(sums[:riceParamCount], res)     // columns 0..14
+		riceSumsHighNEON(sums[riceParamCount:], res) // columns 15..30
+		return
+	}
+	riceSumsGo(sums, res)
+}
+
+//go:noescape
+func riceSumsHighNEON(sums []uint64, res []int32)
