@@ -24,8 +24,9 @@ const (
 	riceParamCount = riceMaxParam + 1
 
 	// riceMaxParam5 is the largest parameter FLAC's 5-bit partition method can
-	// encode (k = 0..30; 31 is the escape). RiceBestParam clamps maxParam to it
-	// and serves parameters above riceMaxParam from the pure-Go path.
+	// encode (k = 0..30; 31 is the escape). RiceBestParam clamps maxParam to it;
+	// parameters above riceMaxParam are served by the wide SIMD path
+	// (riceSumsWideI32), falling back to pure-Go only off the SIMD architectures.
 	riceMaxParam5 = 30
 )
 
@@ -101,7 +102,9 @@ func RiceBestParam(res []int32, maxParam uint) (bestParam uint, bits uint64) {
 		// the scan below only reads sums[:maxParam+1].
 		riceSumsI32(sums[:riceParamCount], res)
 	} else {
-		riceSumsGo(sums[:maxParam+1], res)
+		// 5-bit range: the wide kernel computes the full 31-column range on the
+		// SIMD path; the scan below only reads sums[:maxParam+1].
+		riceSumsWideI32(sums[:], res)
 	}
 	return riceScan(sums[:maxParam+1], n)
 }

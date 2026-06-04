@@ -167,8 +167,15 @@ func TestRiceAllocFree(t *testing.T) {
 	if got := testing.AllocsPerRun(100, func() { RiceSums(sums, res) }); got != 0 {
 		t.Errorf("RiceSums allocated %v times per run, want 0", got)
 	}
+	wideSums := make([]uint64, riceMaxParam5+1)
+	if got := testing.AllocsPerRun(100, func() { RiceSums(wideSums, res) }); got != 0 {
+		t.Errorf("RiceSums (5-bit width) allocated %v times per run, want 0", got)
+	}
 	if got := testing.AllocsPerRun(100, func() { RiceBestParam(res, 14) }); got != 0 {
 		t.Errorf("RiceBestParam allocated %v times per run, want 0", got)
+	}
+	if got := testing.AllocsPerRun(100, func() { RiceBestParam(res, riceMaxParam5) }); got != 0 {
+		t.Errorf("RiceBestParam (5-bit range) allocated %v times per run, want 0", got)
 	}
 }
 
