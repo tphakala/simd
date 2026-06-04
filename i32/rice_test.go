@@ -171,3 +171,69 @@ func TestRiceAllocFree(t *testing.T) {
 		t.Errorf("RiceBestParam allocated %v times per run, want 0", got)
 	}
 }
+
+// TestZigzagSumMatchesOracle checks ZigzagSum against an independent sum of the
+// zigzag fold across the block-straddling sizes.
+func TestZigzagSumMatchesOracle(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	for _, n := range []int{0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 33, 100, 1000, 1024, 1025} {
+		res := make([]int32, n)
+		for i := range res {
+			res[i] = int32(rng.Uint32())
+		}
+		var want uint64
+		for _, r := range res {
+			want += zigzag(r)
+		}
+		if got := ZigzagSum(res); got != want {
+			t.Fatalf("n=%d ZigzagSum = %d, want %d", n, got, want)
+		}
+	}
+}
+
+// TestZigzagSumExtremes exercises the int32 sign bit and the zigzag overflow at
+// math.MinInt32 (zigzag = 2^32-1), the worst case for the unsigned widening.
+func TestZigzagSumExtremes(t *testing.T) {
+	res := []int32{math.MinInt32, math.MaxInt32, -1, 0, math.MinInt32, math.MaxInt32, 1, -2, 3}
+	var want uint64
+	for _, r := range res {
+		want += zigzag(r)
+	}
+	if got := ZigzagSum(res); got != want {
+		t.Errorf("ZigzagSum extremes = %d, want %d", got, want)
+	}
+}
+
+// TestZigzagSumEqualsRiceSums0 pins the invariant that ZigzagSum is exactly the
+// k=0 column of RiceSums (Σ_i zigzag(res[i]) >> 0), so the two kernels cannot
+// drift apart.
+func TestZigzagSumEqualsRiceSums0(t *testing.T) {
+	rng := rand.New(rand.NewSource(8))
+	for _, n := range []int{0, 1, 8, 9, 100, 1000, 1025} {
+		res := make([]int32, n)
+		for i := range res {
+			res[i] = int32(rng.Uint32())
+		}
+		sums := make([]uint64, riceParamCount)
+		RiceSums(sums, res)
+		if got := ZigzagSum(res); got != sums[0] {
+			t.Fatalf("n=%d ZigzagSum = %d, want RiceSums[0] = %d", n, got, sums[0])
+		}
+	}
+}
+
+func TestZigzagSumEmpty(t *testing.T) {
+	if got := ZigzagSum(nil); got != 0 {
+		t.Errorf("ZigzagSum(nil) = %d, want 0", got)
+	}
+}
+
+func TestZigzagSumAllocFree(t *testing.T) {
+	res := make([]int32, 1024)
+	for i := range res {
+		res[i] = int32(i*7 - 3)
+	}
+	if got := testing.AllocsPerRun(100, func() { ZigzagSum(res) }); got != 0 {
+		t.Errorf("ZigzagSum allocated %v times per run, want 0", got)
+	}
+}

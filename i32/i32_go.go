@@ -141,6 +141,81 @@ func riceSumsGo(sums []uint64, res []int32) {
 	}
 }
 
+// zigzagSumGo returns Σ_i zigzag(res[i]), the FLAC residual zigzag fold summed
+// in uint64. It is exactly the k=0 column of riceSumsGo and the bit-exact source
+// of truth the SIMD kernels are validated against. The fold uses int32
+// arithmetic (matching the kernels): r<<1 wraps and r>>31 is the arithmetic
+// sign-extension, so a math.MinInt32 residual folds to 2^32-1 before the
+// unsigned widen.
+func zigzagSumGo(res []int32) uint64 {
+	var s uint64
+	for _, r := range res {
+		s += uint64(uint32((r << 1) ^ (r >> int32SignShift)))
+	}
+	return s
+}
+
+// absU64 returns the absolute value of v as a uint64. v is bounded well inside
+// the int64 range here (at most a 4th finite difference of int32 samples, ~2^35),
+// so the math.MinInt64 edge case (where -v overflows) cannot arise.
+func absU64(v int64) uint64 {
+	if v < 0 {
+		return uint64(-v)
+	}
+	return uint64(v)
+}
+
+// fixedAbsSumsGo writes the five fixed-predictor residual abs-sums into sums:
+//
+//	sums[order] = Σ_{i>=order} |e_order[i]|   for order in 0..4
+//
+// where e_order is the order-th forward finite difference of src (order 0 is src
+// itself, order 1 the first difference, and so on). The differences are computed
+// in int64 (a 4th difference of int32 samples can reach ~2^35, beyond int32), and
+// sums[order] excludes the first order warm-up samples, matching the cost FLAC
+// uses to choose a fixed predictor order. It fully overwrites sums and is the
+// bit-exact source of truth the SIMD kernels are validated against.
+//
+// The accumulators are kept in a local array and stored once at the end: writing
+// through *sums each iteration would force them to memory (the compiler cannot
+// prove sums does not alias src). This mirrors go-flac's FixedAbsSums exactly so
+// swapping it for the SIMD path leaves the encoded stream byte-identical.
+func fixedAbsSumsGo(src []int32, sums *[5]uint64) {
+	var s [5]uint64
+	var p1, p2, p3, p4 int64 // p1=prev e0, p2=prev e1, p3=prev e2, p4=prev e3
+	n := len(src)
+	// Warm-up: order o's difference e_o is first defined at sample index o, so at
+	// position i only orders 0..i are active. Handled in this short bounded loop
+	// (len(s)-1 = 4 samples at most) so the main loop below can stay branchless.
+	w := min(n, len(s)-1)
+	for i := range w {
+		e0 := int64(src[i])
+		e1 := e0 - p1
+		e2 := e1 - p2
+		e3 := e2 - p3
+		e := [4]int64{e0, e1, e2, e3}
+		for o := 0; o <= i; o++ {
+			s[o] += absU64(e[o])
+		}
+		p1, p2, p3, p4 = e0, e1, e2, e3
+	}
+	// Main region i >= len(s)-1: every order is active, so this is branchless.
+	for i := w; i < n; i++ {
+		e0 := int64(src[i])
+		e1 := e0 - p1
+		e2 := e1 - p2
+		e3 := e2 - p3
+		e4 := e3 - p4
+		s[0] += absU64(e0)
+		s[1] += absU64(e1)
+		s[2] += absU64(e2)
+		s[3] += absU64(e3)
+		s[4] += absU64(e4)
+		p1, p2, p3, p4 = e0, e1, e2, e3
+	}
+	*sums = s
+}
+
 // lpcRestoreGo is the exact inverse of lpcResidualEncodeGo: it reconstructs the
 // samples from the [order warm-up | residual] layout via the serial recurrence
 //

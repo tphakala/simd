@@ -2,6 +2,7 @@ package i32
 
 import (
 	"math"
+	"math/rand"
 	"testing"
 )
 
@@ -131,5 +132,117 @@ func TestDiff_AllocFree(t *testing.T) {
 		if got := testing.AllocsPerRun(100, func() { fn(dst, src) }); got != 0 {
 			t.Errorf("%s allocated %v times per run, want 0", name, got)
 		}
+	}
+}
+
+// Tests for FixedAbsSums, the five fixed-predictor residual abs-sums.
+//
+// sums[order] = Σ_{i>=order} |e_order[i]| where e_order is the order-th forward
+// finite difference of src (orders 0..4), computed in int64 and excluding the
+// first order warm-up samples.
+
+// fixedAbsSumsOracle is an independent implementation that derives each order's
+// finite difference by repeated first-differencing in int64 (the algorithm
+// diffResidualRepeated uses, widened), then sums |diff| over the non-warm-up
+// range [order, n). Written separately from fixedAbsSumsGo so the two agreeing
+// is a real cross-check rather than a restatement.
+func fixedAbsSumsOracle(src []int32) [5]uint64 {
+	cur := make([]int64, len(src))
+	for i, v := range src {
+		cur[i] = int64(v)
+	}
+	abs := func(v int64) uint64 {
+		if v < 0 {
+			return uint64(-v)
+		}
+		return uint64(v)
+	}
+	var sums [5]uint64
+	for order := 0; order <= 4; order++ {
+		for i := order; i < len(cur); i++ {
+			sums[order] += abs(cur[i])
+		}
+		if order < 4 {
+			next := make([]int64, len(cur))
+			for i := len(cur) - 1; i >= 1; i-- {
+				next[i] = cur[i] - cur[i-1] // next[0] is warm-up, never read for order+1
+			}
+			cur = next
+		}
+	}
+	return sums
+}
+
+// TestFixedAbsSumsSmall checks a hand-computed case including the warm-up
+// exclusions for orders that have no full window yet.
+func TestFixedAbsSumsSmall(t *testing.T) {
+	src := []int32{3, 7, 2}
+	// order0: 3+7+2 = 12
+	// order1 (i>=1): |7-3| + |2-7| = 4 + 5 = 9
+	// order2 (i>=2): |(2-7)-(7-3)| = |-9| = 9
+	// order3,4: no terms (n<4, n<5) -> 0
+	var got [5]uint64
+	FixedAbsSums(src, &got)
+	want := [5]uint64{12, 9, 9, 0, 0}
+	if got != want {
+		t.Fatalf("FixedAbsSums small = %v, want %v", got, want)
+	}
+}
+
+func TestFixedAbsSumsMatchesOracle(t *testing.T) {
+	rng := rand.New(rand.NewSource(11))
+	for _, n := range []int{0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33, 100, 1000, 1024, 1025} {
+		src := make([]int32, n)
+		for i := range src {
+			src[i] = int32(rng.Uint32())
+		}
+		var got [5]uint64
+		FixedAbsSums(src, &got)
+		want := fixedAbsSumsOracle(src)
+		if got != want {
+			t.Fatalf("n=%d FixedAbsSums = %v, want %v", n, got, want)
+		}
+	}
+}
+
+// TestFixedAbsSumsExtremes drives the int64 width: MinInt32/MaxInt32 differences
+// reach ~2^35, so an int32-wrapping cascade would diverge from the reference.
+func TestFixedAbsSumsExtremes(t *testing.T) {
+	src := []int32{math.MinInt32, math.MaxInt32, math.MinInt32, math.MaxInt32, math.MinInt32, math.MaxInt32, 0, -1, 1, math.MinInt32, math.MaxInt32, 0}
+	var got [5]uint64
+	FixedAbsSums(src, &got)
+	want := fixedAbsSumsOracle(src)
+	if got != want {
+		t.Fatalf("FixedAbsSums extremes = %v, want %v", got, want)
+	}
+}
+
+// TestFixedAbsSumsOverwrites confirms sums is fully written, not accumulated into.
+func TestFixedAbsSumsOverwrites(t *testing.T) {
+	src := []int32{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	got := [5]uint64{999, 999, 999, 999, 999}
+	FixedAbsSums(src, &got)
+	want := fixedAbsSumsOracle(src)
+	if got != want {
+		t.Fatalf("FixedAbsSums did not overwrite: %v, want %v", got, want)
+	}
+}
+
+func TestFixedAbsSumsEmpty(t *testing.T) {
+	got := [5]uint64{7, 7, 7, 7, 7}
+	FixedAbsSums(nil, &got)
+	if got != ([5]uint64{}) {
+		t.Errorf("FixedAbsSums(nil) = %v, want all zero", got)
+	}
+}
+
+func TestFixedAbsSumsAllocFree(t *testing.T) {
+	src := make([]int32, 1024)
+	for i := range src {
+		src[i] = int32(i*7 - 3)
+	}
+	var sums [5]uint64
+	if got := testing.AllocsPerRun(100, func() { FixedAbsSums(src, &sums) }); got != 0 {
+		t.Errorf("FixedAbsSums allocated %v times per run, want 0", got)
 	}
 }

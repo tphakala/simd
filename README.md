@@ -382,10 +382,12 @@ SIMD-accelerated integer-domain operations for codec and integer-DSP hot loops (
 |                     | `MidSideDecode(left, right, mid, side)` | Mid/side inverse (parity-bit reconstruction)             | 8x (AVX2) / 4x (NEON) |
 | **Fixed predictor** | `Diff1`..`Diff4(dst, src)`              | Order 1-4 fixed-predictor encode residual (forward diff) | 8x (AVX2) / 4x (NEON) |
 |                     | `Restore1`..`Restore4(dst, src)`        | Order 1-4 fixed-predictor decode (inverse; prefix sum)   | 8x (AVX2) / 4x (NEON) |
+|                     | `FixedAbsSums(src, sums)`               | Order 0-4 residual abs-sums in one pass (predictor select) | 8x (AVX2) / 4x (NEON) |
 | **LPC**             | `LPCResidualEncode(res, samples, coeffs, shift)` | Quantized-LPC encode residual FIR (parallel across outputs) | 8x (AVX2) / 4x (NEON) |
 |                     | `LPCRestore(out, residual, coeffs, shift)`       | Quantized-LPC decode (serial recurrence; vectorized taps)   | 8x (AVX2) / 4x (NEON) |
-| **Rice**            | `RiceSums(sums, res)`                   | Per-parameter zigzag unary-bit sums `Σ (zigzag(res)>>k)`  | 8x (AVX2) / 4x (NEON) |
+| **Rice**            | `RiceSums(sums, res)`                   | Per-parameter zigzag unary-bit sums `Σ (zigzag(res)>>k)`, all FLAC params k=0..30 | 8x (AVX2) / 4x (NEON) |
 |                     | `RiceBestParam(res, maxParam)`          | Cost-minimizing Rice parameter + its bit count           | 8x (AVX2) / 4x (NEON) |
+|                     | `ZigzagSum(res)`                        | Total zigzag fold `Σ zigzag(res)` (estimate fast path)   | 8x (AVX2) / 4x (NEON) |
 
 ```go
 import "github.com/tphakala/simd/i32"
@@ -401,14 +403,18 @@ res := make([]int32, n)
 i32.Diff2(res, left)     // order-2 fixed-predictor encode residual
 i32.Restore2(left, res)  // exact inverse: reconstruct the samples
 
+var absSums [5]uint64
+i32.FixedAbsSums(left, &absSums) // order 0-4 residual abs-sums for predictor selection
+
 coeffs := []int32{...}             // quantized LPC coefficients (order = len)
 i32.LPCResidualEncode(res, left, coeffs, shift) // encode FIR residual
 i32.LPCRestore(left, res, coeffs, shift)        // exact inverse: reconstruct
 
 param, bits := i32.RiceBestParam(res, 14) // best Rice parameter and its bit cost
+total := i32.ZigzagSum(res)               // Σ zigzag(res): the k=0 Rice sum on its own
 ```
 
-Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. The decorrelation and fixed-predictor kernels do integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes. `RestoreK` is the exact inverse of `DiffK`: since the order-`K` fixed predictor is the `K`-th forward difference, restoration is `K` cumulative-sum passes built on one SIMD prefix-sum kernel (11x at order 1 down to ~5x at order 4 on AVX2; 6x to 3x on NEON, all zero-allocation). The LPC kernels accumulate the prediction sum in int64 (matching libFLAC), so they stay bit-exact for the full coefficient precision and order: `LPCResidualEncode` is a FIR that vectorizes across output samples (widening `VPMULDQ` / `SMLAL`, ~7-9x on AVX2, ~4-5x on NEON), while `LPCRestore` is a serial recurrence whose per-output tap dot product is vectorized, keeping the just-written newest samples on store-forwardable scalar loads (~1.4-3.9x on AVX2, ~1.8-3.6x on NEON, order 8 to 32). The Rice cost search folds each residual to its unsigned zigzag symbol `(r<<1)^(r>>31)`, widens it to int64, and accumulates `Σ (zigzag(res)>>k)` for every Rice parameter `k` in 0..14 at once (the symbols are halved progressively, exact for the logical shift); `RiceBestParam` adds the `n*(k+1)` code overhead and picks the cheapest `k`. This is the exact bit cost, not the `sum>>k` approximation, and runs ~13x on AVX2 and ~4x on NEON, zero-allocation.
+Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. The decorrelation and fixed-predictor kernels do integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes. `RestoreK` is the exact inverse of `DiffK`: since the order-`K` fixed predictor is the `K`-th forward difference, restoration is `K` cumulative-sum passes built on one SIMD prefix-sum kernel (11x at order 1 down to ~5x at order 4 on AVX2; 6x to 3x on NEON, all zero-allocation). The LPC kernels accumulate the prediction sum in int64 (matching libFLAC), so they stay bit-exact for the full coefficient precision and order: `LPCResidualEncode` is a FIR that vectorizes across output samples (widening `VPMULDQ` / `SMLAL`, ~7-9x on AVX2, ~4-5x on NEON), while `LPCRestore` is a serial recurrence whose per-output tap dot product is vectorized, keeping the just-written newest samples on store-forwardable scalar loads (~1.4-3.9x on AVX2, ~1.8-3.6x on NEON, order 8 to 32). `FixedAbsSums` picks the cheapest fixed predictor in one pass: it forms the order-0..4 forward finite differences in int64 (a 4th difference of int32 samples exceeds the int32 range) with a windowed sign-extending subtract cascade, sums `|e_order|` per order excluding the warm-up, and runs ~2.6x on AVX2, ~1.7x on NEON. The Rice cost search folds each residual to its unsigned zigzag symbol `(r<<1)^(r>>31)`, widens it to int64, and accumulates `Σ (zigzag(res)>>k)` for every Rice parameter at once (the symbols are halved progressively, exact for the logical shift); the kernel now covers FLAC's full range `k` in 0..30 (the 5-bit method, previously a scalar tail above 14), so a 31-column `RiceSums` runs ~13x on AVX2 and ~4x on NEON instead of falling back to scalar. `RiceBestParam` adds the `n*(k+1)` code overhead and picks the cheapest `k`; this is the exact bit cost, not the `sum>>k` approximation. `ZigzagSum` exposes just the `k=0` total `Σ zigzag(res)` for the estimate path (~3.7x AVX2, ~2.4x NEON). All zero-allocation.
 
 ### `i16` - int16 Operations
 
@@ -612,6 +618,9 @@ a Raspberry Pi 5):
 | LPCRestore (order 32)        | 4443 ns vs 17529 ns (**3.9x**)| 11303 ns vs 41026 ns (**3.6x**) |
 | RiceSums (k=0..14)           | 810 ns vs 10490 ns (**13.0x**)| 4090 ns vs 17163 ns (**4.2x**) |
 | RiceBestParam (k=0..14)      | 810 ns vs 10490 ns (**13.0x**)| 4081 ns vs 17163 ns (**4.2x**) |
+| RiceSums (k=0..30, 5-bit)    | 1685 ns vs 21401 ns (**12.7x**)| 8503 ns vs 34111 ns (**4.0x**) |
+| ZigzagSum                    | 88 ns vs 328 ns (**3.7x**)    | 476 ns vs 1124 ns (**2.4x**)  |
+| FixedAbsSums (orders 0..4)   | 752 ns vs 1952 ns (**2.6x**)  | 2881 ns vs 4777 ns (**1.7x**) |
 
 ### int16 (i16) - SIMD vs Pure Go (1000 elements)
 
@@ -622,7 +631,7 @@ a Raspberry Pi 5):
 
 Both i16 kernels are zero-allocation and bit-exact against the pure-Go reference (verified with negative values and the int16 extremes); they move whole 16-bit lanes, so the bit pattern of each sample is irrelevant to correctness.
 
-All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The Restore baseline is the pure-Go decode recurrence; `RestoreK` reconstructs samples as `K` SIMD prefix-sum passes (the inverse of the order-`K` forward difference). The LPC kernels accumulate in int64 and are checked against an arbitrary-precision `math.big` oracle and the encode->decode round-trip; `LPCRestore` is the serial decode recurrence (vectorized per-output tap dot product), dispatched to SIMD only at order >= 8 where it beats the scalar path. The Rice kernels compute the exact per-parameter unary-bit sums `Σ (zigzag(res)>>k)` for all 15 FLAC parameters in one pass (15 int64 accumulators; AVX2 sweeps the data twice for its 16-register file, NEON fits one pass in its 32 registers), checked against an independent oracle and brute-force parameter scan.
+All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The Restore baseline is the pure-Go decode recurrence; `RestoreK` reconstructs samples as `K` SIMD prefix-sum passes (the inverse of the order-`K` forward difference). The LPC kernels accumulate in int64 and are checked against an arbitrary-precision `math.big` oracle and the encode->decode round-trip; `LPCRestore` is the serial decode recurrence (vectorized per-output tap dot product), dispatched to SIMD only at order >= 8 where it beats the scalar path. The Rice kernels compute the exact per-parameter unary-bit sums `Σ (zigzag(res)>>k)` for FLAC's full parameter range in one sweep, checked against an independent oracle and brute-force parameter scan: the 4-bit method (k=0..14) and the 5-bit method (k=0..30, a low-15 kernel plus a pre-shifted high-16 kernel) are both fully vectorized, replacing the scalar tail that previously handled k>14. `ZigzagSum` is that sweep's k=0 column on its own (Σ zigzag), and `FixedAbsSums` computes the order-0..4 fixed-predictor residual abs-sums in one windowed int64 cascade; both are checked against independent oracles across the sign bit and the int32 extremes (where the 4th difference exceeds int32, exercising the int64 width).
 
 ### Performance Notes
 

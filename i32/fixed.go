@@ -51,3 +51,17 @@ func Diff4(dst, src []int32) {
 	}
 	diff4I32(dst[:n], src[:n])
 }
+
+// FixedAbsSums writes into sums the absolute-value totals of the order-0 through
+// order-4 fixed-predictor residuals of src:
+//
+//	sums[order] = Σ_{i>=order} |e_order[i]|
+//
+// where e_order is the order-th forward finite difference of src (order 0 is src
+// itself). Each total is accumulated in int64 (the differences exceed the int32
+// range) and excludes the first order warm-up samples, matching the cost FLAC
+// uses to choose a fixed predictor order in one pass. sums is fully overwritten;
+// src is read-only. An empty src yields all-zero sums.
+func FixedAbsSums(src []int32, sums *[5]uint64) {
+	fixedAbsSumsI32(src, sums)
+}

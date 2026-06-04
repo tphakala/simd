@@ -41,6 +41,19 @@ const (
 // sums is fully overwritten (not accumulated into). res is read-only. The SIMD
 // fast path covers the FLAC parameter range (len(sums) <= riceParamCount = 15);
 // wider requests fall back to the pure-Go reference.
+// RiceSums fills sums[k] with the per-parameter unary-bit total
+//
+//	sums[k] = Σ_i (zigzag(res[i]) >> k)   for k in [0, len(sums))
+//
+// where zigzag(r) = (r<<1) ^ (r>>31) is the FLAC residual fold. Each sum is
+// accumulated in uint64 (it cannot overflow for any realistic block length).
+// The total Rice-coded bit cost of res with parameter k is sums[k] + n*(k+1),
+// n = len(res); see RiceBestParam.
+//
+// sums is fully overwritten (not accumulated into). res is read-only. The SIMD
+// fast path covers FLAC's full parameter range: the 4-bit method (len(sums) <=
+// riceParamCount = 15) and the 5-bit method (up to riceMaxParam5+1 = 31). Wider
+// requests fall back to the pure-Go reference.
 func RiceSums(sums []uint64, res []int32) {
 	switch m := len(sums); {
 	case m == 0:
@@ -48,15 +61,35 @@ func RiceSums(sums []uint64, res []int32) {
 	case m == riceParamCount:
 		riceSumsI32(sums, res)
 	case m < riceParamCount:
-		// The SIMD kernel writes exactly riceParamCount sums; compute the full
+		// The 15-wide kernel writes exactly riceParamCount sums; compute the full
 		// set on the stack and copy the requested prefix. The array does not
 		// escape, so this stays allocation-free.
 		var full [riceParamCount]uint64
 		riceSumsI32(full[:], res)
 		copy(sums, full[:m])
-	default: // m > riceParamCount
+	case m <= riceMaxParam5+1:
+		// FLAC 5-bit range (16..31 columns): vectorize all of it. The wide path
+		// always writes riceMaxParam5+1 sums; compute on the stack (no escape) and
+		// copy the requested prefix.
+		var full [riceMaxParam5 + 1]uint64
+		riceSumsWideI32(full[:], res)
+		copy(sums, full[:m])
+	default: // m > riceMaxParam5+1
 		riceSumsGo(sums, res)
 	}
+}
+
+// ZigzagSum returns the sum of the FLAC residual zigzag fold over res:
+//
+//	Σ_i zigzag(res[i]),   zigzag(r) = (r<<1) ^ (r>>31)
+//
+// Each residual is folded to its unsigned Rice symbol and accumulated in uint64
+// (it cannot overflow for any realistic block length). This is exactly the k=0
+// column of RiceSums, exposed separately for the estimate path that needs only
+// that total and not the full per-parameter sweep. res is read-only; an empty
+// res returns 0.
+func ZigzagSum(res []int32) uint64 {
+	return zigzagSumI32(res)
 }
 
 // RiceBestParam scans Rice parameters k in [0, maxParam] and returns the k that
