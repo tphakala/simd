@@ -237,3 +237,26 @@ func TestZigzagSumAllocFree(t *testing.T) {
 		t.Errorf("ZigzagSum allocated %v times per run, want 0", got)
 	}
 }
+
+// TestRiceSumsWideDispatchGuard exercises riceSumsWideI32's exact-width gate:
+// only a full 31-wide slice may reach the fixed-width SIMD kernels (which write
+// exactly riceParamCount and 16 columns), so any other width must fall back to
+// the pure-Go reference and still be correct. A regression here would surface as
+// an out-of-bounds asm write rather than a wrong value.
+func TestRiceSumsWideDispatchGuard(t *testing.T) {
+	rng := rand.New(rand.NewSource(9))
+	res := make([]int32, 64)
+	for i := range res {
+		res[i] = int32(rng.Uint32())
+	}
+	for _, m := range []int{16, 20, riceMaxParam5 + 1} {
+		got := make([]uint64, m)
+		riceSumsWideI32(got, res)
+		want := riceSumsOracle(res, m)
+		for k := range want {
+			if got[k] != want[k] {
+				t.Fatalf("m=%d riceSumsWideI32[%d] = %d, want %d", m, k, got[k], want[k])
+			}
+		}
+	}
+}

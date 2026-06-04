@@ -236,7 +236,10 @@ func riceSumsAVX2(sums []uint64, res []int32)
 // 0..14 and a high kernel for columns 15..30, so the whole range is vectorized
 // instead of falling to the scalar tail; both gate on AVX2 and one full block.
 func riceSumsWideI32(sums []uint64, res []int32) {
-	if hasAVX2 && len(res) >= minAVXElements {
+	// The exact-width gate mirrors riceSumsI32: riceSumsHighAVX2 is a fixed
+	// 16-column writer, so only dispatch it when sums is the full 31-wide slice;
+	// any other length goes to the pure-Go reference (which handles all widths).
+	if hasAVX2 && len(sums) == riceMaxParam5+1 && len(res) >= minAVXElements {
 		riceSumsAVX2(sums[:riceParamCount], res)     // columns 0..14
 		riceSumsHighAVX2(sums[riceParamCount:], res) // columns 15..30
 		return

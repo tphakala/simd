@@ -39,18 +39,6 @@ const (
 // n = len(res); see RiceBestParam.
 //
 // sums is fully overwritten (not accumulated into). res is read-only. The SIMD
-// fast path covers the FLAC parameter range (len(sums) <= riceParamCount = 15);
-// wider requests fall back to the pure-Go reference.
-// RiceSums fills sums[k] with the per-parameter unary-bit total
-//
-//	sums[k] = Σ_i (zigzag(res[i]) >> k)   for k in [0, len(sums))
-//
-// where zigzag(r) = (r<<1) ^ (r>>31) is the FLAC residual fold. Each sum is
-// accumulated in uint64 (it cannot overflow for any realistic block length).
-// The total Rice-coded bit cost of res with parameter k is sums[k] + n*(k+1),
-// n = len(res); see RiceBestParam.
-//
-// sums is fully overwritten (not accumulated into). res is read-only. The SIMD
 // fast path covers FLAC's full parameter range: the 4-bit method (len(sums) <=
 // riceParamCount = 15) and the 5-bit method (up to riceMaxParam5+1 = 31). Wider
 // requests fall back to the pure-Go reference.

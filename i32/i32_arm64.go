@@ -214,7 +214,10 @@ func riceSumsNEON(sums []uint64, res []int32)
 // 0..14 and a high kernel for columns 15..30, so the whole range is vectorized
 // instead of falling to the scalar tail; both gate on NEON and one full block.
 func riceSumsWideI32(sums []uint64, res []int32) {
-	if hasNEON && len(res) >= minNEONElements {
+	// The exact-width gate mirrors riceSumsI32: riceSumsHighNEON is a fixed
+	// 16-column writer, so only dispatch it when sums is the full 31-wide slice;
+	// any other length goes to the pure-Go reference (which handles all widths).
+	if hasNEON && len(sums) == riceMaxParam5+1 && len(res) >= minNEONElements {
 		riceSumsNEON(sums[:riceParamCount], res)     // columns 0..14
 		riceSumsHighNEON(sums[riceParamCount:], res) // columns 15..30
 		return
