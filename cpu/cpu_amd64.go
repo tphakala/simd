@@ -19,6 +19,7 @@ func init() {
 	X86.BMI1 = cpu.X86.HasBMI1
 	X86.BMI2 = cpu.X86.HasBMI2
 	X86.POPCNT = cpu.X86.HasPOPCNT
+	X86.PCLMULQDQ = cpu.X86.HasPCLMULQDQ
 }
 
 func cpuInfo() string {
