@@ -125,19 +125,24 @@ fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveDecimate(dst,sig,k,f,p)`   | Strided FIR downsample (decimate) | 8x / 4x / 2x                    |
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
+|                 | `Autocorrelate(autoc, x, maxLag)`   | LPC autocorrelation Σ x[i]·x[i-lag] (bit-exact) | 4x (AVX2) / 2x (NEON)     |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
 |                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
 |                 | `DeinterleaveN(dsts, src)`          | Unpack N interleaved streams (any N) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
 |                 | `CubicInterpDot(hist,a,b,c,d,x)`    | Fused cubic interp dot product| 4x / 2x                             |
-|                 | `Int32ToFloat32Scale(dst,src,s)`    | PCM int32 to normalized float | 8x / 4x                             |
-|                 | `Int16ToFloat32Scale(dst,src,s)`    | PCM int16 to normalized float | 8x (AVX2) / 4x (NEON)               |
-|                 | `Float32ToInt16Scale(dst,src,s)`    | Normalized float to PCM int16 | 8x (AVX2) / 4x (NEON)               |
 
 `DotProductBatch` scores its `[][]float64` rows in groups of four, keeping the
 query vector resident in registers across each group via a fused 4-row kernel on
 AMD64 (AVX-512 and AVX+FMA) instead of re-loading it per row. Short, ragged, or
 sub-SIMD-width rows fall back to the per-row dot product, with identical results.
+
+`Autocorrelate` computes the LPC autocorrelation `autoc[lag] = Σ x[i]·x[i-lag]`
+used by FLAC-style encoders. It vectorizes across lags (one accumulator lane per
+lag, never fusing the multiply-add), so each lag's sum keeps the exact left-to-right
+order of the scalar loop and every build emits byte-identical results to the pure-Go
+reference. The AVX2 path accumulates four lags per YMM, NEON two lags per V register;
+non-AVX2/NEON CPUs and short blocks use the scalar reference.
 
 ### `f32` - float32 Operations
 
@@ -149,6 +154,16 @@ Same API as `f64` but for `float32` with wider SIMD:
 | AMD64 (AVX+FMA) | 8x float32  |
 | AMD64 (SSE2)    | 4x float32  |
 | ARM64 (NEON)    | 4x float32  |
+
+**PCM conversion** (audio sample-format conversion, f32-specific; no f64 equivalent):
+
+| Function | Description | SIMD Width |
+| --- | --- | --- |
+| `Int32ToFloat32Scale(dst, src, s)` | PCM int32 to normalized float | 8x (AVX2) / 4x (NEON) |
+| `Int16ToFloat32Scale(dst, src, s)` | PCM int16 to normalized float | 8x (AVX2) / 4x (NEON) |
+| `Float32ToInt16Scale(dst, src, s)` | Normalized float to PCM int16 | 8x (AVX2) / 4x (NEON) |
+
+Each has an `Unsafe` variant that skips bounds reconciliation.
 
 `InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
 a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
@@ -388,6 +403,7 @@ SIMD-accelerated integer-domain operations for codec and integer-DSP hot loops (
 | **Rice**            | `RiceSums(sums, res)`                   | Per-parameter zigzag unary-bit sums `Σ (zigzag(res)>>k)`, all FLAC params k=0..30 | 8x (AVX2) / 4x (NEON) |
 |                     | `RiceBestParam(res, maxParam)`          | Cost-minimizing Rice parameter + its bit count           | 8x (AVX2) / 4x (NEON) |
 |                     | `ZigzagSum(res)`                        | Total zigzag fold `Σ zigzag(res)` (estimate fast path)   | 8x (AVX2) / 4x (NEON) |
+| **Reduction**       | `MinMax(res) (min, max)`                | Signed int32 per-slice minimum and maximum in one pass   | 8x (AVX2) / 4x (NEON) |
 
 ```go
 import "github.com/tphakala/simd/i32"
@@ -412,9 +428,10 @@ i32.LPCRestore(left, res, coeffs, shift)        // exact inverse: reconstruct
 
 param, bits := i32.RiceBestParam(res, 14) // best Rice parameter and its bit cost
 total := i32.ZigzagSum(res)               // Σ zigzag(res): the k=0 Rice sum on its own
+mn, mx := i32.MinMax(res)                 // smallest and largest residual in one signed pass
 ```
 
-Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. The decorrelation and fixed-predictor kernels do integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes. `RestoreK` is the exact inverse of `DiffK`: since the order-`K` fixed predictor is the `K`-th forward difference, restoration is `K` cumulative-sum passes built on one SIMD prefix-sum kernel (11x at order 1 down to ~5x at order 4 on AVX2; 6x to 3x on NEON, all zero-allocation). The LPC kernels accumulate the prediction sum in int64 (matching libFLAC), so they stay bit-exact for the full coefficient precision and order: `LPCResidualEncode` is a FIR that vectorizes across output samples (widening `VPMULDQ` / `SMLAL`, ~7-9x on AVX2, ~4-5x on NEON), while `LPCRestore` is a serial recurrence whose per-output tap dot product is vectorized, keeping the just-written newest samples on store-forwardable scalar loads (~1.4-3.9x on AVX2, ~1.8-3.6x on NEON, order 8 to 32). `FixedAbsSums` picks the cheapest fixed predictor in one pass: it forms the order-0..4 forward finite differences in int64 (a 4th difference of int32 samples exceeds the int32 range) with a windowed sign-extending subtract cascade, sums `|e_order|` per order excluding the warm-up, and runs ~2.6x on AVX2, ~1.7x on NEON. The Rice cost search folds each residual to its unsigned zigzag symbol `(r<<1)^(r>>31)`, widens it to int64, and accumulates `Σ (zigzag(res)>>k)` for every Rice parameter at once (the symbols are halved progressively, exact for the logical shift); the kernel now covers FLAC's full range `k` in 0..30 (the 5-bit method, previously a scalar tail above 14), so a 31-column `RiceSums` runs ~13x on AVX2 and ~4x on NEON instead of falling back to scalar. `RiceBestParam` adds the `n*(k+1)` code overhead and picks the cheapest `k`; this is the exact bit cost, not the `sum>>k` approximation. `ZigzagSum` exposes just the `k=0` total `Σ zigzag(res)` for the estimate path (~3.7x AVX2, ~2.4x NEON). All zero-allocation.
+Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. The decorrelation and fixed-predictor kernels do integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes. `RestoreK` is the exact inverse of `DiffK`: since the order-`K` fixed predictor is the `K`-th forward difference, restoration is `K` cumulative-sum passes built on one SIMD prefix-sum kernel (11x at order 1 down to ~5x at order 4 on AVX2; 6x to 3x on NEON, all zero-allocation). The LPC kernels accumulate the prediction sum in int64 (matching libFLAC), so they stay bit-exact for the full coefficient precision and order: `LPCResidualEncode` is a FIR that vectorizes across output samples (widening `VPMULDQ` / `SMLAL`, ~7-9x on AVX2, ~4-5x on NEON), while `LPCRestore` is a serial recurrence whose per-output tap dot product is vectorized, keeping the just-written newest samples on store-forwardable scalar loads (~1.4-3.9x on AVX2, ~1.8-3.6x on NEON, order 8 to 32). `FixedAbsSums` picks the cheapest fixed predictor in one pass: it forms the order-0..4 forward finite differences in int64 (a 4th difference of int32 samples exceeds the int32 range) with a windowed sign-extending subtract cascade, sums `|e_order|` per order excluding the warm-up, and runs ~2.6x on AVX2, ~1.7x on NEON. The Rice cost search folds each residual to its unsigned zigzag symbol `(r<<1)^(r>>31)`, widens it to int64, and accumulates `Σ (zigzag(res)>>k)` for every Rice parameter at once (the symbols are halved progressively, exact for the logical shift); the kernel now covers FLAC's full range `k` in 0..30 (the 5-bit method, previously a scalar tail above 14), so a 31-column `RiceSums` runs ~13x on AVX2 and ~4x on NEON instead of falling back to scalar. `RiceBestParam` adds the `n*(k+1)` code overhead and picks the cheapest `k`; this is the exact bit cost, not the `sum>>k` approximation. `ZigzagSum` exposes just the `k=0` total `Σ zigzag(res)` for the estimate path (~3.7x AVX2, ~2.4x NEON). `MinMax` returns the smallest and largest int32 in one signed pass (`VPMINSD`/`VPMAXSD` on AVX2, `SMIN`/`SMAX` with single-instruction `SMINV`/`SMAXV` folds on NEON); the Rice planner uses it per partition because the largest zigzag fold is reached at the most-negative or most-positive sample. Since min/max of int32 has no accumulation order, the SIMD paths are bit-identical to the pure-Go reference by construction (~10x AVX2, ~5x NEON). All zero-allocation.
 
 ### `i16` - int16 Operations
 
@@ -557,6 +574,20 @@ a Raspberry Pi 5):
 | 241 taps, 2x decimate | **1.5x** | **1.3x** | **1.2x** | **1.1x** |
 | 241 taps, 4x decimate | **1.4x** | **1.2x** | **1.2x** | **1.1x** |
 
+#### Autocorrelate (lag-vectorized LPC autocorrelation, f64)
+
+`Autocorrelate` is the LPC autocorrelation step in a FLAC-style encoder, the
+largest remaining single-core hotspot there. Vectorizing across lags keeps the
+result byte-identical to the scalar reference while still beating it. Block size
+4096, allocation-free, speedup over the pure-Go fallback (AVX2 on x86-64, NEON on
+a Raspberry Pi 5):
+
+| Config (n=4096)       | amd64 (AVX2) | arm64 (NEON) |
+| --------------------- | ------------ | ------------ |
+| maxLag 8              | **2.9x**     | **2.4x**     |
+| maxLag 12             | **3.0x**     | **2.4x**     |
+| maxLag 32             | **3.5x**     | **2.7x**     |
+
 #### Performance Summary
 
 | Package  | Average Speedup | Best         | Operations   |
@@ -621,6 +652,7 @@ a Raspberry Pi 5):
 | RiceSums (k=0..30, 5-bit)    | 1685 ns vs 21401 ns (**12.7x**)| 8503 ns vs 34111 ns (**4.0x**) |
 | ZigzagSum                    | 88 ns vs 328 ns (**3.7x**)    | 476 ns vs 1124 ns (**2.4x**)  |
 | FixedAbsSums (orders 0..4)   | 752 ns vs 1952 ns (**2.6x**)  | 2881 ns vs 4777 ns (**1.7x**) |
+| MinMax                       | 47 ns vs 480 ns (**10.2x**)   | 216 ns vs 1103 ns (**5.1x**)  |
 
 ### int16 (i16) - SIMD vs Pure Go (1000 elements)
 
@@ -631,7 +663,7 @@ a Raspberry Pi 5):
 
 Both i16 kernels are zero-allocation and bit-exact against the pure-Go reference (verified with negative values and the int16 extremes); they move whole 16-bit lanes, so the bit pattern of each sample is irrelevant to correctness.
 
-All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The Restore baseline is the pure-Go decode recurrence; `RestoreK` reconstructs samples as `K` SIMD prefix-sum passes (the inverse of the order-`K` forward difference). The LPC kernels accumulate in int64 and are checked against an arbitrary-precision `math.big` oracle and the encode->decode round-trip; `LPCRestore` is the serial decode recurrence (vectorized per-output tap dot product), dispatched to SIMD only at order >= 8 where it beats the scalar path. The Rice kernels compute the exact per-parameter unary-bit sums `Σ (zigzag(res)>>k)` for FLAC's full parameter range in one sweep, checked against an independent oracle and brute-force parameter scan: the 4-bit method (k=0..14) and the 5-bit method (k=0..30, a low-15 kernel plus a pre-shifted high-16 kernel) are both fully vectorized, replacing the scalar tail that previously handled k>14. `ZigzagSum` is that sweep's k=0 column on its own (Σ zigzag), and `FixedAbsSums` computes the order-0..4 fixed-predictor residual abs-sums in one windowed int64 cascade; both are checked against independent oracles across the sign bit and the int32 extremes (where the 4th difference exceeds int32, exercising the int64 width).
+All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The Restore baseline is the pure-Go decode recurrence; `RestoreK` reconstructs samples as `K` SIMD prefix-sum passes (the inverse of the order-`K` forward difference). The LPC kernels accumulate in int64 and are checked against an arbitrary-precision `math.big` oracle and the encode->decode round-trip; `LPCRestore` is the serial decode recurrence (vectorized per-output tap dot product), dispatched to SIMD only at order >= 8 where it beats the scalar path. The Rice kernels compute the exact per-parameter unary-bit sums `Σ (zigzag(res)>>k)` for FLAC's full parameter range in one sweep, checked against an independent oracle and brute-force parameter scan: the 4-bit method (k=0..14) and the 5-bit method (k=0..30, a low-15 kernel plus a pre-shifted high-16 kernel) are both fully vectorized, replacing the scalar tail that previously handled k>14. `ZigzagSum` is that sweep's k=0 column on its own (Σ zigzag), and `FixedAbsSums` computes the order-0..4 fixed-predictor residual abs-sums in one windowed int64 cascade; both are checked against independent oracles across the sign bit and the int32 extremes (where the 4th difference exceeds int32, exercising the int64 width). `MinMax` is exact by construction (signed min/max has no accumulation order or wrapping); its parity tests plant `MinInt32`/`MaxInt32` in both a mid-block lane and the scalar tail, in both orderings, to catch a dropped vector lane or a skipped tail.
 
 ### Performance Notes
 
