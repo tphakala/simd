@@ -1341,8 +1341,10 @@ TEXT ·minMaxNEON(SB), NOSPLIT, $0-32
     MOVD res_base+0(FP), R2
     MOVD res_len+8(FP), R3
     LSR  $2, R3, R4                  // R4 = full 4-element blocks (>=1)
-    VLD1 (R2), [V0.S4]               // V0 = block 0 (min acc)
-    VLD1 (R2), [V1.S4]               // V1 = block 0 (max acc)
+    VLD1 (R2), [V0.S4]               // V0 = block 0 (min acc), no advance
+    VLD1.P 16(R2), [V1.S4]           // V1 = block 0 (max acc), advance to block 1
+    SUB  $1, R4                      // blocks remaining after block 0
+    CBZ  R4, mm_neon_reduce          // single block: accumulators hold it; R2 at tail
 mm_neon_loop:
     VLD1.P 16(R2), [V2.S4]           // load block + advance
     WORD $0x4EA26C00                 // SMIN V0.4S, V0.4S, V2.4S
@@ -1350,6 +1352,7 @@ mm_neon_loop:
     SUB  $1, R4
     CBNZ R4, mm_neon_loop
 
+mm_neon_reduce:
     WORD $0x4EB1A803                 // SMINV S3, V0.4S
     WORD $0x4EB0A824                 // SMAXV S4, V1.4S
     FMOVS F3, R5                     // R5 = running min (low 32 = int32)

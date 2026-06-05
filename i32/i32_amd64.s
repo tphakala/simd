@@ -1672,8 +1672,10 @@ TEXT ·minMaxAVX2(SB), NOSPLIT, $0-32
     SHRQ $3, R9                      // R9 = full 8-element blocks (>=1)
     VMOVDQU (R8), Y0                 // min acc = block 0
     VMOVDQU (R8), Y1                 // max acc = block 0
-    MOVQ R8, SI                      // working res ptr
     MOVQ R9, AX                      // block counter
+    DECQ AX                          // blocks remaining after block 0
+    JZ   mm_reduce                   // single block: accumulators already hold it
+    LEAQ 32(R8), SI                  // working res ptr at block 1
 mm_loop:
     VMOVDQU (SI), Y2
     VPMINSD Y2, Y0, Y0               // Y0 = lanewise min(Y2, Y0)
@@ -1681,6 +1683,8 @@ mm_loop:
     ADDQ $32, SI
     DECQ AX
     JNZ  mm_loop
+
+mm_reduce:
 
     // horizontal min of Y0 -> AX (low 32 bits), max of Y1 -> DX (low 32 bits)
     VEXTRACTI128 $1, Y0, X3
