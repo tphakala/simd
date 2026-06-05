@@ -319,6 +319,40 @@ func accumulateAdd64Go(dst, src []float64) {
 	}
 }
 
+// autocorrelateGo is the pure-Go reference autocorrelation. For each lag in
+// 0..maxLag it sums x[i]*x[i-lag] over i in lag..len(x)-1, left to right with
+// separate multiply and add. It is the bit-exact contract the AVX2 and NEON
+// kernels reproduce: each lag is an independent accumulator fed in increasing-i
+// order, so vectorizing ACROSS lags (one lane per lag, separate mul+add, never
+// FMA) yields identical bytes to this loop on every build.
+func autocorrelateGo(autoc, x []float64, maxLag int) {
+	n := len(x)
+	for lag := 0; lag <= maxLag; lag++ {
+		var sum float64
+		for i := lag; i < n; i++ {
+			sum += x[i] * x[i-lag]
+		}
+		autoc[lag] = sum
+	}
+}
+
+// autocorrTriangularSeed fills autoc[lag] (lag in 0..maxLag) with the partial
+// sum over the prologue samples i in lag..pmax-1, left to right. The SIMD
+// kernels then continue each lag's accumulator over the steady region
+// i in pmax..n-1, so the complete sum is accumulated in the same order as
+// autocorrelateGo and stays bit-identical. pmax is the padded steady-region
+// start (a multiple-of-lanes boundary) chosen so every vectorized load is in
+// bounds. Shared by the amd64 and arm64 orchestrators.
+func autocorrTriangularSeed(autoc, x []float64, maxLag, pmax int) {
+	for lag := 0; lag <= maxLag; lag++ {
+		var s float64
+		for i := lag; i < pmax; i++ {
+			s += x[i] * x[i-lag]
+		}
+		autoc[lag] = s
+	}
+}
+
 func interleave2Go(dst, a, b []float64) {
 	for i := range a {
 		dst[i*2] = a[i]

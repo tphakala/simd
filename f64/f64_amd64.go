@@ -20,6 +20,10 @@ const (
 // Used by min64/max64 to determine when to fall back to scalar code.
 var minSIMDElements = minAVXElements
 
+// hasAVX2 gates the autocorrelation kernel, which needs VPERMPD (AVX2). It uses
+// a direct dispatch rather than the init-time function pointers above.
+var hasAVX2 = cpu.X86.AVX2
+
 // Function pointer types for SIMD operations
 type (
 	dotProductFunc        func(a, b []float64) float64
@@ -390,6 +394,48 @@ func dotProductBatchKernel(useAVX512 bool, results []float64, rows [][]float64, 
 	}
 }
 
+// autocorrelate64 computes autoc[lag] for lag in 0..maxLag. On AVX2 it
+// vectorizes ACROSS lags: four consecutive lags share one accumulator register,
+// each lane summing its lag's x[i]*x[i-lag] terms in increasing-i order with
+// separate VMULPD+VADDPD (never FMA), so the result is bit-identical to
+// autocorrelateGo. The triangular prologue (i < pmax) is seeded in scalar Go;
+// the kernel then sweeps the rectangular steady region i in pmax..n-1 where
+// every per-lag window load is in bounds. Without AVX2, or when the block is
+// too short to have a steady region, it falls back to the scalar reference.
+func autocorrelate64(autoc, x []float64, maxLag int) {
+	const lanes = 4
+	n := len(x)
+	groups := (maxLag + lanes) / lanes // ceil((maxLag+1)/lanes)
+	pmax := groups*lanes - 1           // steady-region start = padded max lag
+	if !hasAVX2 || n <= pmax {
+		autocorrelateGo(autoc, x, maxLag)
+		return
+	}
+	autocorrTriangularSeed(autoc, x, maxLag, pmax)
+	count := n - pmax
+	bcast := &x[pmax]
+	for g := range groups {
+		base := g * lanes
+		// window points at x[pmax-base-(lanes-1)]; the kernel loads `lanes`
+		// ascending elements there and reverses them so lane j accumulates lag
+		// base+j. Both pmax-base-(lanes-1) >= 0 and the final read index
+		// n-1-base stay in bounds for every group.
+		window := &x[pmax-base-(lanes-1)]
+		if base+lanes-1 <= maxLag {
+			autocorrStep4AVX(&autoc[base], bcast, window, count)
+			continue
+		}
+		// Final partial group (maxLag+1 not a multiple of lanes): run the kernel
+		// over a padded stack buffer and copy back only the real lags. The pad
+		// lanes accumulate valid-but-unused lags and are discarded.
+		var buf [lanes]float64
+		realLanes := maxLag + 1 - base
+		copy(buf[:realLanes], autoc[base:maxLag+1])
+		autocorrStep4AVX(&buf[0], bcast, window, count)
+		copy(autoc[base:maxLag+1], buf[:realLanes])
+	}
+}
+
 func convolveValid64(dst, signal, kernel []float64) {
 	kLen := len(kernel)
 	for i := range dst {
@@ -651,6 +697,16 @@ func dotProductAVX(a, b []float64) float64
 
 //go:noescape
 func dotProduct4AVX(results, row0, row1, row2, row3, vec *float64, n int)
+
+// autocorrStep4AVX accumulates the steady region of four autocorrelation lags.
+// acc points at four contiguous seeded accumulators (lags base..base+3);
+// broadcast at x[pmax] and window at x[pmax-base-3] advance one element per
+// iteration for count iterations. Each step does acc += x[i] * reverse(window)
+// with separate VMULPD+VADDPD so the per-lag sum order matches the scalar
+// reference exactly. See autocorrelate64.
+//
+//go:noescape
+func autocorrStep4AVX(acc, broadcast, window *float64, count int)
 
 //go:noescape
 func convolveDecimateAVX(dst, signal, kernel []float64, factor, phase int)

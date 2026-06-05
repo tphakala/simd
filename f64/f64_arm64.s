@@ -1686,3 +1686,40 @@ cd_neon_store:
 
 cd_neon_done:
     RET
+
+// func autocorrStep2NEON(acc, broadcast, window *float64, count int)
+// Steady-region accumulation for two autocorrelation lags at once. V0 holds the
+// two seeded accumulators (lanes = lags base..base+1). Each iteration broadcasts
+// x[i] (LD1R), loads the two ascending window samples, swaps them with EXT #8 so
+// lane j carries x[i-(base+j)], then fuses the multiply-add with FMLA.
+//
+// FMLA (one rounding) is deliberate: Go's arm64 compiler fuses the scalar
+// reference's `sum += x[i]*x[i-lag]` into FMADDD, so the fused kernel is what
+// reproduces autocorrelateGo bit-for-bit on arm64. (The amd64 backend does not
+// fuse, so the AVX2 kernel uses separate VMULPD+VADDPD to match its own
+// fallback.) broadcast (X1) and window (X2) advance one float64 per iteration.
+// Registers are fixed by the hand-encoded WORDs: X0=acc, X1=broadcast,
+// X2=window; V0=acc, V1=x[i], V2=window/temp.
+TEXT ·autocorrStep2NEON(SB), NOSPLIT, $0-32
+    MOVD acc+0(FP), R0
+    MOVD broadcast+8(FP), R1
+    MOVD window+16(FP), R2
+    MOVD count+24(FP), R3
+
+    WORD $0x4C407C00           // LD1 {V0.2D}, [X0]   seeded accumulators (lags base, base+1)
+    CBZ R3, autocorr2_done
+
+autocorr2_loop:
+    WORD $0x4D40CC21           // LD1R {V1.2D}, [X1]  V1 = x[i] in both lanes
+    WORD $0x4C407C42           // LD1 {V2.2D}, [X2]   V2 = [x[i-base-1], x[i-base]]
+    WORD $0x6E024042           // EXT V2.16B, V2.16B, V2.16B, #8   swap -> [x[i-base], x[i-base-1]]
+    WORD $0x4E61CC40           // FMLA V0.2D, V2.2D, V1.2D   V0 += x[i]*window (fused, matches Go FMADDD)
+    ADD $8, R1
+    ADD $8, R2
+    SUB $1, R3
+    CBNZ R3, autocorr2_loop
+
+    WORD $0x4C007C00           // ST1 {V0.2D}, [X0]   store the two lag accumulators
+
+autocorr2_done:
+    RET
