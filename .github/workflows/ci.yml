@@ -110,9 +110,23 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
+        # Guard the pure-Go *_other.go fallbacks. Six packages
+        # (c64/c128/f32/f64/i16/i32) gate their fallback on `!amd64 && !arm64`,
+        # so the amd64/arm64 legs above never compile those files: a primitive
+        # added to the SIMD dispatch but forgotten in the fallback builds green
+        # here and breaks only on other architectures (see #93/#94). riscv64 is
+        # a normal 64-bit non-SIMD target; js/wasm additionally exercises the
+        # assembler-less wasm backend. Build-only is enough to catch the gap.
+        # (f16's fallback is `!arm64`, so the amd64 legs already cover it.)
+        include:
+          - goos: linux
+            goarch: riscv64
+          - goos: js
+            goarch: wasm
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
