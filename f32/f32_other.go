@@ -9,6 +9,7 @@ func mul(dst, a, b []float32)                          { mulGo(dst, a, b) }
 func div(dst, a, b []float32)                          { divGo(dst, a, b) }
 func scale(dst, a []float32, s float32)                { scaleGo(dst, a, s) }
 func addScalar(dst, a []float32, s float32)            { addScalarGo(dst, a, s) }
+func subFromScalar32(dst, a []float32, s float32)      { subFromScalarGo(dst, a, s) }
 func sum(a []float32) float32                          { return sumGo(a) }
 func min32(a []float32) float32                        { return minGo(a) }
 func max32(a []float32) float32                        { return maxGo(a) }

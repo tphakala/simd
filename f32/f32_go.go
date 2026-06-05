@@ -104,6 +104,16 @@ func addScalarGo(dst, a []float32, s float32) {
 	}
 }
 
+func subFromScalarGo(dst, a []float32, s float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	for i := range dst {
+		dst[i] = s - a[i]
+	}
+}
+
 func sumGo(a []float32) float32 {
 	var sum float32
 	for _, v := range a {

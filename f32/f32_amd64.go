@@ -237,6 +237,14 @@ func neg32(dst, a []float32) {
 	negImpl(dst, a)
 }
 
+func subFromScalar32(dst, a []float32, s float32) {
+	// Compose using already-dispatched primitives: (s - a) == (-a) + s.
+	// Each step is internally vectorized or falls back to Go via the global impl
+	// pointers, so this works on every supported CPU without an extra guard.
+	neg32(dst, a)
+	addScalar(dst, dst, s)
+}
+
 func fma32(dst, a, b, c []float32) {
 	fmaImpl(dst, a, b, c)
 }
