@@ -289,6 +289,7 @@ func TestAVX2Kernels_AllocFree(t *testing.T) {
 		{"diff4AVX2", func() { diff4AVX2(dst, a) }},
 		{"cumsumAVX2", func() { cumsumAVX2(dst) }},
 		{"zigzagSumAVX2", func() { _ = zigzagSumAVX2(a) }},
+		{"minMaxAVX2", func() { _, _ = minMaxAVX2(a) }},
 		{"fixedAbsSumsAVX2", func() { fixedAbsSumsAVX2(a, &fasSums) }},
 		{"riceSumsHighAVX2", func() { riceSumsHighAVX2(riceHi, a) }},
 		{"lpcResidualEncodeAVX2", func() { lpcResidualEncodeAVX2(dst, a, lpcAllocCoeffs, 12) }},
@@ -491,6 +492,39 @@ func TestZigzagSumAVX2_ParityWithGo(t *testing.T) {
 		want := zigzagSumGo(res)
 		if got != want {
 			t.Fatalf("n=%d: zigzagSumAVX2 = %d, want %d (Go)", n, got, want)
+		}
+	}
+}
+
+func TestMinMaxAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	// A tame in-range body keeps the planted extremes the unique min/max, so a
+	// kernel that drops a vector lane or skips the scalar tail is caught: one
+	// variant plants the extremes in a mid-block lane and in the tail, the other
+	// swaps them, covering both a dropped lane and a dropped tail on both reduces.
+	for _, n := range paritySizes {
+		if n < minAVXElements {
+			continue // dispatch routes these to Go; the kernel is not called
+		}
+		for _, swap := range []bool{false, true} {
+			res := make([]int32, n)
+			for i := range res {
+				res[i] = int32(i%13) - 6
+			}
+			mid, tail := int32(math.MinInt32), int32(math.MaxInt32)
+			if swap {
+				mid, tail = tail, mid
+			}
+			res[n/2] = mid
+			res[n-1] = tail
+			gotMin, gotMax := minMaxAVX2(res)
+			wantMin, wantMax := minMaxGo(res)
+			if gotMin != wantMin || gotMax != wantMax {
+				t.Fatalf("n=%d swap=%v: minMaxAVX2 = (%d, %d), want (%d, %d) (Go)",
+					n, swap, gotMin, gotMax, wantMin, wantMax)
+			}
 		}
 	}
 }

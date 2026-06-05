@@ -1657,3 +1657,75 @@ riceHi_tail:
 riceHi_done:
     VZEROUPPER
     RET
+
+// func minMaxAVX2(res []int32) (minVal, maxVal int32)
+// Signed int32 min and max over res in one pass. The dispatch gates len(res) >=
+// 8, so at least one full 8-element block exists: the min and max accumulators
+// start from block 0 and fold the remaining full blocks with VPMINSD/VPMAXSD,
+// then a horizontal reduce collapses the 8 lanes to a scalar and a scalar tail
+// folds the (n mod 8) remainder. Every compare is signed (VPMINSD/VPMAXSD and
+// the CMPL tail), so the int32 sign bit is honored exactly like minMaxGo.
+TEXT ·minMaxAVX2(SB), NOSPLIT, $0-32
+    MOVQ res_base+0(FP), R8
+    MOVQ res_len+8(FP), CX           // n (>=8)
+    MOVQ CX, R9
+    SHRQ $3, R9                      // R9 = full 8-element blocks (>=1)
+    VMOVDQU (R8), Y0                 // min acc = block 0
+    VMOVDQU (R8), Y1                 // max acc = block 0
+    MOVQ R9, AX                      // block counter
+    DECQ AX                          // blocks remaining after block 0
+    JZ   mm_reduce                   // single block: accumulators already hold it
+    LEAQ 32(R8), SI                  // working res ptr at block 1
+mm_loop:
+    VMOVDQU (SI), Y2
+    VPMINSD Y2, Y0, Y0               // Y0 = lanewise min(Y2, Y0)
+    VPMAXSD Y2, Y1, Y1               // Y1 = lanewise max(Y2, Y1)
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  mm_loop
+
+mm_reduce:
+
+    // horizontal min of Y0 -> AX (low 32 bits), max of Y1 -> DX (low 32 bits)
+    VEXTRACTI128 $1, Y0, X3
+    VPMINSD X3, X0, X0               // fold lanes 4..7 into 0..3
+    VPSHUFD $0x4E, X0, X3           // swap 64-bit halves
+    VPMINSD X3, X0, X0
+    VPSHUFD $0xB1, X0, X3           // swap 32-bit within pairs
+    VPMINSD X3, X0, X0              // lane0 = min over all 8 lanes
+    MOVQ X0, AX                      // EAX = running min
+
+    VEXTRACTI128 $1, Y1, X3
+    VPMAXSD X3, X1, X1
+    VPSHUFD $0x4E, X1, X3
+    VPMAXSD X3, X1, X1
+    VPSHUFD $0xB1, X1, X3
+    VPMAXSD X3, X1, X1
+    MOVQ X1, DX                      // EDX = running max
+
+    // scalar tail: (n mod 8) residuals at &res[fullBlocks*8]
+    MOVQ CX, BX
+    ANDQ $7, BX
+    JZ   mm_done
+    MOVQ R9, R10
+    SHLQ $5, R10                     // fullBlocks * 32 bytes
+    ADDQ R8, R10                     // tail ptr
+mm_tail:
+    MOVL (R10), R11                  // r (32-bit)
+    CMPL R11, AX
+    JGE  mm_tail_max
+    MOVL R11, AX                     // r < min -> new min
+mm_tail_max:
+    CMPL R11, DX
+    JLE  mm_tail_next
+    MOVL R11, DX                     // r > max -> new max
+mm_tail_next:
+    ADDQ $4, R10
+    DECQ BX
+    JNZ  mm_tail
+
+mm_done:
+    MOVL AX, minVal+24(FP)
+    MOVL DX, maxVal+28(FP)
+    VZEROUPPER
+    RET

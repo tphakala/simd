@@ -249,3 +249,17 @@ func riceSumsWideI32(sums []uint64, res []int32) {
 
 //go:noescape
 func riceSumsHighAVX2(sums []uint64, res []int32)
+
+// minMaxI32 dispatches the signed int32 min/max reduction. The AVX2 kernel does
+// the reduction in 8-wide VPMINSD/VPMAXSD lanes with a scalar tail, so it gates
+// on AVX2 and at least one full 8-element block; shorter slices use the pure-Go
+// reference. res is non-empty (the public MinMax guards the empty case).
+func minMaxI32(res []int32) (minVal, maxVal int32) {
+	if hasAVX2 && len(res) >= minAVXElements {
+		return minMaxAVX2(res)
+	}
+	return minMaxGo(res)
+}
+
+//go:noescape
+func minMaxAVX2(res []int32) (minVal, maxVal int32)

@@ -33,3 +33,5 @@ func zigzagSumI32(res []int32) uint64 { return zigzagSumGo(res) }
 func fixedAbsSumsI32(src []int32, sums *[5]uint64) { fixedAbsSumsGo(src, sums) }
 
 func riceSumsWideI32(sums []uint64, res []int32) { riceSumsGo(sums, res) }
+
+func minMaxI32(res []int32) (minVal, maxVal int32) { return minMaxGo(res) }

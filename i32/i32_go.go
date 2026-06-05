@@ -155,6 +155,22 @@ func zigzagSumGo(res []int32) uint64 {
 	return s
 }
 
+// minMaxGo returns the smallest and largest int32 in res via a single signed
+// scan. res must be non-empty (the public MinMax guards the empty case); it is
+// the bit-exact source of truth the SIMD MinMax kernels are validated against.
+func minMaxGo(res []int32) (minVal, maxVal int32) {
+	lo, hi := res[0], res[0]
+	for _, r := range res[1:] {
+		if r < lo {
+			lo = r
+		}
+		if r > hi {
+			hi = r
+		}
+	}
+	return lo, hi
+}
+
 // absU64 returns the absolute value of v as a uint64. v is bounded well inside
 // the int64 range here (at most a 4th finite difference of int32 samples, ~2^35),
 // so the math.MinInt64 edge case (where -v overflows) cannot arise.
