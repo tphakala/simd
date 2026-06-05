@@ -104,6 +104,14 @@ func neg32(dst, a []float32) {
 	negGo(dst, a)
 }
 
+func subFromScalar32(dst, a []float32, s float32) {
+	// Compose using already-dispatched primitives: (s - a) == (-a) + s.
+	// neg32 and addScalar each gate on hasNEON internally and fall back to pure
+	// Go when NEON is unavailable, so no extra guard is needed here.
+	neg32(dst, a)
+	addScalar(dst, dst, s)
+}
+
 func fma32(dst, a, b, c []float32) {
 	if hasNEON && len(dst) >= 4 {
 		fmaNEON(dst, a, b, c)

@@ -32,6 +32,28 @@ func DotProductUnsafe(a, b []float32) float32 {
 	return dotProduct(a, b)
 }
 
+// WeightedSum returns the weighted sum Σ(weights[i]·src[i]).
+//
+// This is mathematically a dot product, so it reuses the dispatched dot-product
+// kernel (AVX+FMA on AMD64, NEON on ARM64). Processes min(len(weights), len(src))
+// elements; returns 0 if either slice is empty.
+func WeightedSum(weights, src []float32) float32 {
+	if len(weights) == 0 || len(src) == 0 {
+		return 0
+	}
+	return dotProduct(weights, src)
+}
+
+// SumOfSquares returns Σ(src[i]²), computed as the dot product of src with
+// itself so it shares the dispatched dot-product kernel. Returns 0 for an empty
+// slice.
+func SumOfSquares(src []float32) float32 {
+	if len(src) == 0 {
+		return 0
+	}
+	return dotProduct(src, src)
+}
+
 // Add computes element-wise addition: dst[i] = a[i] + b[i].
 func Add(dst, a, b []float32) {
 	n := minLen(len(dst), len(a), len(b))
@@ -84,6 +106,19 @@ func AddScalar(dst, a []float32, s float32) {
 		return
 	}
 	addScalar(dst[:n], a[:n], s)
+}
+
+// SubFromScalar computes dst[i] = s - a[i] (scalar minus vector).
+//
+// Composed from already-dispatched primitives ((s - a) == (-a) + s), so it is
+// vectorized on every supported CPU and falls back to pure Go otherwise.
+// Processes min(len(a), len(dst)) elements.
+func SubFromScalar(dst, a []float32, s float32) {
+	n := min(len(a), len(dst))
+	if n == 0 {
+		return
+	}
+	subFromScalar32(dst[:n], a[:n], s)
 }
 
 // Sum returns the sum of all elements.
