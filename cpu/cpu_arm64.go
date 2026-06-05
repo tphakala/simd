@@ -9,6 +9,7 @@ func init() {
 	ARM64.FP16 = cpu.ARM64.HasASIMDHP // FEAT_FP16 - half-precision SIMD
 	ARM64.SVE = cpu.ARM64.HasSVE
 	ARM64.SVE2 = cpu.ARM64.HasSVE2
+	ARM64.PMULL = cpu.ARM64.HasPMULL // FEAT_PMULL - polynomial multiply
 }
 
 func cpuInfo() string {

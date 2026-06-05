@@ -8,6 +8,7 @@
 //   - [github.com/tphakala/simd/f32] - float32 SIMD operations
 //   - [github.com/tphakala/simd/i32] - int32 SIMD operations (integer DSP)
 //   - [github.com/tphakala/simd/c128] - complex128 SIMD operations
+//   - [github.com/tphakala/simd/crc] - CRC checksums (carry-less-multiply folding)
 //
 // # Architecture Support
 //
@@ -56,6 +57,8 @@
 // Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MidSideEncode, MidSideDecode, Diff1..Diff4, Restore1..Restore4, LPCResidualEncode, LPCRestore, RiceSums, RiceBestParam
 //
 // Complex (c128): Add, Sub, Mul, MulConj, Conj, Abs, AbsSq, Scale
+//
+// CRC (crc): Checksum16 (FLAC CRC-16, PCLMULQDQ/PMULL carry-less-multiply fold)
 //
 // # Design Principles
 //

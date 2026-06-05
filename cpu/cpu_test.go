@@ -37,6 +37,18 @@ func TestHasFP16(_ *testing.T) {
 	_ = got
 }
 
+// TestHasPCLMULQDQ tests the HasPCLMULQDQ function
+func TestHasPCLMULQDQ(_ *testing.T) {
+	got := HasPCLMULQDQ()
+	_ = got
+}
+
+// TestHasPMULL tests the HasPMULL function
+func TestHasPMULL(_ *testing.T) {
+	got := HasPMULL()
+	_ = got
+}
+
 // TestHasAVX512VL tests the HasAVX512VL function
 func TestHasAVX512VL(_ *testing.T) {
 	got := HasAVX512VL()
@@ -76,10 +88,12 @@ func TestFeatures(_ *testing.T) {
 	_ = X86.BMI1
 	_ = X86.BMI2
 	_ = X86.POPCNT
+	_ = X86.PCLMULQDQ
 
 	// Test ARM64 features struct
 	_ = ARM64.NEON
 	_ = ARM64.FP16
 	_ = ARM64.SVE
 	_ = ARM64.SVE2
+	_ = ARM64.PMULL
 }

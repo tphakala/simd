@@ -80,7 +80,23 @@ fmt.Println(cpu.HasFMA())      // true/false
 fmt.Println(cpu.HasAVX512VL()) // true/false (AVX-512 F+VL)
 fmt.Println(cpu.HasNEON())     // true/false
 fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
+fmt.Println(cpu.HasPCLMULQDQ()) // true/false (x86 carry-less multiply)
+fmt.Println(cpu.HasPMULL())    // true/false (ARM64 polynomial multiply)
 ```
+
+### `crc` - Cyclic Redundancy Checks
+
+```go
+import "github.com/tphakala/simd/crc"
+
+// FLAC CRC-16 (poly 0x8005, init 0, MSB-first, no reflection), folded 16 bytes
+// at a time with PCLMULQDQ (amd64) / PMULL (arm64), scalar slice-by-16 fallback.
+sum := crc.Checksum16(p) // bit-identical to the scalar reference, zero-alloc
+```
+
+| Function          | Description                              | Acceleration                       |
+| ----------------- | ---------------------------------------- | ---------------------------------- |
+| `Checksum16(p)`   | FLAC CRC-16 (poly 0x8005, MSB-first)     | PCLMULQDQ / PMULL carry-less fold  |
 
 ### `f64` - float64 Operations
 
