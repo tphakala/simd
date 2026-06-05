@@ -558,6 +558,37 @@ func BenchmarkDotProductBatch(b *testing.B) {
 	}
 }
 
+func BenchmarkAutocorrelate(b *testing.B) {
+	// FLAC LPC analysis: a windowed block (typically 4096 samples) correlated
+	// at lags 0..maxOrder. maxLag 8 mirrors libFLAC -l 8 (compression level 5);
+	// 32 is the subset maximum.
+	blockSizes := []int{4096}
+	maxLags := []int{8, 12, 32}
+
+	for _, n := range blockSizes {
+		x := make([]float64, n)
+		for i := range x {
+			x[i] = (float64((i*2654435761)%65536) - 32768) * 0.7
+		}
+		for _, maxLag := range maxLags {
+			autoc := make([]float64, maxLag+1)
+			name := fmt.Sprintf("n%d_lag%d", n, maxLag)
+			b.Run(fmt.Sprintf("SIMD_%s", name), func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					Autocorrelate(autoc, x, maxLag)
+				}
+				b.SetBytes(int64(n * 8))
+			})
+			b.Run(fmt.Sprintf("Go_%s", name), func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					autocorrelateGo(autoc, x, maxLag)
+				}
+				b.SetBytes(int64(n * 8))
+			})
+		}
+	}
+}
+
 func BenchmarkConvolveValid(b *testing.B) {
 	signalSizes := []int{1024, 4096, 16384}
 	kernelSizes := []int{16, 64, 256}

@@ -180,6 +180,47 @@ func dotProductBatch64(results []float64, rows [][]float64, vec []float64) {
 	}
 }
 
+// autocorrelate64 computes autoc[lag] for lag in 0..maxLag. On NEON it
+// vectorizes ACROSS lags (two consecutive lags per accumulator register), each
+// lane summing its lag's x[i]*x[i-lag] terms in increasing-i order. The kernel
+// uses fused FMLA because Go's arm64 compiler fuses the scalar reference's
+// multiply-add into FMADDD, so FMLA is what reproduces autocorrelateGo
+// bit-for-bit on arm64 (the amd64 AVX2 path instead uses separate mul+add to
+// match its own non-fused fallback). The triangular prologue (i < pmax) is
+// seeded in scalar Go; the kernel sweeps the rectangular steady region
+// i in pmax..n-1. Mirrors the amd64 orchestrator with two lanes instead of four.
+func autocorrelate64(autoc, x []float64, maxLag int) {
+	const lanes = 2
+	n := len(x)
+	groups := (maxLag + lanes) / lanes // ceil((maxLag+1)/lanes)
+	pmax := groups*lanes - 1           // steady-region start = padded max lag
+	if !hasNEON || n <= pmax {
+		autocorrelateGo(autoc, x, maxLag)
+		return
+	}
+	autocorrTriangularSeed(autoc, x, maxLag, pmax)
+	count := n - pmax
+	bcast := &x[pmax]
+	for g := range groups {
+		base := g * lanes
+		window := &x[pmax-base-(lanes-1)]
+		if base+lanes-1 <= maxLag {
+			autocorrStep2NEON(&autoc[base], bcast, window, count)
+			continue
+		}
+		// Final partial group (odd lag count): run the kernel over a padded
+		// stack buffer; the pad lane accumulates a valid-but-unused lag.
+		var buf [lanes]float64
+		realLanes := maxLag + 1 - base
+		copy(buf[:realLanes], autoc[base:maxLag+1])
+		autocorrStep2NEON(&buf[0], bcast, window, count)
+		copy(autoc[base:maxLag+1], buf[:realLanes])
+	}
+}
+
+//go:noescape
+func autocorrStep2NEON(acc, broadcast, window *float64, count int)
+
 func convolveValid64(dst, signal, kernel []float64) {
 	// Convolution as sliding dot products
 	kLen := len(kernel)

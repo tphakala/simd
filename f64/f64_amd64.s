@@ -1330,6 +1330,40 @@ dot4_avx_done:
     VZEROUPPER
     RET
 
+// func autocorrStep4AVX(acc, broadcast, window *float64, count int)
+// Steady-region accumulation for four autocorrelation lags at once. Y0 holds
+// the four seeded accumulators (lanes = lags base..base+3). Each iteration
+// broadcasts x[i], loads the four ascending window samples, reverses them with
+// VPERMPD so lane j carries x[i-(base+j)], multiplies, and adds. Separate
+// VMULPD + VADDPD (no FMA) keep each lane's sum bit-identical to the scalar
+// reference. broadcast and window advance one float64 (8 bytes) per iteration.
+TEXT ·autocorrStep4AVX(SB), NOSPLIT, $0-32
+    MOVQ acc+0(FP), DX
+    MOVQ broadcast+8(FP), SI
+    MOVQ window+16(FP), DI
+    MOVQ count+24(FP), CX
+
+    VMOVUPD (DX), Y0           // Y0 = seeded accumulators (lags base..base+3)
+    TESTQ CX, CX
+    JZ    autocorr4_done
+
+autocorr4_loop:
+    VBROADCASTSD (SI), Y1      // Y1 = x[i] in all four lanes
+    VMOVUPD (DI), Y2           // Y2 = [x[i-base-3], x[i-base-2], x[i-base-1], x[i-base]]
+    VPERMPD $0x1B, Y2, Y2      // reverse -> [x[i-base], x[i-base-1], x[i-base-2], x[i-base-3]]
+    VMULPD Y1, Y2, Y2          // Y2 = x[i] * window         (separate multiply)
+    VADDPD Y2, Y0, Y0          // Y0 += Y2                   (separate add, no FMA)
+    ADDQ $8, SI
+    ADDQ $8, DI
+    DECQ CX
+    JNZ  autocorr4_loop
+
+    VMOVUPD Y0, (DX)           // store the four lag accumulators back
+
+autocorr4_done:
+    VZEROUPPER
+    RET
+
 // func dotProduct4AVX512(results, row0, row1, row2, row3, vec *float64, n int)
 // Computes four dot products against the same vec, reusing each vec load.
 // Two accumulator banks per row (a/b); 32 doubles per row per main iteration

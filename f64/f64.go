@@ -321,6 +321,33 @@ func DotProductBatch(results []float64, rows [][]float64, vec []float64) {
 	dotProductBatch64(results[:n], rows[:n], vec)
 }
 
+// Autocorrelate computes the autocorrelation of x at lags 0..maxLag:
+//
+//	autoc[lag] = Σ x[i]*x[i-lag]  for i in lag..len(x)-1
+//
+// summed left to right with separate multiply and add. The AVX2 and NEON
+// kernels vectorize ACROSS lags (one accumulator lane per lag, never fusing the
+// multiply-add), so every build produces byte-identical results to the pure-Go
+// reference. This is the LPC autocorrelation step used by FLAC-style encoders,
+// where the quantized predictor coefficients (hence the output bytes) depend on
+// the exact rounding of this reduction.
+//
+// Preconditions: maxLag >= 0 and len(autoc) >= maxLag+1. Lags beyond len(x)-1
+// (whose sums are empty) are written as 0. Processes lags 0..min(maxLag,
+// len(autoc)-1).
+func Autocorrelate(autoc, x []float64, maxLag int) {
+	if maxLag < 0 || len(x) == 0 {
+		return
+	}
+	if maxLag > len(autoc)-1 {
+		maxLag = len(autoc) - 1
+	}
+	if maxLag < 0 {
+		return
+	}
+	autocorrelate64(autoc, x, maxLag)
+}
+
 // ConvolveValid computes valid convolution of signal with kernel.
 // dst[i] = sum(signal[i+j] * kernel[j]) for j in 0..len(kernel)-1.
 // Output length is len(signal) - len(kernel) + 1.
