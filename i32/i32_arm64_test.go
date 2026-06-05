@@ -267,6 +267,7 @@ func TestNEONKernels_AllocFree(t *testing.T) {
 		{"diff4NEON", func() { diff4NEON(dst, a) }},
 		{"cumsumNEON", func() { cumsumNEON(dst) }},
 		{"zigzagSumNEON", func() { _ = zigzagSumNEON(a) }},
+		{"minMaxNEON", func() { _, _ = minMaxNEON(a) }},
 		{"fixedAbsSumsNEON", func() { fixedAbsSumsNEON(a, &fasSums) }},
 		{"riceSumsHighNEON", func() { riceSumsHighNEON(riceHi, a) }},
 		{"lpcResidualEncodeNEON", func() { lpcResidualEncodeNEON(dst, a, lpcAllocCoeffs, 12) }},
@@ -461,6 +462,39 @@ func TestZigzagSumNEON_ParityWithGo(t *testing.T) {
 		want := zigzagSumGo(res)
 		if got != want {
 			t.Fatalf("n=%d: zigzagSumNEON = %d, want %d (Go)", n, got, want)
+		}
+	}
+}
+
+func TestMinMaxNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	// A tame in-range body keeps the planted extremes the unique min/max, so a
+	// kernel that drops a vector lane or skips the scalar tail is caught: one
+	// variant plants the extremes in a mid-block lane and in the tail, the other
+	// swaps them, covering both a dropped lane and a dropped tail on both reduces.
+	for _, n := range paritySizes {
+		if n < minNEONElements {
+			continue // dispatch routes these to Go; the kernel is not called
+		}
+		for _, swap := range []bool{false, true} {
+			res := make([]int32, n)
+			for i := range res {
+				res[i] = int32(i%13) - 6
+			}
+			mid, tail := int32(math.MinInt32), int32(math.MaxInt32)
+			if swap {
+				mid, tail = tail, mid
+			}
+			res[n/2] = mid
+			res[n-1] = tail
+			gotMin, gotMax := minMaxNEON(res)
+			wantMin, wantMax := minMaxGo(res)
+			if gotMin != wantMin || gotMax != wantMax {
+				t.Fatalf("n=%d swap=%v: minMaxNEON = (%d, %d), want (%d, %d) (Go)",
+					n, swap, gotMin, gotMax, wantMin, wantMax)
+			}
 		}
 	}
 }

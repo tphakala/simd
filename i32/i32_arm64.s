@@ -1327,3 +1327,47 @@ rice_neon_hi_tail_k:
 
 rice_neon_hi_done:
     RET
+
+// func minMaxNEON(res []int32) (minVal, maxVal int32)
+// Signed int32 min and max over res in one pass. The dispatch gates len(res) >=
+// 4, so at least one full 4-element (.4S) block exists: the min and max
+// accumulators start from block 0 and fold the remaining full blocks with
+// SMIN/SMAX, then SMINV/SMAXV reduce each accumulator across its 4 lanes to a
+// scalar and a scalar tail folds the (n mod 4) remainder. SMIN/SMAX/SMINV/SMAXV
+// have no Go assembler mnemonic, so they are hand-encoded WORD directives (the
+// trailing comment is the decoded form, cross-checked by asmcheck_test.go).
+// Every compare is signed, matching minMaxGo exactly.
+TEXT ·minMaxNEON(SB), NOSPLIT, $0-32
+    MOVD res_base+0(FP), R2
+    MOVD res_len+8(FP), R3
+    LSR  $2, R3, R4                  // R4 = full 4-element blocks (>=1)
+    VLD1 (R2), [V0.S4]               // V0 = block 0 (min acc)
+    VLD1 (R2), [V1.S4]               // V1 = block 0 (max acc)
+mm_neon_loop:
+    VLD1.P 16(R2), [V2.S4]           // load block + advance
+    WORD $0x4EA26C00                 // SMIN V0.4S, V0.4S, V2.4S
+    WORD $0x4EA26421                 // SMAX V1.4S, V1.4S, V2.4S
+    SUB  $1, R4
+    CBNZ R4, mm_neon_loop
+
+    WORD $0x4EB1A803                 // SMINV S3, V0.4S
+    WORD $0x4EB0A824                 // SMAXV S4, V1.4S
+    FMOVS F3, R5                     // R5 = running min (low 32 = int32)
+    FMOVS F4, R6                     // R6 = running max (low 32 = int32)
+
+    // scalar tail: (n mod 4) residuals (R2 already at &res[fullBlocks*4])
+    AND  $3, R3, R4
+    CBZ  R4, mm_neon_done
+mm_neon_tail:
+    MOVW.P 4(R2), R7                 // r (sign-extended; low 32 = int32)
+    CMPW R5, R7                      // (R7 - R5), signed 32-bit
+    CSEL LT, R7, R5, R5             // R5 = min(r, R5)
+    CMPW R6, R7
+    CSEL GT, R7, R6, R6             // R6 = max(r, R6)
+    SUB  $1, R4
+    CBNZ R4, mm_neon_tail
+
+mm_neon_done:
+    MOVW R5, minVal+24(FP)
+    MOVW R6, maxVal+28(FP)
+    RET

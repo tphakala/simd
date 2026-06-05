@@ -471,3 +471,19 @@ func BenchmarkFixedAbsSumsGo_1000(b *testing.B) {
 		fixedAbsSumsGo(src, &sums)
 	}
 }
+
+func BenchmarkMinMax_1000(b *testing.B) {
+	res := benchRiceRes()
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		MinMax(res)
+	}
+}
+
+func BenchmarkMinMaxGo_1000(b *testing.B) {
+	res := benchRiceRes()
+	b.SetBytes(benchN * 4)
+	for b.Loop() {
+		minMaxGo(res)
+	}
+}
