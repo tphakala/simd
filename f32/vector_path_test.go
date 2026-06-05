@@ -140,6 +140,30 @@ func TestVectorPathUnary32(t *testing.T) {
 	}
 }
 
+// TestVectorPathRound32 uses non-tie fractional inputs so the result is identical
+// regardless of the half-way rounding rule, and an exact match is required.
+func TestVectorPathRound32(t *testing.T) {
+	for _, n := range vpLens {
+		src := make([]float32, n)
+		for i := range src {
+			frac := float32(0.3)
+			if i%2 == 1 {
+				frac = 0.7
+			}
+			src[i] = float32((i*3+1)%17-8) + frac
+		}
+		got := make([]float32, n)
+		want := make([]float32, n)
+		Round(got, src)
+		round32Go(want, src)
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("Round n=%d [%d] = %v, want %v (in %v)", n, i, got[i], want[i], src[i])
+			}
+		}
+	}
+}
+
 // TestVectorPathActivations32 covers the (dst, src) activation kernels. ReLU is
 // exact; Sigmoid/Tanh/Exp use the looser approximation tolerance.
 func TestVectorPathActivations32(t *testing.T) {

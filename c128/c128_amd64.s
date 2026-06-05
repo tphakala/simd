@@ -1125,3 +1125,100 @@ conj_sse2_loop:
 
 conj_sse2_done:
     RET
+
+// ============================================================================
+// FROMREAL - CONVERT REAL TO COMPLEX: complex(x, 0)
+// ============================================================================
+
+// func fromRealAVX512(dst []complex128, src []float64)
+// Processes 2 complex128 per iteration using YMM. Mirrors fromRealAVX: a
+// dedicated ZMM kernel buys nothing for this store-bandwidth-bound interleave,
+// exactly as c64's fromRealAVX512 reuses the YMM approach.
+TEXT ·fromRealAVX512(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   fromreal_avx512_remainder
+
+    VXORPD Y15, Y15, Y15          // zero for interleaving
+
+fromreal_avx512_loop2:
+    VMOVUPD (SI), X0              // X0 = [r0, r1]
+    VUNPCKLPD X15, X0, X1         // X1 = [r0, 0]
+    VUNPCKHPD X15, X0, X2         // X2 = [r1, 0]
+    VINSERTF128 $1, X2, Y1, Y0    // Y0 = [r0, 0, r1, 0]
+    VMOVUPD Y0, (DX)             // store 2 complex128 = 32 bytes
+    ADDQ $16, SI                 // 2 float64 = 16 bytes
+    ADDQ $32, DX                 // 2 complex128 = 32 bytes
+    DECQ AX
+    JNZ  fromreal_avx512_loop2
+
+fromreal_avx512_remainder:
+    ANDQ $1, CX
+    JZ   fromreal_avx512_done
+
+    VMOVSD (SI), X0              // X0 = [r, 0] (load form zeros the high 64)
+    VMOVUPD X0, (DX)            // store one complex128
+
+fromreal_avx512_done:
+    VZEROUPPER
+    RET
+
+// func fromRealAVX(dst []complex128, src []float64)
+TEXT ·fromRealAVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   fromreal_avx_remainder
+
+    VXORPD Y15, Y15, Y15
+
+fromreal_avx_loop2:
+    VMOVUPD (SI), X0              // X0 = [r0, r1]
+    VUNPCKLPD X15, X0, X1         // X1 = [r0, 0]
+    VUNPCKHPD X15, X0, X2         // X2 = [r1, 0]
+    VINSERTF128 $1, X2, Y1, Y0    // Y0 = [r0, 0, r1, 0]
+    VMOVUPD Y0, (DX)
+    ADDQ $16, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  fromreal_avx_loop2
+
+fromreal_avx_remainder:
+    ANDQ $1, CX
+    JZ   fromreal_avx_done
+
+    VMOVSD (SI), X0
+    VMOVUPD X0, (DX)
+
+fromreal_avx_done:
+    VZEROUPPER
+    RET
+
+// func fromRealSSE2(dst []complex128, src []float64)
+// Each complex128 fills a full XMM, so MOVSD's load-form zeroing of the upper
+// 64 bits yields [r, 0.0] directly; one element per iteration.
+TEXT ·fromRealSSE2(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    TESTQ CX, CX
+    JZ   fromreal_sse2_done
+
+fromreal_sse2_loop:
+    MOVSD (SI), X0               // X0 = [r, 0.0] (load form zeros the high 64)
+    MOVUPS X0, (DX)             // store one complex128 = 16 bytes
+    ADDQ $8, SI
+    ADDQ $16, DX
+    DECQ CX
+    JNZ  fromreal_sse2_loop
+
+fromreal_sse2_done:
+    RET

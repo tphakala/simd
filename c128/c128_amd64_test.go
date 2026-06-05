@@ -230,3 +230,46 @@ func TestAbsSqKernels(t *testing.T) {
 		})
 	}
 }
+
+
+// TestFromRealKernels compares each available FromReal assembly kernel against
+// the Go reference across sizes that exercise the wide loop and the scalar
+// remainder, including odd lengths so the 2-element YMM stride and its tail both
+// run. AVX-512 is skipped on hosts without it (verified in CI), but its logic is
+// identical to the AVX kernel exercised here.
+func TestFromRealKernels(t *testing.T) {
+	sizes := []int{0, 1, 2, 3, 4, 5, 7, 8, 9, 16, 17}
+
+	kernels := []struct {
+		name string
+		fn   fromRealFunc
+		skip bool
+	}{
+		{"SSE2", fromRealSSE2, !cpu.X86.SSE2},
+		{"AVX", fromRealAVX, !cpu.X86.AVX},
+		{"AVX512", fromRealAVX512, !cpu.X86.AVX512F || !cpu.X86.AVX512VL},
+	}
+
+	for _, k := range kernels {
+		if k.skip {
+			continue
+		}
+		t.Run(k.name, func(t *testing.T) {
+			for _, n := range sizes {
+				src := make([]float64, n)
+				for i := range src {
+					src[i] = float64(i+1) - 5
+				}
+				got := make([]complex128, n)
+				want := make([]complex128, n)
+				k.fn(got, src)
+				fromRealGo(want, src)
+				for i := range got {
+					if got[i] != want[i] {
+						t.Errorf("%s n=%d: FromReal[%d] = %v, want %v", k.name, n, i, got[i], want[i])
+					}
+				}
+			}
+		})
+	}
+}

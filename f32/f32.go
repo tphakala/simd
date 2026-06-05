@@ -410,6 +410,17 @@ func Sqrt(dst, a []float32) {
 	sqrt32(dst[:n], a[:n])
 }
 
+
+// Round rounds each element to the nearest integer, half away from zero:
+// dst[i] = round(src[i]). Processes min(len(dst), len(src)) elements.
+func Round(dst, src []float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	round32(dst[:n], src[:n])
+}
+
 // Reciprocal computes element-wise reciprocal: dst[i] = 1/a[i].
 // Processes min(len(dst), len(a)) elements.
 func Reciprocal(dst, a []float32) {

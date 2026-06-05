@@ -108,3 +108,17 @@ func conjGo(dst, a []complex128) {
 		dst[i] = complex(real(a[i]), -imag(a[i]))
 	}
 }
+
+
+// fromRealGo converts real float64 values to complex128: dst[i] = complex(src[i], 0).
+// This is the trusted reference and the path that runs on architectures without
+// SIMD.
+func fromRealGo(dst []complex128, src []float64) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
+	for i := range dst {
+		dst[i] = complex(src[i], 0)
+	}
+}

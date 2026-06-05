@@ -72,6 +72,14 @@ func conj128(dst, a []complex128) {
 	conjGo(dst, a)
 }
 
+func fromReal128(dst []complex128, src []float64) {
+	if hasNEON && len(dst) >= 1 {
+		fromRealNEON(dst, src)
+		return
+	}
+	fromRealGo(dst, src)
+}
+
 //go:noescape
 func mulNEON(dst, a, b []complex128)
 
@@ -95,3 +103,6 @@ func absSqNEON(dst []float64, a []complex128)
 
 //go:noescape
 func conjNEON(dst, a []complex128)
+
+//go:noescape
+func fromRealNEON(dst []complex128, src []float64)

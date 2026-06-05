@@ -552,3 +552,54 @@ conj_neon_tail:
 
 conj_neon_done:
     RET
+
+// ============================================================================
+// FROMREAL - CONVERT REAL TO COMPLEX: complex(x, 0)
+// ============================================================================
+
+// func fromRealNEON(dst []complex128, src []float64)
+TEXT ·fromRealNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R1
+    MOVD src_base+24(FP), R2
+
+    CBZ  R1, fromreal_neon_done
+
+    CMP  $2, R1
+    BLT  fromreal_neon_tail
+
+    // Zero register for interleaving
+    VEOR V15.B16, V15.B16, V15.B16
+
+fromreal_neon_loop2:
+    // Load 2 float64: V0 = [r0, r1]
+    VLD1.P 16(R2), [V0.D2]
+
+    // Interleave with zeros: V1=[r0,0], V2=[r1,0]
+    WORD $0x4ECF3801             // ZIP1 V1.2D, V0.2D, V15.2D
+    WORD $0x4ECF7802             // ZIP2 V2.2D, V0.2D, V15.2D
+
+    // Store 2 complex128 = 32 bytes
+    VST1.P [V1.D2], 16(R0)
+    VST1.P [V2.D2], 16(R0)
+
+    SUB  $2, R1
+    CMP  $2, R1
+    BGE  fromreal_neon_loop2
+
+    CBZ  R1, fromreal_neon_done
+
+fromreal_neon_tail:
+    FMOVD (R2), F0               // r
+    FMOVD ZR, F1                 // 0
+
+    FMOVD F0, (R0)
+    FMOVD F1, 8(R0)
+
+    ADD  $8, R2
+    ADD  $16, R0
+    SUB  $1, R1
+    CBNZ R1, fromreal_neon_tail
+
+fromreal_neon_done:
+    RET
