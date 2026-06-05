@@ -4,6 +4,7 @@
 // - Mul: Complex multiplication for frequency-domain convolution
 // - MulConj: Multiply by conjugate for correlation
 // - Scale: Scale by complex scalar
+// - FromReal: Convert real float64 to complex128 (FFT input preparation)
 //
 // All functions automatically select the optimal implementation based on
 // runtime CPU feature detection. Functions gracefully fall back to pure Go
@@ -109,6 +110,19 @@ func Conj(dst, a []complex128) {
 		return
 	}
 	conj128(dst[:n], a[:n])
+}
+
+
+// FromReal converts real float64 values to complex128: dst[i] = complex(src[i], 0).
+// Processes min(len(dst), len(src)) elements.
+//
+// This is used to convert real-valued signals to complex for FFT input.
+func FromReal(dst []complex128, src []float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	fromReal128(dst[:n], src[:n])
 }
 
 func minLen(a, b, c int) int {

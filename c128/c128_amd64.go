@@ -18,18 +18,20 @@ type (
 	scaleFunc     func(dst, a []complex128, s complex128)
 	unaryAbsFunc  func(dst []float64, a []complex128)
 	unaryConjFunc func(dst, a []complex128)
+	fromRealFunc  func(dst []complex128, src []float64)
 )
 
 // Function pointers - assigned at init time based on CPU features
 var (
-	mulImpl     binaryOpFunc
-	mulConjImpl binaryOpFunc
-	scaleImpl   scaleFunc
-	addImpl     binaryOpFunc
-	subImpl     binaryOpFunc
-	absImpl     unaryAbsFunc
-	absSqImpl   unaryAbsFunc
-	conjImpl    unaryConjFunc
+	mulImpl      binaryOpFunc
+	mulConjImpl  binaryOpFunc
+	scaleImpl    scaleFunc
+	addImpl      binaryOpFunc
+	subImpl      binaryOpFunc
+	absImpl      unaryAbsFunc
+	absSqImpl    unaryAbsFunc
+	conjImpl     unaryConjFunc
+	fromRealImpl fromRealFunc
 )
 
 func init() {
@@ -69,6 +71,7 @@ func initAVX512() {
 	absImpl = absAVX512
 	absSqImpl = absSqAVX512
 	conjImpl = conjAVX512
+	fromRealImpl = fromRealAVX512
 }
 
 func initAVX() {
@@ -80,6 +83,7 @@ func initAVX() {
 	absImpl = absAVX
 	absSqImpl = absSqAVX
 	conjImpl = conjAVX
+	fromRealImpl = fromRealAVX
 }
 
 // initAVXNoFMA runs on AVX-capable CPUs that lack FMA (rare but possible:
@@ -95,6 +99,8 @@ func initAVXNoFMA() {
 	absImpl = absAVX
 	absSqImpl = absSqAVX
 	conjImpl = conjAVX
+	// FromReal is pure interleaving (no FMA), so the AVX kernel is safe here.
+	fromRealImpl = fromRealAVX
 }
 
 func initSSE2() {
@@ -106,6 +112,7 @@ func initSSE2() {
 	absImpl = absSSE2
 	absSqImpl = absSqSSE2
 	conjImpl = conjSSE2
+	fromRealImpl = fromRealSSE2
 }
 
 func initGo() {
@@ -117,6 +124,7 @@ func initGo() {
 	absImpl = absGo
 	absSqImpl = absSqGo
 	conjImpl = conjGo
+	fromRealImpl = fromRealGo
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -151,6 +159,10 @@ func absSq128(dst []float64, a []complex128) {
 
 func conj128(dst, a []complex128) {
 	conjImpl(dst, a)
+}
+
+func fromReal128(dst []complex128, src []float64) {
+	fromRealImpl(dst, src)
 }
 
 // AVX+FMA assembly function declarations (2x complex128 per iteration)
@@ -236,3 +248,14 @@ func conjAVX(dst, a []complex128)
 
 //go:noescape
 func conjSSE2(dst, a []complex128)
+
+// FromReal assembly function declarations
+
+//go:noescape
+func fromRealAVX512(dst []complex128, src []float64)
+
+//go:noescape
+func fromRealAVX(dst []complex128, src []float64)
+
+//go:noescape
+func fromRealSSE2(dst []complex128, src []float64)

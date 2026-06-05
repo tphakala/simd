@@ -314,6 +314,7 @@ SIMD-accelerated complex number operations for FFT-based signal processing:
 | **Unary**      | `Abs(dst, a)`        | Complex magnitude \|a + bi\|       | 4x (AVX-512) / 2x (AVX) |
 |                | `AbsSq(dst, a)`      | Magnitude squared \|a + bi\|²      | 4x / 2x                 |
 |                | `Conj(dst, a)`       | Complex conjugate: a - bi          | 4x / 2x                 |
+| **Conversion** | `FromReal(dst, src)` | Real to complex: src → src+0i      | 2x (AVX-512/AVX) / 2x (NEON) |
 
 These operations are designed for FFT-based signal processing pipelines:
 

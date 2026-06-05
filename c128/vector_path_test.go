@@ -137,3 +137,28 @@ func TestVectorPathToRealC128(t *testing.T) {
 		}
 	}
 }
+
+
+// vpMakeF64 builds a deterministic float64 source slice for FromReal sweeps.
+func vpMakeF64(n, seed int) []float64 {
+	s := make([]float64, n)
+	for i := range s {
+		s[i] = float64((i*7+seed)%23) - 11
+	}
+	return s
+}
+
+func TestVectorPathFromRealC128(t *testing.T) {
+	for _, n := range vpLens {
+		src := vpMakeF64(n, 6)
+		got := make([]complex128, n)
+		want := make([]complex128, n)
+		FromReal(got, src)
+		fromRealGo(want, src)
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("FromReal n=%d [%d] = %v, want %v (Go fallback)", n, i, got[i], want[i])
+			}
+		}
+	}
+}
