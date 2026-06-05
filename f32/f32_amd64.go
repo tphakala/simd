@@ -52,6 +52,7 @@ var (
 	negImpl              unaryOpFunc
 	sqrtImpl             unaryOpFunc
 	reciprocalImpl       unaryOpFunc
+	roundImpl            unaryOpFunc
 	fmaImpl              fmaFunc
 	clampImpl            clampFunc
 	minIdxImpl           reduceIdxFunc
@@ -93,6 +94,7 @@ func initAVX512() {
 	negImpl = negAVX512
 	sqrtImpl = sqrtAVX512
 	reciprocalImpl = reciprocalAVX512
+	roundImpl = roundAVX
 	fmaImpl = fmaAVX512
 	clampImpl = clampAVX512
 	minIdxImpl = minIdxGo
@@ -118,6 +120,7 @@ func initAVX() {
 	negImpl = negAVX
 	sqrtImpl = sqrtAVX
 	reciprocalImpl = reciprocalAVX
+	roundImpl = roundAVX
 	fmaImpl = fmaAVX
 	clampImpl = clampAVX
 	minIdxImpl = minIdxGo
@@ -142,6 +145,7 @@ func initSSE() {
 	negImpl = negSSE
 	sqrtImpl = sqrtSSE
 	reciprocalImpl = reciprocalSSE
+	roundImpl = round32Go
 	fmaImpl = fmaSSE
 	clampImpl = clampSSE
 	minIdxImpl = minIdxGo
@@ -168,6 +172,7 @@ func initGo() {
 	negImpl = negGo
 	sqrtImpl = sqrt32Go
 	reciprocalImpl = reciprocal32Go
+	roundImpl = round32Go
 	fmaImpl = fmaGo
 	clampImpl = clampGo
 	minIdxImpl = minIdxGo
@@ -259,6 +264,11 @@ func sqrt32(dst, a []float32) {
 
 func reciprocal32(dst, a []float32) {
 	reciprocalImpl(dst, a)
+}
+
+
+func round32(dst, src []float32) {
+	roundImpl(dst, src)
 }
 
 func minIdx32(a []float32) int {
@@ -704,6 +714,9 @@ func clampScaleAVX(dst, src []float32, minVal, maxVal, scale float32)
 
 //go:noescape
 func sqrtAVX(dst, a []float32)
+
+//go:noescape
+func roundAVX(dst, src []float32)
 
 //go:noescape
 func reciprocalAVX(dst, a []float32)

@@ -976,6 +976,42 @@ sqrt32_loop1:
 sqrt32_done:
     RET
 
+// roundNEON: round-half-away-from-zero using FRINTA (round to nearest, ties to
+// away), which matches math.Round exactly. The float32 analogue of f64's
+// roundNEON.
+//
+// func roundNEON(dst, src []float32)
+TEXT ·roundNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R2
+    MOVD src_base+24(FP), R1
+
+    LSR $2, R2, R3
+    CBZ R3, round32_scalar
+
+round32_loop4:
+    VLD1.P 16(R1), [V0.S4]
+    WORD $0x6E218800           // FRINTA V0.4S, V0.4S
+    VST1.P [V0.S4], 16(R0)
+    SUB $1, R3
+    CBNZ R3, round32_loop4
+
+round32_scalar:
+    AND $3, R2
+    CBZ R2, round32_done
+
+round32_loop1:
+    FMOVS (R1), F0
+    WORD $0x1E264000           // FRINTA S0, S0
+    FMOVS F0, (R0)
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R2
+    CBNZ R2, round32_loop1
+
+round32_done:
+    RET
+
 // func reciprocalNEON(dst, a []float32)
 // Uses full precision division (FRECPE is only approximate)
 TEXT ·reciprocalNEON(SB), NOSPLIT, $0-48

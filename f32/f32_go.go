@@ -389,6 +389,20 @@ func sqrt32Go(dst, a []float32) {
 	}
 }
 
+
+// round32Go rounds each element to the nearest integer, half away from zero,
+// matching math.Round. This is the trusted reference and the path that runs on
+// architectures without SIMD.
+func round32Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
+	for i := range dst {
+		dst[i] = float32(math.Round(float64(src[i])))
+	}
+}
+
 func reciprocal32Go(dst, a []float32) {
 	if len(dst) == 0 {
 		return

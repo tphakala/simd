@@ -13,6 +13,38 @@ DATA absf32mask<>+0x18(SB)/4, $0x7fffffff
 DATA absf32mask<>+0x1c(SB)/4, $0x7fffffff
 GLOBL absf32mask<>(SB), RODATA|NOPTR, $32
 
+// Constants for roundAVX (round-half-away-from-zero). absf32mask above doubles
+// as the |frac| mask; these supply the sign bit, the 0.5 threshold and 1.0.
+DATA roundf32_signmask<>+0x00(SB)/4, $0x80000000
+DATA roundf32_signmask<>+0x04(SB)/4, $0x80000000
+DATA roundf32_signmask<>+0x08(SB)/4, $0x80000000
+DATA roundf32_signmask<>+0x0c(SB)/4, $0x80000000
+DATA roundf32_signmask<>+0x10(SB)/4, $0x80000000
+DATA roundf32_signmask<>+0x14(SB)/4, $0x80000000
+DATA roundf32_signmask<>+0x18(SB)/4, $0x80000000
+DATA roundf32_signmask<>+0x1c(SB)/4, $0x80000000
+GLOBL roundf32_signmask<>(SB), RODATA|NOPTR, $32
+
+DATA roundf32_half<>+0x00(SB)/4, $0x3f000000
+DATA roundf32_half<>+0x04(SB)/4, $0x3f000000
+DATA roundf32_half<>+0x08(SB)/4, $0x3f000000
+DATA roundf32_half<>+0x0c(SB)/4, $0x3f000000
+DATA roundf32_half<>+0x10(SB)/4, $0x3f000000
+DATA roundf32_half<>+0x14(SB)/4, $0x3f000000
+DATA roundf32_half<>+0x18(SB)/4, $0x3f000000
+DATA roundf32_half<>+0x1c(SB)/4, $0x3f000000
+GLOBL roundf32_half<>(SB), RODATA|NOPTR, $32
+
+DATA roundf32_one<>+0x00(SB)/4, $0x3f800000
+DATA roundf32_one<>+0x04(SB)/4, $0x3f800000
+DATA roundf32_one<>+0x08(SB)/4, $0x3f800000
+DATA roundf32_one<>+0x0c(SB)/4, $0x3f800000
+DATA roundf32_one<>+0x10(SB)/4, $0x3f800000
+DATA roundf32_one<>+0x14(SB)/4, $0x3f800000
+DATA roundf32_one<>+0x18(SB)/4, $0x3f800000
+DATA roundf32_one<>+0x1c(SB)/4, $0x3f800000
+GLOBL roundf32_one<>(SB), RODATA|NOPTR, $32
+
 // func dotProductAVX(a, b []float32) float32
 // Optimized with 4 independent accumulators to hide FMA latency.
 // Processes 32 float32s per iteration (4 vectors × 8 floats).
@@ -2928,6 +2960,76 @@ sqrt32_avx_scalar:
     JNZ  sqrt32_avx_scalar
 
 sqrt32_avx_done:
+    VZEROUPPER
+    RET
+
+// roundAVX: round-half-away-from-zero, the float32 analogue of f64's roundAVX.
+// There is no single AVX instruction for round-half-away (VROUNDPS $0 rounds
+// half-to-even), so it is emulated:
+//   t   = trunc(x)
+//   f   = x - t                     // signed fractional part in (-1, 1)
+//   inc = (|f| >= 0.5) ? sign(x)*1.0 : 0
+//   result = t + inc
+// This avoids the trunc(|x|+0.5) overcounting at |x|=nextafter(0.5,0), where the
+// FP add rounds up to exactly 1.0.
+//
+// func roundAVX(dst, src []float32)
+TEXT ·roundAVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    VMOVUPS absf32mask<>(SB), Y3      // |frac| mask (0x7fffffff per lane)
+    VMOVUPS roundf32_signmask<>(SB), Y4
+    VMOVUPS roundf32_half<>(SB), Y5
+    VMOVUPS roundf32_one<>(SB), Y11
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   round32_avx_remainder
+
+round32_avx_loop8:
+    VMOVUPS (SI), Y0                  // Y0 = x
+    VROUNDPS $3, Y0, Y1               // Y1 = trunc(x)
+    VSUBPS Y1, Y0, Y2                 // Y2 = x - trunc(x) = signed frac
+    VANDPS Y3, Y2, Y6                 // Y6 = |frac|
+    VCMPPS $5, Y5, Y6, Y7             // Y7 = mask: |frac| NLT 0.5  (|frac| >= 0.5)
+    VANDPS Y11, Y7, Y8                // Y8 = 1.0 where mask, else 0
+    VANDPS Y4, Y0, Y9                 // Y9 = signbit(x)
+    VORPS Y9, Y8, Y8                  // Y8 = ±1.0 (or ±0.0 when no increment)
+    VADDPS Y8, Y1, Y1                 // Y1 = trunc(x) + ±1 or +0
+    VMOVUPS Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  round32_avx_loop8
+
+round32_avx_remainder:
+    ANDQ $7, CX
+    JZ   round32_avx_done
+
+    VMOVSS absf32mask<>(SB), X3
+    VMOVSS roundf32_signmask<>(SB), X4
+    VMOVSS roundf32_half<>(SB), X5
+    VMOVSS roundf32_one<>(SB), X11
+
+round32_avx_scalar:
+    VMOVSS (SI), X0                   // X0 = x
+    VROUNDSS $3, X0, X0, X1           // X1 = trunc(x)
+    VSUBSS X1, X0, X2                 // X2 = signed frac
+    VANDPS X3, X2, X6                 // X6 = |frac|
+    VCMPSS $5, X5, X6, X7             // X7 = mask: |frac| NLT 0.5
+    VANDPS X11, X7, X8                // X8 = 1.0 where mask else 0
+    VANDPS X4, X0, X9                 // X9 = signbit(x)
+    VORPS X9, X8, X8                  // X8 = ±1 or ±0
+    VADDSS X8, X1, X1                 // X1 = trunc(x) + inc
+    VMOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  round32_avx_scalar
+
+round32_avx_done:
     VZEROUPPER
     RET
 
