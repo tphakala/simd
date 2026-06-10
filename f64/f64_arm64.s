@@ -1723,3 +1723,108 @@ autocorr2_loop:
 
 autocorr2_done:
     RET
+
+// func dotProduct4NEON(results, row0, row1, row2, row3, vec *float64, n int)
+// Scores four rows against the same vec, reusing each vec load across the group
+// instead of reloading the query per row (parity with the f32 kernel, ported
+// from .4S to .2D: 2 float64 per vector). Two accumulator banks per row
+// (V0-V3 bank a, V4-V7 bank b) hide FMLA latency over a 4-element main loop;
+// V16/V17 hold the two query chunks, V18-V21 the four row chunks.
+// FMLA  Vd.2D, Vn.2D, Vm.2D: 0x4E60CC00 | (Vm << 16) | (Vn << 5) | Vd
+// FADD  Vd.2D, Vn.2D, Vm.2D: 0x4E60D400 | (Vm << 16) | (Vn << 5) | Vd
+// FADDP Dd, Vn.2D:           0x7E70D800 | (Vn << 5) | Vd
+TEXT ·dotProduct4NEON(SB), NOSPLIT, $0-56
+    MOVD results+0(FP), R0
+    MOVD row0+8(FP), R1
+    MOVD row1+16(FP), R2
+    MOVD row2+24(FP), R3
+    MOVD row3+32(FP), R4
+    MOVD vec+40(FP), R5
+    MOVD n+48(FP), R6
+
+    VEOR V0.B16, V0.B16, V0.B16
+    VEOR V1.B16, V1.B16, V1.B16
+    VEOR V2.B16, V2.B16, V2.B16
+    VEOR V3.B16, V3.B16, V3.B16
+    VEOR V4.B16, V4.B16, V4.B16
+    VEOR V5.B16, V5.B16, V5.B16
+    VEOR V6.B16, V6.B16, V6.B16
+    VEOR V7.B16, V7.B16, V7.B16
+
+    // Process 4 elements per row (2 chunks of 2 doubles) per iteration.
+    LSR $2, R6, R7             // R7 = n / 4
+    CBZ R7, dot4d_rem2_check
+
+dot4d_loop4:
+    // chunk a: vec[0:2] -> V16, accumulate into bank a (V0-V3)
+    VLD1.P 16(R5), [V16.D2]
+    VLD1.P 16(R1), [V18.D2]
+    WORD $0x4E70CE40           // FMLA V0.2D, V18.2D, V16.2D
+    VLD1.P 16(R2), [V19.D2]
+    WORD $0x4E70CE61           // FMLA V1.2D, V19.2D, V16.2D
+    VLD1.P 16(R3), [V20.D2]
+    WORD $0x4E70CE82           // FMLA V2.2D, V20.2D, V16.2D
+    VLD1.P 16(R4), [V21.D2]
+    WORD $0x4E70CEA3           // FMLA V3.2D, V21.2D, V16.2D
+    // chunk b: vec[2:4] -> V17, accumulate into bank b (V4-V7)
+    VLD1.P 16(R5), [V17.D2]
+    VLD1.P 16(R1), [V18.D2]
+    WORD $0x4E71CE44           // FMLA V4.2D, V18.2D, V17.2D
+    VLD1.P 16(R2), [V19.D2]
+    WORD $0x4E71CE65           // FMLA V5.2D, V19.2D, V17.2D
+    VLD1.P 16(R3), [V20.D2]
+    WORD $0x4E71CE86           // FMLA V6.2D, V20.2D, V17.2D
+    VLD1.P 16(R4), [V21.D2]
+    WORD $0x4E71CEA7           // FMLA V7.2D, V21.2D, V17.2D
+    SUB $1, R7
+    CBNZ R7, dot4d_loop4
+
+    // Fold bank b into bank a (only reached when the main loop ran).
+    WORD $0x4E64D400           // FADD V0.2D, V0.2D, V4.2D
+    WORD $0x4E65D421           // FADD V1.2D, V1.2D, V5.2D
+    WORD $0x4E66D442           // FADD V2.2D, V2.2D, V6.2D
+    WORD $0x4E67D463           // FADD V3.2D, V3.2D, V7.2D
+
+dot4d_rem2_check:
+    AND $3, R6, R8
+    LSR $1, R8, R9             // R9 = (n & 3) / 2
+    CBZ R9, dot4d_reduce
+
+    // One 2-element chunk into bank a.
+    VLD1.P 16(R5), [V16.D2]
+    VLD1.P 16(R1), [V18.D2]
+    WORD $0x4E70CE40           // FMLA V0.2D, V18.2D, V16.2D
+    VLD1.P 16(R2), [V19.D2]
+    WORD $0x4E70CE61           // FMLA V1.2D, V19.2D, V16.2D
+    VLD1.P 16(R3), [V20.D2]
+    WORD $0x4E70CE82           // FMLA V2.2D, V20.2D, V16.2D
+    VLD1.P 16(R4), [V21.D2]
+    WORD $0x4E70CEA3           // FMLA V3.2D, V21.2D, V16.2D
+
+dot4d_reduce:
+    // Reduce each bank-a accumulator to a scalar (D0..D3) BEFORE any scalar FMA,
+    // since scalar ops zero the upper lane of the V register.
+    WORD $0x7E70D800           // FADDP D0, V0.2D
+    WORD $0x7E70D821           // FADDP D1, V1.2D
+    WORD $0x7E70D842           // FADDP D2, V2.2D
+    WORD $0x7E70D863           // FADDP D3, V3.2D
+
+    AND $1, R6, R8             // R8 = n & 1 (scalar tail count, 0 or 1)
+    CBZ R8, dot4d_store
+
+    FMOVD (R5), F18
+    FMOVD (R1), F19
+    FMADDD F18, F0, F19, F0    // F0 = F19 * F18 + F0
+    FMOVD (R2), F19
+    FMADDD F18, F1, F19, F1
+    FMOVD (R3), F19
+    FMADDD F18, F2, F19, F2
+    FMOVD (R4), F19
+    FMADDD F18, F3, F19, F3
+
+dot4d_store:
+    FMOVD F0, (R0)
+    FMOVD F1, 8(R0)
+    FMOVD F2, 16(R0)
+    FMOVD F3, 24(R0)
+    RET
