@@ -109,15 +109,17 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 	// Size-half FFT twiddles (computed in float64, stored as float32).
 	for t := range p.twRe {
 		ang := 2 * math.Pi * float64(t) / float64(half)
-		p.twRe[t] = float32(math.Cos(ang))
-		p.twIm[t] = float32(-math.Sin(ang))
+		s, c := math.Sincos(ang)
+		p.twRe[t] = float32(c)
+		p.twIm[t] = float32(-s)
 	}
 
 	// Real-input unravel twiddles W_N^k.
 	for k := 0; k <= half; k++ {
 		ang := 2 * math.Pi * float64(k) / float64(nfft)
-		p.unRe[k] = float32(math.Cos(ang))
-		p.unIm[k] = float32(-math.Sin(ang))
+		s, c := math.Sincos(ang)
+		p.unRe[k] = float32(c)
+		p.unIm[k] = float32(-s)
 	}
 
 	return p, nil
@@ -185,9 +187,15 @@ func (p *STFTPlan) numFrames(signalLen, hop int) int {
 // unravelBin computes the real-input spectrum bin X[k] (k in [0, half]) from the
 // half-length complex FFT result currently in p.re/p.im, returning (re, im).
 func (p *STFTPlan) unravelBin(k int) (re, im float32) {
-	km := (p.half - k) % p.half
-	ckr, cki := p.re[k%p.half], p.im[k%p.half]
-	cmr, cmi := p.re[km], p.im[km]
+	// k runs 0..half inclusive; the half-size spectrum C wraps at p.half,
+	// so both k == 0 and k == p.half read C[0]. Branch instead of modulo
+	// to keep integer division off this per-bin path.
+	ck, cm := 0, 0
+	if k > 0 && k < p.half {
+		ck, cm = k, p.half-k
+	}
+	ckr, cki := p.re[ck], p.im[ck]
+	cmr, cmi := p.re[cm], p.im[cm]
 
 	// Even/odd half-spectra: E = 0.5*(C[k] + conj(C[half-k])),
 	// O = -0.5i*(C[k] - conj(C[half-k])).
