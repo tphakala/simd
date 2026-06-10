@@ -6167,8 +6167,8 @@ euclid32_avx_loop32:
     JNZ  euclid32_avx_loop32
 
     VADDPS Y3, Y0, Y0
+    VADDPS Y5, Y4, Y4
     VADDPS Y4, Y0, Y0
-    VADDPS Y5, Y0, Y0
 
 euclid32_avx_loop8_check:
     ANDQ $31, CX
