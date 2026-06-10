@@ -1756,25 +1756,27 @@ TEXT ·dotProduct4NEON(SB), NOSPLIT, $0-56
     CBZ R7, dot4d_rem2_check
 
 dot4d_loop4:
-    // chunk a: vec[0:2] -> V16, accumulate into bank a (V0-V3)
+    // chunk a: group the vec + 4 row loads, then the FMLAs into bank a (V0-V3),
+    // so the load/store unit pipelines the loads instead of stalling each FMLA on
+    // its just-loaded operand.
     VLD1.P 16(R5), [V16.D2]
     VLD1.P 16(R1), [V18.D2]
-    WORD $0x4E70CE40           // FMLA V0.2D, V18.2D, V16.2D
     VLD1.P 16(R2), [V19.D2]
-    WORD $0x4E70CE61           // FMLA V1.2D, V19.2D, V16.2D
     VLD1.P 16(R3), [V20.D2]
-    WORD $0x4E70CE82           // FMLA V2.2D, V20.2D, V16.2D
     VLD1.P 16(R4), [V21.D2]
+    WORD $0x4E70CE40           // FMLA V0.2D, V18.2D, V16.2D
+    WORD $0x4E70CE61           // FMLA V1.2D, V19.2D, V16.2D
+    WORD $0x4E70CE82           // FMLA V2.2D, V20.2D, V16.2D
     WORD $0x4E70CEA3           // FMLA V3.2D, V21.2D, V16.2D
-    // chunk b: vec[2:4] -> V17, accumulate into bank b (V4-V7)
+    // chunk b: same for bank b (V4-V7) with vec[2:4] -> V17
     VLD1.P 16(R5), [V17.D2]
     VLD1.P 16(R1), [V18.D2]
-    WORD $0x4E71CE44           // FMLA V4.2D, V18.2D, V17.2D
     VLD1.P 16(R2), [V19.D2]
-    WORD $0x4E71CE65           // FMLA V5.2D, V19.2D, V17.2D
     VLD1.P 16(R3), [V20.D2]
-    WORD $0x4E71CE86           // FMLA V6.2D, V20.2D, V17.2D
     VLD1.P 16(R4), [V21.D2]
+    WORD $0x4E71CE44           // FMLA V4.2D, V18.2D, V17.2D
+    WORD $0x4E71CE65           // FMLA V5.2D, V19.2D, V17.2D
+    WORD $0x4E71CE86           // FMLA V6.2D, V20.2D, V17.2D
     WORD $0x4E71CEA7           // FMLA V7.2D, V21.2D, V17.2D
     SUB $1, R7
     CBNZ R7, dot4d_loop4
@@ -1790,15 +1792,15 @@ dot4d_rem2_check:
     LSR $1, R8, R9             // R9 = (n & 3) / 2
     CBZ R9, dot4d_reduce
 
-    // One 2-element chunk into bank a.
+    // One 2-element chunk into bank a: group the loads, then the FMLAs.
     VLD1.P 16(R5), [V16.D2]
     VLD1.P 16(R1), [V18.D2]
-    WORD $0x4E70CE40           // FMLA V0.2D, V18.2D, V16.2D
     VLD1.P 16(R2), [V19.D2]
-    WORD $0x4E70CE61           // FMLA V1.2D, V19.2D, V16.2D
     VLD1.P 16(R3), [V20.D2]
-    WORD $0x4E70CE82           // FMLA V2.2D, V20.2D, V16.2D
     VLD1.P 16(R4), [V21.D2]
+    WORD $0x4E70CE40           // FMLA V0.2D, V18.2D, V16.2D
+    WORD $0x4E70CE61           // FMLA V1.2D, V19.2D, V16.2D
+    WORD $0x4E70CE82           // FMLA V2.2D, V20.2D, V16.2D
     WORD $0x4E70CEA3           // FMLA V3.2D, V21.2D, V16.2D
 
 dot4d_reduce:

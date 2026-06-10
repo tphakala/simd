@@ -33,4 +33,20 @@ func TestDotProduct4NEONKernel(t *testing.T) {
 			}
 		}
 	}
+
+	// The kernel must not allocate.
+	const dim = 256
+	vec := deterministicF64Vector(11, dim)
+	rows := [4][]float64{
+		deterministicF64Vector(100, dim),
+		deterministicF64Vector(101, dim),
+		deterministicF64Vector(102, dim),
+		deterministicF64Vector(103, dim),
+	}
+	results := make([]float64, 4)
+	if a := testing.AllocsPerRun(100, func() {
+		dotProduct4NEON(&results[0], &rows[0][0], &rows[1][0], &rows[2][0], &rows[3][0], &vec[0], dim)
+	}); a != 0 {
+		t.Errorf("dotProduct4NEON allocated %v times per run, want 0", a)
+	}
 }
