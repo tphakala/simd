@@ -367,6 +367,8 @@ SIMD-accelerated complex number operations for FFT-based signal processing:
 |                | `Scale(dst, a, s)`   | Scale by complex scalar            | 4x / 2x                 |
 |                | `Add(dst, a, b)`     | Complex addition                   | 4x / 2x                 |
 |                | `Sub(dst, a, b)`     | Complex subtraction                | 4x / 2x                 |
+| **Reduction**  | `DotProduct(a, b)`     | Complex dot product sum(a·b)       | 2x (AVX) / 1x (SSE2, NEON) |
+|                | `DotProductConj(a, b)` | Hermitian inner product sum(a·conj(b)) | 2x (AVX) / 1x (SSE2, NEON) |
 | **Unary**      | `Abs(dst, a)`        | Complex magnitude \|a + bi\|       | 4x (AVX-512) / 2x (AVX) |
 |                | `AbsSq(dst, a)`      | Magnitude squared \|a + bi\|²      | 4x / 2x                 |
 |                | `Conj(dst, a)`       | Complex conjugate: a - bi          | 4x / 2x                 |
@@ -420,6 +422,8 @@ SIMD-accelerated single-precision complex number operations:
 |                | `Scale(dst, a, s)`   | Scale by complex scalar            | 8x / 4x / 2x                      |
 |                | `Add(dst, a, b)`     | Complex addition                   | 8x / 4x / 2x                      |
 |                | `Sub(dst, a, b)`     | Complex subtraction                | 8x / 4x / 2x                      |
+| **Reduction**  | `DotProduct(a, b)`     | Complex dot product sum(a·b)       | 4x (AVX) / 2x (SSE, NEON) |
+|                | `DotProductConj(a, b)` | Hermitian inner product sum(a·conj(b)) | 4x (AVX) / 2x (SSE, NEON) |
 | **Unary**      | `Abs(dst, a)`        | Complex magnitude \|a + bi\|       | 8x / 4x / 2x                      |
 |                | `AbsSq(dst, a)`      | Magnitude squared \|a + bi\|²      | 8x / 4x / 2x                      |
 |                | `Conj(dst, a)`       | Complex conjugate: a - bi          | 8x / 4x / 2x                      |

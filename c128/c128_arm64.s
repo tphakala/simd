@@ -603,3 +603,128 @@ fromreal_neon_tail:
 
 fromreal_neon_done:
     RET
+
+// ============================================================================
+// DOT PRODUCT REDUCTIONS
+// sum(a[i]*b[i]) and sum(a[i]*conj(b[i])). Each reuses the mul/mulConj product
+// above but accumulates the real and imaginary result lanes into V14/V15 and
+// horizontally reduces each .2D vector with a scalar FADDP. Accumulation is in
+// float64 to match dotProductGo / dotProductConjGo.
+// FADD  Vd.2D, Vn.2D, Vm.2D: 0x4E60D400 | (Vm << 16) | (Vn << 5) | Vd
+// FADDP Dd, Vn.2D:           0x7E70D800 | (Vn << 5) | Vd
+// ============================================================================
+
+// func dotProductNEON(a, b []complex128) complex128
+TEXT ·dotProductNEON(SB), NOSPLIT, $0-64
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R1
+    MOVD b_base+24(FP), R2
+
+    VEOR V14.B16, V14.B16, V14.B16   // accRe
+    VEOR V15.B16, V15.B16, V15.B16   // accIm
+
+    CMP  $2, R1
+    BLT  dp128_neon_reduce
+
+dp128_neon_loop2:
+    VLD1.P 16(R0), [V0.D2]
+    VLD1.P 16(R0), [V1.D2]
+    VLD1.P 16(R2), [V2.D2]
+    VLD1.P 16(R2), [V3.D2]
+    WORD $0x4EC11804             // UZP1 V4.2D, V0.2D, V1.2D
+    WORD $0x4EC15805             // UZP2 V5.2D, V0.2D, V1.2D
+    WORD $0x4EC31846             // UZP1 V6.2D, V2.2D, V3.2D
+    WORD $0x4EC35847             // UZP2 V7.2D, V2.2D, V3.2D
+    WORD $0x6E66DC88             // FMUL V8.2D, V4.2D, V6.2D
+    WORD $0x6E67DCA9             // FMUL V9.2D, V5.2D, V7.2D
+    WORD $0x6E67DC8A             // FMUL V10.2D, V4.2D, V7.2D
+    WORD $0x6E66DCAB             // FMUL V11.2D, V5.2D, V6.2D
+    WORD $0x4EE9D50C             // FSUB V12.2D, V8.2D, V9.2D
+    WORD $0x4E6BD54D             // FADD V13.2D, V10.2D, V11.2D
+    WORD $0x4E6CD5CE             // FADD V14.2D, V14.2D, V12.2D
+    WORD $0x4E6DD5EF             // FADD V15.2D, V15.2D, V13.2D
+    SUB  $2, R1
+    CMP  $2, R1
+    BGE  dp128_neon_loop2
+
+dp128_neon_reduce:
+    WORD $0x7E70D9CE             // FADDP D14, V14.2D
+    WORD $0x7E70D9EF             // FADDP D15, V15.2D
+
+    CBZ  R1, dp128_neon_done
+
+    VLD1 (R0), [V0.D2]           // [ar, ai]
+    VLD1 (R2), [V1.D2]           // [br, bi]
+    VDUP V0.D[1], V2.D2          // F2 = ai
+    VDUP V1.D[1], V3.D2          // F3 = bi
+    FMULD F0, F1, F4             // ar*br
+    FMULD F2, F3, F5             // ai*bi
+    FMULD F0, F3, F6             // ar*bi
+    FMULD F2, F1, F7             // ai*br
+    FSUBD F5, F4, F4             // ar*br - ai*bi
+    FADDD F6, F7, F5             // ar*bi + ai*br
+    FADDD F4, F14, F14           // sumRe += real
+    FADDD F5, F15, F15           // sumIm += imag
+
+dp128_neon_done:
+    FMOVD F14, ret_real+48(FP)
+    FMOVD F15, ret_imag+56(FP)
+    RET
+
+// func dotProductConjNEON(a, b []complex128) complex128
+// a*conj(b) = (ar*br + ai*bi) + (ai*br - ar*bi)i
+TEXT ·dotProductConjNEON(SB), NOSPLIT, $0-64
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R1
+    MOVD b_base+24(FP), R2
+
+    VEOR V14.B16, V14.B16, V14.B16
+    VEOR V15.B16, V15.B16, V15.B16
+
+    CMP  $2, R1
+    BLT  dpc128_neon_reduce
+
+dpc128_neon_loop2:
+    VLD1.P 16(R0), [V0.D2]
+    VLD1.P 16(R0), [V1.D2]
+    VLD1.P 16(R2), [V2.D2]
+    VLD1.P 16(R2), [V3.D2]
+    WORD $0x4EC11804             // UZP1 V4.2D, V0.2D, V1.2D
+    WORD $0x4EC15805             // UZP2 V5.2D, V0.2D, V1.2D
+    WORD $0x4EC31846             // UZP1 V6.2D, V2.2D, V3.2D
+    WORD $0x4EC35847             // UZP2 V7.2D, V2.2D, V3.2D
+    WORD $0x6E66DC88             // FMUL V8.2D, V4.2D, V6.2D
+    WORD $0x6E67DCA9             // FMUL V9.2D, V5.2D, V7.2D
+    WORD $0x6E66DCAA             // FMUL V10.2D, V5.2D, V6.2D
+    WORD $0x6E67DC8B             // FMUL V11.2D, V4.2D, V7.2D
+    WORD $0x4E69D50C             // FADD V12.2D, V8.2D, V9.2D
+    WORD $0x4EEBD54D             // FSUB V13.2D, V10.2D, V11.2D
+    WORD $0x4E6CD5CE             // FADD V14.2D, V14.2D, V12.2D
+    WORD $0x4E6DD5EF             // FADD V15.2D, V15.2D, V13.2D
+    SUB  $2, R1
+    CMP  $2, R1
+    BGE  dpc128_neon_loop2
+
+dpc128_neon_reduce:
+    WORD $0x7E70D9CE             // FADDP D14, V14.2D
+    WORD $0x7E70D9EF             // FADDP D15, V15.2D
+
+    CBZ  R1, dpc128_neon_done
+
+    VLD1 (R0), [V0.D2]
+    VLD1 (R2), [V1.D2]
+    VDUP V0.D[1], V2.D2
+    VDUP V1.D[1], V3.D2
+    FMULD F0, F1, F4             // ar*br
+    FMULD F2, F3, F5             // ai*bi
+    FMULD F2, F1, F6             // ai*br
+    FMULD F0, F3, F7             // ar*bi
+    FADDD F4, F5, F4             // ar*br + ai*bi
+    FSUBD F7, F6, F5             // ai*br - ar*bi
+    FADDD F4, F14, F14           // sumRe += real
+    FADDD F5, F15, F15           // sumIm += imag
+
+dpc128_neon_done:
+    FMOVD F14, ret_real+48(FP)
+    FMOVD F15, ret_imag+56(FP)
+    RET

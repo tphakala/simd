@@ -7,6 +7,7 @@ import "github.com/tphakala/simd/cpu"
 // Function pointer types for SIMD operations
 type (
 	binaryOpFunc  func(dst, a, b []complex64)
+	reduceFunc    func(a, b []complex64) complex64
 	scaleFunc     func(dst, a []complex64, s complex64)
 	unaryAbsFunc  func(dst []float32, a []complex64)
 	unaryConjFunc func(dst, a []complex64)
@@ -15,15 +16,17 @@ type (
 
 // Function pointers - assigned at init time based on CPU features
 var (
-	mulImpl      binaryOpFunc
-	mulConjImpl  binaryOpFunc
-	scaleImpl    scaleFunc
-	addImpl      binaryOpFunc
-	subImpl      binaryOpFunc
-	absImpl      unaryAbsFunc
-	absSqImpl    unaryAbsFunc
-	conjImpl     unaryConjFunc
-	fromRealImpl fromRealFunc
+	mulImpl            binaryOpFunc
+	mulConjImpl        binaryOpFunc
+	dotProductImpl     reduceFunc
+	dotProductConjImpl reduceFunc
+	scaleImpl          scaleFunc
+	addImpl            binaryOpFunc
+	subImpl            binaryOpFunc
+	absImpl            unaryAbsFunc
+	absSqImpl          unaryAbsFunc
+	conjImpl           unaryConjFunc
+	fromRealImpl       fromRealFunc
 )
 
 func init() {
@@ -45,6 +48,10 @@ func init() {
 func initAVX512() {
 	mulImpl = mulAVX512
 	mulConjImpl = mulConjAVX512
+	// No AVX-512 dot kernels yet (no AVX-512 hardware to verify; see #75/#96):
+	// reuse the AVX kernels so the tier still gets the speedup.
+	dotProductImpl = dotProductAVX
+	dotProductConjImpl = dotProductConjAVX
 	scaleImpl = scaleAVX512
 	addImpl = addAVX512
 	subImpl = subAVX512
@@ -57,6 +64,8 @@ func initAVX512() {
 func initAVX() {
 	mulImpl = mulAVX
 	mulConjImpl = mulConjAVX
+	dotProductImpl = dotProductAVX
+	dotProductConjImpl = dotProductConjAVX
 	scaleImpl = scaleAVX
 	addImpl = addAVX
 	subImpl = subAVX
@@ -69,6 +78,8 @@ func initAVX() {
 func initSSE2() {
 	mulImpl = mulSSE2
 	mulConjImpl = mulConjSSE2
+	dotProductImpl = dotProductSSE2
+	dotProductConjImpl = dotProductConjSSE2
 	scaleImpl = scaleSSE2
 	addImpl = addSSE2
 	subImpl = subSSE2
@@ -81,6 +92,8 @@ func initSSE2() {
 func initGo() {
 	mulImpl = mulGo
 	mulConjImpl = mulConjGo
+	dotProductImpl = dotProductGo
+	dotProductConjImpl = dotProductConjGo
 	scaleImpl = scaleGo
 	addImpl = addGo
 	subImpl = subGo
@@ -98,6 +111,14 @@ func mul64(dst, a, b []complex64) {
 
 func mulConj64(dst, a, b []complex64) {
 	mulConjImpl(dst, a, b)
+}
+
+func dotProduct64(a, b []complex64) complex64 {
+	return dotProductImpl(a, b)
+}
+
+func dotProductConj64(a, b []complex64) complex64 {
+	return dotProductConjImpl(a, b)
 }
 
 func scale64(dst, a []complex64, s complex64) {
@@ -137,6 +158,12 @@ func mulAVX(dst, a, b []complex64)
 func mulConjAVX(dst, a, b []complex64)
 
 //go:noescape
+func dotProductAVX(a, b []complex64) complex64
+
+//go:noescape
+func dotProductConjAVX(a, b []complex64) complex64
+
+//go:noescape
 func scaleAVX(dst, a []complex64, s complex64)
 
 //go:noescape
@@ -169,6 +196,12 @@ func mulSSE2(dst, a, b []complex64)
 
 //go:noescape
 func mulConjSSE2(dst, a, b []complex64)
+
+//go:noescape
+func dotProductSSE2(a, b []complex64) complex64
+
+//go:noescape
+func dotProductConjSSE2(a, b []complex64) complex64
 
 //go:noescape
 func scaleSSE2(dst, a []complex64, s complex64)

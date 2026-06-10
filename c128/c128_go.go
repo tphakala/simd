@@ -109,7 +109,6 @@ func conjGo(dst, a []complex128) {
 	}
 }
 
-
 // fromRealGo converts real float64 values to complex128: dst[i] = complex(src[i], 0).
 // This is the trusted reference and the path that runs on architectures without
 // SIMD.
@@ -121,4 +120,36 @@ func fromRealGo(dst []complex128, src []float64) {
 	for i := range dst {
 		dst[i] = complex(src[i], 0)
 	}
+}
+
+// dotProductGo computes the complex dot product sum(a[i]*b[i]) over
+// min(len(a), len(b)) elements, accumulating the real and imaginary parts in
+// float64 (the native element precision).
+func dotProductGo(a, b []complex128) complex128 {
+	n := min(len(a), len(b))
+	var sumRe, sumIm float64
+	for i := range n {
+		ar, ai := real(a[i]), imag(a[i])
+		br, bi := real(b[i]), imag(b[i])
+		// a*b = (ar*br - ai*bi) + (ar*bi + ai*br)i
+		sumRe += ar*br - ai*bi
+		sumIm += ar*bi + ai*br
+	}
+	return complex(sumRe, sumIm)
+}
+
+// dotProductConjGo computes the conjugated dot product sum(a[i]*conj(b[i])) over
+// min(len(a), len(b)) elements, accumulating in float64. This is the standard
+// Hermitian inner product used for correlation and matched filtering.
+func dotProductConjGo(a, b []complex128) complex128 {
+	n := min(len(a), len(b))
+	var sumRe, sumIm float64
+	for i := range n {
+		ar, ai := real(a[i]), imag(a[i])
+		br, bi := real(b[i]), imag(b[i])
+		// a*conj(b) = (ar*br + ai*bi) + (ai*br - ar*bi)i
+		sumRe += ar*br + ai*bi
+		sumIm += ai*br - ar*bi
+	}
+	return complex(sumRe, sumIm)
 }

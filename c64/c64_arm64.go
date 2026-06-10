@@ -22,6 +22,20 @@ func mulConj64(dst, a, b []complex64) {
 	mulConjGo(dst, a, b)
 }
 
+func dotProduct64(a, b []complex64) complex64 {
+	if hasNEON {
+		return dotProductNEON(a, b)
+	}
+	return dotProductGo(a, b)
+}
+
+func dotProductConj64(a, b []complex64) complex64 {
+	if hasNEON {
+		return dotProductConjNEON(a, b)
+	}
+	return dotProductConjGo(a, b)
+}
+
 func scale64(dst, a []complex64, s complex64) {
 	if hasNEON {
 		scaleNEON(dst, a, s)
@@ -83,6 +97,12 @@ func mulNEON(dst, a, b []complex64)
 
 //go:noescape
 func mulConjNEON(dst, a, b []complex64)
+
+//go:noescape
+func dotProductNEON(a, b []complex64) complex64
+
+//go:noescape
+func dotProductConjNEON(a, b []complex64) complex64
 
 //go:noescape
 func scaleNEON(dst, a []complex64, s complex64)

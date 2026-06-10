@@ -67,7 +67,7 @@
 //
 // Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MidSideEncode, MidSideDecode, Diff1..Diff4, Restore1..Restore4, LPCResidualEncode, LPCRestore, RiceSums, RiceBestParam
 //
-// Complex (c128): Add, Sub, Mul, MulConj, Conj, Abs, AbsSq, Scale
+// Complex (c64/c128): Add, Sub, Mul, MulConj, DotProduct, DotProductConj, Conj, Abs, AbsSq, Scale
 //
 // CRC (crc): Checksum16 (FLAC CRC-16, PCLMULQDQ/PMULL carry-less-multiply fold)
 //
