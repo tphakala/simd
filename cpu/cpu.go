@@ -21,6 +21,7 @@ type Features struct {
 	BMI2      bool
 	POPCNT    bool
 	PCLMULQDQ bool // carry-less multiply (CLMUL) - used for CRC folding
+	F16C      bool // half<->single float conversion (VCVTPH2PS/VCVTPS2PH)
 
 	// ARM64 features
 	NEON  bool
@@ -51,6 +52,11 @@ func HasNEON() bool { return ARM64.NEON }
 // HasPCLMULQDQ returns true if the x86 carry-less multiply instruction
 // (PCLMULQDQ) is available. It is used to accelerate CRC folding.
 func HasPCLMULQDQ() bool { return X86.PCLMULQDQ }
+
+// HasF16C returns true if the x86 F16C half-precision conversion instructions
+// (VCVTPH2PS / VCVTPS2PH) are available. They accelerate Float16 <-> float32
+// slice conversion. F16C provides conversion only, not half-precision arithmetic.
+func HasF16C() bool { return X86.F16C }
 
 // HasPMULL returns true if the ARM64 polynomial multiply instruction (PMULL)
 // is available. It is used to accelerate CRC folding.

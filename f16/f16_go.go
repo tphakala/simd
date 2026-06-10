@@ -28,14 +28,17 @@ const (
 	fp32MantHighBit = 0x800000
 
 	// Conversion constants
-	fp32MantShift   = 13                            // FP32 mantissa bits to shift for FP16
-	fp32SignExtract = 16                            // Shift to extract sign from FP32 to FP16 position
-	fp32RoundBit    = 0x1000                        // Bit 12 for rounding
-	fp32RoundMask   = 0xFFF                         // Bits below round bit
-	fp32RoundCheck  = 0x2000                        // Bit 13 for round-to-even check
-	expBiasDiff     = fp32ExpBias - fp16ExpBias     // 112
-	expOverflow     = fp32ExpBias + fp16ExpBias     // 142 - overflow threshold
-	expUnderflow    = fp32ExpBias - 24              // 103 - underflow threshold
+	fp32MantShift   = 13                        // FP32 mantissa bits to shift for FP16
+	fp32SignExtract = 16                        // Shift to extract sign from FP32 to FP16 position
+	fp32RoundBit    = 0x1000                    // Bit 12 for rounding
+	fp32RoundMask   = 0xFFF                     // Bits below round bit
+	fp32RoundCheck  = 0x2000                    // Bit 13 for round-to-even check
+	expBiasDiff     = fp32ExpBias - fp16ExpBias // 112
+	expOverflow     = fp32ExpBias + fp16ExpBias // 142 - overflow threshold
+	// Flush to zero only below 2^-25 (half the smallest f16 denormal, 2^-24).
+	// Inputs in [2^-25, 2^-24) round to the smallest denormal under
+	// round-to-nearest-even, so the cutoff is fp32ExpBias-25, not -24.
+	expUnderflow    = fp32ExpBias - 25              // 102 - underflow threshold
 	expDenormThresh = fp32ExpBias - fp16ExpBias + 1 // 113 - denormalized threshold
 )
 
@@ -107,11 +110,15 @@ func fromFloat32Go(f float32) Float16 {
 		return sign
 
 	case exp < expDenormThresh:
-		// Denormalized result
-		// Add implicit 1 to mantissa
+		// Denormalized result.
+		// Add the implicit leading 1 to the f32 mantissa.
 		mant |= fp32MantHighBit
-		// Shift right to create denormalized value
-		shift := uint(expDenormThresh - exp)
+		// Shift right by the f32-to-f16 mantissa-width difference (fp32MantShift)
+		// plus the extra exponent gap, so the value lands in the f16 denormal
+		// mantissa range [1, 0x3FF]. Omitting fp32MantShift here was a bug: it
+		// left the result ~13 bits too large, so positive subnormal inputs
+		// truncated to wrong (even sign-flipped) Float16 bits.
+		shift := uint(fp32MantShift + (expDenormThresh - exp))
 		// Round to nearest even
 		round := uint32(1) << (shift - 1)
 		if mant&round != 0 && (mant&(round-1) != 0 || mant&(round<<1) != 0) {
