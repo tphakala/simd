@@ -384,6 +384,8 @@ func deinterleave2_32(a, b, src []float32) {
 const (
 	interleave3Streams  = 3
 	interleave4Streams  = 4
+	interleave6Streams  = 6
+	interleave8Streams  = 8
 	neonInterleaveBlock = 4
 )
 
@@ -400,6 +402,18 @@ func interleaveN32(dst []float32, srcs [][]float32, n int) {
 	case interleave4Streams:
 		if hasNEON && n >= neonInterleaveBlock {
 			interleave4NEON(dst, srcs[0], srcs[1], srcs[2], srcs[3], n)
+			return
+		}
+		interleaveNGo(dst, srcs, n)
+	case interleave6Streams:
+		if hasNEON && n >= neonInterleaveBlock {
+			interleave6NEON(dst, srcs[0], srcs[1], srcs[2], srcs[3], srcs[4], srcs[5], n)
+			return
+		}
+		interleaveNGo(dst, srcs, n)
+	case interleave8Streams:
+		if hasNEON && n >= neonInterleaveBlock {
+			interleave8NEON(dst, srcs[0], srcs[1], srcs[2], srcs[3], srcs[4], srcs[5], srcs[6], srcs[7], n)
 			return
 		}
 		interleaveNGo(dst, srcs, n)
@@ -424,6 +438,18 @@ func deinterleaveN32(dsts [][]float32, src []float32, n int) {
 	case interleave4Streams:
 		if hasNEON && n >= neonInterleaveBlock {
 			deinterleave4NEON(dsts[0], dsts[1], dsts[2], dsts[3], src, n)
+			return
+		}
+		deinterleaveNGo(dsts, src, n)
+	case interleave6Streams:
+		if hasNEON && n >= neonInterleaveBlock {
+			deinterleave6NEON(dsts[0], dsts[1], dsts[2], dsts[3], dsts[4], dsts[5], src, n)
+			return
+		}
+		deinterleaveNGo(dsts, src, n)
+	case interleave8Streams:
+		if hasNEON && n >= neonInterleaveBlock {
+			deinterleave8NEON(dsts[0], dsts[1], dsts[2], dsts[3], dsts[4], dsts[5], dsts[6], dsts[7], src, n)
 			return
 		}
 		deinterleaveNGo(dsts, src, n)
@@ -457,6 +483,18 @@ func interleave4NEON(dst, s0, s1, s2, s3 []float32, n int)
 //go:noescape
 func deinterleave4NEON(d0, d1, d2, d3, src []float32, n int)
 
+//go:noescape
+func interleave6NEON(dst, s0, s1, s2, s3, s4, s5 []float32, n int)
+
+//go:noescape
+func deinterleave6NEON(d0, d1, d2, d3, d4, d5, src []float32, n int)
+
+//go:noescape
+func interleave8NEON(dst, s0, s1, s2, s3, s4, s5, s6, s7 []float32, n int)
+
+//go:noescape
+func deinterleave8NEON(d0, d1, d2, d3, d4, d5, d6, d7, src []float32, n int)
+
 func sqrt32(dst, a []float32) {
 	if hasNEON && len(dst) >= 4 {
 		sqrtNEON(dst, a)
@@ -464,7 +502,6 @@ func sqrt32(dst, a []float32) {
 	}
 	sqrt32Go(dst, a)
 }
-
 
 func round32(dst, src []float32) {
 	if hasNEON && len(dst) >= 4 {
