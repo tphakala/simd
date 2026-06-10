@@ -343,9 +343,10 @@ func FuzzF64Log(f *testing.F) {
 // FuzzF64Pow differentially fuzzes Pow and PowElem against math.Pow for
 // positive finite bases (the SIMD precondition; other inputs dispatch to the
 // scalar path, which is exercised too via the raw exponent). Lanes whose
-// |p*ln(x)| lands near the exp-core clamp (>700) or whose true result is
-// subnormal are skipped: the kernel documents +Inf/0 result classes and
-// flush-to-zero behavior in those bands (see powAVX).
+// |p*ln(x)| lands near the overflow/underflow thresholds (>700) or whose
+// true result is subnormal are skipped: the kernel's relative error can flip
+// the result class there, and subnormal results lose precision gradually
+// (see powAVX).
 func FuzzF64Pow(f *testing.F) {
 	addByteLenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {
@@ -374,7 +375,9 @@ func FuzzF64Pow(f *testing.F) {
 				return
 			}
 			if y := pw * refLn64(x); math.Abs(y) > 700 || math.IsNaN(y) {
-				return // documented clamp/class bands near overflow/underflow
+				// Near the exact overflow/underflow thresholds the kernel's
+				// ~3e-6 error in p*ln(x) can flip the +Inf/0 class.
+				return
 			}
 			if want != 0 && math.Abs(want) < 4e-308 {
 				return // subnormal results may flush to 0 in the exp core

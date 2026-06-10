@@ -2084,11 +2084,13 @@ log64_neon_done:
 // func powNEON64(dst, src []float64, exp float64)
 // Fused pow(x, p) = exp(p*ln(x)) for slices whose elements are all positive
 // and finite (the dispatcher guarantees this, see powSIMDOK64). The log core
-// matches logNEON64; the exp core matches expNEON64 with its [-709, 709]
-// clamp on y = p*ln(x), but lanes whose pre-clamp y exceeds the clamp are
-// blended to +Inf (y > 709) or 0 (y < -709) so true overflow/underflow keeps
-// math.Pow's result classes (see powAVX for the band caveat). Accuracy is
-// bounded by the exp core's degree-5 polynomial (~3e-6 relative).
+// matches logNEON64; the exp core matches expNEON64 except y = p*ln(x) is
+// clamped to [-746, 710] (past ln(MaxFloat64) and ln of the smallest
+// subnormal) and the 2^k reconstruction is split into
+// 2^(k>>1) * 2^(k-(k>>1)), so overflow goes to +Inf and underflow degrades
+// gradually through subnormals to 0, matching math.Pow's result classes
+// (see powAVX). Accuracy is bounded by the exp core's degree-5 polynomial
+// (~3e-6 relative).
 TEXT ·powNEON64(SB), NOSPLIT, $0-56
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
@@ -2099,16 +2101,14 @@ TEXT ·powNEON64(SB), NOSPLIT, $0-56
     FMOVD exp+48(FP), F12
     VDUP V12.D[0], V12.D2             // V12 = p
 
-    // Exp clamp bounds and +Inf for the overflow blend
-    MOVD $0x4086280000000000, R10
+    // Pow clamp bounds: wider than Exp's +-709 because the split 2^k
+    // reconstruction covers the full result range (see powAVX)
+    MOVD $0x4086300000000000, R10
     VMOV R10, V13.D[0]
-    VDUP V13.D[0], V13.D2             // V13 = 709.0
-    MOVD $0xC086280000000000, R10
+    VDUP V13.D[0], V13.D2             // V13 = 710.0
+    MOVD $0xC087500000000000, R10
     VMOV R10, V14.D[0]
-    VDUP V14.D[0], V14.D2             // V14 = -709.0
-    MOVD $0x7FF0000000000000, R10
-    VMOV R10, V15.D[0]
-    VDUP V15.D[0], V15.D2             // V15 = +Inf
+    VDUP V14.D[0], V14.D2             // V14 = -746.0
 
     // Log-core reduction constants (see logNEON64)
     MOVD $0x3FE6A09E00000000, R10
@@ -2207,10 +2207,8 @@ pow64_neon_loop2:
     WORD $0x4e6bd54a                  // FADD V10.2D, V10.2D, V11.2D  + lnm
     WORD $0x4e76ccaa                  // FMLA V10.2D, V5.2D, V22.2D   += e * ln2hi
 
-    // y = p*ln(x); keep the pre-clamp y in V6 for the overflow blends, then
-    // clamp to [-709, 709] for the exp core
+    // y = p*ln(x), clamped to [-746, 710]
     WORD $0x6e6cdd40                  // FMUL V0.2D, V10.2D, V12.2D   y
-    WORD $0x4ea01c06                  // MOV V6.16B, V0.16B           pre-clamp y
     WORD $0x4eedf400                  // FMIN V0.2D, V0.2D, V13.2D
     WORD $0x4e6ef400                  // FMAX V0.2D, V0.2D, V14.2D
 
@@ -2231,17 +2229,19 @@ pow64_neon_loop2:
     WORD $0x4e75d529                  // FADD V9.2D, V9.2D, V21.2D    + 1
     WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
     WORD $0x4e75d529                  // FADD V9.2D, V9.2D, V21.2D    exp(r)
+    // Split 2^k reconstruction: k reaches past the biased exponent range
+    // (down to -1076), so build 2^(k>>1) and 2^(k-(k>>1)) separately; the
+    // double multiply overflows to +Inf / underflows through subnormals to
+    // 0 exactly where math.Pow does.
     WORD $0x4ee1b8e7                  // FCVTZS V7.2D, V7.2D          int(k)
+    WORD $0x4f7f04e8                  // SSHR V8.2D, V7.2D, #1        k1 = k >> 1
+    WORD $0x6ee884e7                  // SUB V7.2D, V7.2D, V8.2D      k2 = k - k1
+    WORD $0x4f745508                  // SHL V8.2D, V8.2D, #52
+    WORD $0x4ef58508                  // ADD V8.2D, V8.2D, V21.2D     2^k1 bits
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D     exp(r) * 2^k1
     WORD $0x4f7454e7                  // SHL V7.2D, V7.2D, #52
-    WORD $0x4ef584e7                  // ADD V7.2D, V7.2D, V21.2D     2^k bits
-    WORD $0x6e67dd29                  // FMUL V9.2D, V9.2D, V7.2D     exp(y)
-
-    // Overflow/underflow classes from the pre-clamp y: y > 709 -> +Inf,
-    // y < -709 -> 0 (strict compares, see powAVX)
-    WORD $0x6eede4c1                  // FCMGT V1.2D, V6.2D, V13.2D   y > 709
-    WORD $0x6ea11de9                  // BIT V9.16B, V15.16B, V1.16B
-    WORD $0x6ee6e5c1                  // FCMGT V1.2D, V14.2D, V6.2D   y < -709
-    WORD $0x4e611d29                  // BIC V9.16B, V9.16B, V1.16B
+    WORD $0x4ef584e7                  // ADD V7.2D, V7.2D, V21.2D     2^k2 bits
+    WORD $0x6e67dd29                  // FMUL V9.2D, V9.2D, V7.2D     * 2^k2 = exp(y)
 
     VST1.P [V9.D2], 16(R0)
     SUB $1, R4
@@ -2294,9 +2294,8 @@ pow64_neon_scalar_normal:
     FADDD F3, F4, F4                  // + lnm
     FMADDD F22, F4, F2, F4            // += e * ln2hi -> ln(x)
 
-    // y = p*ln(x); pre-clamp copy in F6, clamp to [-709, 709]
+    // y = p*ln(x), clamped to [-746, 710]
     FMULD F12, F4, F0
-    FMOVD F0, F6
     FMIND F13, F0, F0
     FMAXD F14, F0, F0
 
@@ -2324,30 +2323,20 @@ pow64_neon_scalar_normal:
     FADDD F21, F4, F4
     FMULD F0, F4, F4
     FADDD F21, F4, F4                 // exp(r)
-    FCVTZSD F2, R8
+    // Split 2^k reconstruction (see the vector body)
+    FCVTZSD F2, R8                    // k
+    ASR $1, R8, R10                   // k1 = k >> 1
+    SUB R10, R8, R8                   // k2 = k - k1
+    MOVD $0x3FF0000000000000, R11
+    LSL $52, R10, R10
+    ADD R11, R10, R10
+    FMOVD R10, F5
+    FMULD F5, F4, F4                  // exp(r) * 2^k1
     LSL $52, R8, R8
-    MOVD $0x3FF0000000000000, R10
-    ADD R10, R8, R8
+    ADD R11, R8, R8
     FMOVD R8, F5
-    FMULD F5, F4, F4                  // exp(y)
-
-    // Overflow/underflow classes from the pre-clamp y (F6)
-    FCMPD F13, F6
-    BGT pow64_neon_scalar_posinf      // y > 709
-    FCMPD F14, F6
-    BLT pow64_neon_scalar_zero        // y < -709
+    FMULD F5, F4, F4                  // * 2^k2 = exp(y)
     FMOVD F4, (R0)
-    B pow64_neon_scalar_next
-
-pow64_neon_scalar_posinf:
-    MOVD $0x7FF0000000000000, R8
-    MOVD R8, (R0)
-    B pow64_neon_scalar_next
-
-pow64_neon_scalar_zero:
-    MOVD ZR, (R0)
-
-pow64_neon_scalar_next:
     ADD $8, R1
     ADD $8, R0
     SUB $1, R3
@@ -2368,16 +2357,14 @@ TEXT ·powElemNEON64(SB), NOSPLIT, $0-72
     MOVD $log64neon_expc<>(SB), R5    // exp-core constant table
     ADD $64, R5, R6                   // second VLD1 base (c5 = 1/120)
 
-    // Exp clamp bounds and +Inf for the overflow blend
-    MOVD $0x4086280000000000, R10
+    // Pow clamp bounds: wider than Exp's +-709 because the split 2^k
+    // reconstruction covers the full result range (see powAVX)
+    MOVD $0x4086300000000000, R10
     VMOV R10, V13.D[0]
-    VDUP V13.D[0], V13.D2             // V13 = 709.0
-    MOVD $0xC086280000000000, R10
+    VDUP V13.D[0], V13.D2             // V13 = 710.0
+    MOVD $0xC087500000000000, R10
     VMOV R10, V14.D[0]
-    VDUP V14.D[0], V14.D2             // V14 = -709.0
-    MOVD $0x7FF0000000000000, R10
-    VMOV R10, V15.D[0]
-    VDUP V15.D[0], V15.D2             // V15 = +Inf
+    VDUP V14.D[0], V14.D2             // V14 = -746.0
 
     // Log-core reduction constants (see logNEON64)
     MOVD $0x3FE6A09E00000000, R10
@@ -2476,10 +2463,9 @@ powelem64_neon_loop2:
     WORD $0x4e6bd54a                  // FADD V10.2D, V10.2D, V11.2D  + lnm
     WORD $0x4e76ccaa                  // FMLA V10.2D, V5.2D, V22.2D   += e * ln2hi
 
-    // y = exp[i]*ln(base[i]); pre-clamp copy in V6, clamp for the exp core
+    // y = exp[i]*ln(base[i]), clamped to [-746, 710]
     VLD1.P 16(R2), [V12.D2]           // V12 = exponents (finite)
     WORD $0x6e6cdd40                  // FMUL V0.2D, V10.2D, V12.2D   y
-    WORD $0x4ea01c06                  // MOV V6.16B, V0.16B           pre-clamp y
     WORD $0x4eedf400                  // FMIN V0.2D, V0.2D, V13.2D
     WORD $0x4e6ef400                  // FMAX V0.2D, V0.2D, V14.2D
 
@@ -2500,16 +2486,19 @@ powelem64_neon_loop2:
     WORD $0x4e75d529                  // FADD V9.2D, V9.2D, V21.2D    + 1
     WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
     WORD $0x4e75d529                  // FADD V9.2D, V9.2D, V21.2D    exp(r)
+    // Split 2^k reconstruction: k reaches past the biased exponent range
+    // (down to -1076), so build 2^(k>>1) and 2^(k-(k>>1)) separately; the
+    // double multiply overflows to +Inf / underflows through subnormals to
+    // 0 exactly where math.Pow does.
     WORD $0x4ee1b8e7                  // FCVTZS V7.2D, V7.2D          int(k)
+    WORD $0x4f7f04e8                  // SSHR V8.2D, V7.2D, #1        k1 = k >> 1
+    WORD $0x6ee884e7                  // SUB V7.2D, V7.2D, V8.2D      k2 = k - k1
+    WORD $0x4f745508                  // SHL V8.2D, V8.2D, #52
+    WORD $0x4ef58508                  // ADD V8.2D, V8.2D, V21.2D     2^k1 bits
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D     exp(r) * 2^k1
     WORD $0x4f7454e7                  // SHL V7.2D, V7.2D, #52
-    WORD $0x4ef584e7                  // ADD V7.2D, V7.2D, V21.2D     2^k bits
-    WORD $0x6e67dd29                  // FMUL V9.2D, V9.2D, V7.2D     exp(y)
-
-    // Overflow/underflow classes from the pre-clamp y (see powNEON64)
-    WORD $0x6eede4c1                  // FCMGT V1.2D, V6.2D, V13.2D   y > 709
-    WORD $0x6ea11de9                  // BIT V9.16B, V15.16B, V1.16B
-    WORD $0x6ee6e5c1                  // FCMGT V1.2D, V14.2D, V6.2D   y < -709
-    WORD $0x4e611d29                  // BIC V9.16B, V9.16B, V1.16B
+    WORD $0x4ef584e7                  // ADD V7.2D, V7.2D, V21.2D     2^k2 bits
+    WORD $0x6e67dd29                  // FMUL V9.2D, V9.2D, V7.2D     * 2^k2 = exp(y)
 
     VST1.P [V9.D2], 16(R0)
     SUB $1, R4
@@ -2562,10 +2551,9 @@ powelem64_neon_scalar_normal:
     FADDD F3, F4, F4                  // + lnm
     FMADDD F22, F4, F2, F4            // += e * ln2hi -> ln(base)
 
-    // y = exp[i]*ln(base[i]); pre-clamp copy in F6, clamp to [-709, 709]
+    // y = exp[i]*ln(base[i]), clamped to [-746, 710]
     FMOVD (R2), F12                   // p
     FMULD F12, F4, F0
-    FMOVD F0, F6
     FMIND F13, F0, F0
     FMAXD F14, F0, F0
 
@@ -2593,30 +2581,20 @@ powelem64_neon_scalar_normal:
     FADDD F21, F4, F4
     FMULD F0, F4, F4
     FADDD F21, F4, F4                 // exp(r)
-    FCVTZSD F2, R8
+    // Split 2^k reconstruction (see the vector body)
+    FCVTZSD F2, R8                    // k
+    ASR $1, R8, R10                   // k1 = k >> 1
+    SUB R10, R8, R8                   // k2 = k - k1
+    MOVD $0x3FF0000000000000, R11
+    LSL $52, R10, R10
+    ADD R11, R10, R10
+    FMOVD R10, F5
+    FMULD F5, F4, F4                  // exp(r) * 2^k1
     LSL $52, R8, R8
-    MOVD $0x3FF0000000000000, R10
-    ADD R10, R8, R8
+    ADD R11, R8, R8
     FMOVD R8, F5
-    FMULD F5, F4, F4                  // exp(y)
-
-    // Overflow/underflow classes from the pre-clamp y (F6)
-    FCMPD F13, F6
-    BGT powelem64_neon_scalar_posinf  // y > 709
-    FCMPD F14, F6
-    BLT powelem64_neon_scalar_zero    // y < -709
+    FMULD F5, F4, F4                  // * 2^k2 = exp(y)
     FMOVD F4, (R0)
-    B powelem64_neon_scalar_next
-
-powelem64_neon_scalar_posinf:
-    MOVD $0x7FF0000000000000, R8
-    MOVD R8, (R0)
-    B powelem64_neon_scalar_next
-
-powelem64_neon_scalar_zero:
-    MOVD ZR, (R0)
-
-powelem64_neon_scalar_next:
     ADD $8, R1
     ADD $8, R2
     ADD $8, R0

@@ -5338,13 +5338,12 @@ log64_done:
 // Fused pow(x, p) = exp(p*ln(x)) for slices whose elements are all positive
 // and finite (the dispatcher guarantees this, see powSIMDOK64). The log core
 // matches logAVX (constants from memory instead of registers); the exp core
-// matches expAVX with its [-709, 709] clamp on y = p*ln(x), but lanes whose
-// pre-clamp y exceeds the clamp are blended to +Inf (y > 709) or 0
-// (y < -709) so true overflow/underflow keeps math.Pow's result classes.
-// Within ~0.1% of the clamp (709 < y < ln(MaxFloat64) ~ 709.78 and the
-// mirrored underflow band) the true result is still finite/subnormal, so the
-// blend rounds those bands to +Inf resp. 0. Accuracy elsewhere is bounded by
-// the exp core's degree-5 polynomial (~3e-6 relative). Requires AVX2 and FMA.
+// matches expAVX except y = p*ln(x) is clamped to [-746, 710] (past
+// ln(MaxFloat64) ~ 709.78 and ln of the smallest subnormal ~ -744.44) and
+// the 2^k reconstruction is split into 2^(k>>1) * 2^(k-(k>>1)), so overflow
+// goes to +Inf and underflow degrades gradually through subnormals to 0,
+// matching math.Pow's result classes. Accuracy is bounded by the exp core's
+// degree-5 polynomial (~3e-6 relative). Requires AVX2 and FMA.
 TEXT ·powAVX(SB), NOSPLIT, $0-56
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
@@ -5399,12 +5398,11 @@ pow64_loop4:
     VADDPD Y4, Y3, Y3                  // + lnm
     VFMADD231PD log64_ln2hi<>(SB), Y2, Y3 // Y3 = ln(x)
 
-    // y = p*ln(x); keep the pre-clamp value in Y6 for the overflow blends,
-    // then clamp to [-709, 709] for the exp core
+    // y = p*ln(x), clamped to [-746, 710]; the split 2^k reconstruction
+    // below covers the whole result range
     VMULPD Y8, Y3, Y0
-    VMOVUPD Y0, Y6                     // Y6 = y (pre-clamp)
-    VMINPD exp_clamp_hi64<>(SB), Y0, Y0
-    VMAXPD exp_clamp_lo64<>(SB), Y0, Y0
+    VMINPD log64_powclamp_hi<>(SB), Y0, Y0
+    VMAXPD log64_powclamp_lo<>(SB), Y0, Y0
 
     // --- exp core (see expAVX) ---
     VMULPD Y15, Y0, Y1                 // y * log2e
@@ -5421,21 +5419,21 @@ pow64_loop4:
     VADDPD Y13, Y4, Y4
     VMULPD Y3, Y4, Y4
     VADDPD Y13, Y4, Y4                 // exp(r)
-    VCVTTPD2DQY Y2, X5
+    // Split 2^k reconstruction: k reaches past the biased exponent range
+    // (down to -1076), so build 2^(k>>1) and 2^(k-(k>>1)) separately. The
+    // double multiply overflows to +Inf / underflows through subnormals to
+    // 0 exactly where math.Pow does.
+    VCVTTPD2DQY Y2, X5                 // X5 = 4 x int32(k)
+    VPSRAD $1, X5, X3                  // k1 = k >> 1
+    VPSUBD X3, X5, X5                  // k2 = k - k1
+    VPMOVSXDQ X3, Y3
+    VPSLLQ $52, Y3, Y3
+    VPADDQ sigmoid_one64<>(SB), Y3, Y3 // 2^k1 bits
+    VMULPD Y3, Y4, Y4                  // exp(r) * 2^k1
     VPMOVSXDQ X5, Y5
     VPSLLQ $52, Y5, Y5
-    VPADDQ sigmoid_one64<>(SB), Y5, Y5
-    VMULPD Y5, Y4, Y4                  // exp(y)
-
-    // Overflow/underflow classes from the pre-clamp y (strict compares, so a
-    // y of exactly +-709 keeps the computed finite value): y > 709 -> +Inf,
-    // y < -709 -> 0, matching math.Pow.
-    VMOVUPD log64_posinf<>(SB), Y2
-    VCMPPD $30, exp_clamp_hi64<>(SB), Y6, Y1 // Y1 = mask: y > 709 (GT_OQ)
-    VBLENDVPD Y1, Y2, Y4, Y4
-    VCMPPD $17, exp_clamp_lo64<>(SB), Y6, Y1 // Y1 = mask: y < -709 (LT_OQ)
-    VXORPD Y2, Y2, Y2
-    VBLENDVPD Y1, Y2, Y4, Y4
+    VPADDQ sigmoid_one64<>(SB), Y5, Y5 // 2^k2 bits
+    VMULPD Y5, Y4, Y4                  // * 2^k2 = exp(y)
 
     VMOVUPD Y4, (DX)
     ADDQ $32, SI
@@ -5493,12 +5491,10 @@ pow64_scalar_normal:
     VADDSD X4, X5, X5
     VFMADD231SD log64_ln2hi<>(SB), X3, X5 // X5 = ln(x)
 
-    // y = p*ln(x); keep the pre-clamp y in X6, clamp for the exp core
-    // (X8 = p from the vector constants)
+    // y = p*ln(x), clamped (X8 = p from the vector constants)
     VMULSD X8, X5, X0
-    VMOVSD X0, X6, X6                  // X6 = y (pre-clamp)
-    VMINSD exp_clamp_hi64<>(SB), X0, X0
-    VMAXSD exp_clamp_lo64<>(SB), X0, X0
+    VMINSD log64_powclamp_hi<>(SB), X0, X0
+    VMAXSD log64_powclamp_lo<>(SB), X0, X0
 
     // exp core, scalar (X9-X15 = exp constants)
     VMULSD X15, X0, X1
@@ -5515,35 +5511,22 @@ pow64_scalar_normal:
     VADDSD X13, X4, X4
     VMULSD X3, X4, X4
     VADDSD X13, X4, X4                 // exp(r)
-    VCVTTSD2SI X2, AX
-    SHLQ $52, AX
+    // Split 2^k reconstruction (see the vector body)
+    VCVTTSD2SI X2, AX                  // k
+    MOVQ AX, R10
+    SARQ $1, R10                       // k1 = k >> 1
+    SUBQ R10, AX                       // k2 = k - k1
     MOVQ $0x3FF0000000000000, BX
+    SHLQ $52, R10
+    ADDQ BX, R10
+    VMOVQ R10, X5
+    VMULSD X5, X4, X4                  // exp(r) * 2^k1
+    SHLQ $52, AX
     ADDQ BX, AX
     VMOVQ AX, X5
-    VMULSD X5, X4, X4
-
-    // Overflow/underflow classes from the pre-clamp y (X6): strict compares
-    // so a y of exactly +-709 keeps the computed finite value
-    VMOVSD exp_clamp_hi64<>(SB), X1
-    VUCOMISD X1, X6
-    JA   pow64_scalar_posinf           // y > 709 -> +Inf
-    VMOVSD exp_clamp_lo64<>(SB), X1
-    VUCOMISD X1, X6
-    JB   pow64_scalar_zero             // y < -709 -> 0
+    VMULSD X5, X4, X4                  // * 2^k2 = exp(y)
 
     VMOVSD X4, (DX)
-    JMP  pow64_scalar_next
-
-pow64_scalar_posinf:
-    MOVQ $0x7FF0000000000000, AX
-    MOVQ AX, (DX)
-    JMP  pow64_scalar_next
-
-pow64_scalar_zero:
-    MOVQ $0, AX
-    MOVQ AX, (DX)
-
-pow64_scalar_next:
     ADDQ $8, SI
     ADDQ $8, DX
     DECQ CX
@@ -5609,13 +5592,12 @@ powelem64_loop4:
     VADDPD Y4, Y3, Y3
     VFMADD231PD log64_ln2hi<>(SB), Y2, Y3 // Y3 = ln(base)
 
-    // y = exp[i]*ln(base[i]); keep the pre-clamp value in Y6 for the
-    // overflow blends, then clamp to [-709, 709] for the exp core
+    // y = exp[i]*ln(base[i]), clamped to [-746, 710]; the split 2^k
+    // reconstruction below covers the whole result range
     VMOVUPD (DI), Y8                   // Y8 = exponents (finite)
     VMULPD Y8, Y3, Y0
-    VMOVUPD Y0, Y6                     // Y6 = y (pre-clamp)
-    VMINPD exp_clamp_hi64<>(SB), Y0, Y0
-    VMAXPD exp_clamp_lo64<>(SB), Y0, Y0
+    VMINPD log64_powclamp_hi<>(SB), Y0, Y0
+    VMAXPD log64_powclamp_lo<>(SB), Y0, Y0
 
     // --- exp core (see expAVX) ---
     VMULPD Y15, Y0, Y1
@@ -5632,19 +5614,18 @@ powelem64_loop4:
     VADDPD Y13, Y4, Y4
     VMULPD Y3, Y4, Y4
     VADDPD Y13, Y4, Y4                 // exp(r)
-    VCVTTPD2DQY Y2, X5
+    // Split 2^k reconstruction (see powAVX)
+    VCVTTPD2DQY Y2, X5                 // X5 = 4 x int32(k)
+    VPSRAD $1, X5, X3                  // k1 = k >> 1
+    VPSUBD X3, X5, X5                  // k2 = k - k1
+    VPMOVSXDQ X3, Y3
+    VPSLLQ $52, Y3, Y3
+    VPADDQ sigmoid_one64<>(SB), Y3, Y3 // 2^k1 bits
+    VMULPD Y3, Y4, Y4                  // exp(r) * 2^k1
     VPMOVSXDQ X5, Y5
     VPSLLQ $52, Y5, Y5
-    VPADDQ sigmoid_one64<>(SB), Y5, Y5
-    VMULPD Y5, Y4, Y4
-
-    // Overflow/underflow classes from the pre-clamp y (see powAVX)
-    VMOVUPD log64_posinf<>(SB), Y2
-    VCMPPD $30, exp_clamp_hi64<>(SB), Y6, Y1 // Y1 = mask: y > 709 (GT_OQ)
-    VBLENDVPD Y1, Y2, Y4, Y4
-    VCMPPD $17, exp_clamp_lo64<>(SB), Y6, Y1 // Y1 = mask: y < -709 (LT_OQ)
-    VXORPD Y2, Y2, Y2
-    VBLENDVPD Y1, Y2, Y4, Y4
+    VPADDQ sigmoid_one64<>(SB), Y5, Y5 // 2^k2 bits
+    VMULPD Y5, Y4, Y4                  // * 2^k2 = exp(y)
 
     VMOVUPD Y4, (DX)
     ADDQ $32, SI
@@ -5704,9 +5685,8 @@ powelem64_scalar_normal:
 
     VMOVSD (DI), X8                    // p
     VMULSD X8, X5, X0
-    VMOVSD X0, X6, X6                  // X6 = y (pre-clamp)
-    VMINSD exp_clamp_hi64<>(SB), X0, X0
-    VMAXSD exp_clamp_lo64<>(SB), X0, X0
+    VMINSD log64_powclamp_hi<>(SB), X0, X0
+    VMAXSD log64_powclamp_lo<>(SB), X0, X0
 
     VMULSD X15, X0, X1
     VROUNDSD $0, X1, X1, X2
@@ -5722,34 +5702,22 @@ powelem64_scalar_normal:
     VADDSD X13, X4, X4
     VMULSD X3, X4, X4
     VADDSD X13, X4, X4
-    VCVTTSD2SI X2, AX
-    SHLQ $52, AX
+    // Split 2^k reconstruction (see powAVX)
+    VCVTTSD2SI X2, AX                  // k
+    MOVQ AX, R10
+    SARQ $1, R10                       // k1 = k >> 1
+    SUBQ R10, AX                       // k2 = k - k1
     MOVQ $0x3FF0000000000000, BX
+    SHLQ $52, R10
+    ADDQ BX, R10
+    VMOVQ R10, X5
+    VMULSD X5, X4, X4                  // exp(r) * 2^k1
+    SHLQ $52, AX
     ADDQ BX, AX
     VMOVQ AX, X5
-    VMULSD X5, X4, X4
-
-    // Overflow/underflow classes from the pre-clamp y (X6), see powAVX
-    VMOVSD exp_clamp_hi64<>(SB), X1
-    VUCOMISD X1, X6
-    JA   powelem64_scalar_posinf       // y > 709 -> +Inf
-    VMOVSD exp_clamp_lo64<>(SB), X1
-    VUCOMISD X1, X6
-    JB   powelem64_scalar_zero         // y < -709 -> 0
+    VMULSD X5, X4, X4                  // * 2^k2 = exp(y)
 
     VMOVSD X4, (DX)
-    JMP  powelem64_scalar_next
-
-powelem64_scalar_posinf:
-    MOVQ $0x7FF0000000000000, AX
-    MOVQ AX, (DX)
-    JMP  powelem64_scalar_next
-
-powelem64_scalar_zero:
-    MOVQ $0, AX
-    MOVQ AX, (DX)
-
-powelem64_scalar_next:
     ADDQ $8, SI
     ADDQ $8, DI
     ADDQ $8, DX
@@ -5759,3 +5727,19 @@ powelem64_scalar_next:
 powelem64_done:
     VZEROUPPER
     RET
+
+// Pow clamp bounds: wider than the Exp kernel's +-709 because the pow
+// kernels split the 2^k reconstruction (2^(k>>1) * 2^(k-(k>>1))), which
+// covers the full float64 result range. ln(MaxFloat64) ~ 709.78,
+// ln(smallest subnormal) ~ -744.44.
+DATA log64_powclamp_hi<>+0x00(SB)/8, $0x4086300000000000  // 710.0
+DATA log64_powclamp_hi<>+0x08(SB)/8, $0x4086300000000000
+DATA log64_powclamp_hi<>+0x10(SB)/8, $0x4086300000000000
+DATA log64_powclamp_hi<>+0x18(SB)/8, $0x4086300000000000
+GLOBL log64_powclamp_hi<>(SB), RODATA|NOPTR, $32
+
+DATA log64_powclamp_lo<>+0x00(SB)/8, $0xc087500000000000  // -746.0
+DATA log64_powclamp_lo<>+0x08(SB)/8, $0xc087500000000000
+DATA log64_powclamp_lo<>+0x10(SB)/8, $0xc087500000000000
+DATA log64_powclamp_lo<>+0x18(SB)/8, $0xc087500000000000
+GLOBL log64_powclamp_lo<>(SB), RODATA|NOPTR, $32
