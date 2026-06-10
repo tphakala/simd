@@ -1222,3 +1222,189 @@ fromreal_sse2_loop:
 
 fromreal_sse2_done:
     RET
+
+// ============================================================================
+// DOT PRODUCT REDUCTIONS
+// sum(a[i]*b[i]) and sum(a[i]*conj(b[i])). Each reuses the mul/mulConj product,
+// accumulating into a register instead of storing, then horizontally reduces.
+// Accumulation is in float64 to match dotProductGo / dotProductConjGo.
+// AVX processes 2 complex128 per iteration; SSE2 processes 1 (its two float64
+// lanes are already the real/imag accumulators, so no lane reduction is needed).
+// ============================================================================
+
+// func dotProductAVX(a, b []complex128) complex128
+TEXT ·dotProductAVX(SB), NOSPLIT, $0-64
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    VXORPD Y6, Y6, Y6          // accumulator [r,i,r,i]
+
+    MOVQ CX, AX
+    SHRQ $1, AX                // 2 complex128 per iteration
+    JZ   dp128_avx_reduce
+
+dp128_avx_loop2:
+    VMOVUPD (SI), Y0
+    VMOVUPD (DI), Y1
+    VMOVDDUP Y0, Y2            // [ar,ar,...]
+    VSHUFPD $0x0F, Y0, Y0, Y3  // [ai,ai,...]
+    VSHUFPD $0x05, Y1, Y1, Y4  // [bi,br,...]
+    VMULPD Y4, Y3, Y5          // [ai*bi, ai*br, ...]
+    VFMADDSUB213PD Y5, Y1, Y2  // Y2 = [ar*br-ai*bi, ar*bi+ai*br, ...]
+    VADDPD Y2, Y6, Y6
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  dp128_avx_loop2
+
+dp128_avx_reduce:
+    VEXTRACTF128 $1, Y6, X0    // [r1,i1]
+    VADDPD X0, X6, X6          // [sumRe,sumIm]
+
+    ANDQ $1, CX
+    JZ   dp128_avx_done
+
+    VMOVUPD (SI), X0
+    VMOVUPD (DI), X1
+    VMOVDDUP X0, X2
+    VSHUFPD $0x03, X0, X0, X3
+    VSHUFPD $0x01, X1, X1, X4
+    VMULPD X4, X3, X5
+    VFMADDSUB213PD X5, X1, X2  // X2 = [re,im]
+    VADDPD X2, X6, X6
+
+dp128_avx_done:
+    VMOVSD X6, ret_real+48(FP)
+    VSHUFPD $0x01, X6, X6, X6   // move imag (high lane) to low
+    VMOVSD X6, ret_imag+56(FP)
+    VZEROUPPER
+    RET
+
+// func dotProductConjAVX(a, b []complex128) complex128
+TEXT ·dotProductConjAVX(SB), NOSPLIT, $0-64
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    VXORPD Y6, Y6, Y6
+
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   dpc128_avx_reduce
+
+dpc128_avx_loop2:
+    VMOVUPD (SI), Y0
+    VMOVUPD (DI), Y1
+    VMOVDDUP Y0, Y2            // [ar,ar,...]
+    VSHUFPD $0x0F, Y0, Y0, Y3  // [ai,ai,...]
+    VSHUFPD $0x05, Y1, Y1, Y4  // [bi,br,...]
+    VMULPD Y4, Y2, Y5          // [ar*bi, ar*br, ...]
+    VFMADDSUB213PD Y5, Y1, Y3  // Y3 = [ai*br-ar*bi, ai*bi+ar*br, ...]
+    VSHUFPD $0x05, Y3, Y3, Y2  // [ar*br+ai*bi, ai*br-ar*bi, ...]
+    VADDPD Y2, Y6, Y6
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  dpc128_avx_loop2
+
+dpc128_avx_reduce:
+    VEXTRACTF128 $1, Y6, X0
+    VADDPD X0, X6, X6
+
+    ANDQ $1, CX
+    JZ   dpc128_avx_done
+
+    VMOVUPD (SI), X0
+    VMOVUPD (DI), X1
+    VMOVDDUP X0, X2
+    VSHUFPD $0x03, X0, X0, X3
+    VSHUFPD $0x01, X1, X1, X4
+    VMULPD X4, X2, X5
+    VFMADDSUB213PD X5, X1, X3
+    VSHUFPD $0x01, X3, X3, X2
+    VADDPD X2, X6, X6
+
+dpc128_avx_done:
+    VMOVSD X6, ret_real+48(FP)
+    VSHUFPD $0x01, X6, X6, X6   // move imag (high lane) to low
+    VMOVSD X6, ret_imag+56(FP)
+    VZEROUPPER
+    RET
+
+// func dotProductSSE2(a, b []complex128) complex128
+TEXT ·dotProductSSE2(SB), NOSPLIT, $0-64
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    XORPD X7, X7               // [sumRe, sumIm]
+
+    TESTQ CX, CX
+    JZ   dp128_sse_done
+
+dp128_sse_loop:
+    MOVUPD (SI), X0
+    MOVUPD (DI), X1
+    MOVAPD X0, X2
+    SHUFPD $0x00, X2, X2       // [ar,ar]
+    MOVAPD X0, X3
+    SHUFPD $0x03, X3, X3       // [ai,ai]
+    MOVAPD X1, X4
+    SHUFPD $0x01, X4, X4       // [bi,br]
+    MULPD X1, X2              // [ar*br, ar*bi]
+    MULPD X4, X3              // [ai*bi, ai*br]
+    MOVAPD X2, X5
+    SUBPD X3, X5             // [ar*br-ai*bi, ar*bi-ai*br]
+    ADDPD X3, X2             // [ar*br+ai*bi, ar*bi+ai*br]
+    SHUFPD $0x2, X2, X5      // X5 = [re, im]
+    ADDPD X5, X7
+    ADDQ $16, SI
+    ADDQ $16, DI
+    DECQ CX
+    JNZ  dp128_sse_loop
+
+dp128_sse_done:
+    MOVSD X7, ret_real+48(FP)
+    SHUFPD $0x01, X7, X7        // move imag (high lane) to low
+    MOVSD X7, ret_imag+56(FP)
+    RET
+
+// func dotProductConjSSE2(a, b []complex128) complex128
+TEXT ·dotProductConjSSE2(SB), NOSPLIT, $0-64
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    XORPD X7, X7
+
+    TESTQ CX, CX
+    JZ   dpc128_sse_done
+
+dpc128_sse_loop:
+    MOVUPD (SI), X0
+    MOVUPD (DI), X1
+    MOVAPD X0, X2
+    SHUFPD $0x00, X2, X2
+    MOVAPD X0, X3
+    SHUFPD $0x03, X3, X3
+    MOVAPD X1, X4
+    SHUFPD $0x01, X4, X4
+    MULPD X1, X2              // [ar*br, ar*bi]
+    MULPD X4, X3              // [ai*bi, ai*br]
+    MOVAPD X2, X5
+    ADDPD X3, X5             // [ar*br+ai*bi, ar*bi+ai*br]
+    MOVAPD X3, X6
+    SUBPD X2, X6             // [ai*bi-ar*br, ai*br-ar*bi]
+    SHUFPD $0x2, X6, X5      // X5 = [re, im]
+    ADDPD X5, X7
+    ADDQ $16, SI
+    ADDQ $16, DI
+    DECQ CX
+    JNZ  dpc128_sse_loop
+
+dpc128_sse_done:
+    MOVSD X7, ret_real+48(FP)
+    SHUFPD $0x01, X7, X7        // move imag (high lane) to low
+    MOVSD X7, ret_imag+56(FP)
+    RET

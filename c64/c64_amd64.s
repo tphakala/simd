@@ -1348,3 +1348,241 @@ fromreal_sse2_remainder:
 
 fromreal_sse2_done:
     RET
+
+// ============================================================================
+// DOT PRODUCT REDUCTIONS
+// sum(a[i]*b[i]) and sum(a[i]*conj(b[i])). Each reuses the element-wise complex
+// product from mul/mulConj above, accumulating into a vector register instead of
+// storing, then horizontally reduces the real and imaginary lanes. Accumulation
+// is in float32 to match dotProductGo / dotProductConjGo.
+// ============================================================================
+
+// func dotProductAVX(a, b []complex64) complex64
+TEXT ·dotProductAVX(SB), NOSPLIT, $0-56
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    VXORPS Y6, Y6, Y6          // accumulator [r,i,r,i,r,i,r,i]
+
+    MOVQ CX, AX
+    SHRQ $2, AX                // 4 complex64 per iteration
+    JZ   dp_avx_reduce
+
+dp_avx_loop4:
+    VMOVUPS (SI), Y0
+    VMOVUPS (DI), Y1
+    VMOVSLDUP Y0, Y2           // [ar,ar,...]
+    VMOVSHDUP Y0, Y3           // [ai,ai,...]
+    VSHUFPS $0xB1, Y1, Y1, Y4  // [bi,br,...]
+    VMULPS Y4, Y3, Y5          // [ai*bi, ai*br, ...]
+    VFMADDSUB213PS Y5, Y1, Y2  // Y2 = [ar*br-ai*bi, ar*bi+ai*br, ...]
+    VADDPS Y2, Y6, Y6
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  dp_avx_loop4
+
+dp_avx_reduce:
+    // Reduce Y6 [r0,i0,r1,i1,r2,i2,r3,i3] -> X6 low 64 = [sumRe,sumIm]
+    VEXTRACTF128 $1, Y6, X0    // [r2,i2,r3,i3]
+    VADDPS X0, X6, X6          // [R0,I0,R1,I1]
+    VSHUFPS $0x0E, X6, X6, X0  // [R1,I1,R0,R0]
+    VADDPS X0, X6, X6          // low 64 = [sumRe,sumIm]
+
+    ANDQ $3, CX
+    JZ   dp_avx_done
+
+dp_avx_tail:
+    VMOVSD (SI), X0
+    VMOVSD (DI), X1
+    VMOVSLDUP X0, X2
+    VMOVSHDUP X0, X3
+    VSHUFPS $0xB1, X1, X1, X4
+    VMULPS X4, X3, X5
+    VFMADDSUB213PS X5, X1, X2  // X2 = [re,im,?,?]
+    VADDPS X2, X6, X6          // accumulate low 64
+    ADDQ $8, SI
+    ADDQ $8, DI
+    DECQ CX
+    JNZ  dp_avx_tail
+
+dp_avx_done:
+    VMOVSD X6, ret+48(FP)
+    VZEROUPPER
+    RET
+
+// func dotProductConjAVX(a, b []complex64) complex64
+// a*conj(b) = (ar*br + ai*bi) + (ai*br - ar*bi)i
+TEXT ·dotProductConjAVX(SB), NOSPLIT, $0-56
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    VXORPS Y6, Y6, Y6
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   dpc_avx_reduce
+
+dpc_avx_loop4:
+    VMOVUPS (SI), Y0
+    VMOVUPS (DI), Y1
+    VMOVSLDUP Y0, Y2           // [ar,ar,...]
+    VMOVSHDUP Y0, Y3           // [ai,ai,...]
+    VSHUFPS $0xB1, Y1, Y1, Y4  // [bi,br,...]
+    VMULPS Y4, Y2, Y5          // [ar*bi, ar*br, ...]
+    VFMADDSUB213PS Y5, Y1, Y3  // Y3 = [ai*br-ar*bi, ai*bi+ar*br, ...]
+    VSHUFPS $0xB1, Y3, Y3, Y2  // [ar*br+ai*bi, ai*br-ar*bi, ...]
+    VADDPS Y2, Y6, Y6
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  dpc_avx_loop4
+
+dpc_avx_reduce:
+    VEXTRACTF128 $1, Y6, X0
+    VADDPS X0, X6, X6
+    VSHUFPS $0x0E, X6, X6, X0
+    VADDPS X0, X6, X6
+
+    ANDQ $3, CX
+    JZ   dpc_avx_done
+
+dpc_avx_tail:
+    VMOVSD (SI), X0
+    VMOVSD (DI), X1
+    VMOVSLDUP X0, X2
+    VMOVSHDUP X0, X3
+    VSHUFPS $0xB1, X1, X1, X4
+    VMULPS X4, X2, X5
+    VFMADDSUB213PS X5, X1, X3
+    VSHUFPS $0xB1, X3, X3, X2
+    VADDPS X2, X6, X6
+    ADDQ $8, SI
+    ADDQ $8, DI
+    DECQ CX
+    JNZ  dpc_avx_tail
+
+dpc_avx_done:
+    VMOVSD X6, ret+48(FP)
+    VZEROUPPER
+    RET
+
+// func dotProductSSE2(a, b []complex64) complex64
+// SSE4.1 (BLENDPS); accumulates 2 complex64 per iteration into X7.
+TEXT ·dotProductSSE2(SB), NOSPLIT, $0-56
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    XORPS X7, X7               // accumulator [r0,i0,r1,i1]
+
+    MOVQ CX, AX
+    SHRQ $1, AX                // 2 complex64 per iteration
+    JZ   dp_sse_reduce
+
+dp_sse_loop2:
+    MOVUPS (SI), X0
+    MOVUPS (DI), X1
+    MOVSLDUP X0, X2            // [ar,ar,...]
+    MOVSHDUP X0, X3            // [ai,ai,...]
+    MOVAPS X1, X4
+    SHUFPS $0xB1, X4, X4       // [bi,br,...]
+    MULPS X1, X2               // [ar*br, ar*bi, ...]
+    MULPS X4, X3               // [ai*bi, ai*br, ...]
+    MOVAPS X2, X5
+    SUBPS X3, X5               // [ar*br-ai*bi, ar*bi-ai*br, ...]
+    ADDPS X3, X2               // [ar*br+ai*bi, ar*bi+ai*br, ...]
+    BLENDPS $0x0A, X2, X5      // X5 = [re0,im0,re1,im1]
+    ADDPS X5, X7
+    ADDQ $16, SI
+    ADDQ $16, DI
+    DECQ AX
+    JNZ  dp_sse_loop2
+
+dp_sse_reduce:
+    // Reduce X7 [R0,I0,R1,I1] -> low 64 = [sumRe,sumIm]
+    MOVAPS X7, X0
+    SHUFPS $0x0E, X0, X0       // [R1,I1,R0,R0]
+    ADDPS X0, X7              // low 64 = [sumRe,sumIm]
+
+    ANDQ $1, CX
+    JZ   dp_sse_done
+
+    MOVSD (SI), X0
+    MOVSD (DI), X1
+    MOVSLDUP X0, X2
+    MOVSHDUP X0, X3
+    MOVAPS X1, X4
+    SHUFPS $0xB1, X4, X4
+    MULPS X1, X2
+    MULPS X4, X3
+    MOVAPS X2, X5
+    SUBPS X3, X5
+    ADDPS X3, X2
+    BLENDPS $0x02, X2, X5      // X5 = [re,im,?,?]
+    ADDPS X5, X7
+
+dp_sse_done:
+    MOVSD X7, ret+48(FP)
+    RET
+
+// func dotProductConjSSE2(a, b []complex64) complex64
+TEXT ·dotProductConjSSE2(SB), NOSPLIT, $0-56
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    XORPS X7, X7
+
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   dpc_sse_reduce
+
+dpc_sse_loop2:
+    MOVUPS (SI), X0
+    MOVUPS (DI), X1
+    MOVSLDUP X0, X2
+    MOVSHDUP X0, X3
+    MOVAPS X1, X4
+    SHUFPS $0xB1, X4, X4
+    MULPS X1, X2               // [ar*br, ar*bi, ...]
+    MULPS X4, X3               // [ai*bi, ai*br, ...]
+    MOVAPS X2, X5
+    ADDPS X3, X5               // [ar*br+ai*bi, ar*bi+ai*br, ...]
+    MOVAPS X3, X6
+    SUBPS X2, X6               // [ai*bi-ar*br, ai*br-ar*bi, ...]
+    BLENDPS $0x0A, X6, X5      // X5 = [re0,im0,re1,im1]
+    ADDPS X5, X7
+    ADDQ $16, SI
+    ADDQ $16, DI
+    DECQ AX
+    JNZ  dpc_sse_loop2
+
+dpc_sse_reduce:
+    MOVAPS X7, X0
+    SHUFPS $0x0E, X0, X0
+    ADDPS X0, X7
+
+    ANDQ $1, CX
+    JZ   dpc_sse_done
+
+    MOVSD (SI), X0
+    MOVSD (DI), X1
+    MOVSLDUP X0, X2
+    MOVSHDUP X0, X3
+    MOVAPS X1, X4
+    SHUFPS $0xB1, X4, X4
+    MULPS X1, X2
+    MULPS X4, X3
+    MOVAPS X2, X5
+    ADDPS X3, X5
+    MOVAPS X3, X6
+    SUBPS X2, X6
+    BLENDPS $0x02, X6, X5
+    ADDPS X5, X7
+
+dpc_sse_done:
+    MOVSD X7, ret+48(FP)
+    RET

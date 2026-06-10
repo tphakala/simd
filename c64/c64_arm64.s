@@ -603,3 +603,143 @@ fromreal_neon_tail:
 
 fromreal_neon_done:
     RET
+
+// ============================================================================
+// DOT PRODUCT REDUCTIONS
+// sum(a[i]*b[i]) and sum(a[i]*conj(b[i])). Each reuses the mul/mulConj product
+// above but accumulates the real and imaginary result lanes into V14/V15 and
+// horizontally reduces with FADDP at the end. Accumulation is in float32 to
+// match dotProductGo / dotProductConjGo.
+// FADD  Vd.4S, Vn.4S, Vm.4S: 0x4E20D400 | (Vm << 16) | (Vn << 5) | Vd
+// FADDP Vd.4S, Vn.4S, Vm.4S: 0x6E20D400 | (Vm << 16) | (Vn << 5) | Vd
+// FADDP Sd, Vn.2S:           0x7E30D800 | (Vn << 5) | Vd
+// ============================================================================
+
+// func dotProductNEON(a, b []complex64) complex64
+TEXT ·dotProductNEON(SB), NOSPLIT, $0-56
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R1
+    MOVD b_base+24(FP), R2
+
+    VEOR V14.B16, V14.B16, V14.B16   // accRe
+    VEOR V15.B16, V15.B16, V15.B16   // accIm
+
+    CMP  $4, R1
+    BLT  dp_neon_reduce
+
+dp_neon_loop4:
+    VLD1.P 16(R0), [V0.S4]
+    VLD1.P 16(R0), [V1.S4]
+    VLD1.P 16(R2), [V2.S4]
+    VLD1.P 16(R2), [V3.S4]
+    WORD $0x4E811804             // UZP1 V4.4S, V0.4S, V1.4S
+    WORD $0x4E815805             // UZP2 V5.4S, V0.4S, V1.4S
+    WORD $0x4E831846             // UZP1 V6.4S, V2.4S, V3.4S
+    WORD $0x4E835847             // UZP2 V7.4S, V2.4S, V3.4S
+    WORD $0x6E26DC88             // FMUL V8.4S, V4.4S, V6.4S
+    WORD $0x6E27DCA9             // FMUL V9.4S, V5.4S, V7.4S
+    WORD $0x6E27DC8A             // FMUL V10.4S, V4.4S, V7.4S
+    WORD $0x6E26DCAB             // FMUL V11.4S, V5.4S, V6.4S
+    WORD $0x4EA9D50C             // FSUB V12.4S, V8.4S, V9.4S
+    WORD $0x4E2BD54D             // FADD V13.4S, V10.4S, V11.4S
+    WORD $0x4E2CD5CE             // FADD V14.4S, V14.4S, V12.4S
+    WORD $0x4E2DD5EF             // FADD V15.4S, V15.4S, V13.4S
+    SUB  $4, R1
+    CMP  $4, R1
+    BGE  dp_neon_loop4
+
+dp_neon_reduce:
+    WORD $0x6E2ED5CE             // FADDP V14.4S, V14.4S, V14.4S
+    WORD $0x7E30D9CE             // FADDP S14, V14.2S
+    WORD $0x6E2FD5EF             // FADDP V15.4S, V15.4S, V15.4S
+    WORD $0x7E30D9EF             // FADDP S15, V15.2S
+
+    CBZ  R1, dp_neon_done
+
+dp_neon_tail:
+    FMOVS (R0), F0
+    FMOVS 4(R0), F1
+    FMOVS (R2), F2
+    FMOVS 4(R2), F3
+    FMULS F0, F2, F4             // ar*br
+    FMULS F1, F3, F5             // ai*bi
+    FMULS F0, F3, F6             // ar*bi
+    FMULS F1, F2, F7             // ai*br
+    FSUBS F5, F4, F4             // ar*br - ai*bi
+    FADDS F6, F7, F5             // ar*bi + ai*br
+    FADDS F4, F14, F14           // sumRe += real
+    FADDS F5, F15, F15           // sumIm += imag
+    ADD  $8, R0
+    ADD  $8, R2
+    SUB  $1, R1
+    CBNZ R1, dp_neon_tail
+
+dp_neon_done:
+    FMOVS F14, ret_real+48(FP)
+    FMOVS F15, ret_imag+52(FP)
+    RET
+
+// func dotProductConjNEON(a, b []complex64) complex64
+// a*conj(b) = (ar*br + ai*bi) + (ai*br - ar*bi)i
+TEXT ·dotProductConjNEON(SB), NOSPLIT, $0-56
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R1
+    MOVD b_base+24(FP), R2
+
+    VEOR V14.B16, V14.B16, V14.B16   // accRe
+    VEOR V15.B16, V15.B16, V15.B16   // accIm
+
+    CMP  $4, R1
+    BLT  dpc_neon_reduce
+
+dpc_neon_loop4:
+    VLD1.P 16(R0), [V0.S4]
+    VLD1.P 16(R0), [V1.S4]
+    VLD1.P 16(R2), [V2.S4]
+    VLD1.P 16(R2), [V3.S4]
+    WORD $0x4E811804             // UZP1 V4.4S, V0.4S, V1.4S
+    WORD $0x4E815805             // UZP2 V5.4S, V0.4S, V1.4S
+    WORD $0x4E831846             // UZP1 V6.4S, V2.4S, V3.4S
+    WORD $0x4E835847             // UZP2 V7.4S, V2.4S, V3.4S
+    WORD $0x6E26DC88             // FMUL V8.4S, V4.4S, V6.4S
+    WORD $0x6E27DCA9             // FMUL V9.4S, V5.4S, V7.4S
+    WORD $0x6E26DCAA             // FMUL V10.4S, V5.4S, V6.4S
+    WORD $0x6E27DC8B             // FMUL V11.4S, V4.4S, V7.4S
+    WORD $0x4E29D50C             // FADD V12.4S, V8.4S, V9.4S
+    WORD $0x4EABD54D             // FSUB V13.4S, V10.4S, V11.4S
+    WORD $0x4E2CD5CE             // FADD V14.4S, V14.4S, V12.4S
+    WORD $0x4E2DD5EF             // FADD V15.4S, V15.4S, V13.4S
+    SUB  $4, R1
+    CMP  $4, R1
+    BGE  dpc_neon_loop4
+
+dpc_neon_reduce:
+    WORD $0x6E2ED5CE             // FADDP V14.4S, V14.4S, V14.4S
+    WORD $0x7E30D9CE             // FADDP S14, V14.2S
+    WORD $0x6E2FD5EF             // FADDP V15.4S, V15.4S, V15.4S
+    WORD $0x7E30D9EF             // FADDP S15, V15.2S
+
+    CBZ  R1, dpc_neon_done
+
+dpc_neon_tail:
+    FMOVS (R0), F0
+    FMOVS 4(R0), F1
+    FMOVS (R2), F2
+    FMOVS 4(R2), F3
+    FMULS F0, F2, F4             // ar*br
+    FMULS F1, F3, F5             // ai*bi
+    FMULS F1, F2, F6             // ai*br
+    FMULS F0, F3, F7             // ar*bi
+    FADDS F4, F5, F4             // ar*br + ai*bi
+    FSUBS F7, F6, F5             // ai*br - ar*bi
+    FADDS F4, F14, F14           // sumRe += real
+    FADDS F5, F15, F15           // sumIm += imag
+    ADD  $8, R0
+    ADD  $8, R2
+    SUB  $1, R1
+    CBNZ R1, dpc_neon_tail
+
+dpc_neon_done:
+    FMOVS F14, ret_real+48(FP)
+    FMOVS F15, ret_imag+52(FP)
+    RET

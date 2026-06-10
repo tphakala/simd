@@ -24,6 +24,20 @@ func mulConj128(dst, a, b []complex128) {
 	mulConjGo(dst, a, b)
 }
 
+func dotProduct128(a, b []complex128) complex128 {
+	if hasNEON {
+		return dotProductNEON(a, b)
+	}
+	return dotProductGo(a, b)
+}
+
+func dotProductConj128(a, b []complex128) complex128 {
+	if hasNEON {
+		return dotProductConjNEON(a, b)
+	}
+	return dotProductConjGo(a, b)
+}
+
 func scale128(dst, a []complex128, s complex128) {
 	if hasNEON && len(dst) >= 1 {
 		scaleNEON(dst, a, s)
@@ -85,6 +99,12 @@ func mulNEON(dst, a, b []complex128)
 
 //go:noescape
 func mulConjNEON(dst, a, b []complex128)
+
+//go:noescape
+func dotProductNEON(a, b []complex128) complex128
+
+//go:noescape
+func dotProductConjNEON(a, b []complex128) complex128
 
 //go:noescape
 func scaleNEON(dst, a []complex128, s complex128)

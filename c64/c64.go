@@ -4,6 +4,8 @@
 // using float32 precision for higher throughput:
 // - Mul: Complex multiplication for frequency-domain convolution
 // - MulConj: Multiply by conjugate for correlation
+// - DotProduct: Complex dot product sum(a[i]*b[i]) for frequency-domain folding
+// - DotProductConj: Hermitian inner product sum(a[i]*conj(b[i])) for correlation
 // - Scale: Scale by complex scalar
 // - Add/Sub: Complex addition/subtraction for FFT butterflies
 // - AbsSq: Magnitude squared for power spectrum computation
@@ -131,6 +133,36 @@ func FromReal(dst []complex64, src []float32) {
 		return
 	}
 	fromReal64(dst[:n], src[:n])
+}
+
+// DotProduct computes the complex dot product: sum(a[i] * b[i]).
+// Processes min(len(a), len(b)) elements; returns 0 for empty input.
+//
+// Dot product: sum((ar + ai*i)(br + bi*i)) = sum((ar*br - ai*bi) + (ar*bi + ai*br)i)
+//
+// The real and imaginary parts accumulate in float32, matching the element
+// precision. This is the inner product used by frequency-domain folding.
+func DotProduct(a, b []complex64) complex64 {
+	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	return dotProduct64(a[:n], b[:n])
+}
+
+// DotProductConj computes the conjugated complex dot product: sum(a[i] * conj(b[i])).
+// Processes min(len(a), len(b)) elements; returns 0 for empty input.
+//
+// Conjugated dot product: sum((ar + ai*i)(br - bi*i)) = sum((ar*br + ai*bi) + (ai*br - ar*bi)i)
+//
+// This is the standard Hermitian inner product used for cross-correlation and
+// matched filtering. The real and imaginary parts accumulate in float32.
+func DotProductConj(a, b []complex64) complex64 {
+	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	return dotProductConj64(a[:n], b[:n])
 }
 
 func minLen(a, b, c int) int {

@@ -15,6 +15,7 @@ const (
 // Function pointer types for SIMD operations
 type (
 	binaryOpFunc  func(dst, a, b []complex128)
+	reduceFunc    func(a, b []complex128) complex128
 	scaleFunc     func(dst, a []complex128, s complex128)
 	unaryAbsFunc  func(dst []float64, a []complex128)
 	unaryConjFunc func(dst, a []complex128)
@@ -23,15 +24,17 @@ type (
 
 // Function pointers - assigned at init time based on CPU features
 var (
-	mulImpl      binaryOpFunc
-	mulConjImpl  binaryOpFunc
-	scaleImpl    scaleFunc
-	addImpl      binaryOpFunc
-	subImpl      binaryOpFunc
-	absImpl      unaryAbsFunc
-	absSqImpl    unaryAbsFunc
-	conjImpl     unaryConjFunc
-	fromRealImpl fromRealFunc
+	mulImpl            binaryOpFunc
+	mulConjImpl        binaryOpFunc
+	dotProductImpl     reduceFunc
+	dotProductConjImpl reduceFunc
+	scaleImpl          scaleFunc
+	addImpl            binaryOpFunc
+	subImpl            binaryOpFunc
+	absImpl            unaryAbsFunc
+	absSqImpl          unaryAbsFunc
+	conjImpl           unaryConjFunc
+	fromRealImpl       fromRealFunc
 )
 
 func init() {
@@ -65,6 +68,10 @@ func selectImpl(avx512, avxFMA, avx, sse2 bool) {
 func initAVX512() {
 	mulImpl = mulAVX512
 	mulConjImpl = mulConjAVX512
+	// No AVX-512 dot kernels yet (no AVX-512 hardware to verify; see #75/#96):
+	// reuse the AVX kernels so the tier still gets the speedup.
+	dotProductImpl = dotProductAVX
+	dotProductConjImpl = dotProductConjAVX
 	scaleImpl = scaleAVX512
 	addImpl = addAVX512
 	subImpl = subAVX512
@@ -77,6 +84,8 @@ func initAVX512() {
 func initAVX() {
 	mulImpl = mulAVX
 	mulConjImpl = mulConjAVX
+	dotProductImpl = dotProductAVX
+	dotProductConjImpl = dotProductConjAVX
 	scaleImpl = scaleAVX
 	addImpl = addAVX
 	subImpl = subAVX
@@ -94,6 +103,10 @@ func initAVXNoFMA() {
 	mulImpl = mulSSE2
 	mulConjImpl = mulConjSSE2
 	scaleImpl = scaleSSE2
+	// The dot kernels use VFMADDSUB213PD as well, so they follow mul/mulConj
+	// down to SSE2 on AVX-without-FMA parts.
+	dotProductImpl = dotProductSSE2
+	dotProductConjImpl = dotProductConjSSE2
 	addImpl = addAVX
 	subImpl = subAVX
 	absImpl = absAVX
@@ -107,6 +120,8 @@ func initSSE2() {
 	mulImpl = mulSSE2
 	mulConjImpl = mulConjSSE2
 	scaleImpl = scaleSSE2
+	dotProductImpl = dotProductSSE2
+	dotProductConjImpl = dotProductConjSSE2
 	addImpl = addSSE2
 	subImpl = subSSE2
 	absImpl = absSSE2
@@ -118,6 +133,8 @@ func initSSE2() {
 func initGo() {
 	mulImpl = mulGo
 	mulConjImpl = mulConjGo
+	dotProductImpl = dotProductGo
+	dotProductConjImpl = dotProductConjGo
 	scaleImpl = scaleGo
 	addImpl = addGo
 	subImpl = subGo
@@ -135,6 +152,14 @@ func mul128(dst, a, b []complex128) {
 
 func mulConj128(dst, a, b []complex128) {
 	mulConjImpl(dst, a, b)
+}
+
+func dotProduct128(a, b []complex128) complex128 {
+	return dotProductImpl(a, b)
+}
+
+func dotProductConj128(a, b []complex128) complex128 {
+	return dotProductConjImpl(a, b)
 }
 
 func scale128(dst, a []complex128, s complex128) {
@@ -174,6 +199,12 @@ func mulAVX(dst, a, b []complex128)
 func mulConjAVX(dst, a, b []complex128)
 
 //go:noescape
+func dotProductAVX(a, b []complex128) complex128
+
+//go:noescape
+func dotProductConjAVX(a, b []complex128) complex128
+
+//go:noescape
 func scaleAVX(dst, a []complex128, s complex128)
 
 //go:noescape
@@ -206,6 +237,12 @@ func mulSSE2(dst, a, b []complex128)
 
 //go:noescape
 func mulConjSSE2(dst, a, b []complex128)
+
+//go:noescape
+func dotProductSSE2(a, b []complex128) complex128
+
+//go:noescape
+func dotProductConjSSE2(a, b []complex128) complex128
 
 //go:noescape
 func scaleSSE2(dst, a []complex128, s complex128)

@@ -3,6 +3,8 @@
 // These operations are designed to accelerate FFT-based convolution pipelines:
 // - Mul: Complex multiplication for frequency-domain convolution
 // - MulConj: Multiply by conjugate for correlation
+// - DotProduct: Complex dot product sum(a[i]*b[i]) for frequency-domain folding
+// - DotProductConj: Hermitian inner product sum(a[i]*conj(b[i])) for correlation
 // - Scale: Scale by complex scalar
 // - FromReal: Convert real float64 to complex128 (FFT input preparation)
 //
@@ -112,7 +114,6 @@ func Conj(dst, a []complex128) {
 	conj128(dst[:n], a[:n])
 }
 
-
 // FromReal converts real float64 values to complex128: dst[i] = complex(src[i], 0).
 // Processes min(len(dst), len(src)) elements.
 //
@@ -123,6 +124,36 @@ func FromReal(dst []complex128, src []float64) {
 		return
 	}
 	fromReal128(dst[:n], src[:n])
+}
+
+// DotProduct computes the complex dot product: sum(a[i] * b[i]).
+// Processes min(len(a), len(b)) elements; returns 0 for empty input.
+//
+// Dot product: sum((ar + ai*i)(br + bi*i)) = sum((ar*br - ai*bi) + (ar*bi + ai*br)i)
+//
+// The real and imaginary parts accumulate in float64. This is the inner product
+// used by frequency-domain folding.
+func DotProduct(a, b []complex128) complex128 {
+	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	return dotProduct128(a[:n], b[:n])
+}
+
+// DotProductConj computes the conjugated complex dot product: sum(a[i] * conj(b[i])).
+// Processes min(len(a), len(b)) elements; returns 0 for empty input.
+//
+// Conjugated dot product: sum((ar + ai*i)(br - bi*i)) = sum((ar*br + ai*bi) + (ai*br - ar*bi)i)
+//
+// This is the standard Hermitian inner product used for cross-correlation and
+// matched filtering.
+func DotProductConj(a, b []complex128) complex128 {
+	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	return dotProductConj128(a[:n], b[:n])
 }
 
 func minLen(a, b, c int) int {
