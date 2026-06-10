@@ -5283,7 +5283,7 @@ log64_scalar_normal:
     ANDQ BX, R10
     SUBQ R10, AX                       // AX = bits(m)
     VMOVQ AX, X2                       // X2 = m
-    CVTSQ2SD R11, X3                   // X3 = e as float64
+    VCVTSI2SDQ R11, X3, X3             // X3 = e as float64
 
     // s = (m-1)/(m+1), t = s^2 (X10 = 1.0 from the vector constants)
     VSUBSD X10, X2, X4                 // m - 1
@@ -5469,7 +5469,7 @@ pow64_scalar_normal:
     ANDQ BX, R10
     SUBQ R10, AX                       // bits(m)
     VMOVQ AX, X2                       // m
-    CVTSQ2SD R11, X3                   // e
+    VCVTSI2SDQ R11, X3, X3             // e
 
     VSUBSD X13, X2, X4                 // m - 1 (X13 = 1.0)
     VADDSD X13, X2, X5                 // m + 1
@@ -5660,7 +5660,7 @@ powelem64_scalar_normal:
     ANDQ BX, R10
     SUBQ R10, AX                       // bits(m)
     VMOVQ AX, X2
-    CVTSQ2SD R11, X3                   // e
+    VCVTSI2SDQ R11, X3, X3             // e
 
     VSUBSD X13, X2, X4                 // m - 1
     VADDSD X13, X2, X5                 // m + 1

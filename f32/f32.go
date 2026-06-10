@@ -727,15 +727,17 @@ func ExpInPlace(a []float32) {
 // Processes min(len(dst), len(src)) elements. Edge cases match math.Log:
 // Log(0) = -Inf, Log(x < 0) = NaN, Log(+Inf) = +Inf, Log(NaN) = NaN.
 //
-// The implementation is currently the accurate pure-Go reference on every
-// architecture; a vectorized kernel is a profiled follow-up (see issue #109).
-// Allocation-free and safe for concurrent use on disjoint buffers.
+// On AVX2+FMA and NEON hosts a vectorized kernel is used (Cephes logf
+// degree-8 minimax polynomial; worst-case relative error ~1.4e-7, about one
+// float32 ulp, including subnormal inputs). Elsewhere it falls back to the
+// float64-accurate Go path. Allocation-free and safe for concurrent use on
+// disjoint buffers.
 func Log(dst, src []float32) {
 	n := min(len(dst), len(src))
 	if n == 0 {
 		return
 	}
-	logGo(dst[:n], src[:n])
+	log32(dst[:n], src[:n])
 }
 
 // LogInPlace computes the natural logarithm in place: a[i] = ln(a[i]).
@@ -743,7 +745,7 @@ func LogInPlace(a []float32) {
 	if len(a) == 0 {
 		return
 	}
-	logGo(a, a)
+	log32(a, a)
 }
 
 // Log2 computes the base-2 logarithm elementwise: dst[i] = log2(src[i]).
@@ -754,7 +756,7 @@ func Log2(dst, src []float32) {
 	if n == 0 {
 		return
 	}
-	log2Go(dst[:n], src[:n])
+	log2_32(dst[:n], src[:n])
 }
 
 // Log10 computes the base-10 logarithm elementwise: dst[i] = log10(src[i]).
@@ -766,20 +768,27 @@ func Log10(dst, src []float32) {
 	if n == 0 {
 		return
 	}
-	log10Go(dst[:n], src[:n])
+	log10_32(dst[:n], src[:n])
 }
 
 // Pow raises each element to a scalar power: dst[i] = src[i]**exp. The scalar
 // exponent is the common DSP case (for example the ^0.35 power-law compression
 // in PCEN). Processes min(len(dst), len(src)) elements; edge cases match
 // math.Pow (Pow(x, 0) = 1, Pow(negative, non-integer) = NaN, Pow(0, negative)
-// = +Inf). Allocation-free; a vectorized kernel is a profiled follow-up (#109).
+// = +Inf).
+//
+// On AVX2+FMA and NEON hosts, slices whose elements are all positive and
+// finite are computed with a fused exp(exp*ln(x)) kernel (relative error
+// ~1.4e-5, mirroring the Exp core); overflow yields +Inf and underflow 0,
+// matching math.Pow. Slices containing non-positive, infinite, or NaN bases,
+// and calls with a zero or non-finite exponent, take the exact scalar path.
+// Allocation-free and safe for concurrent use on disjoint buffers.
 func Pow(dst, src []float32, exp float32) {
 	n := min(len(dst), len(src))
 	if n == 0 {
 		return
 	}
-	powGo(dst[:n], src[:n], exp)
+	pow32(dst[:n], src[:n], exp)
 }
 
 // PowInPlace raises each element to a scalar power in place: a[i] = a[i]**exp.
@@ -787,18 +796,19 @@ func PowInPlace(a []float32, exp float32) {
 	if len(a) == 0 {
 		return
 	}
-	powGo(a, a, exp)
+	pow32(a, a, exp)
 }
 
 // PowElem raises each base to its own exponent: dst[i] = base[i]**exp[i].
 // Processes min(len(dst), len(base), len(exp)) elements; edge cases match
-// math.Pow.
+// math.Pow. The SIMD fast path and its fallback rules match Pow, with the
+// additional requirement that every exponent is finite.
 func PowElem(dst, base, exp []float32) {
 	n := min(len(dst), len(base), len(exp))
 	if n == 0 {
 		return
 	}
-	powElemGo(dst[:n], base[:n], exp[:n])
+	powElem32(dst[:n], base[:n], exp[:n])
 }
 
 // Int32ToFloat32Scale converts int32 samples to float32 and scales in one pass.

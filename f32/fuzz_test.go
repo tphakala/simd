@@ -329,3 +329,116 @@ func FuzzF32InterleaveN(f *testing.F) {
 		}
 	})
 }
+
+// FuzzF32Log differentially fuzzes the dispatched Log/Log2/Log10 against the
+// pure-Go references over arbitrary bit patterns, including NaN, infinities,
+// negatives, zeros, and subnormals. Specials compare by class, finite values
+// within the documented kernel tolerance.
+func FuzzF32Log(f *testing.F) {
+	addByteLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := f32sBits(raw)
+		if len(v) == 0 {
+			return
+		}
+		got := make([]float32, len(v))
+		want := make([]float32, len(v))
+
+		check := func(op string) {
+			for i := range got {
+				g, w := float64(got[i]), float64(want[i])
+				switch {
+				case math.IsNaN(w):
+					if !math.IsNaN(g) {
+						t.Fatalf("%s[%d](%v): got %v want NaN", op, i, v[i], g)
+					}
+				case math.IsInf(w, 0) || w == 0:
+					if g != w {
+						t.Fatalf("%s[%d](%v): got %v want %v", op, i, v[i], g, w)
+					}
+				default:
+					diff := math.Abs(g - w)
+					if math.Abs(w) > 1e-6 {
+						diff /= math.Abs(w)
+					}
+					if diff > logRelTol32 {
+						t.Fatalf("%s[%d](%g): got %v want %v (err %g)", op, i, v[i], g, w, diff)
+					}
+				}
+			}
+		}
+		Log(got, v)
+		logGo(want, v)
+		check("Log")
+		Log2(got, v)
+		log2Go(want, v)
+		check("Log2")
+		Log10(got, v)
+		log10Go(want, v)
+		check("Log10")
+	})
+}
+
+// FuzzF32Pow differentially fuzzes Pow and PowElem against math.Pow for
+// positive finite bases (the SIMD precondition; other inputs dispatch to the
+// scalar path, which is exercised too via the raw exponent). Lanes whose
+// |p*ln(x)| lands near the overflow/underflow thresholds (>87) or whose true
+// result is subnormal are skipped: the kernel's relative error can flip the
+// result class there, and subnormal results lose precision gradually (see
+// powAVX).
+func FuzzF32Pow(f *testing.F) {
+	addByteLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := f32sBits(raw)
+		if len(v) < 3 {
+			return
+		}
+		p := v[0]
+		rest := v[1:]
+		h := len(rest) / 2
+		base, exps := rest[:h], rest[h:2*h]
+		for i, x := range base {
+			x = float32(math.Abs(float64(x)))
+			if !(x > 0 && x <= math.MaxFloat32) {
+				x = 1.5 + float32(i)
+			}
+			base[i] = x
+		}
+
+		checkLane := func(op string, i int, x, pw, g float32) {
+			want := math.Pow(float64(x), float64(pw))
+			if math.IsNaN(want) {
+				if !math.IsNaN(float64(g)) {
+					t.Fatalf("%s[%d](%g, %g): got %v want NaN", op, i, x, pw, g)
+				}
+				return
+			}
+			if y := float64(pw) * math.Log(float64(x)); math.Abs(y) > 87 || math.IsNaN(y) {
+				// Near the exact overflow/underflow thresholds the kernel's
+				// ~1.4e-5 error in p*ln(x) can flip the +Inf/0 class.
+				return
+			}
+			if want != 0 && math.Abs(want) < 2.4e-38 {
+				return // subnormal results lose precision gradually
+			}
+			w := float32(want)
+			diff := math.Abs(float64(g - w))
+			if math.Abs(float64(w)) > 1e-6 {
+				diff /= math.Abs(float64(w))
+			}
+			if diff > powRelTol32 {
+				t.Fatalf("%s[%d](%g, %g): got %v want %v (err %g)", op, i, x, pw, g, w, diff)
+			}
+		}
+
+		got := make([]float32, h)
+		Pow(got, base, p)
+		for i := range got {
+			checkLane("Pow", i, base[i], p, got[i])
+		}
+		PowElem(got, base, exps)
+		for i := range got {
+			checkLane("PowElem", i, base[i], exps[i], got[i])
+		}
+	})
+}
