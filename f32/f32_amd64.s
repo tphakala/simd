@@ -6582,18 +6582,15 @@ log32_scalar_normal:
     JMP  log32_scalar_next
 
 log32_scalar_nan:
-    MOVL $0x7FC00000, AX
-    MOVL AX, (DX)
+    MOVL $0x7FC00000, (DX)
     JMP  log32_scalar_next
 
 log32_scalar_neginf:
-    MOVL $0xFF800000, AX
-    MOVL AX, (DX)
+    MOVL $0xFF800000, (DX)
     JMP  log32_scalar_next
 
 log32_scalar_posinf:
-    MOVL $0x7F800000, AX
-    MOVL AX, (DX)
+    MOVL $0x7F800000, (DX)
 
 log32_scalar_next:
     ADDQ $4, SI
