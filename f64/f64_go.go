@@ -569,9 +569,22 @@ func exp64Go(dst, src []float64) {
 	}
 }
 
+// logSubnormScale64 normalizes a positive subnormal so math.Log sees a normal
+// input: math.Log's amd64 assembly extracts the exponent field without
+// normalizing, so it returns ~-709.09 for every subnormal x. Scaling by 2^54
+// and subtracting 54*ln(2) is exact in the scale step (2^54 is a power of
+// two) and accurate to ~1 ulp overall.
+const (
+	dblMinNormal64    = 2.2250738585072014e-308
+	logSubnormScale64 = 0x1p54
+	logSubnormExp64   = 54
+)
+
 // logGo computes the natural logarithm: dst[i] = ln(src[i]).
 // Edge cases follow math.Log: ln(0) = -Inf, ln(x<0) = NaN, ln(+Inf) = +Inf,
-// ln(NaN) = NaN. This is the scalar reference and the fallback when no SIMD log
+// ln(NaN) = NaN. Positive subnormal inputs are normalized first (see
+// logSubnormScale64); plain math.Log would return ~-709.09 for all of them
+// on amd64. This is the scalar reference and the fallback when no SIMD log
 // kernel is selected.
 func logGo(dst, src []float64) {
 	if len(dst) == 0 {
@@ -579,29 +592,50 @@ func logGo(dst, src []float64) {
 	}
 	_ = src[len(dst)-1]
 	for i := range dst {
-		dst[i] = math.Log(src[i])
+		x := src[i]
+		if x > 0 && x < dblMinNormal64 {
+			dst[i] = math.Log(x*logSubnormScale64) - logSubnormExp64*math.Ln2
+			continue
+		}
+		dst[i] = math.Log(x)
 	}
 }
 
 // log2Go computes the base-2 logarithm: dst[i] = log2(src[i]).
+// math.Log2 normalizes subnormals itself (it is Frexp-based) and is exact for
+// powers of two, but its log2(frac)+exp formulation cancels at ~ulp(1)
+// absolute error near x = 1, which is ~2e-8 relative where log2(x) ~ 1e-9.
+// Inputs near 1 are routed through the relative-accurate math.Log instead.
 func log2Go(dst, src []float64) {
 	if len(dst) == 0 {
 		return
 	}
 	_ = src[len(dst)-1]
 	for i := range dst {
-		dst[i] = math.Log2(src[i])
+		x := src[i]
+		if x > 0.99 && x < 1.01 {
+			dst[i] = math.Log(x) * (1 / math.Ln2)
+			continue
+		}
+		dst[i] = math.Log2(x)
 	}
 }
 
 // log10Go computes the base-10 logarithm: dst[i] = log10(src[i]).
+// math.Log10 is math.Log scaled, so positive subnormal inputs need the same
+// normalization as logGo.
 func log10Go(dst, src []float64) {
 	if len(dst) == 0 {
 		return
 	}
 	_ = src[len(dst)-1]
 	for i := range dst {
-		dst[i] = math.Log10(src[i])
+		x := src[i]
+		if x > 0 && x < dblMinNormal64 {
+			dst[i] = (math.Log(x*logSubnormScale64) - logSubnormExp64*math.Ln2) * (1 / math.Ln10)
+			continue
+		}
+		dst[i] = math.Log10(x)
 	}
 }
 

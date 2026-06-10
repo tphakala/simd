@@ -5009,3 +5009,734 @@ cd_sse2_store:
 
 cd_sse2_ret:
     RET
+
+// ============================================================================
+// logAVX / powAVX / powElemAVX: vectorized natural log core (issue #109)
+// ============================================================================
+
+// Shared log-core constants. The mantissa reduction is the musl /
+// ARM-optimized-routines integer trick: tmp = bits(x) - OFF puts the biased
+// exponent of m = x / 2^e in tmp's exponent field such that
+// m in [sqrt(2)/2, sqrt(2)), with e = tmp >> 52 (arithmetic) and
+// bits(m) = bits(x) - (tmp & 0xfff0000000000000). No compares or branches.
+DATA log64_off<>+0x00(SB)/8, $0x3fe6a09e00000000
+DATA log64_off<>+0x08(SB)/8, $0x3fe6a09e00000000
+DATA log64_off<>+0x10(SB)/8, $0x3fe6a09e00000000
+DATA log64_off<>+0x18(SB)/8, $0x3fe6a09e00000000
+GLOBL log64_off<>(SB), RODATA|NOPTR, $32
+
+DATA log64_expmask<>+0x00(SB)/8, $0xfff0000000000000
+DATA log64_expmask<>+0x08(SB)/8, $0xfff0000000000000
+DATA log64_expmask<>+0x10(SB)/8, $0xfff0000000000000
+DATA log64_expmask<>+0x18(SB)/8, $0xfff0000000000000
+GLOBL log64_expmask<>(SB), RODATA|NOPTR, $32
+
+// DBL_MIN = 2.2250738585072014e-308: positive inputs below this are
+// subnormal and pre-scaled by 2^64 (exponent bias -64) before the reduction.
+DATA log64_dblmin<>+0x00(SB)/8, $0x0010000000000000
+DATA log64_dblmin<>+0x08(SB)/8, $0x0010000000000000
+DATA log64_dblmin<>+0x10(SB)/8, $0x0010000000000000
+DATA log64_dblmin<>+0x18(SB)/8, $0x0010000000000000
+GLOBL log64_dblmin<>(SB), RODATA|NOPTR, $32
+
+DATA log64_two64<>+0x00(SB)/8, $0x43f0000000000000  // 2^64
+DATA log64_two64<>+0x08(SB)/8, $0x43f0000000000000
+DATA log64_two64<>+0x10(SB)/8, $0x43f0000000000000
+DATA log64_two64<>+0x18(SB)/8, $0x43f0000000000000
+GLOBL log64_two64<>(SB), RODATA|NOPTR, $32
+
+DATA log64_negsc<>+0x00(SB)/8, $0xc050000000000000  // -64.0 (exponent bias)
+DATA log64_negsc<>+0x08(SB)/8, $0xc050000000000000
+DATA log64_negsc<>+0x10(SB)/8, $0xc050000000000000
+DATA log64_negsc<>+0x18(SB)/8, $0xc050000000000000
+GLOBL log64_negsc<>(SB), RODATA|NOPTR, $32
+
+// VPERMD indices gathering the high (odd) dwords of the four int64 lanes
+// into the low 128 bits, for the int32 -> float64 exponent conversion.
+DATA log64_permidx<>+0x00(SB)/4, $1
+DATA log64_permidx<>+0x04(SB)/4, $3
+DATA log64_permidx<>+0x08(SB)/4, $5
+DATA log64_permidx<>+0x0c(SB)/4, $7
+DATA log64_permidx<>+0x10(SB)/4, $0
+DATA log64_permidx<>+0x14(SB)/4, $0
+DATA log64_permidx<>+0x18(SB)/4, $0
+DATA log64_permidx<>+0x1c(SB)/4, $0
+GLOBL log64_permidx<>(SB), RODATA|NOPTR, $32
+
+// Minimax polynomial for ln(m), m in [sqrt(2)/2, sqrt(2)) (SLEEF xlog_u1
+// coefficients): with s = (m-1)/(m+1) and t = s^2,
+// ln(m) = 2s + s*t*P(t), P(t) = ((((((c0*t + c1)*t + c2)*t + c3)*t + c4)*t
+// + c5)*t + c6). Worst-case relative error of the full ln(x) is ~2 ulps.
+DATA log64_c0<>+0x00(SB)/8, $0x3fc39c4f5407567e  // 0.15320769885027014
+DATA log64_c0<>+0x08(SB)/8, $0x3fc39c4f5407567e
+DATA log64_c0<>+0x10(SB)/8, $0x3fc39c4f5407567e
+DATA log64_c0<>+0x18(SB)/8, $0x3fc39c4f5407567e
+GLOBL log64_c0<>(SB), RODATA|NOPTR, $32
+
+DATA log64_c1<>+0x00(SB)/8, $0x3fc3872e67fe8e84  // 0.15256290510034287
+DATA log64_c1<>+0x08(SB)/8, $0x3fc3872e67fe8e84
+DATA log64_c1<>+0x10(SB)/8, $0x3fc3872e67fe8e84
+DATA log64_c1<>+0x18(SB)/8, $0x3fc3872e67fe8e84
+GLOBL log64_c1<>(SB), RODATA|NOPTR, $32
+
+DATA log64_c2<>+0x00(SB)/8, $0x3fc747353a506035  // 0.1818605932937786
+DATA log64_c2<>+0x08(SB)/8, $0x3fc747353a506035
+DATA log64_c2<>+0x10(SB)/8, $0x3fc747353a506035
+DATA log64_c2<>+0x18(SB)/8, $0x3fc747353a506035
+GLOBL log64_c2<>(SB), RODATA|NOPTR, $32
+
+DATA log64_c3<>+0x00(SB)/8, $0x3fcc71c0a65ecd8e  // 0.222221451983938
+DATA log64_c3<>+0x08(SB)/8, $0x3fcc71c0a65ecd8e
+DATA log64_c3<>+0x10(SB)/8, $0x3fcc71c0a65ecd8e
+DATA log64_c3<>+0x18(SB)/8, $0x3fcc71c0a65ecd8e
+GLOBL log64_c3<>(SB), RODATA|NOPTR, $32
+
+DATA log64_c4<>+0x00(SB)/8, $0x3fd249249a68a245  // 0.28571429327942993
+DATA log64_c4<>+0x08(SB)/8, $0x3fd249249a68a245
+DATA log64_c4<>+0x10(SB)/8, $0x3fd249249a68a245
+DATA log64_c4<>+0x18(SB)/8, $0x3fd249249a68a245
+GLOBL log64_c4<>(SB), RODATA|NOPTR, $32
+
+DATA log64_c5<>+0x00(SB)/8, $0x3fd99999998f92ea  // 0.3999999999635252
+DATA log64_c5<>+0x08(SB)/8, $0x3fd99999998f92ea
+DATA log64_c5<>+0x10(SB)/8, $0x3fd99999998f92ea
+DATA log64_c5<>+0x18(SB)/8, $0x3fd99999998f92ea
+GLOBL log64_c5<>(SB), RODATA|NOPTR, $32
+
+DATA log64_c6<>+0x00(SB)/8, $0x3fe55555555557ae  // 0.66666666666673335
+DATA log64_c6<>+0x08(SB)/8, $0x3fe55555555557ae
+DATA log64_c6<>+0x10(SB)/8, $0x3fe55555555557ae
+DATA log64_c6<>+0x18(SB)/8, $0x3fe55555555557ae
+GLOBL log64_c6<>(SB), RODATA|NOPTR, $32
+
+// fdlibm ln(2) hi/lo split for the pow kernels' fixed natural-log
+// reconstruction (logAVX takes its split via arguments instead).
+DATA log64_ln2hi<>+0x00(SB)/8, $0x3fe62e42fee00000
+DATA log64_ln2hi<>+0x08(SB)/8, $0x3fe62e42fee00000
+DATA log64_ln2hi<>+0x10(SB)/8, $0x3fe62e42fee00000
+DATA log64_ln2hi<>+0x18(SB)/8, $0x3fe62e42fee00000
+GLOBL log64_ln2hi<>(SB), RODATA|NOPTR, $32
+
+DATA log64_ln2lo<>+0x00(SB)/8, $0x3dea39ef35793c76
+DATA log64_ln2lo<>+0x08(SB)/8, $0x3dea39ef35793c76
+DATA log64_ln2lo<>+0x10(SB)/8, $0x3dea39ef35793c76
+DATA log64_ln2lo<>+0x18(SB)/8, $0x3dea39ef35793c76
+GLOBL log64_ln2lo<>(SB), RODATA|NOPTR, $32
+
+DATA log64_posinf<>+0x00(SB)/8, $0x7ff0000000000000
+DATA log64_posinf<>+0x08(SB)/8, $0x7ff0000000000000
+DATA log64_posinf<>+0x10(SB)/8, $0x7ff0000000000000
+DATA log64_posinf<>+0x18(SB)/8, $0x7ff0000000000000
+GLOBL log64_posinf<>(SB), RODATA|NOPTR, $32
+
+DATA log64_neginf<>+0x00(SB)/8, $0xfff0000000000000
+DATA log64_neginf<>+0x08(SB)/8, $0xfff0000000000000
+DATA log64_neginf<>+0x10(SB)/8, $0xfff0000000000000
+DATA log64_neginf<>+0x18(SB)/8, $0xfff0000000000000
+GLOBL log64_neginf<>(SB), RODATA|NOPTR, $32
+
+DATA log64_nan<>+0x00(SB)/8, $0x7ff8000000000000
+DATA log64_nan<>+0x08(SB)/8, $0x7ff8000000000000
+DATA log64_nan<>+0x10(SB)/8, $0x7ff8000000000000
+DATA log64_nan<>+0x18(SB)/8, $0x7ff8000000000000
+GLOBL log64_nan<>(SB), RODATA|NOPTR, $32
+
+// func logAVX(dst, src []float64, k1hi, k1lo, k2 float64)
+// Shared kernel for Log, Log2, and Log10: per lane it computes
+// result = e*k1hi + (lnm*k2 + e*k1lo), with x = m*2^e, m in
+// [sqrt(2)/2, sqrt(2)) and lnm = ln(m) = 2s + s*t*P(t) for s = (m-1)/(m+1),
+// t = s^2 (atanh form, SLEEF xlog_u1 minimax polynomial). Positive subnormal
+// inputs are pre-scaled by 2^64 (exponent bias -64). Special lanes are fixed
+// up with blends from the original input: +Inf -> +Inf, +-0 -> -Inf,
+// x < 0 or NaN -> NaN, matching math.Log. Requires AVX2 (YMM integer ops in
+// the exponent extraction) and FMA. Processes 4 elements per iteration; the
+// 0-3 element tail uses the scalar path below.
+TEXT ·logAVX(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    // Loop-invariant constants. The low 128 bits (X10, X13-X15) are reused
+    // by the scalar remainder path.
+    VMOVUPD log64_negsc<>(SB), Y6      // Y6 = -64.0 (subnormal exponent bias)
+    VMOVUPD log64_two64<>(SB), Y7      // Y7 = 2^64 (subnormal pre-scale)
+    VMOVUPD log64_dblmin<>(SB), Y8     // Y8 = DBL_MIN
+    VMOVUPD log64_permidx<>(SB), Y9    // Y9 = VPERMD odd-dword gather indices
+    VMOVUPD sigmoid_one64<>(SB), Y10   // Y10 = 1.0
+    VMOVUPD log64_expmask<>(SB), Y11   // Y11 = 0xfff0000000000000
+    VMOVUPD log64_off<>(SB), Y12       // Y12 = reduction offset
+    VBROADCASTSD k2+64(FP), Y13        // Y13 = k2
+    VBROADCASTSD k1lo+56(FP), Y14      // Y14 = k1lo
+    VBROADCASTSD k1hi+48(FP), Y15      // Y15 = k1hi
+
+    MOVQ CX, R8
+    SHRQ $2, R8                        // len / 4
+    JZ   log64_remainder
+
+log64_loop4:
+    VMOVUPD (SI), Y0                   // Y0 = x (kept for the special-lane blends)
+
+    // Subnormal pre-scale: lanes with 0 < x < DBL_MIN are scaled by 2^64 and
+    // carry an exponent bias of -64. (Negative/NaN lanes fail the compare or
+    // produce garbage that the final blends overwrite.)
+    VCMPPD $17, Y8, Y0, Y1             // Y1 = mask: x < DBL_MIN (LT_OQ, NaN -> false)
+    VMULPD Y7, Y0, Y2                  // Y2 = x * 2^64
+    VBLENDVPD Y1, Y2, Y0, Y2           // Y2 = xs = subnormal ? x*2^64 : x
+    VANDPD Y6, Y1, Y1                  // Y1 = ebias = subnormal ? -64.0 : 0.0
+
+    // Exponent/mantissa split (musl/ARM-optimized-routines integer trick):
+    // tmp = bits(xs) - OFF; e = tmp >> 52 (arithmetic); bits(m) = bits(xs) -
+    // (tmp & 0xfff0000000000000), leaving m in [sqrt(2)/2, sqrt(2)).
+    VPSUBQ Y12, Y2, Y3                 // Y3 = tmp
+    VPAND Y11, Y3, Y4                  // Y4 = tmp & expmask
+    VPSUBQ Y4, Y2, Y4                  // Y4 = m
+    // AVX2 has no VPSRAQ: arithmetic-shift the high dwords by 20 (giving
+    // bits 52..63 of each lane sign-extended), gather them with VPERMD, and
+    // convert int32 -> float64.
+    VPSRAD $20, Y3, Y3                 // odd dwords = e (int32)
+    VPERMD Y3, Y9, Y3                  // X3 = 4 x int32 e
+    VCVTDQ2PD X3, Y3                   // Y3 = e as float64
+    VADDPD Y1, Y3, Y3                  // Y3 = e + ebias
+
+    // s = (m-1)/(m+1), t = s^2
+    VSUBPD Y10, Y4, Y5                 // Y5 = m - 1
+    VADDPD Y10, Y4, Y4                 // Y4 = m + 1
+    VDIVPD Y4, Y5, Y5                  // Y5 = s
+    VMULPD Y5, Y5, Y4                  // Y4 = t
+
+    // P(t), Horner with memory-operand FMAs
+    VMOVUPD log64_c0<>(SB), Y2
+    VFMADD213PD log64_c1<>(SB), Y4, Y2 // Y2 = Y2*t + c1
+    VFMADD213PD log64_c2<>(SB), Y4, Y2
+    VFMADD213PD log64_c3<>(SB), Y4, Y2
+    VFMADD213PD log64_c4<>(SB), Y4, Y2
+    VFMADD213PD log64_c5<>(SB), Y4, Y2
+    VFMADD213PD log64_c6<>(SB), Y4, Y2 // Y2 = P(t)
+
+    VMULPD Y5, Y4, Y4                  // Y4 = s*t
+    VADDPD Y5, Y5, Y5                  // Y5 = 2s
+    VFMADD231PD Y2, Y4, Y5             // Y5 = lnm = s*t*P(t) + 2s
+
+    // result = e*k1hi + (lnm*k2 + e*k1lo)
+    VMULPD Y14, Y3, Y4                 // Y4 = e * k1lo
+    VFMADD231PD Y13, Y5, Y4            // Y4 += lnm * k2
+    VFMADD231PD Y15, Y3, Y4            // Y4 += e * k1hi
+
+    // Special lanes from the original x: +Inf -> +Inf, +-0 -> -Inf,
+    // x < 0 or NaN -> NaN (canonical quiet NaN, like math.Log).
+    VMOVUPD log64_posinf<>(SB), Y2
+    VCMPPD $0, Y2, Y0, Y1              // Y1 = mask: x == +Inf (EQ_OQ)
+    VBLENDVPD Y1, Y2, Y4, Y4
+    VXORPD Y2, Y2, Y2
+    VCMPPD $0, Y2, Y0, Y1              // Y1 = mask: x == +-0
+    VMOVUPD log64_neginf<>(SB), Y3
+    VBLENDVPD Y1, Y3, Y4, Y4
+    VCMPPD $17, Y2, Y0, Y1             // Y1 = mask: x < 0
+    VCMPPD $3, Y0, Y0, Y2              // Y2 = mask: x unordered (NaN)
+    VORPD Y2, Y1, Y1
+    VMOVUPD log64_nan<>(SB), Y3
+    VBLENDVPD Y1, Y3, Y4, Y4
+
+    VMOVUPD Y4, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ R8
+    JNZ  log64_loop4
+
+log64_remainder:
+    ANDQ $3, CX
+    JZ   log64_done
+
+log64_scalar:
+    MOVQ (SI), AX                      // AX = bits(x)
+    VMOVSD (SI), X0                    // X0 = x
+
+    // Specials first: NaN or x < 0 -> NaN, +-0 -> -Inf, +Inf -> +Inf.
+    // VUCOMISD sets ZF=PF=CF=1 for unordered, so test JP before JB/JE.
+    VXORPD X1, X1, X1
+    VUCOMISD X1, X0
+    JP   log64_scalar_nan
+    JB   log64_scalar_nan              // x < 0
+    JE   log64_scalar_neginf           // x == +-0
+    MOVQ $0x7FF0000000000000, BX
+    CMPQ AX, BX
+    JEQ  log64_scalar_posinf
+
+    // Subnormal pre-scale (x is positive finite here; bits compare as ints)
+    XORQ R9, R9                        // R9 = exponent bias
+    MOVQ $0x0010000000000000, BX       // DBL_MIN bits
+    CMPQ AX, BX
+    JGE  log64_scalar_normal
+    VMOVSD log64_two64<>(SB), X2       // 2^64
+    VMULSD X2, X0, X0                  // x *= 2^64
+    VMOVQ X0, AX
+    MOVQ $-64, R9
+
+log64_scalar_normal:
+    MOVQ $0x3FE6A09E00000000, BX
+    MOVQ AX, R10
+    SUBQ BX, R10                       // R10 = tmp = bits - OFF
+    MOVQ R10, R11
+    SARQ $52, R11                      // R11 = e
+    ADDQ R9, R11                       // e += bias
+    MOVQ $0xFFF0000000000000, BX
+    ANDQ BX, R10
+    SUBQ R10, AX                       // AX = bits(m)
+    VMOVQ AX, X2                       // X2 = m
+    CVTSQ2SD R11, X3                   // X3 = e as float64
+
+    // s = (m-1)/(m+1), t = s^2 (X10 = 1.0 from the vector constants)
+    VSUBSD X10, X2, X4                 // m - 1
+    VADDSD X10, X2, X5                 // m + 1
+    VDIVSD X5, X4, X4                  // X4 = s
+    VMULSD X4, X4, X5                  // X5 = t
+
+    VMOVSD log64_c0<>(SB), X1
+    VFMADD213SD log64_c1<>(SB), X5, X1
+    VFMADD213SD log64_c2<>(SB), X5, X1
+    VFMADD213SD log64_c3<>(SB), X5, X1
+    VFMADD213SD log64_c4<>(SB), X5, X1
+    VFMADD213SD log64_c5<>(SB), X5, X1
+    VFMADD213SD log64_c6<>(SB), X5, X1 // X1 = P(t)
+
+    VMULSD X4, X5, X5                  // X5 = s*t
+    VADDSD X4, X4, X4                  // X4 = 2s
+    VFMADD231SD X1, X5, X4             // X4 = lnm
+
+    VMULSD X14, X3, X5                 // e * k1lo
+    VFMADD231SD X13, X4, X5            // += lnm * k2
+    VFMADD231SD X15, X3, X5            // += e * k1hi
+    VMOVSD X5, (DX)
+    JMP  log64_scalar_next
+
+log64_scalar_nan:
+    MOVQ $0x7FF8000000000000, AX
+    MOVQ AX, (DX)
+    JMP  log64_scalar_next
+
+log64_scalar_neginf:
+    MOVQ $0xFFF0000000000000, AX
+    MOVQ AX, (DX)
+    JMP  log64_scalar_next
+
+log64_scalar_posinf:
+    MOVQ $0x7FF0000000000000, AX
+    MOVQ AX, (DX)
+
+log64_scalar_next:
+    ADDQ $8, SI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  log64_scalar
+
+log64_done:
+    VZEROUPPER
+    RET
+
+// func powAVX(dst, src []float64, exp float64)
+// Fused pow(x, p) = exp(p*ln(x)) for slices whose elements are all positive
+// and finite (the dispatcher guarantees this, see powSIMDOK64). The log core
+// matches logAVX (constants from memory instead of registers); the exp core
+// matches expAVX except y = p*ln(x) is clamped to [-746, 710] (past
+// ln(MaxFloat64) ~ 709.78 and ln of the smallest subnormal ~ -744.44) and
+// the 2^k reconstruction is split into 2^(k>>1) * 2^(k-(k>>1)), so overflow
+// goes to +Inf and underflow degrades gradually through subnormals to 0,
+// matching math.Pow's result classes. Accuracy is bounded by the exp core's
+// degree-5 polynomial (~3e-6 relative). Requires AVX2 and FMA.
+TEXT ·powAVX(SB), NOSPLIT, $0-56
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    // Exp-core constants in registers (the log core uses memory operands).
+    // The low 128 bits (X8-X15) are reused by the scalar remainder path.
+    VMOVUPD log64_permidx<>(SB), Y7    // Y7 = VPERMD gather indices
+    VBROADCASTSD exp+48(FP), Y8        // Y8 = p
+    VMOVUPD tanh64_c5<>(SB), Y9        // Y9 = 1/120
+    VMOVUPD tanh64_c4<>(SB), Y10       // Y10 = 1/24
+    VMOVUPD tanh64_c3<>(SB), Y11       // Y11 = 1/6
+    VMOVUPD sigmoid_half64<>(SB), Y12  // Y12 = 0.5
+    VMOVUPD sigmoid_one64<>(SB), Y13   // Y13 = 1.0
+    VMOVUPD tanh64_ln2<>(SB), Y14      // Y14 = ln(2)
+    VMOVUPD tanh64_log2e<>(SB), Y15    // Y15 = log2(e)
+
+    MOVQ CX, R8
+    SHRQ $2, R8
+    JZ   pow64_remainder
+
+pow64_loop4:
+    VMOVUPD (SI), Y0                   // Y0 = x (positive finite)
+
+    // --- log core (see logAVX) ---
+    VCMPPD $17, log64_dblmin<>(SB), Y0, Y1
+    VMULPD log64_two64<>(SB), Y0, Y2
+    VBLENDVPD Y1, Y2, Y0, Y0           // x, subnormals pre-scaled
+    VANDPD log64_negsc<>(SB), Y1, Y1   // ebias
+    VPSUBQ log64_off<>(SB), Y0, Y2     // tmp
+    VPAND log64_expmask<>(SB), Y2, Y3
+    VPSUBQ Y3, Y0, Y3                  // m
+    VPSRAD $20, Y2, Y2
+    VPERMD Y2, Y7, Y2
+    VCVTDQ2PD X2, Y2
+    VADDPD Y1, Y2, Y2                  // e
+    VSUBPD Y13, Y3, Y4                 // m - 1
+    VADDPD Y13, Y3, Y3                 // m + 1
+    VDIVPD Y3, Y4, Y4                  // s
+    VMULPD Y4, Y4, Y3                  // t
+    VMOVUPD log64_c0<>(SB), Y5
+    VFMADD213PD log64_c1<>(SB), Y3, Y5
+    VFMADD213PD log64_c2<>(SB), Y3, Y5
+    VFMADD213PD log64_c3<>(SB), Y3, Y5
+    VFMADD213PD log64_c4<>(SB), Y3, Y5
+    VFMADD213PD log64_c5<>(SB), Y3, Y5
+    VFMADD213PD log64_c6<>(SB), Y3, Y5 // P(t)
+    VMULPD Y4, Y3, Y3                  // s*t
+    VADDPD Y4, Y4, Y4                  // 2s
+    VFMADD231PD Y5, Y3, Y4             // lnm
+    VMULPD log64_ln2lo<>(SB), Y2, Y3   // e*ln2lo
+    VADDPD Y4, Y3, Y3                  // + lnm
+    VFMADD231PD log64_ln2hi<>(SB), Y2, Y3 // Y3 = ln(x)
+
+    // y = p*ln(x), clamped to [-746, 710]; the split 2^k reconstruction
+    // below covers the whole result range
+    VMULPD Y8, Y3, Y0
+    VMINPD log64_powclamp_hi<>(SB), Y0, Y0
+    VMAXPD log64_powclamp_lo<>(SB), Y0, Y0
+
+    // --- exp core (see expAVX) ---
+    VMULPD Y15, Y0, Y1                 // y * log2e
+    VROUNDPD $0, Y1, Y2                // k
+    VMULPD Y14, Y2, Y3                 // k * ln2
+    VSUBPD Y3, Y0, Y3                  // r
+    VMULPD Y3, Y9, Y4                  // r*c5
+    VADDPD Y10, Y4, Y4
+    VMULPD Y3, Y4, Y4
+    VADDPD Y11, Y4, Y4
+    VMULPD Y3, Y4, Y4
+    VADDPD Y12, Y4, Y4
+    VMULPD Y3, Y4, Y4
+    VADDPD Y13, Y4, Y4
+    VMULPD Y3, Y4, Y4
+    VADDPD Y13, Y4, Y4                 // exp(r)
+    // Split 2^k reconstruction: k reaches past the biased exponent range
+    // (down to -1076), so build 2^(k>>1) and 2^(k-(k>>1)) separately. The
+    // double multiply overflows to +Inf / underflows through subnormals to
+    // 0 exactly where math.Pow does.
+    VCVTTPD2DQY Y2, X5                 // X5 = 4 x int32(k)
+    VPSRAD $1, X5, X3                  // k1 = k >> 1
+    VPSUBD X3, X5, X5                  // k2 = k - k1
+    VPMOVSXDQ X3, Y3
+    VPSLLQ $52, Y3, Y3
+    VPADDQ sigmoid_one64<>(SB), Y3, Y3 // 2^k1 bits
+    VMULPD Y3, Y4, Y4                  // exp(r) * 2^k1
+    VPMOVSXDQ X5, Y5
+    VPSLLQ $52, Y5, Y5
+    VPADDQ sigmoid_one64<>(SB), Y5, Y5 // 2^k2 bits
+    VMULPD Y5, Y4, Y4                  // * 2^k2 = exp(y)
+
+    VMOVUPD Y4, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ R8
+    JNZ  pow64_loop4
+
+pow64_remainder:
+    ANDQ $3, CX
+    JZ   pow64_done
+
+pow64_scalar:
+    MOVQ (SI), AX
+    VMOVSD (SI), X0
+
+    // log core, scalar (x positive finite; subnormal pre-scale via GPR)
+    XORQ R9, R9
+    MOVQ $0x0010000000000000, BX
+    CMPQ AX, BX
+    JGE  pow64_scalar_normal
+    VMOVSD log64_two64<>(SB), X2       // 2^64
+    VMULSD X2, X0, X0
+    VMOVQ X0, AX
+    MOVQ $-64, R9
+
+pow64_scalar_normal:
+    MOVQ $0x3FE6A09E00000000, BX
+    MOVQ AX, R10
+    SUBQ BX, R10                       // tmp
+    MOVQ R10, R11
+    SARQ $52, R11                      // e
+    ADDQ R9, R11
+    MOVQ $0xFFF0000000000000, BX
+    ANDQ BX, R10
+    SUBQ R10, AX                       // bits(m)
+    VMOVQ AX, X2                       // m
+    CVTSQ2SD R11, X3                   // e
+
+    VSUBSD X13, X2, X4                 // m - 1 (X13 = 1.0)
+    VADDSD X13, X2, X5                 // m + 1
+    VDIVSD X5, X4, X4                  // s
+    VMULSD X4, X4, X5                  // t
+    VMOVSD log64_c0<>(SB), X1
+    VFMADD213SD log64_c1<>(SB), X5, X1
+    VFMADD213SD log64_c2<>(SB), X5, X1
+    VFMADD213SD log64_c3<>(SB), X5, X1
+    VFMADD213SD log64_c4<>(SB), X5, X1
+    VFMADD213SD log64_c5<>(SB), X5, X1
+    VFMADD213SD log64_c6<>(SB), X5, X1 // P(t)
+    VMULSD X4, X5, X5                  // s*t
+    VADDSD X4, X4, X4                  // 2s
+    VFMADD231SD X1, X5, X4             // lnm
+    VMULSD log64_ln2lo<>(SB), X3, X5
+    VADDSD X4, X5, X5
+    VFMADD231SD log64_ln2hi<>(SB), X3, X5 // X5 = ln(x)
+
+    // y = p*ln(x), clamped (X8 = p from the vector constants)
+    VMULSD X8, X5, X0
+    VMINSD log64_powclamp_hi<>(SB), X0, X0
+    VMAXSD log64_powclamp_lo<>(SB), X0, X0
+
+    // exp core, scalar (X9-X15 = exp constants)
+    VMULSD X15, X0, X1
+    VROUNDSD $0, X1, X1, X2            // k
+    VMULSD X14, X2, X3
+    VSUBSD X3, X0, X3                  // r
+    VMULSD X3, X9, X4
+    VADDSD X10, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X11, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X12, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X13, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X13, X4, X4                 // exp(r)
+    // Split 2^k reconstruction (see the vector body)
+    VCVTTSD2SI X2, AX                  // k
+    MOVQ AX, R10
+    SARQ $1, R10                       // k1 = k >> 1
+    SUBQ R10, AX                       // k2 = k - k1
+    MOVQ $0x3FF0000000000000, BX
+    SHLQ $52, R10
+    ADDQ BX, R10
+    VMOVQ R10, X5
+    VMULSD X5, X4, X4                  // exp(r) * 2^k1
+    SHLQ $52, AX
+    ADDQ BX, AX
+    VMOVQ AX, X5
+    VMULSD X5, X4, X4                  // * 2^k2 = exp(y)
+
+    VMOVSD X4, (DX)
+    ADDQ $8, SI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  pow64_scalar
+
+pow64_done:
+    VZEROUPPER
+    RET
+
+// func powElemAVX(dst, base, exp []float64)
+// Elementwise pow(base[i], exp[i]) = exp(exp[i]*ln(base[i])). Same cores and
+// preconditions as powAVX (all bases positive finite, all exponents finite),
+// with the exponent loaded per lane instead of broadcast.
+TEXT ·powElemAVX(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ base_base+24(FP), SI
+    MOVQ exp_base+48(FP), DI
+
+    VMOVUPD log64_permidx<>(SB), Y7    // Y7 = VPERMD gather indices
+    VMOVUPD tanh64_c5<>(SB), Y9        // Y9 = 1/120
+    VMOVUPD tanh64_c4<>(SB), Y10       // Y10 = 1/24
+    VMOVUPD tanh64_c3<>(SB), Y11       // Y11 = 1/6
+    VMOVUPD sigmoid_half64<>(SB), Y12  // Y12 = 0.5
+    VMOVUPD sigmoid_one64<>(SB), Y13   // Y13 = 1.0
+    VMOVUPD tanh64_ln2<>(SB), Y14      // Y14 = ln(2)
+    VMOVUPD tanh64_log2e<>(SB), Y15    // Y15 = log2(e)
+
+    MOVQ CX, R8
+    SHRQ $2, R8
+    JZ   powelem64_remainder
+
+powelem64_loop4:
+    VMOVUPD (SI), Y0                   // Y0 = base (positive finite)
+
+    // --- log core (see logAVX) ---
+    VCMPPD $17, log64_dblmin<>(SB), Y0, Y1
+    VMULPD log64_two64<>(SB), Y0, Y2
+    VBLENDVPD Y1, Y2, Y0, Y0
+    VANDPD log64_negsc<>(SB), Y1, Y1   // ebias
+    VPSUBQ log64_off<>(SB), Y0, Y2     // tmp
+    VPAND log64_expmask<>(SB), Y2, Y3
+    VPSUBQ Y3, Y0, Y3                  // m
+    VPSRAD $20, Y2, Y2
+    VPERMD Y2, Y7, Y2
+    VCVTDQ2PD X2, Y2
+    VADDPD Y1, Y2, Y2                  // e
+    VSUBPD Y13, Y3, Y4                 // m - 1
+    VADDPD Y13, Y3, Y3                 // m + 1
+    VDIVPD Y3, Y4, Y4                  // s
+    VMULPD Y4, Y4, Y3                  // t
+    VMOVUPD log64_c0<>(SB), Y5
+    VFMADD213PD log64_c1<>(SB), Y3, Y5
+    VFMADD213PD log64_c2<>(SB), Y3, Y5
+    VFMADD213PD log64_c3<>(SB), Y3, Y5
+    VFMADD213PD log64_c4<>(SB), Y3, Y5
+    VFMADD213PD log64_c5<>(SB), Y3, Y5
+    VFMADD213PD log64_c6<>(SB), Y3, Y5 // P(t)
+    VMULPD Y4, Y3, Y3                  // s*t
+    VADDPD Y4, Y4, Y4                  // 2s
+    VFMADD231PD Y5, Y3, Y4             // lnm
+    VMULPD log64_ln2lo<>(SB), Y2, Y3
+    VADDPD Y4, Y3, Y3
+    VFMADD231PD log64_ln2hi<>(SB), Y2, Y3 // Y3 = ln(base)
+
+    // y = exp[i]*ln(base[i]), clamped to [-746, 710]; the split 2^k
+    // reconstruction below covers the whole result range
+    VMOVUPD (DI), Y8                   // Y8 = exponents (finite)
+    VMULPD Y8, Y3, Y0
+    VMINPD log64_powclamp_hi<>(SB), Y0, Y0
+    VMAXPD log64_powclamp_lo<>(SB), Y0, Y0
+
+    // --- exp core (see expAVX) ---
+    VMULPD Y15, Y0, Y1
+    VROUNDPD $0, Y1, Y2                // k
+    VMULPD Y14, Y2, Y3
+    VSUBPD Y3, Y0, Y3                  // r
+    VMULPD Y3, Y9, Y4
+    VADDPD Y10, Y4, Y4
+    VMULPD Y3, Y4, Y4
+    VADDPD Y11, Y4, Y4
+    VMULPD Y3, Y4, Y4
+    VADDPD Y12, Y4, Y4
+    VMULPD Y3, Y4, Y4
+    VADDPD Y13, Y4, Y4
+    VMULPD Y3, Y4, Y4
+    VADDPD Y13, Y4, Y4                 // exp(r)
+    // Split 2^k reconstruction (see powAVX)
+    VCVTTPD2DQY Y2, X5                 // X5 = 4 x int32(k)
+    VPSRAD $1, X5, X3                  // k1 = k >> 1
+    VPSUBD X3, X5, X5                  // k2 = k - k1
+    VPMOVSXDQ X3, Y3
+    VPSLLQ $52, Y3, Y3
+    VPADDQ sigmoid_one64<>(SB), Y3, Y3 // 2^k1 bits
+    VMULPD Y3, Y4, Y4                  // exp(r) * 2^k1
+    VPMOVSXDQ X5, Y5
+    VPSLLQ $52, Y5, Y5
+    VPADDQ sigmoid_one64<>(SB), Y5, Y5 // 2^k2 bits
+    VMULPD Y5, Y4, Y4                  // * 2^k2 = exp(y)
+
+    VMOVUPD Y4, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ R8
+    JNZ  powelem64_loop4
+
+powelem64_remainder:
+    ANDQ $3, CX
+    JZ   powelem64_done
+
+powelem64_scalar:
+    MOVQ (SI), AX
+    VMOVSD (SI), X0
+
+    XORQ R9, R9
+    MOVQ $0x0010000000000000, BX
+    CMPQ AX, BX
+    JGE  powelem64_scalar_normal
+    VMOVSD log64_two64<>(SB), X2       // 2^64
+    VMULSD X2, X0, X0
+    VMOVQ X0, AX
+    MOVQ $-64, R9
+
+powelem64_scalar_normal:
+    MOVQ $0x3FE6A09E00000000, BX
+    MOVQ AX, R10
+    SUBQ BX, R10                       // tmp
+    MOVQ R10, R11
+    SARQ $52, R11                      // e
+    ADDQ R9, R11
+    MOVQ $0xFFF0000000000000, BX
+    ANDQ BX, R10
+    SUBQ R10, AX                       // bits(m)
+    VMOVQ AX, X2
+    CVTSQ2SD R11, X3                   // e
+
+    VSUBSD X13, X2, X4                 // m - 1
+    VADDSD X13, X2, X5                 // m + 1
+    VDIVSD X5, X4, X4                  // s
+    VMULSD X4, X4, X5                  // t
+    VMOVSD log64_c0<>(SB), X1
+    VFMADD213SD log64_c1<>(SB), X5, X1
+    VFMADD213SD log64_c2<>(SB), X5, X1
+    VFMADD213SD log64_c3<>(SB), X5, X1
+    VFMADD213SD log64_c4<>(SB), X5, X1
+    VFMADD213SD log64_c5<>(SB), X5, X1
+    VFMADD213SD log64_c6<>(SB), X5, X1
+    VMULSD X4, X5, X5                  // s*t
+    VADDSD X4, X4, X4                  // 2s
+    VFMADD231SD X1, X5, X4             // lnm
+    VMULSD log64_ln2lo<>(SB), X3, X5
+    VADDSD X4, X5, X5
+    VFMADD231SD log64_ln2hi<>(SB), X3, X5 // ln(base)
+
+    VMOVSD (DI), X8                    // p
+    VMULSD X8, X5, X0
+    VMINSD log64_powclamp_hi<>(SB), X0, X0
+    VMAXSD log64_powclamp_lo<>(SB), X0, X0
+
+    VMULSD X15, X0, X1
+    VROUNDSD $0, X1, X1, X2
+    VMULSD X14, X2, X3
+    VSUBSD X3, X0, X3
+    VMULSD X3, X9, X4
+    VADDSD X10, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X11, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X12, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X13, X4, X4
+    VMULSD X3, X4, X4
+    VADDSD X13, X4, X4
+    // Split 2^k reconstruction (see powAVX)
+    VCVTTSD2SI X2, AX                  // k
+    MOVQ AX, R10
+    SARQ $1, R10                       // k1 = k >> 1
+    SUBQ R10, AX                       // k2 = k - k1
+    MOVQ $0x3FF0000000000000, BX
+    SHLQ $52, R10
+    ADDQ BX, R10
+    VMOVQ R10, X5
+    VMULSD X5, X4, X4                  // exp(r) * 2^k1
+    SHLQ $52, AX
+    ADDQ BX, AX
+    VMOVQ AX, X5
+    VMULSD X5, X4, X4                  // * 2^k2 = exp(y)
+
+    VMOVSD X4, (DX)
+    ADDQ $8, SI
+    ADDQ $8, DI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  powelem64_scalar
+
+powelem64_done:
+    VZEROUPPER
+    RET
+
+// Pow clamp bounds: wider than the Exp kernel's +-709 because the pow
+// kernels split the 2^k reconstruction (2^(k>>1) * 2^(k-(k>>1))), which
+// covers the full float64 result range. ln(MaxFloat64) ~ 709.78,
+// ln(smallest subnormal) ~ -744.44.
+DATA log64_powclamp_hi<>+0x00(SB)/8, $0x4086300000000000  // 710.0
+DATA log64_powclamp_hi<>+0x08(SB)/8, $0x4086300000000000
+DATA log64_powclamp_hi<>+0x10(SB)/8, $0x4086300000000000
+DATA log64_powclamp_hi<>+0x18(SB)/8, $0x4086300000000000
+GLOBL log64_powclamp_hi<>(SB), RODATA|NOPTR, $32
+
+DATA log64_powclamp_lo<>+0x00(SB)/8, $0xc087500000000000  // -746.0
+DATA log64_powclamp_lo<>+0x08(SB)/8, $0xc087500000000000
+DATA log64_powclamp_lo<>+0x10(SB)/8, $0xc087500000000000
+DATA log64_powclamp_lo<>+0x18(SB)/8, $0xc087500000000000
+GLOBL log64_powclamp_lo<>(SB), RODATA|NOPTR, $32

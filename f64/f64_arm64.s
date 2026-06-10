@@ -1830,3 +1830,777 @@ dot4d_store:
     FMOVD F2, 16(R0)
     FMOVD F3, 24(R0)
     RET
+
+// ============================================================================
+// logNEON64 / powNEON64 / powElemNEON64: vectorized natural log core (#109)
+// ============================================================================
+
+// Exp-core constants for the pow kernels, loaded per iteration with one VLD1
+// pair into working registers because the persistent V12-V31 budget is
+// exhausted by the log-core constants: [ln(2), 0.5, 1/6, 1/24, 1/120], one
+// lane pair each.
+DATA log64neon_expc<>+0x00(SB)/8, $0x3FE62E42FEFA39EF
+DATA log64neon_expc<>+0x08(SB)/8, $0x3FE62E42FEFA39EF
+DATA log64neon_expc<>+0x10(SB)/8, $0x3FE0000000000000
+DATA log64neon_expc<>+0x18(SB)/8, $0x3FE0000000000000
+DATA log64neon_expc<>+0x20(SB)/8, $0x3FC5555555555555
+DATA log64neon_expc<>+0x28(SB)/8, $0x3FC5555555555555
+DATA log64neon_expc<>+0x30(SB)/8, $0x3FA5555555555555
+DATA log64neon_expc<>+0x38(SB)/8, $0x3FA5555555555555
+DATA log64neon_expc<>+0x40(SB)/8, $0x3F81111111111111
+DATA log64neon_expc<>+0x48(SB)/8, $0x3F81111111111111
+GLOBL log64neon_expc<>(SB), RODATA|NOPTR, $80
+
+// func logNEON64(dst, src []float64, k1hi, k1lo, k2 float64)
+// Shared kernel for Log, Log2, and Log10: per lane it computes
+// result = e*k1hi + (lnm*k2 + e*k1lo), with x = m*2^e, m in
+// [sqrt(2)/2, sqrt(2)) and lnm = ln(m) = 2s + s*t*P(t) for s = (m-1)/(m+1),
+// t = s^2 (atanh form, SLEEF xlog_u1 minimax polynomial; same algorithm as
+// the amd64 logAVX). Positive subnormal inputs are pre-scaled by 2^64
+// (exponent bias -64). Special lanes are fixed up with BIT blends from the
+// original input: +Inf -> +Inf, +-0 -> -Inf, x < 0 or NaN -> NaN, matching
+// math.Log. Processes 2 elements per iteration; the 0-1 element tail uses
+// the scalar path below.
+TEXT ·logNEON64(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    // Special-value constants for the blend fixups
+    MOVD $0x7FF0000000000000, R10
+    VMOV R10, V13.D[0]
+    VDUP V13.D[0], V13.D2             // V13 = +Inf
+    MOVD $0xFFF0000000000000, R10
+    VMOV R10, V14.D[0]
+    VDUP V14.D[0], V14.D2             // V14 = -Inf
+    MOVD $0x7FF8000000000000, R10
+    VMOV R10, V15.D[0]
+    VDUP V15.D[0], V15.D2             // V15 = quiet NaN
+
+    // Reduction constants (see logAVX for the algorithm notes)
+    MOVD $0x3FE6A09E00000000, R10
+    VMOV R10, V16.D[0]
+    VDUP V16.D[0], V16.D2             // V16 = reduction offset
+    MOVD $0xFFF0000000000000, R10
+    VMOV R10, V17.D[0]
+    VDUP V17.D[0], V17.D2             // V17 = exponent mask
+    MOVD $0x0010000000000000, R10
+    VMOV R10, V18.D[0]
+    VDUP V18.D[0], V18.D2             // V18 = DBL_MIN
+    MOVD $0x43F0000000000000, R10
+    VMOV R10, V19.D[0]
+    VDUP V19.D[0], V19.D2             // V19 = 2^64 (subnormal pre-scale)
+    MOVD $0xC050000000000000, R10
+    VMOV R10, V20.D[0]
+    VDUP V20.D[0], V20.D2             // V20 = -64.0 (exponent bias)
+    FMOVD $1.0, F21
+    VDUP V21.D[0], V21.D2             // V21 = 1.0
+
+    // Reconstruction constants from the arguments
+    FMOVD k1hi+48(FP), F22
+    VDUP V22.D[0], V22.D2             // V22 = k1hi
+    FMOVD k1lo+56(FP), F23
+    VDUP V23.D[0], V23.D2             // V23 = k1lo
+    FMOVD k2+64(FP), F24
+    VDUP V24.D[0], V24.D2             // V24 = k2
+
+    // SLEEF xlog_u1 minimax coefficients c0..c6
+    MOVD $0x3FC39C4F5407567E, R10
+    VMOV R10, V25.D[0]
+    VDUP V25.D[0], V25.D2             // V25 = c0 = 0.15320769885027014
+    MOVD $0x3FC3872E67FE8E84, R10
+    VMOV R10, V26.D[0]
+    VDUP V26.D[0], V26.D2             // V26 = c1 = 0.15256290510034287
+    MOVD $0x3FC747353A506035, R10
+    VMOV R10, V27.D[0]
+    VDUP V27.D[0], V27.D2             // V27 = c2 = 0.1818605932937786
+    MOVD $0x3FCC71C0A65ECD8E, R10
+    VMOV R10, V28.D[0]
+    VDUP V28.D[0], V28.D2             // V28 = c3 = 0.222221451983938
+    MOVD $0x3FD249249A68A245, R10
+    VMOV R10, V29.D[0]
+    VDUP V29.D[0], V29.D2             // V29 = c4 = 0.28571429327942993
+    MOVD $0x3FD99999998F92EA, R10
+    VMOV R10, V30.D[0]
+    VDUP V30.D[0], V30.D2             // V30 = c5 = 0.3999999999635252
+    MOVD $0x3FE55555555557AE, R10
+    VMOV R10, V31.D[0]
+    VDUP V31.D[0], V31.D2             // V31 = c6 = 0.66666666666673335
+
+    LSR $1, R3, R4
+    CBZ R4, log64_neon_scalar
+
+log64_neon_loop2:
+    VLD1.P 16(R1), [V0.D2]            // V0 = x (kept for the special blends)
+
+    // Subnormal pre-scale: lanes with x < DBL_MIN scaled by 2^64, bias -64
+    WORD $0x6ee0e641                  // FCMGT V1.2D, V18.2D, V0.2D   mask: x < DBL_MIN
+    WORD $0x6e73dc02                  // FMUL V2.2D, V0.2D, V19.2D    x * 2^64
+    WORD $0x4ea11c23                  // MOV V3.16B, V1.16B           copy mask for BSL
+    WORD $0x6e601c43                  // BSL V3.16B, V2.16B, V0.16B   xs = mask ? x*2^64 : x
+    WORD $0x4e341c24                  // AND V4.16B, V1.16B, V20.16B  ebias = mask & -64.0
+
+    // tmp = bits(xs) - OFF; bits(m) = bits(xs) - (tmp & expmask);
+    // e = (tmp >> 52) + ebias, leaving m in [sqrt(2)/2, sqrt(2))
+    WORD $0x6ef08465                  // SUB V5.2D, V3.2D, V16.2D     tmp
+    WORD $0x4e311ca6                  // AND V6.16B, V5.16B, V17.16B  tmp & expmask
+    WORD $0x6ee68466                  // SUB V6.2D, V3.2D, V6.2D      bits(m)
+    WORD $0x4f4c04a5                  // SSHR V5.2D, V5.2D, #52       e (int64, arithmetic)
+    WORD $0x4e61d8a5                  // SCVTF V5.2D, V5.2D           e as float64
+    WORD $0x4e64d4a5                  // FADD V5.2D, V5.2D, V4.2D     e += ebias
+
+    // s = (m-1)/(m+1), t = s^2
+    WORD $0x4ef5d4c7                  // FSUB V7.2D, V6.2D, V21.2D    m - 1
+    WORD $0x4e75d4c6                  // FADD V6.2D, V6.2D, V21.2D    m + 1
+    WORD $0x6e66fce7                  // FDIV V7.2D, V7.2D, V6.2D     s
+    WORD $0x6e67dce6                  // FMUL V6.2D, V7.2D, V7.2D     t
+
+    // P(t), Horner ping-pong between V8/V9 with FMLA
+    WORD $0x4eb91f28                  // MOV V8.16B, V25.16B          acc = c0
+    WORD $0x4eba1f49                  // MOV V9.16B, V26.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c1 + acc*t
+    WORD $0x4ebb1f68                  // MOV V8.16B, V27.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     c2 + acc*t
+    WORD $0x4ebc1f89                  // MOV V9.16B, V28.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c3 + acc*t
+    WORD $0x4ebd1fa8                  // MOV V8.16B, V29.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     c4 + acc*t
+    WORD $0x4ebe1fc9                  // MOV V9.16B, V30.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c5 + acc*t
+    WORD $0x4ebf1fe8                  // MOV V8.16B, V31.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     P(t) = c6 + acc*t
+
+    // lnm = 2s + s*t*P(t)
+    WORD $0x6e66dcea                  // FMUL V10.2D, V7.2D, V6.2D    s*t
+    WORD $0x4e67d4eb                  // FADD V11.2D, V7.2D, V7.2D    2s
+    WORD $0x4e68cd4b                  // FMLA V11.2D, V10.2D, V8.2D   lnm
+
+    // result = e*k1hi + (lnm*k2 + e*k1lo)
+    WORD $0x6e77dcaa                  // FMUL V10.2D, V5.2D, V23.2D   e * k1lo
+    WORD $0x4e78cd6a                  // FMLA V10.2D, V11.2D, V24.2D  += lnm * k2
+    WORD $0x4e76ccaa                  // FMLA V10.2D, V5.2D, V22.2D   += e * k1hi
+
+    // Special lanes from the original x: +Inf -> +Inf, +-0 -> -Inf,
+    // x < 0 or NaN -> NaN
+    WORD $0x4e6de401                  // FCMEQ V1.2D, V0.2D, V13.2D   mask: x == +Inf
+    WORD $0x6ea11daa                  // BIT V10.16B, V13.16B, V1.16B
+    WORD $0x4ee0d801                  // FCMEQ V1.2D, V0.2D, #0       mask: x == +-0
+    WORD $0x6ea11dca                  // BIT V10.16B, V14.16B, V1.16B
+    WORD $0x4ee0e802                  // FCMLT V2.2D, V0.2D, #0       mask: x < 0
+    WORD $0x4e60e401                  // FCMEQ V1.2D, V0.2D, V0.2D    mask: x ordered
+    WORD $0x4ee11c42                  // ORN V2.16B, V2.16B, V1.16B   (x < 0) | NaN
+    WORD $0x6ea21dea                  // BIT V10.16B, V15.16B, V2.16B
+
+    VST1.P [V10.D2], 16(R0)
+    SUB $1, R4
+    CBNZ R4, log64_neon_loop2
+
+log64_neon_scalar:
+    AND $1, R3
+    CBZ R3, log64_neon_done
+
+log64_neon_scalar_loop:
+    MOVD (R1), R5                     // bits(x)
+    FMOVD (R1), F0
+
+    // Specials: FCMPD sets V for unordered, N for negative, Z for zero
+    FCMPD $(0.0), F0
+    BVS log64_neon_scalar_nan         // x is NaN
+    BMI log64_neon_scalar_nan         // x < 0
+    BEQ log64_neon_scalar_neginf      // x == +-0
+    MOVD $0x7FF0000000000000, R6
+    CMP R6, R5
+    BEQ log64_neon_scalar_posinf
+
+    // Subnormal pre-scale (x positive finite; bits compare as ints)
+    MOVD $0, R9
+    MOVD $0x0010000000000000, R6
+    CMP R6, R5
+    BGE log64_neon_scalar_normal
+    MOVD $0x43F0000000000000, R7
+    FMOVD R7, F2
+    FMULD F2, F0, F0
+    FMOVD F0, R5
+    MOVD $-64, R9
+
+log64_neon_scalar_normal:
+    MOVD $0x3FE6A09E00000000, R6
+    SUB R6, R5, R7                    // tmp = bits - OFF
+    ASR $52, R7, R8                   // e
+    ADD R9, R8, R8                    // e += bias
+    MOVD $0xFFF0000000000000, R6
+    AND R6, R7, R7
+    SUB R7, R5, R5                    // bits(m)
+    FMOVD R5, F1                      // m
+    SCVTFD R8, F2                     // e as float64
+
+    // s = (m-1)/(m+1), t = s^2 (F21 = 1.0 from the vector constants)
+    FSUBD F21, F1, F3                 // m - 1
+    FADDD F21, F1, F4                 // m + 1
+    FDIVD F4, F3, F3                  // s
+    FMULD F3, F3, F4                  // t
+
+    // P(t): FMADDD Fm, Fa, Fn, Fd computes Fd = Fa + Fn*Fm
+    FMADDD F4, F26, F25, F5           // c1 + c0*t
+    FMADDD F4, F27, F5, F5            // c2 + acc*t
+    FMADDD F4, F28, F5, F5            // c3 + acc*t
+    FMADDD F4, F29, F5, F5            // c4 + acc*t
+    FMADDD F4, F30, F5, F5            // c5 + acc*t
+    FMADDD F4, F31, F5, F5            // P(t) = c6 + acc*t
+
+    FMULD F4, F3, F4                  // s*t
+    FADDD F3, F3, F3                  // 2s
+    FMADDD F5, F3, F4, F3             // lnm = 2s + s*t*P(t)
+
+    FMULD F23, F2, F4                 // e * k1lo
+    FMADDD F24, F4, F3, F4            // += lnm * k2
+    FMADDD F22, F4, F2, F4            // += e * k1hi
+    FMOVD F4, (R0)
+    B log64_neon_scalar_next
+
+log64_neon_scalar_nan:
+    MOVD $0x7FF8000000000000, R6
+    MOVD R6, (R0)
+    B log64_neon_scalar_next
+
+log64_neon_scalar_neginf:
+    MOVD $0xFFF0000000000000, R6
+    MOVD R6, (R0)
+    B log64_neon_scalar_next
+
+log64_neon_scalar_posinf:
+    MOVD $0x7FF0000000000000, R6
+    MOVD R6, (R0)
+
+log64_neon_scalar_next:
+    ADD $8, R1
+    ADD $8, R0
+    SUB $1, R3
+    CBNZ R3, log64_neon_scalar_loop
+
+log64_neon_done:
+    RET
+
+// func powNEON64(dst, src []float64, exp float64)
+// Fused pow(x, p) = exp(p*ln(x)) for slices whose elements are all positive
+// and finite (the dispatcher guarantees this, see powSIMDOK64). The log core
+// matches logNEON64; the exp core matches expNEON64 except y = p*ln(x) is
+// clamped to [-746, 710] (past ln(MaxFloat64) and ln of the smallest
+// subnormal) and the 2^k reconstruction is split into
+// 2^(k>>1) * 2^(k-(k>>1)), so overflow goes to +Inf and underflow degrades
+// gradually through subnormals to 0, matching math.Pow's result classes
+// (see powAVX). Accuracy is bounded by the exp core's degree-5 polynomial
+// (~3e-6 relative).
+TEXT ·powNEON64(SB), NOSPLIT, $0-56
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+    MOVD $log64neon_expc<>(SB), R5    // exp-core constant table
+    ADD $64, R5, R6                   // second VLD1 base (c5 = 1/120)
+
+    FMOVD exp+48(FP), F12
+    VDUP V12.D[0], V12.D2             // V12 = p
+
+    // Pow clamp bounds: wider than Exp's +-709 because the split 2^k
+    // reconstruction covers the full result range (see powAVX)
+    MOVD $0x4086300000000000, R10
+    VMOV R10, V13.D[0]
+    VDUP V13.D[0], V13.D2             // V13 = 710.0
+    MOVD $0xC087500000000000, R10
+    VMOV R10, V14.D[0]
+    VDUP V14.D[0], V14.D2             // V14 = -746.0
+
+    // Log-core reduction constants (see logNEON64)
+    MOVD $0x3FE6A09E00000000, R10
+    VMOV R10, V16.D[0]
+    VDUP V16.D[0], V16.D2             // V16 = reduction offset
+    MOVD $0xFFF0000000000000, R10
+    VMOV R10, V17.D[0]
+    VDUP V17.D[0], V17.D2             // V17 = exponent mask
+    MOVD $0x0010000000000000, R10
+    VMOV R10, V18.D[0]
+    VDUP V18.D[0], V18.D2             // V18 = DBL_MIN
+    MOVD $0x43F0000000000000, R10
+    VMOV R10, V19.D[0]
+    VDUP V19.D[0], V19.D2             // V19 = 2^64
+    MOVD $0xC050000000000000, R10
+    VMOV R10, V20.D[0]
+    VDUP V20.D[0], V20.D2             // V20 = -64.0
+    FMOVD $1.0, F21
+    VDUP V21.D[0], V21.D2             // V21 = 1.0
+
+    // fdlibm ln(2) hi/lo split and log2(e)
+    MOVD $0x3FE62E42FEE00000, R10
+    VMOV R10, V22.D[0]
+    VDUP V22.D[0], V22.D2             // V22 = ln2 hi
+    MOVD $0x3DEA39EF35793C76, R10
+    VMOV R10, V23.D[0]
+    VDUP V23.D[0], V23.D2             // V23 = ln2 lo
+    MOVD $0x3FF71547652B82FE, R10
+    VMOV R10, V24.D[0]
+    VDUP V24.D[0], V24.D2             // V24 = log2(e)
+
+    // SLEEF xlog_u1 minimax coefficients c0..c6
+    MOVD $0x3FC39C4F5407567E, R10
+    VMOV R10, V25.D[0]
+    VDUP V25.D[0], V25.D2             // V25 = c0
+    MOVD $0x3FC3872E67FE8E84, R10
+    VMOV R10, V26.D[0]
+    VDUP V26.D[0], V26.D2             // V26 = c1
+    MOVD $0x3FC747353A506035, R10
+    VMOV R10, V27.D[0]
+    VDUP V27.D[0], V27.D2             // V27 = c2
+    MOVD $0x3FCC71C0A65ECD8E, R10
+    VMOV R10, V28.D[0]
+    VDUP V28.D[0], V28.D2             // V28 = c3
+    MOVD $0x3FD249249A68A245, R10
+    VMOV R10, V29.D[0]
+    VDUP V29.D[0], V29.D2             // V29 = c4
+    MOVD $0x3FD99999998F92EA, R10
+    VMOV R10, V30.D[0]
+    VDUP V30.D[0], V30.D2             // V30 = c5
+    MOVD $0x3FE55555555557AE, R10
+    VMOV R10, V31.D[0]
+    VDUP V31.D[0], V31.D2             // V31 = c6
+
+    LSR $1, R3, R4
+    CBZ R4, pow64_neon_scalar
+
+pow64_neon_loop2:
+    VLD1.P 16(R1), [V0.D2]            // V0 = x (positive finite)
+
+    // --- log core (see logNEON64) ---
+    WORD $0x6ee0e641                  // FCMGT V1.2D, V18.2D, V0.2D   mask: x < DBL_MIN
+    WORD $0x6e73dc02                  // FMUL V2.2D, V0.2D, V19.2D    x * 2^64
+    WORD $0x4ea11c23                  // MOV V3.16B, V1.16B
+    WORD $0x6e601c43                  // BSL V3.16B, V2.16B, V0.16B   xs
+    WORD $0x4e341c24                  // AND V4.16B, V1.16B, V20.16B  ebias
+    WORD $0x6ef08465                  // SUB V5.2D, V3.2D, V16.2D     tmp
+    WORD $0x4e311ca6                  // AND V6.16B, V5.16B, V17.16B
+    WORD $0x6ee68466                  // SUB V6.2D, V3.2D, V6.2D      bits(m)
+    WORD $0x4f4c04a5                  // SSHR V5.2D, V5.2D, #52       e (int64)
+    WORD $0x4e61d8a5                  // SCVTF V5.2D, V5.2D           e as float64
+    WORD $0x4e64d4a5                  // FADD V5.2D, V5.2D, V4.2D     e += ebias
+    WORD $0x4ef5d4c7                  // FSUB V7.2D, V6.2D, V21.2D    m - 1
+    WORD $0x4e75d4c6                  // FADD V6.2D, V6.2D, V21.2D    m + 1
+    WORD $0x6e66fce7                  // FDIV V7.2D, V7.2D, V6.2D     s
+    WORD $0x6e67dce6                  // FMUL V6.2D, V7.2D, V7.2D     t
+    WORD $0x4eb91f28                  // MOV V8.16B, V25.16B          acc = c0
+    WORD $0x4eba1f49                  // MOV V9.16B, V26.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c1 + acc*t
+    WORD $0x4ebb1f68                  // MOV V8.16B, V27.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     c2 + acc*t
+    WORD $0x4ebc1f89                  // MOV V9.16B, V28.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c3 + acc*t
+    WORD $0x4ebd1fa8                  // MOV V8.16B, V29.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     c4 + acc*t
+    WORD $0x4ebe1fc9                  // MOV V9.16B, V30.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c5 + acc*t
+    WORD $0x4ebf1fe8                  // MOV V8.16B, V31.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     P(t)
+    WORD $0x6e66dcea                  // FMUL V10.2D, V7.2D, V6.2D    s*t
+    WORD $0x4e67d4eb                  // FADD V11.2D, V7.2D, V7.2D    2s
+    WORD $0x4e68cd4b                  // FMLA V11.2D, V10.2D, V8.2D   lnm
+
+    // ln(x) = e*ln2hi + (e*ln2lo + lnm)
+    WORD $0x6e77dcaa                  // FMUL V10.2D, V5.2D, V23.2D   e * ln2lo
+    WORD $0x4e6bd54a                  // FADD V10.2D, V10.2D, V11.2D  + lnm
+    WORD $0x4e76ccaa                  // FMLA V10.2D, V5.2D, V22.2D   += e * ln2hi
+
+    // y = p*ln(x), clamped to [-746, 710]
+    WORD $0x6e6cdd40                  // FMUL V0.2D, V10.2D, V12.2D   y
+    WORD $0x4eedf400                  // FMIN V0.2D, V0.2D, V13.2D
+    WORD $0x4e6ef400                  // FMAX V0.2D, V0.2D, V14.2D
+
+    // --- exp core (see expNEON64); constants from the table ---
+    VLD1 (R5), [V1.D2, V2.D2, V3.D2, V4.D2] // ln2, 0.5, 1/6, 1/24
+    VLD1 (R6), [V5.D2]                      // 1/120
+    WORD $0x6e78dc07                  // FMUL V7.2D, V0.2D, V24.2D    y * log2e
+    WORD $0x4e6188e7                  // FRINTN V7.2D, V7.2D          k
+    WORD $0x6e61dce8                  // FMUL V8.2D, V7.2D, V1.2D     k * ln2
+    WORD $0x4ee8d408                  // FSUB V8.2D, V0.2D, V8.2D     r
+    WORD $0x6e65dd09                  // FMUL V9.2D, V8.2D, V5.2D     r * c5
+    WORD $0x4e64d529                  // FADD V9.2D, V9.2D, V4.2D     + 1/24
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
+    WORD $0x4e63d529                  // FADD V9.2D, V9.2D, V3.2D     + 1/6
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
+    WORD $0x4e62d529                  // FADD V9.2D, V9.2D, V2.2D     + 0.5
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
+    WORD $0x4e75d529                  // FADD V9.2D, V9.2D, V21.2D    + 1
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
+    WORD $0x4e75d529                  // FADD V9.2D, V9.2D, V21.2D    exp(r)
+    // Split 2^k reconstruction: k reaches past the biased exponent range
+    // (down to -1076), so build 2^(k>>1) and 2^(k-(k>>1)) separately; the
+    // double multiply overflows to +Inf / underflows through subnormals to
+    // 0 exactly where math.Pow does.
+    WORD $0x4ee1b8e7                  // FCVTZS V7.2D, V7.2D          int(k)
+    WORD $0x4f7f04e8                  // SSHR V8.2D, V7.2D, #1        k1 = k >> 1
+    WORD $0x6ee884e7                  // SUB V7.2D, V7.2D, V8.2D      k2 = k - k1
+    WORD $0x4f745508                  // SHL V8.2D, V8.2D, #52
+    WORD $0x4ef58508                  // ADD V8.2D, V8.2D, V21.2D     2^k1 bits
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D     exp(r) * 2^k1
+    WORD $0x4f7454e7                  // SHL V7.2D, V7.2D, #52
+    WORD $0x4ef584e7                  // ADD V7.2D, V7.2D, V21.2D     2^k2 bits
+    WORD $0x6e67dd29                  // FMUL V9.2D, V9.2D, V7.2D     * 2^k2 = exp(y)
+
+    VST1.P [V9.D2], 16(R0)
+    SUB $1, R4
+    CBNZ R4, pow64_neon_loop2
+
+pow64_neon_scalar:
+    AND $1, R3
+    CBZ R3, pow64_neon_done
+
+pow64_neon_scalar_loop:
+    MOVD (R1), R7                     // bits(x)
+    FMOVD (R1), F0
+
+    // log core, scalar (x positive finite; see logNEON64 tail)
+    MOVD $0, R9
+    MOVD $0x0010000000000000, R8
+    CMP R8, R7
+    BGE pow64_neon_scalar_normal
+    MOVD $0x43F0000000000000, R10
+    FMOVD R10, F2
+    FMULD F2, F0, F0
+    FMOVD F0, R7
+    MOVD $-64, R9
+
+pow64_neon_scalar_normal:
+    MOVD $0x3FE6A09E00000000, R8
+    SUB R8, R7, R10                   // tmp
+    ASR $52, R10, R11                 // e
+    ADD R9, R11, R11
+    MOVD $0xFFF0000000000000, R8
+    AND R8, R10, R10
+    SUB R10, R7, R7                   // bits(m)
+    FMOVD R7, F1                      // m
+    SCVTFD R11, F2                    // e
+
+    FSUBD F21, F1, F3                 // m - 1
+    FADDD F21, F1, F4                 // m + 1
+    FDIVD F4, F3, F3                  // s
+    FMULD F3, F3, F4                  // t
+    FMADDD F4, F26, F25, F5           // c1 + c0*t
+    FMADDD F4, F27, F5, F5
+    FMADDD F4, F28, F5, F5
+    FMADDD F4, F29, F5, F5
+    FMADDD F4, F30, F5, F5
+    FMADDD F4, F31, F5, F5            // P(t)
+    FMULD F4, F3, F4                  // s*t
+    FADDD F3, F3, F3                  // 2s
+    FMADDD F5, F3, F4, F3             // lnm
+    FMULD F23, F2, F4                 // e * ln2lo
+    FADDD F3, F4, F4                  // + lnm
+    FMADDD F22, F4, F2, F4            // += e * ln2hi -> ln(x)
+
+    // y = p*ln(x), clamped to [-746, 710]
+    FMULD F12, F4, F0
+    FMIND F13, F0, F0
+    FMAXD F14, F0, F0
+
+    // exp core, scalar (see expNEON64 tail; F24 = log2e, F21 = 1.0)
+    FMULD F24, F0, F1
+    FRINTND F1, F2                    // k
+    MOVD $0x3FE62E42FEFA39EF, R8      // ln(2)
+    FMOVD R8, F3
+    FMULD F3, F2, F3
+    FSUBD F3, F0, F0                  // r
+    MOVD $0x3F81111111111111, R8      // 1/120
+    FMOVD R8, F4
+    FMULD F0, F4, F4
+    MOVD $0x3FA5555555555555, R8      // 1/24
+    FMOVD R8, F5
+    FADDD F5, F4, F4
+    FMULD F0, F4, F4
+    MOVD $0x3FC5555555555555, R8      // 1/6
+    FMOVD R8, F5
+    FADDD F5, F4, F4
+    FMULD F0, F4, F4
+    FMOVD $0.5, F5
+    FADDD F5, F4, F4
+    FMULD F0, F4, F4
+    FADDD F21, F4, F4
+    FMULD F0, F4, F4
+    FADDD F21, F4, F4                 // exp(r)
+    // Split 2^k reconstruction (see the vector body)
+    FCVTZSD F2, R8                    // k
+    ASR $1, R8, R10                   // k1 = k >> 1
+    SUB R10, R8, R8                   // k2 = k - k1
+    MOVD $0x3FF0000000000000, R11
+    LSL $52, R10, R10
+    ADD R11, R10, R10
+    FMOVD R10, F5
+    FMULD F5, F4, F4                  // exp(r) * 2^k1
+    LSL $52, R8, R8
+    ADD R11, R8, R8
+    FMOVD R8, F5
+    FMULD F5, F4, F4                  // * 2^k2 = exp(y)
+    FMOVD F4, (R0)
+    ADD $8, R1
+    ADD $8, R0
+    SUB $1, R3
+    CBNZ R3, pow64_neon_scalar_loop
+
+pow64_neon_done:
+    RET
+
+// func powElemNEON64(dst, base, exp []float64)
+// Elementwise pow(base[i], exp[i]) = exp(exp[i]*ln(base[i])). Same cores and
+// preconditions as powNEON64 (all bases positive finite, all exponents
+// finite), with the exponent loaded per lane instead of broadcast.
+TEXT ·powElemNEON64(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD base_base+24(FP), R1
+    MOVD exp_base+48(FP), R2
+    MOVD $log64neon_expc<>(SB), R5    // exp-core constant table
+    ADD $64, R5, R6                   // second VLD1 base (c5 = 1/120)
+
+    // Pow clamp bounds: wider than Exp's +-709 because the split 2^k
+    // reconstruction covers the full result range (see powAVX)
+    MOVD $0x4086300000000000, R10
+    VMOV R10, V13.D[0]
+    VDUP V13.D[0], V13.D2             // V13 = 710.0
+    MOVD $0xC087500000000000, R10
+    VMOV R10, V14.D[0]
+    VDUP V14.D[0], V14.D2             // V14 = -746.0
+
+    // Log-core reduction constants (see logNEON64)
+    MOVD $0x3FE6A09E00000000, R10
+    VMOV R10, V16.D[0]
+    VDUP V16.D[0], V16.D2             // V16 = reduction offset
+    MOVD $0xFFF0000000000000, R10
+    VMOV R10, V17.D[0]
+    VDUP V17.D[0], V17.D2             // V17 = exponent mask
+    MOVD $0x0010000000000000, R10
+    VMOV R10, V18.D[0]
+    VDUP V18.D[0], V18.D2             // V18 = DBL_MIN
+    MOVD $0x43F0000000000000, R10
+    VMOV R10, V19.D[0]
+    VDUP V19.D[0], V19.D2             // V19 = 2^64
+    MOVD $0xC050000000000000, R10
+    VMOV R10, V20.D[0]
+    VDUP V20.D[0], V20.D2             // V20 = -64.0
+    FMOVD $1.0, F21
+    VDUP V21.D[0], V21.D2             // V21 = 1.0
+
+    // fdlibm ln(2) hi/lo split and log2(e)
+    MOVD $0x3FE62E42FEE00000, R10
+    VMOV R10, V22.D[0]
+    VDUP V22.D[0], V22.D2             // V22 = ln2 hi
+    MOVD $0x3DEA39EF35793C76, R10
+    VMOV R10, V23.D[0]
+    VDUP V23.D[0], V23.D2             // V23 = ln2 lo
+    MOVD $0x3FF71547652B82FE, R10
+    VMOV R10, V24.D[0]
+    VDUP V24.D[0], V24.D2             // V24 = log2(e)
+
+    // SLEEF xlog_u1 minimax coefficients c0..c6
+    MOVD $0x3FC39C4F5407567E, R10
+    VMOV R10, V25.D[0]
+    VDUP V25.D[0], V25.D2             // V25 = c0
+    MOVD $0x3FC3872E67FE8E84, R10
+    VMOV R10, V26.D[0]
+    VDUP V26.D[0], V26.D2             // V26 = c1
+    MOVD $0x3FC747353A506035, R10
+    VMOV R10, V27.D[0]
+    VDUP V27.D[0], V27.D2             // V27 = c2
+    MOVD $0x3FCC71C0A65ECD8E, R10
+    VMOV R10, V28.D[0]
+    VDUP V28.D[0], V28.D2             // V28 = c3
+    MOVD $0x3FD249249A68A245, R10
+    VMOV R10, V29.D[0]
+    VDUP V29.D[0], V29.D2             // V29 = c4
+    MOVD $0x3FD99999998F92EA, R10
+    VMOV R10, V30.D[0]
+    VDUP V30.D[0], V30.D2             // V30 = c5
+    MOVD $0x3FE55555555557AE, R10
+    VMOV R10, V31.D[0]
+    VDUP V31.D[0], V31.D2             // V31 = c6
+
+    LSR $1, R3, R4
+    CBZ R4, powelem64_neon_scalar
+
+powelem64_neon_loop2:
+    VLD1.P 16(R1), [V0.D2]            // V0 = base (positive finite)
+
+    // --- log core (see logNEON64) ---
+    WORD $0x6ee0e641                  // FCMGT V1.2D, V18.2D, V0.2D   mask: x < DBL_MIN
+    WORD $0x6e73dc02                  // FMUL V2.2D, V0.2D, V19.2D    x * 2^64
+    WORD $0x4ea11c23                  // MOV V3.16B, V1.16B
+    WORD $0x6e601c43                  // BSL V3.16B, V2.16B, V0.16B   xs
+    WORD $0x4e341c24                  // AND V4.16B, V1.16B, V20.16B  ebias
+    WORD $0x6ef08465                  // SUB V5.2D, V3.2D, V16.2D     tmp
+    WORD $0x4e311ca6                  // AND V6.16B, V5.16B, V17.16B
+    WORD $0x6ee68466                  // SUB V6.2D, V3.2D, V6.2D      bits(m)
+    WORD $0x4f4c04a5                  // SSHR V5.2D, V5.2D, #52       e (int64)
+    WORD $0x4e61d8a5                  // SCVTF V5.2D, V5.2D           e as float64
+    WORD $0x4e64d4a5                  // FADD V5.2D, V5.2D, V4.2D     e += ebias
+    WORD $0x4ef5d4c7                  // FSUB V7.2D, V6.2D, V21.2D    m - 1
+    WORD $0x4e75d4c6                  // FADD V6.2D, V6.2D, V21.2D    m + 1
+    WORD $0x6e66fce7                  // FDIV V7.2D, V7.2D, V6.2D     s
+    WORD $0x6e67dce6                  // FMUL V6.2D, V7.2D, V7.2D     t
+    WORD $0x4eb91f28                  // MOV V8.16B, V25.16B          acc = c0
+    WORD $0x4eba1f49                  // MOV V9.16B, V26.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c1 + acc*t
+    WORD $0x4ebb1f68                  // MOV V8.16B, V27.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     c2 + acc*t
+    WORD $0x4ebc1f89                  // MOV V9.16B, V28.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c3 + acc*t
+    WORD $0x4ebd1fa8                  // MOV V8.16B, V29.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     c4 + acc*t
+    WORD $0x4ebe1fc9                  // MOV V9.16B, V30.16B
+    WORD $0x4e66cd09                  // FMLA V9.2D, V8.2D, V6.2D     c5 + acc*t
+    WORD $0x4ebf1fe8                  // MOV V8.16B, V31.16B
+    WORD $0x4e66cd28                  // FMLA V8.2D, V9.2D, V6.2D     P(t)
+    WORD $0x6e66dcea                  // FMUL V10.2D, V7.2D, V6.2D    s*t
+    WORD $0x4e67d4eb                  // FADD V11.2D, V7.2D, V7.2D    2s
+    WORD $0x4e68cd4b                  // FMLA V11.2D, V10.2D, V8.2D   lnm
+
+    // ln(base) = e*ln2hi + (e*ln2lo + lnm); the exponent load is issued
+    // first so it overlaps the dependent FMUL/FADD/FMLA chain
+    VLD1.P 16(R2), [V12.D2]           // V12 = exponents (finite)
+    WORD $0x6e77dcaa                  // FMUL V10.2D, V5.2D, V23.2D   e * ln2lo
+    WORD $0x4e6bd54a                  // FADD V10.2D, V10.2D, V11.2D  + lnm
+    WORD $0x4e76ccaa                  // FMLA V10.2D, V5.2D, V22.2D   += e * ln2hi
+
+    // y = exp[i]*ln(base[i]), clamped to [-746, 710]
+    WORD $0x6e6cdd40                  // FMUL V0.2D, V10.2D, V12.2D   y
+    WORD $0x4eedf400                  // FMIN V0.2D, V0.2D, V13.2D
+    WORD $0x4e6ef400                  // FMAX V0.2D, V0.2D, V14.2D
+
+    // --- exp core (see expNEON64); constants from the table ---
+    VLD1 (R5), [V1.D2, V2.D2, V3.D2, V4.D2] // ln2, 0.5, 1/6, 1/24
+    VLD1 (R6), [V5.D2]                      // 1/120
+    WORD $0x6e78dc07                  // FMUL V7.2D, V0.2D, V24.2D    y * log2e
+    WORD $0x4e6188e7                  // FRINTN V7.2D, V7.2D          k
+    WORD $0x6e61dce8                  // FMUL V8.2D, V7.2D, V1.2D     k * ln2
+    WORD $0x4ee8d408                  // FSUB V8.2D, V0.2D, V8.2D     r
+    WORD $0x6e65dd09                  // FMUL V9.2D, V8.2D, V5.2D     r * c5
+    WORD $0x4e64d529                  // FADD V9.2D, V9.2D, V4.2D     + 1/24
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
+    WORD $0x4e63d529                  // FADD V9.2D, V9.2D, V3.2D     + 1/6
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
+    WORD $0x4e62d529                  // FADD V9.2D, V9.2D, V2.2D     + 0.5
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
+    WORD $0x4e75d529                  // FADD V9.2D, V9.2D, V21.2D    + 1
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D
+    WORD $0x4e75d529                  // FADD V9.2D, V9.2D, V21.2D    exp(r)
+    // Split 2^k reconstruction: k reaches past the biased exponent range
+    // (down to -1076), so build 2^(k>>1) and 2^(k-(k>>1)) separately; the
+    // double multiply overflows to +Inf / underflows through subnormals to
+    // 0 exactly where math.Pow does.
+    WORD $0x4ee1b8e7                  // FCVTZS V7.2D, V7.2D          int(k)
+    WORD $0x4f7f04e8                  // SSHR V8.2D, V7.2D, #1        k1 = k >> 1
+    WORD $0x6ee884e7                  // SUB V7.2D, V7.2D, V8.2D      k2 = k - k1
+    WORD $0x4f745508                  // SHL V8.2D, V8.2D, #52
+    WORD $0x4ef58508                  // ADD V8.2D, V8.2D, V21.2D     2^k1 bits
+    WORD $0x6e68dd29                  // FMUL V9.2D, V9.2D, V8.2D     exp(r) * 2^k1
+    WORD $0x4f7454e7                  // SHL V7.2D, V7.2D, #52
+    WORD $0x4ef584e7                  // ADD V7.2D, V7.2D, V21.2D     2^k2 bits
+    WORD $0x6e67dd29                  // FMUL V9.2D, V9.2D, V7.2D     * 2^k2 = exp(y)
+
+    VST1.P [V9.D2], 16(R0)
+    SUB $1, R4
+    CBNZ R4, powelem64_neon_loop2
+
+powelem64_neon_scalar:
+    AND $1, R3
+    CBZ R3, powelem64_neon_done
+
+powelem64_neon_scalar_loop:
+    MOVD (R1), R7                     // bits(base)
+    FMOVD (R1), F0
+
+    // log core, scalar (base positive finite; see logNEON64 tail)
+    MOVD $0, R9
+    MOVD $0x0010000000000000, R8
+    CMP R8, R7
+    BGE powelem64_neon_scalar_normal
+    MOVD $0x43F0000000000000, R10
+    FMOVD R10, F2
+    FMULD F2, F0, F0
+    FMOVD F0, R7
+    MOVD $-64, R9
+
+powelem64_neon_scalar_normal:
+    MOVD $0x3FE6A09E00000000, R8
+    SUB R8, R7, R10                   // tmp
+    ASR $52, R10, R11                 // e
+    ADD R9, R11, R11
+    MOVD $0xFFF0000000000000, R8
+    AND R8, R10, R10
+    SUB R10, R7, R7                   // bits(m)
+    FMOVD R7, F1                      // m
+    SCVTFD R11, F2                    // e
+
+    FSUBD F21, F1, F3                 // m - 1
+    FADDD F21, F1, F4                 // m + 1
+    FDIVD F4, F3, F3                  // s
+    FMULD F3, F3, F4                  // t
+    FMADDD F4, F26, F25, F5           // c1 + c0*t
+    FMADDD F4, F27, F5, F5
+    FMADDD F4, F28, F5, F5
+    FMADDD F4, F29, F5, F5
+    FMADDD F4, F30, F5, F5
+    FMADDD F4, F31, F5, F5            // P(t)
+    FMULD F4, F3, F4                  // s*t
+    FADDD F3, F3, F3                  // 2s
+    FMADDD F5, F3, F4, F3             // lnm
+    FMULD F23, F2, F4                 // e * ln2lo
+    FADDD F3, F4, F4                  // + lnm
+    FMADDD F22, F4, F2, F4            // += e * ln2hi -> ln(base)
+
+    // y = exp[i]*ln(base[i]), clamped to [-746, 710]
+    FMOVD (R2), F12                   // p
+    FMULD F12, F4, F0
+    FMIND F13, F0, F0
+    FMAXD F14, F0, F0
+
+    // exp core, scalar (see expNEON64 tail; F24 = log2e, F21 = 1.0)
+    FMULD F24, F0, F1
+    FRINTND F1, F2                    // k
+    MOVD $0x3FE62E42FEFA39EF, R8      // ln(2)
+    FMOVD R8, F3
+    FMULD F3, F2, F3
+    FSUBD F3, F0, F0                  // r
+    MOVD $0x3F81111111111111, R8      // 1/120
+    FMOVD R8, F4
+    FMULD F0, F4, F4
+    MOVD $0x3FA5555555555555, R8      // 1/24
+    FMOVD R8, F5
+    FADDD F5, F4, F4
+    FMULD F0, F4, F4
+    MOVD $0x3FC5555555555555, R8      // 1/6
+    FMOVD R8, F5
+    FADDD F5, F4, F4
+    FMULD F0, F4, F4
+    FMOVD $0.5, F5
+    FADDD F5, F4, F4
+    FMULD F0, F4, F4
+    FADDD F21, F4, F4
+    FMULD F0, F4, F4
+    FADDD F21, F4, F4                 // exp(r)
+    // Split 2^k reconstruction (see the vector body)
+    FCVTZSD F2, R8                    // k
+    ASR $1, R8, R10                   // k1 = k >> 1
+    SUB R10, R8, R8                   // k2 = k - k1
+    MOVD $0x3FF0000000000000, R11
+    LSL $52, R10, R10
+    ADD R11, R10, R10
+    FMOVD R10, F5
+    FMULD F5, F4, F4                  // exp(r) * 2^k1
+    LSL $52, R8, R8
+    ADD R11, R8, R8
+    FMOVD R8, F5
+    FMULD F5, F4, F4                  // * 2^k2 = exp(y)
+    FMOVD F4, (R0)
+    ADD $8, R1
+    ADD $8, R2
+    ADD $8, R0
+    SUB $1, R3
+    CBNZ R3, powelem64_neon_scalar_loop
+
+powelem64_neon_done:
+    RET

@@ -77,7 +77,8 @@
 //
 // Activation functions: Sigmoid, ReLU, Tanh, Exp, ClampScale
 //
-// Transcendental (f32/f64): Log, Log2, Log10, Pow, PowElem (plus LogInPlace, PowInPlace)
+// Transcendental (f32/f64): Log, Log2, Log10, Pow, PowElem (plus LogInPlace, PowInPlace);
+// f64 is SIMD-accelerated on AVX2+FMA and NEON (f32 kernels tracked in #109)
 //
 // Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
 //

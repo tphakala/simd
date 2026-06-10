@@ -3,6 +3,7 @@
 package f64
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/tphakala/simd/cpu"
@@ -683,6 +684,67 @@ func exp64(dst, src []float64) {
 	}
 	exp64Go(dst, src)
 }
+
+// logSIMDOK reports whether the AVX log/pow kernels can run: they need AVX2
+// (YMM integer ops for the exponent extraction) and FMA (polynomial
+// evaluation). AVX1-only or FMA-less CPUs use the accurate Go path.
+func logSIMDOK(n int) bool {
+	return cpu.X86.AVX2 && cpu.X86.FMA && n >= minAVXElements
+}
+
+func log64(dst, src []float64) {
+	if logSIMDOK(len(dst)) {
+		logAVX(dst, src, logLn2Hi64, logLn2Lo64, 1.0)
+		return
+	}
+	logGo(dst, src)
+}
+
+func log2_64(dst, src []float64) {
+	// log2(x) = e + ln(m)*log2(e): the e term is exact, so no hi/lo split is
+	// needed and exact powers of two come out exact.
+	if logSIMDOK(len(dst)) {
+		logAVX(dst, src, 1.0, 0.0, logLog2E64)
+		return
+	}
+	log2Go(dst, src)
+}
+
+func log10_64(dst, src []float64) {
+	if logSIMDOK(len(dst)) {
+		logAVX(dst, src, logL102Hi64, logL102Lo64, logLog10E64)
+		return
+	}
+	log10Go(dst, src)
+}
+
+func pow64(dst, src []float64, exp float64) {
+	// A zero or non-finite exponent has whole-slice math.Pow semantics
+	// (for example Pow(x, 0) = 1 even for NaN x); keep those exact.
+	if logSIMDOK(len(dst)) && exp != 0 && !math.IsNaN(exp) && !math.IsInf(exp, 0) &&
+		powSIMDOK64(src[:len(dst)]) {
+		powAVX(dst, src, exp)
+		return
+	}
+	powGo(dst, src, exp)
+}
+
+func powElem64(dst, base, exp []float64) {
+	if logSIMDOK(len(dst)) && powSIMDOK64(base[:len(dst)]) && allFinite64(exp[:len(dst)]) {
+		powElemAVX(dst, base, exp)
+		return
+	}
+	powElemGo(dst, base, exp)
+}
+
+//go:noescape
+func logAVX(dst, src []float64, k1hi, k1lo, k2 float64)
+
+//go:noescape
+func powAVX(dst, src []float64, exp float64)
+
+//go:noescape
+func powElemAVX(dst, base, exp []float64)
 
 //go:noescape
 func expAVX(dst, src []float64)
