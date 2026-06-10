@@ -410,7 +410,6 @@ func Sqrt(dst, a []float32) {
 	sqrt32(dst[:n], a[:n])
 }
 
-
 // Round rounds each element to the nearest integer, half away from zero:
 // dst[i] = round(src[i]). Processes min(len(dst), len(src)) elements.
 func Round(dst, src []float32) {
@@ -722,6 +721,84 @@ func ExpInPlace(a []float32) {
 		return
 	}
 	exp32(a, a)
+}
+
+// Log computes the natural logarithm elementwise: dst[i] = ln(src[i]).
+// Processes min(len(dst), len(src)) elements. Edge cases match math.Log:
+// Log(0) = -Inf, Log(x < 0) = NaN, Log(+Inf) = +Inf, Log(NaN) = NaN.
+//
+// The implementation is currently the accurate pure-Go reference on every
+// architecture; a vectorized kernel is a profiled follow-up (see issue #109).
+// Allocation-free and safe for concurrent use on disjoint buffers.
+func Log(dst, src []float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	logGo(dst[:n], src[:n])
+}
+
+// LogInPlace computes the natural logarithm in place: a[i] = ln(a[i]).
+func LogInPlace(a []float32) {
+	if len(a) == 0 {
+		return
+	}
+	logGo(a, a)
+}
+
+// Log2 computes the base-2 logarithm elementwise: dst[i] = log2(src[i]).
+// Useful for log-frequency and octave math. Processes min(len(dst), len(src))
+// elements; edge cases match math.Log2.
+func Log2(dst, src []float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	log2Go(dst[:n], src[:n])
+}
+
+// Log10 computes the base-10 logarithm elementwise: dst[i] = log10(src[i]).
+// This is the building block for dB conversion (20*log10 for amplitude,
+// 10*log10 for power) and log-mel spectrograms. Processes
+// min(len(dst), len(src)) elements; edge cases match math.Log10.
+func Log10(dst, src []float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	log10Go(dst[:n], src[:n])
+}
+
+// Pow raises each element to a scalar power: dst[i] = src[i]**exp. The scalar
+// exponent is the common DSP case (for example the ^0.35 power-law compression
+// in PCEN). Processes min(len(dst), len(src)) elements; edge cases match
+// math.Pow (Pow(x, 0) = 1, Pow(negative, non-integer) = NaN, Pow(0, negative)
+// = +Inf). Allocation-free; a vectorized kernel is a profiled follow-up (#109).
+func Pow(dst, src []float32, exp float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	powGo(dst[:n], src[:n], exp)
+}
+
+// PowInPlace raises each element to a scalar power in place: a[i] = a[i]**exp.
+func PowInPlace(a []float32, exp float32) {
+	if len(a) == 0 {
+		return
+	}
+	powGo(a, a, exp)
+}
+
+// PowElem raises each base to its own exponent: dst[i] = base[i]**exp[i].
+// Processes min(len(dst), len(base), len(exp)) elements; edge cases match
+// math.Pow.
+func PowElem(dst, base, exp []float32) {
+	n := min(len(dst), len(base), len(exp))
+	if n == 0 {
+		return
+	}
+	powElemGo(dst[:n], base[:n], exp[:n])
 }
 
 // Int32ToFloat32Scale converts int32 samples to float32 and scales in one pass.
