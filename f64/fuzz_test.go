@@ -61,7 +61,7 @@ func addByteLenSeeds(f *testing.F) {
 // eqF64: any NaN equals any NaN, +0.0 equals -0.0, else bit-identical.
 func eqF64(g, w float64) bool {
 	switch {
-	case g != g && w != w:
+	case math.IsNaN(g) && math.IsNaN(w):
 		return true
 	case g == 0 && w == 0:
 		return true

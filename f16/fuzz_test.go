@@ -80,10 +80,11 @@ func FuzzF16FromFloat32(f *testing.F) {
 			// Differential policy keys off the reference output, not the input.
 			// When the Go reference yields a NaN the SIMD path must also yield a
 			// NaN, but the payload may differ (the F16C instruction and the Go
-			// bit-twiddle reference quiet NaNs differently). Otherwise require a
-			// bit-exact match: this also covers float32 NaNs whose set mantissa
-			// bits all live in the truncated low 13 bits, which both paths map to
-			// the same f16 infinity (e.g. 0xff800030 -> 0xfc00).
+			// bit-twiddle reference quiet NaNs differently). Since fromFloat32Go
+			// forces the quiet bit, every NaN input lands in this branch, even
+			// float32 NaNs whose set mantissa bits all live in the truncated low
+			// 13 bits (e.g. 0xff800030 -> 0xfe00). Everything else must match
+			// bit-exactly.
 			if f16IsNaN(want[i]) {
 				if !f16IsNaN(got[i]) {
 					t.Fatalf("FromFloat32Slice src=%v (%#08x): got %#04x want a NaN (len=%d)", fv, math.Float32bits(fv), got[i], len(src))

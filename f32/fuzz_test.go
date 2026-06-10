@@ -81,7 +81,7 @@ func addByteLenSeeds(f *testing.F) {
 // is numerically irrelevant), and every other value must be bit-identical.
 func eqF32(g, w float32) bool {
 	switch {
-	case g != g && w != w:
+	case math.IsNaN(float64(g)) && math.IsNaN(float64(w)):
 		return true
 	case g == 0 && w == 0:
 		return true

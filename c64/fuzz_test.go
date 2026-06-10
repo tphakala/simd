@@ -38,7 +38,7 @@ func c64sBits(raw []byte) []complex64 {
 func c64sUnit(raw []byte) []complex64 {
 	out := make([]complex64, len(raw)/8)
 	for i := range out {
-		re := float32(int32(binary.LittleEndian.Uint32(raw[i*8:]))) / 2147483648.0  // / 2^31
+		re := float32(int32(binary.LittleEndian.Uint32(raw[i*8:]))) / 2147483648.0   // / 2^31
 		im := float32(int32(binary.LittleEndian.Uint32(raw[i*8+4:]))) / 2147483648.0 // / 2^31
 		out[i] = complex(re, im)
 	}
@@ -59,7 +59,7 @@ func addByteLenSeeds(f *testing.F) {
 // eqF32Bits: any NaN equals any NaN, +0 equals -0, else bit-identical.
 func eqF32Bits(g, w float32) bool {
 	switch {
-	case g != g && w != w:
+	case math.IsNaN(float64(g)) && math.IsNaN(float64(w)):
 		return true
 	case g == 0 && w == 0:
 		return true
