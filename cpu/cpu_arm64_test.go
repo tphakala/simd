@@ -22,12 +22,15 @@ func TestCpuInfoAllBranches(t *testing.T) {
 	}()
 
 	tests := []struct {
-		name                 string
+		name                  string
 		neon, fp16, sve, sve2 bool
-		want                 string
+		want                  string
 	}{
-		{"SVE2", true, true, true, true, "ARM64 SVE2"},
-		{"SVE", true, true, true, false, "ARM64 SVE"},
+		// SVE/SVE2 is detected but unused: the library runs the NEON tier, so Info()
+		// reports the NEON base with a detected-but-unused annotation.
+		{"SVE2", true, true, true, true, "ARM64 NEON+FP16 (SVE2 detected, unused)"},
+		{"SVE", true, true, true, false, "ARM64 NEON+FP16 (SVE detected, unused)"},
+		{"SVE_no_FP16", true, false, true, false, "ARM64 NEON (SVE detected, unused)"},
 		{"NEON+FP16", true, true, false, false, "ARM64 NEON+FP16"},
 		{"NEON", true, false, false, false, "ARM64 NEON"},
 		{"no_SIMD", false, false, false, false, "ARM64 (no SIMD)"},
