@@ -120,8 +120,9 @@ SIMD_DISABLE=all go test ./...      # force the pure-Go path everywhere
 ```
 
 The variable must be set before the process starts; it cannot be toggled at
-runtime, because the amd64 packages freeze their kernel function pointers during
-package init based on the features visible at that moment.
+runtime, because the SIMD packages cache their selected kernels during package
+init based on the features visible at that moment (function pointers on amd64,
+capability flags on arm64).
 
 ### `crc` - Cyclic Redundancy Checks
 

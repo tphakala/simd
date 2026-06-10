@@ -91,6 +91,9 @@ func Info() string {
 //	pmull      PMULL only
 //	all        every flag (forces the pure-Go path everywhere)
 func applyDisable(f *Features, spec string) {
+	if spec == "" {
+		return // common case: SIMD_DISABLE unset, nothing to clear
+	}
 	for tok := range strings.SplitSeq(spec, ",") {
 		switch strings.ToLower(strings.TrimSpace(tok)) {
 		case "":

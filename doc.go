@@ -25,8 +25,9 @@
 // "avx512", "avx", "neon", or "all"). It is useful for avoiding AVX-512
 // downclocking, exercising the lower tiers locally, and benchmarking tiers
 // against each other. Unknown tokens are ignored. The variable cannot be toggled
-// at runtime, because the amd64 packages freeze their kernel function pointers
-// during package init. See the cpu package for the full token table.
+// at runtime, because the SIMD packages cache their selected kernels during
+// package init (function pointers on amd64, capability flags on arm64). See the
+// cpu package for the full token table.
 //
 // # Quick Start
 //
