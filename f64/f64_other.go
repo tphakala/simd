@@ -60,3 +60,9 @@ func clampScale64(dst, src []float64, minVal, maxVal, scale float64) {
 }
 func tanh64(dst, src []float64) { tanh64Go(dst, src) }
 func exp64(dst, src []float64)  { exp64Go(dst, src) }
+
+func log64(dst, src []float64)              { logGo(dst, src) }
+func log2_64(dst, src []float64)            { log2Go(dst, src) }
+func log10_64(dst, src []float64)           { log10Go(dst, src) }
+func pow64(dst, src []float64, exp float64) { powGo(dst, src, exp) }
+func powElem64(dst, base, exp []float64)    { powElemGo(dst, base, exp) }
