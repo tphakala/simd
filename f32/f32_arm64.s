@@ -2872,3 +2872,288 @@ cd_neon_store:
 
 cd_neon_done:
     RET
+
+// ============================================================================
+// INTERLEAVE / DEINTERLEAVE N=6 and N=8 (profiling-gated, 5.1/7.1 audio)
+// The pair trick: ZIP adjacent channel pairs at .4S so each 64-bit lane holds a
+// [cA_i, cB_i] frame pair, then ST3/ST4 with .2D arrangement lays the pairs down
+// in frame order (and the inverse for deinterleave via LD3/LD4 .2D + UZP). Four
+// frames per iteration, then a scalar tail. WORD-encoded with arm64asm-checked
+// comments.
+// ZIP1 Vd.4S, Vn.4S, Vm.4S: 0x4E803800 | (Vm << 16) | (Vn << 5) | Vd
+// ZIP2 Vd.4S, Vn.4S, Vm.4S: 0x4E807800 | (Vm << 16) | (Vn << 5) | Vd
+// UZP1 Vd.4S, Vn.4S, Vm.4S: 0x4E801800 | (Vm << 16) | (Vn << 5) | Vd
+// UZP2 Vd.4S, Vn.4S, Vm.4S: 0x4E805800 | (Vm << 16) | (Vn << 5) | Vd
+// ============================================================================
+
+// func interleave6NEON(dst, s0, s1, s2, s3, s4, s5 []float32, n int)
+TEXT ·interleave6NEON(SB), NOSPLIT, $0-176
+    MOVD dst_base+0(FP), R0
+    MOVD s0_base+24(FP), R1
+    MOVD s1_base+48(FP), R2
+    MOVD s2_base+72(FP), R3
+    MOVD s3_base+96(FP), R4
+    MOVD s4_base+120(FP), R5
+    MOVD s5_base+144(FP), R6
+    MOVD n+168(FP), R7
+
+    LSR $2, R7, R8             // R8 = n / 4 (4 frames per iteration)
+    CBZ R8, interleave6_neon_tail
+
+interleave6_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]
+    VLD1.P 16(R2), [V1.S4]
+    VLD1.P 16(R3), [V2.S4]
+    VLD1.P 16(R4), [V3.S4]
+    VLD1.P 16(R5), [V4.S4]
+    VLD1.P 16(R6), [V5.S4]
+    WORD $0x4E813806           // ZIP1 V6.4S, V0.4S, V1.4S   (frames 0,1 ch 0,1)
+    WORD $0x4E833847           // ZIP1 V7.4S, V2.4S, V3.4S   (frames 0,1 ch 2,3)
+    WORD $0x4E853888           // ZIP1 V8.4S, V4.4S, V5.4S   (frames 0,1 ch 4,5)
+    WORD $0x4E817809           // ZIP2 V9.4S, V0.4S, V1.4S   (frames 2,3 ch 0,1)
+    WORD $0x4E83784A           // ZIP2 V10.4S, V2.4S, V3.4S  (frames 2,3 ch 2,3)
+    WORD $0x4E85788B           // ZIP2 V11.4S, V4.4S, V5.4S  (frames 2,3 ch 4,5)
+    VST3.P [V6.D2, V7.D2, V8.D2], 48(R0)     // frames 0,1
+    VST3.P [V9.D2, V10.D2, V11.D2], 48(R0)   // frames 2,3
+    SUB $1, R8
+    CBNZ R8, interleave6_neon_loop4
+
+interleave6_neon_tail:
+    AND $3, R7
+    CBZ R7, interleave6_neon_done
+
+interleave6_neon_tail1:
+    FMOVS (R1), F0
+    FMOVS (R2), F1
+    FMOVS (R3), F2
+    FMOVS (R4), F3
+    FMOVS (R5), F4
+    FMOVS (R6), F5
+    FMOVS F0, (R0)
+    FMOVS F1, 4(R0)
+    FMOVS F2, 8(R0)
+    FMOVS F3, 12(R0)
+    FMOVS F4, 16(R0)
+    FMOVS F5, 20(R0)
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R3
+    ADD $4, R4
+    ADD $4, R5
+    ADD $4, R6
+    ADD $24, R0
+    SUB $1, R7
+    CBNZ R7, interleave6_neon_tail1
+
+interleave6_neon_done:
+    RET
+
+// func deinterleave6NEON(d0, d1, d2, d3, d4, d5, src []float32, n int)
+TEXT ·deinterleave6NEON(SB), NOSPLIT, $0-176
+    MOVD d0_base+0(FP), R0
+    MOVD d1_base+24(FP), R1
+    MOVD d2_base+48(FP), R2
+    MOVD d3_base+72(FP), R3
+    MOVD d4_base+96(FP), R4
+    MOVD d5_base+120(FP), R5
+    MOVD src_base+144(FP), R6
+    MOVD n+168(FP), R7
+
+    LSR $2, R7, R8             // 4 frames per iteration
+    CBZ R8, deinterleave6_neon_tail
+
+deinterleave6_neon_loop4:
+    VLD3.P 48(R6), [V0.D2, V1.D2, V2.D2]     // frames 0,1: V0=ch(0,1), V1=ch(2,3), V2=ch(4,5)
+    VLD3.P 48(R6), [V3.D2, V4.D2, V5.D2]     // frames 2,3
+    WORD $0x4E831810           // UZP1 V16.4S, V0.4S, V3.4S  (s0)
+    WORD $0x4E835811           // UZP2 V17.4S, V0.4S, V3.4S  (s1)
+    WORD $0x4E841832           // UZP1 V18.4S, V1.4S, V4.4S  (s2)
+    WORD $0x4E845833           // UZP2 V19.4S, V1.4S, V4.4S  (s3)
+    WORD $0x4E851854           // UZP1 V20.4S, V2.4S, V5.4S  (s4)
+    WORD $0x4E855855           // UZP2 V21.4S, V2.4S, V5.4S  (s5)
+    VST1.P [V16.S4], 16(R0)
+    VST1.P [V17.S4], 16(R1)
+    VST1.P [V18.S4], 16(R2)
+    VST1.P [V19.S4], 16(R3)
+    VST1.P [V20.S4], 16(R4)
+    VST1.P [V21.S4], 16(R5)
+    SUB $1, R8
+    CBNZ R8, deinterleave6_neon_loop4
+
+deinterleave6_neon_tail:
+    AND $3, R7
+    CBZ R7, deinterleave6_neon_done
+
+deinterleave6_neon_tail1:
+    FMOVS (R6), F0
+    FMOVS 4(R6), F1
+    FMOVS 8(R6), F2
+    FMOVS 12(R6), F3
+    FMOVS 16(R6), F4
+    FMOVS 20(R6), F5
+    FMOVS F0, (R0)
+    FMOVS F1, (R1)
+    FMOVS F2, (R2)
+    FMOVS F3, (R3)
+    FMOVS F4, (R4)
+    FMOVS F5, (R5)
+    ADD $24, R6
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R3
+    ADD $4, R4
+    ADD $4, R5
+    SUB $1, R7
+    CBNZ R7, deinterleave6_neon_tail1
+
+deinterleave6_neon_done:
+    RET
+
+// func interleave8NEON(dst, s0, s1, s2, s3, s4, s5, s6, s7 []float32, n int)
+TEXT ·interleave8NEON(SB), NOSPLIT, $0-224
+    MOVD dst_base+0(FP), R0
+    MOVD s0_base+24(FP), R1
+    MOVD s1_base+48(FP), R2
+    MOVD s2_base+72(FP), R3
+    MOVD s3_base+96(FP), R4
+    MOVD s4_base+120(FP), R5
+    MOVD s5_base+144(FP), R6
+    MOVD s6_base+168(FP), R7
+    MOVD s7_base+192(FP), R8
+    MOVD n+216(FP), R9
+
+    LSR $2, R9, R10            // 4 frames per iteration
+    CBZ R10, interleave8_neon_tail
+
+interleave8_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]
+    VLD1.P 16(R2), [V1.S4]
+    VLD1.P 16(R3), [V2.S4]
+    VLD1.P 16(R4), [V3.S4]
+    VLD1.P 16(R5), [V4.S4]
+    VLD1.P 16(R6), [V5.S4]
+    VLD1.P 16(R7), [V6.S4]
+    VLD1.P 16(R8), [V7.S4]
+    WORD $0x4E813808           // ZIP1 V8.4S, V0.4S, V1.4S   (frames 0,1 ch 0,1)
+    WORD $0x4E833849           // ZIP1 V9.4S, V2.4S, V3.4S   (frames 0,1 ch 2,3)
+    WORD $0x4E85388A           // ZIP1 V10.4S, V4.4S, V5.4S  (frames 0,1 ch 4,5)
+    WORD $0x4E8738CB           // ZIP1 V11.4S, V6.4S, V7.4S  (frames 0,1 ch 6,7)
+    WORD $0x4E81780C           // ZIP2 V12.4S, V0.4S, V1.4S  (frames 2,3 ch 0,1)
+    WORD $0x4E83784D           // ZIP2 V13.4S, V2.4S, V3.4S  (frames 2,3 ch 2,3)
+    WORD $0x4E85788E           // ZIP2 V14.4S, V4.4S, V5.4S  (frames 2,3 ch 4,5)
+    WORD $0x4E8778CF           // ZIP2 V15.4S, V6.4S, V7.4S  (frames 2,3 ch 6,7)
+    VST4.P [V8.D2, V9.D2, V10.D2, V11.D2], 64(R0)     // frames 0,1
+    VST4.P [V12.D2, V13.D2, V14.D2, V15.D2], 64(R0)   // frames 2,3
+    SUB $1, R10
+    CBNZ R10, interleave8_neon_loop4
+
+interleave8_neon_tail:
+    AND $3, R9
+    CBZ R9, interleave8_neon_done
+
+interleave8_neon_tail1:
+    FMOVS (R1), F0
+    FMOVS (R2), F1
+    FMOVS (R3), F2
+    FMOVS (R4), F3
+    FMOVS (R5), F4
+    FMOVS (R6), F5
+    FMOVS (R7), F6
+    FMOVS (R8), F7
+    FMOVS F0, (R0)
+    FMOVS F1, 4(R0)
+    FMOVS F2, 8(R0)
+    FMOVS F3, 12(R0)
+    FMOVS F4, 16(R0)
+    FMOVS F5, 20(R0)
+    FMOVS F6, 24(R0)
+    FMOVS F7, 28(R0)
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R3
+    ADD $4, R4
+    ADD $4, R5
+    ADD $4, R6
+    ADD $4, R7
+    ADD $4, R8
+    ADD $32, R0
+    SUB $1, R9
+    CBNZ R9, interleave8_neon_tail1
+
+interleave8_neon_done:
+    RET
+
+// func deinterleave8NEON(d0, d1, d2, d3, d4, d5, d6, d7, src []float32, n int)
+TEXT ·deinterleave8NEON(SB), NOSPLIT, $0-224
+    MOVD d0_base+0(FP), R0
+    MOVD d1_base+24(FP), R1
+    MOVD d2_base+48(FP), R2
+    MOVD d3_base+72(FP), R3
+    MOVD d4_base+96(FP), R4
+    MOVD d5_base+120(FP), R5
+    MOVD d6_base+144(FP), R6
+    MOVD d7_base+168(FP), R7
+    MOVD src_base+192(FP), R8
+    MOVD n+216(FP), R9
+
+    LSR $2, R9, R10            // 4 frames per iteration
+    CBZ R10, deinterleave8_neon_tail
+
+deinterleave8_neon_loop4:
+    VLD4.P 64(R8), [V0.D2, V1.D2, V2.D2, V3.D2]   // frames 0,1: ch(0,1),(2,3),(4,5),(6,7)
+    VLD4.P 64(R8), [V4.D2, V5.D2, V6.D2, V7.D2]   // frames 2,3
+    WORD $0x4E841810           // UZP1 V16.4S, V0.4S, V4.4S  (s0)
+    WORD $0x4E845811           // UZP2 V17.4S, V0.4S, V4.4S  (s1)
+    WORD $0x4E851832           // UZP1 V18.4S, V1.4S, V5.4S  (s2)
+    WORD $0x4E855833           // UZP2 V19.4S, V1.4S, V5.4S  (s3)
+    WORD $0x4E861854           // UZP1 V20.4S, V2.4S, V6.4S  (s4)
+    WORD $0x4E865855           // UZP2 V21.4S, V2.4S, V6.4S  (s5)
+    WORD $0x4E871876           // UZP1 V22.4S, V3.4S, V7.4S  (s6)
+    WORD $0x4E875877           // UZP2 V23.4S, V3.4S, V7.4S  (s7)
+    VST1.P [V16.S4], 16(R0)
+    VST1.P [V17.S4], 16(R1)
+    VST1.P [V18.S4], 16(R2)
+    VST1.P [V19.S4], 16(R3)
+    VST1.P [V20.S4], 16(R4)
+    VST1.P [V21.S4], 16(R5)
+    VST1.P [V22.S4], 16(R6)
+    VST1.P [V23.S4], 16(R7)
+    SUB $1, R10
+    CBNZ R10, deinterleave8_neon_loop4
+
+deinterleave8_neon_tail:
+    AND $3, R9
+    CBZ R9, deinterleave8_neon_done
+
+deinterleave8_neon_tail1:
+    FMOVS (R8), F0
+    FMOVS 4(R8), F1
+    FMOVS 8(R8), F2
+    FMOVS 12(R8), F3
+    FMOVS 16(R8), F4
+    FMOVS 20(R8), F5
+    FMOVS 24(R8), F6
+    FMOVS 28(R8), F7
+    FMOVS F0, (R0)
+    FMOVS F1, (R1)
+    FMOVS F2, (R2)
+    FMOVS F3, (R3)
+    FMOVS F4, (R4)
+    FMOVS F5, (R5)
+    FMOVS F6, (R6)
+    FMOVS F7, (R7)
+    ADD $32, R8
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R3
+    ADD $4, R4
+    ADD $4, R5
+    ADD $4, R6
+    ADD $4, R7
+    SUB $1, R9
+    CBNZ R9, deinterleave8_neon_tail1
+
+deinterleave8_neon_done:
+    RET

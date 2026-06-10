@@ -224,9 +224,13 @@ Each has an `Unsafe` variant that skips bounds reconciliation.
 `InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
 a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
 streams do not map onto a clean register transpose) on top of the shared N=2/4 (AVX)
-and N=2/3/4 (NEON) kernels; all other stream counts use the allocation-free generic
-path. The N=3 case is the 16k -> 48k upsample hot path: the AVX2 gather/blend kernel
-runs roughly 2.8x (interleave) and 3.2x (deinterleave) over the generic loop on AVX2.
+and N=2/3/4/6/8 (NEON) kernels; all other stream counts use the allocation-free
+generic path. The N=3 case is the 16k -> 48k upsample hot path: the AVX2
+gather/blend kernel runs roughly 2.8x (interleave) and 3.2x (deinterleave) over the
+generic loop on AVX2. The ARM64 N=6 (5.1 audio) and N=8 (7.1 audio) NEON kernels zip
+adjacent channel pairs at `.4S` so each 64-bit lane holds a frame pair, then store
+with `ST3`/`ST4` at `.2D` (the inverse via `LD3`/`LD4` plus `UZP1`/`UZP2`); they run
+roughly 4.4x (N=6) and 3.4x-4.6x (N=8) over the generic loop on the Raspberry Pi 5.
 The 6-stream AVX2 path (the 8k -> 48k upsample) zips stream pairs into three
 double-wide pair streams, then reuses the f64 N=3 interleave on those pairs, so it
 needs no index tables; it runs roughly 2x (interleave and deinterleave) on AVX2.
