@@ -23,17 +23,4 @@ func init() {
 	applyDisable(&ARM64, os.Getenv("SIMD_DISABLE"))
 }
 
-func cpuInfo() string {
-	switch {
-	case ARM64.SVE2:
-		return "ARM64 SVE2"
-	case ARM64.SVE:
-		return "ARM64 SVE"
-	case ARM64.NEON && ARM64.FP16:
-		return "ARM64 NEON+FP16"
-	case ARM64.NEON:
-		return "ARM64 NEON"
-	default:
-		return "ARM64 (no SIMD)"
-	}
-}
+// cpuInfo is shared with the Linux build; see cpu_arm64_info.go.

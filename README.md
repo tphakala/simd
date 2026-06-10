@@ -9,10 +9,10 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 ## Features
 
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
-- **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, AVX without FMA, SSE4.1, NEON, NEON+FP16, or pure Go)
+- **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, AVX without FMA, SSE2, NEON, NEON+FP16, or pure Go); the minimum amd64 SIMD tier is per-package (see [Architecture Support](#architecture-support))
 - **Zero allocations** - All operations work on pre-allocated slices
 - **80+ operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, and complex number operations
-- **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
+- **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2, c64 needs SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
 - **Half-precision support** - Native FP16 SIMD on ARM64 with FP16 extension (Apple Silicon, Cortex-A55+); F16C-accelerated conversions on AMD64
 - **Tunable dispatch** - `SIMD_DISABLE` env var masks feature tiers at startup (avoid AVX-512 downclocking, exercise lower tiers, benchmark tier-vs-tier)
 - **Thread-safe** - All functions are safe for concurrent use
@@ -75,6 +75,7 @@ func main() {
 import "github.com/tphakala/simd/cpu"
 
 fmt.Println(cpu.Info())        // "AMD64 AVX-512", "AMD64 AVX+FMA", "AMD64 AVX", "AMD64 SSE2", "AMD64 (scalar)", "ARM64 NEON+FP16", or "ARM64 NEON"
+                               // SVE-capable ARM64 hosts append " (SVE detected, unused)" - the library runs the NEON path
 fmt.Println(cpu.HasAVX())      // true/false
 fmt.Println(cpu.HasAVX2())     // true/false
 fmt.Println(cpu.HasFMA())      // true/false
@@ -146,6 +147,11 @@ sum := crc.Checksum16(p) // bit-identical to the scalar reference, zero-alloc
 
 ### `f64` - float64 Operations
 
+**Scope:** `f64` carries the FLAC/LPC and scientific double-precision surface,
+including `Autocorrelate` (lag-vectorized LPC autocorrelation). Audio/ML-specific
+helpers (PCM conversions, split-format complex ops, indexed/strided dot products)
+live in `f32` instead, so the two float surfaces are intentionally asymmetric.
+
 | Category        | Function                            | Description                   | SIMD Width                          |
 | --------------- | ----------------------------------- | ----------------------------- | ----------------------------------- |
 | **Arithmetic**  | `Add(dst, a, b)`                    | Element-wise addition         | 8x (AVX-512) / 4x (AVX) / 2x (NEON) |
@@ -209,7 +215,12 @@ non-AVX2/NEON CPUs and short blocks use the scalar reference.
 
 ### `f32` - float32 Operations
 
-Same API as `f64` but for `float32` with wider SIMD:
+Same API as `f64` but for `float32` with wider SIMD.
+
+**Scope:** `f32` carries the audio/FFT/ML surface on top of the shared arithmetic
+API: PCM sample-format conversions, split-format complex operations, and the
+indexed/strided dot products (`DotProductIndexed`, `DotProductStrided`) used by
+streaming DSP. These are f32-specific and have no f64 equivalent by design.
 
 | Architecture    | SIMD Width  |
 | --------------- | ----------- |
@@ -371,7 +382,12 @@ f16.ReLU(dst, a)             // Activation functions
 
 ### `c128` - complex128 Operations
 
-SIMD-accelerated complex number operations for FFT-based signal processing:
+SIMD-accelerated complex number operations for FFT-based signal processing.
+
+**Scope:** `c64`/`c128` are deliberately small, FFT-pipeline helper sets (multiply,
+conjugate-multiply, dot/Hermitian products, scale, add/sub, abs/absSq, conj). They
+are not a general complex-arithmetic surface; operations outside the FFT pipeline
+are intentionally absent.
 
 | Category       | Function             | Description                        | SIMD Width              |
 | -------------- | -------------------- | ---------------------------------- | ----------------------- |
@@ -426,7 +442,10 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 
 ### `c64` - complex64 Operations
 
-SIMD-accelerated single-precision complex number operations:
+SIMD-accelerated single-precision complex number operations. Like `c128`, this is
+a deliberately small FFT-pipeline helper set (see the `c128` scope note). On amd64
+the SIMD floor is SSE4.1 (the "SSE2" routines use `BLENDPS`), one tier above the
+other float packages.
 
 | Category       | Function             | Description                        | SIMD Width                        |
 | -------------- | -------------------- | ---------------------------------- | --------------------------------- |
@@ -510,6 +529,10 @@ Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f3
 ### `i16` - int16 Operations
 
 The 16-bit integer counterpart to `i32`, for raw-PCM hot loops (such as a pure-Go FLAC codec) where the source samples are 16-bit and the cheapest place to vectorize is the channel (de)interleaving that happens before samples are widened to int32. FLAC decorrelation widens samples (the side and mid channels can exceed the source bit depth by one bit), so the arithmetic primitives live in `i32`; this package carries only the operations that provably help at 16-bit width:
+
+**Scope:** `i16` is deliberately movement-only (interleave/deinterleave). There are
+no int16 arithmetic primitives on purpose: widen to `i32` and use its arithmetic
+surface, because 16-bit arithmetic overflows as soon as channels are decorrelated.
 
 | Category       | Function                   | Description                                | SIMD Width                         |
 | -------------- | -------------------------- | ------------------------------------------ | ---------------------------------- |
@@ -771,18 +794,48 @@ The Go fallback for small slices is intentional and likely optimal - SIMD setup 
 
 ## Architecture Support
 
+The library selects the best available kernel at runtime and falls back to pure
+Go when no SIMD path applies. The amd64 baseline is not uniform across packages:
+each package only ships the kernels its workload needs, so the **minimum amd64
+instruction-set tier that activates SIMD differs per package** (verified against
+each package's `*_amd64.go` dispatch):
+
+| Package | amd64 minimum SIMD tier | Higher amd64 tiers used | Below the minimum |
+| ------- | ----------------------- | ----------------------- | ----------------- |
+| `f32`   | SSE2                    | AVX+FMA, AVX-512        | pure Go (baseline guarantees SSE2 on amd64) |
+| `f64`   | SSE2                    | AVX (no FMA), AVX+FMA, AVX-512 | pure Go (baseline guarantees SSE2) |
+| `c128`  | SSE2                    | AVX (no FMA), AVX+FMA, AVX-512 | pure Go (baseline guarantees SSE2) |
+| `c64`   | SSE4.1 (BLENDPS)        | AVX+FMA, AVX-512        | pure Go |
+| `i16`   | SSE2                    | AVX2                    | pure Go (baseline guarantees SSE2) |
+| `i32`   | AVX (interleave), AVX2 (arithmetic) | -           | pure Go |
+| `f16`   | F16C (slice conversions only) | -                 | pure Go (all f16 compute is pure Go on amd64) |
+| `crc`   | PCLMULQDQ               | -                       | scalar slice-by-16 |
+
+SSE2 is part of the amd64 baseline, so `f32`/`f64`/`c128`/`i16` always run SIMD on
+amd64 (their pure-Go path is effectively a non-amd64 safety net). AVX-512 uses the
+`AVX512F && AVX512VL` gate. `cpu.Info()` reports the host-wide tier (AVX-512 /
+AVX+FMA / AVX / SSE2 / scalar); a package whose minimum is above that tier (e.g.
+`i32` on an SSE-only host) runs pure Go even though `Info()` shows SSE2.
+
+ARM64 runs NEON kernels throughout, with an FP16 (FEAT_FP16) fast path in `f16`
+and FP16-widened variants elsewhere. **SVE/SVE2 is detected but unused:** there are
+no SVE kernels yet, so an SVE-capable host (Graviton 3, Neoverse V1) still runs the
+NEON path, and `cpu.Info()` annotates this as `ARM64 NEON+FP16 (SVE detected, unused)`.
+
+The f16 per-architecture summary:
+
 | Architecture | Instruction Set | f64/f32/c128/c64  | f16                    |
 | ------------ | --------------- | ----------------- | ---------------------- |
 | AMD64        | AVX-512         | Full SIMD support | F16C conversions       |
 | AMD64        | AVX + FMA       | Full SIMD support | F16C conversions       |
-| AMD64        | SSE4.1          | Full SIMD support | Pure Go fallback       |
+| AMD64        | SSE2/SSE4.1     | Full SIMD support | Pure Go fallback       |
 | ARM64        | NEON + FP16     | Full SIMD support | Full SIMD support      |
 | ARM64        | NEON only       | Full SIMD support | Pure Go fallback       |
 | Other        | -               | Pure Go fallback  | Pure Go fallback       |
 
 (AMD64 f16 "F16C conversions" = hardware `ToFloat32Slice`/`FromFloat32Slice`; all
-other f16 ops run the pure-Go reference. F16C needs AVX, so SSE4.1-only parts use
-pure Go.)
+other f16 ops run the pure-Go reference. F16C is VEX-encoded and needs AVX, so
+amd64 parts without AVX use pure Go for conversions too.)
 
 **ARM64 FP16 support by device:**
 
