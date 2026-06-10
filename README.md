@@ -100,7 +100,7 @@ program start. Each token clears its own flag plus everything that depends on it
 | ----------- | ----------------------------------------- |
 | `avx512`    | AVX512F, AVX512VL                         |
 | `avx2`      | AVX2 (and the `avx512` set)               |
-| `avx`       | AVX, FMA (and the `avx2` set)             |
+| `avx`       | AVX, FMA, F16C (and the `avx2` set)       |
 | `fma`       | FMA only                                  |
 | `sse42`     | SSE42 (and the `avx` set)                 |
 | `sse41`     | SSE41 (and the `sse42` set)               |
@@ -112,6 +112,10 @@ program start. Each token clears its own flag plus everything that depends on it
 | `sve`       | SVE, SVE2                                 |
 | `pmull`     | PMULL only                                |
 | `all`       | every flag (forces the pure-Go path)      |
+
+F16C is VEX-encoded and only detected alongside AVX, so it clears with the `avx`
+cascade (and therefore with every `sse*` token and `all`); `avx2`, `fma`, and
+`avx512` sit above AVX and leave F16C set.
 
 Unknown tokens are ignored (the library never panics or writes to stderr on env
 input). `cpu.Info()` reflects the cleared flags.
