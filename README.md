@@ -190,8 +190,9 @@ sum := crc.Checksum16(p) // bit-identical to the scalar reference, zero-alloc
 
 `DotProductBatch` scores its `[][]float64` rows in groups of four, keeping the
 query vector resident in registers across each group via a fused 4-row kernel on
-AMD64 (AVX-512 and AVX+FMA) instead of re-loading it per row. Short, ragged, or
-sub-SIMD-width rows fall back to the per-row dot product, with identical results.
+AMD64 (AVX-512 and AVX+FMA) and ARM64 NEON instead of re-loading it per row.
+Short, ragged, or sub-SIMD-width rows fall back to the per-row dot product, with
+identical results.
 
 `Autocorrelate` computes the LPC autocorrelation `autoc[lag] = Σ x[i]·x[i-lag]`
 used by FLAC-style encoders. It vectorizes across lags (one accumulator lane per

@@ -2,7 +2,11 @@
 
 package f64
 
-import "github.com/tphakala/simd/cpu"
+import (
+	"unsafe"
+
+	"github.com/tphakala/simd/cpu"
+)
 
 var (
 	hasNEON = cpu.ARM64.NEON
@@ -167,10 +171,44 @@ func cumulativeSum64(dst, a []float64) {
 	cumulativeSum64Go(dst, a)
 }
 
+// dotProductBatch64 scores rows against vec in groups of four, keeping the query
+// vector resident across each group via dotProduct4NEON instead of reloading it
+// per row. Rows shorter than vecLen (and any tail past the last full group of
+// four) fall back to the per-row dotProduct, so results stay anchored to the
+// scalar contract regardless of row shape. f64 packs half the lanes of f32, so
+// the query-reuse win is smaller; benchmarks on the Raspberry Pi 5 justify
+// keeping the kernel.
 func dotProductBatch64(results []float64, rows [][]float64, vec []float64) {
-	// Batch dot product benefits from cache locality of vec
 	vecLen := len(vec)
-	for i, row := range rows {
+	i := 0
+	if hasNEON && vecLen > 0 {
+		for i+3 < len(rows) {
+			row0, row1, row2, row3 := rows[i], rows[i+1], rows[i+2], rows[i+3]
+			if len(row0) >= vecLen && len(row1) >= vecLen && len(row2) >= vecLen && len(row3) >= vecLen {
+				res := (*float64)(unsafe.Pointer(&results[i]))
+				r0 := (*float64)(unsafe.Pointer(&row0[0]))
+				r1 := (*float64)(unsafe.Pointer(&row1[0]))
+				r2 := (*float64)(unsafe.Pointer(&row2[0]))
+				r3 := (*float64)(unsafe.Pointer(&row3[0]))
+				q := (*float64)(unsafe.Pointer(&vec[0]))
+				dotProduct4NEON(res, r0, r1, r2, r3, q, vecLen)
+				i += 4
+				continue
+			}
+			for j := range 4 {
+				row := rows[i+j]
+				n := min(len(row), vecLen)
+				if n == 0 {
+					results[i+j] = 0
+				} else {
+					results[i+j] = dotProduct(row[:n], vec[:n])
+				}
+			}
+			i += 4
+		}
+	}
+	for ; i < len(rows); i++ {
+		row := rows[i]
 		n := min(len(row), vecLen)
 		if n == 0 {
 			results[i] = 0
@@ -253,6 +291,9 @@ func accumulateAdd64(dst, src []float64) {
 
 //go:noescape
 func dotProductNEON(a, b []float64) float64
+
+//go:noescape
+func dotProduct4NEON(results, row0, row1, row2, row3, vec *float64, n int)
 
 //go:noescape
 func addNEON(dst, a, b []float64)
