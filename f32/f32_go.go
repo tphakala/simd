@@ -389,7 +389,6 @@ func sqrt32Go(dst, a []float32) {
 	}
 }
 
-
 // round32Go rounds each element to the nearest integer, half away from zero,
 // matching math.Round. This is the trusted reference and the path that runs on
 // architectures without SIMD.
@@ -592,6 +591,68 @@ func exp32Go(dst, src []float32) {
 		default:
 			dst[i] = float32(math.Exp(float64(x)))
 		}
+	}
+}
+
+// logGo computes the natural logarithm: dst[i] = ln(src[i]).
+// Edge cases follow math.Log: ln(0) = -Inf, ln(x<0) = NaN, ln(+Inf) = +Inf,
+// ln(NaN) = NaN. This is the scalar reference and the fallback when no SIMD log
+// kernel is selected.
+func logGo(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
+	for i := range dst {
+		dst[i] = float32(math.Log(float64(src[i])))
+	}
+}
+
+// log2Go computes the base-2 logarithm: dst[i] = log2(src[i]).
+func log2Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
+	for i := range dst {
+		dst[i] = float32(math.Log2(float64(src[i])))
+	}
+}
+
+// log10Go computes the base-10 logarithm: dst[i] = log10(src[i]).
+func log10Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
+	for i := range dst {
+		dst[i] = float32(math.Log10(float64(src[i])))
+	}
+}
+
+// powGo raises each element to a scalar power: dst[i] = src[i]**exp.
+// Edge cases follow math.Pow (for example pow(x, 0) = 1, pow(negative,
+// non-integer) = NaN, pow(0, negative) = +Inf).
+func powGo(dst, src []float32, exp float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
+	e := float64(exp)
+	for i := range dst {
+		dst[i] = float32(math.Pow(float64(src[i]), e))
+	}
+}
+
+// powElemGo raises each base to its own exponent: dst[i] = base[i]**exp[i].
+func powElemGo(dst, base, exp []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = base[len(dst)-1]
+	_ = exp[len(dst)-1]
+	for i := range dst {
+		dst[i] = float32(math.Pow(float64(base[i]), float64(exp[i])))
 	}
 }
 

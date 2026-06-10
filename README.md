@@ -178,6 +178,10 @@ sum := crc.Checksum16(p) // bit-identical to the scalar reference, zero-alloc
 |                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 4x (AVX2) / 2x (NEON)               |
 |                 | `Exp(dst, src)`                     | Exponential e^x               | 4x (AVX2) / 2x (NEON)               |
 |                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 4x (AVX) / 2x (NEON)                |
+| **Transcendental** | `Log(dst, src)`                  | Natural log ln(x)             | Pure Go (SIMD kernel TODO)          |
+|                 | `Log2(dst, src)` / `Log10(dst, src)`| Base-2 / base-10 log          | Pure Go (SIMD kernel TODO)          |
+|                 | `Pow(dst, src, exp)`                | Scalar power x^exp (PCEN, dB) | Pure Go (SIMD kernel TODO)          |
+|                 | `PowElem(dst, base, exp)`           | Elementwise base^exp          | Pure Go (SIMD kernel TODO)          |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
