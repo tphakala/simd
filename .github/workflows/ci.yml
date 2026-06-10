@@ -22,7 +22,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # ubuntu-24.04-arm is a native Linux arm64 runner (free for public repos).
+        # It exercises the linux/arm64 detection path (cpu_arm64.go), not the
+        # darwin override that macos-latest hits, and runs the objdump FP16 (.8H)
+        # cross-check natively. macos-latest still covers Apple Silicon.
+        os: [ubuntu-latest, macos-latest, windows-latest, ubuntu-24.04-arm]
         include:
           - os: ubuntu-latest
             coverage: true
@@ -41,7 +45,18 @@ jobs:
 
       - name: Install aarch64 binutils (FP16 .8H encoding cross-check)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
+        run: |
+          sudo apt-get update
+          if [ "${{ runner.arch }}" = "ARM64" ]; then
+            # Native arm64 runner: plain binutils ships an aarch64-capable objdump.
+            # The asmcheck probe (objdumpCandidates) accepts the host `objdump` on
+            # linux/arm64, so the cross-binutils package is unnecessary here.
+            sudo apt-get install -y binutils
+          else
+            # amd64 runner: the cross package supplies aarch64-linux-gnu-objdump,
+            # the only aarch64-capable objdump on an x86 host.
+            sudo apt-get install -y binutils-aarch64-linux-gnu
+          fi
 
       - name: Run tests
         env:
