@@ -46,12 +46,15 @@ func TestApplyDisable(t *testing.T) {
 		{"", nil},
 		{"avx512", []string{"AVX512F", "AVX512VL"}},
 		{"avx2", []string{"AVX2", "AVX512F", "AVX512VL"}},
-		{"avx", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "FMA"}},
+		// F16C is VEX-encoded and gated on AVX, so the avx cascade (and every SSE
+		// token that cascades through clearAVX) must also clear F16C. avx2/fma/avx512
+		// sit above AVX and correctly leave it set.
+		{"avx", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA"}},
 		{"fma", []string{"FMA"}},
-		{"sse42", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "FMA", "SSE42"}},
-		{"sse41", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "FMA", "SSE41", "SSE42"}},
-		{"ssse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "FMA", "SSE41", "SSE42", "SSSE3"}},
-		{"sse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "FMA", "SSE3", "SSE41", "SSE42", "SSSE3"}},
+		{"sse42", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE42"}},
+		{"sse41", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE41", "SSE42"}},
+		{"ssse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE41", "SSE42", "SSSE3"}},
+		{"sse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE3", "SSE41", "SSE42", "SSSE3"}},
 		{"pclmulqdq", []string{"PCLMULQDQ"}},
 		{"neon", []string{"FP16", "NEON", "PMULL", "SVE", "SVE2"}},
 		{"fp16", []string{"FP16"}},

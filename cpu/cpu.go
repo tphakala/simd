@@ -155,6 +155,10 @@ func clearAVX2(f *Features) {
 func clearAVX(f *Features) {
 	f.AVX = false
 	f.FMA = false
+	// F16C is VEX-encoded and only detected when AVX is present, so disabling the
+	// AVX family must also drop the F16C conversion path back to pure Go. avx2/fma/
+	// avx512 sit above AVX and do not cascade here, so they correctly leave it set.
+	f.F16C = false
 	clearAVX2(f)
 }
 
