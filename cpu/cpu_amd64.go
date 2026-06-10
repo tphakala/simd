@@ -25,9 +25,25 @@ func init() {
 	X86.POPCNT = cpu.X86.HasPOPCNT
 	X86.PCLMULQDQ = cpu.X86.HasPCLMULQDQ
 
-	// Honor SIMD_DISABLE last, so the env var can mask any detected feature.
+	// F16C (half<->single conversion) is not exposed by golang.org/x/sys/cpu, so
+	// read it directly from CPUID leaf 1, ECX bit 29. Gate on the x/sys AVX flag,
+	// which already includes the OSXSAVE/XGETBV OS-support check that F16C needs
+	// because it operates on VEX/YMM state.
+	_, _, ecx, _ := cpuid(1, 0)
+	X86.F16C = X86.AVX && ecx&cpuidF16CBit != 0
+
+	// Honor SIMD_DISABLE last, so the env var can mask any detected feature
+	// (including F16C via the "all" token).
 	applyDisable(&X86, os.Getenv("SIMD_DISABLE"))
 }
+
+// cpuidF16CBit is CPUID leaf 1 ECX bit 29, set when F16C is supported.
+const cpuidF16CBit = 1 << 29
+
+// cpuid is the raw CPUID wrapper implemented in cpuid_amd64.s.
+//
+//go:noescape
+func cpuid(leaf, subleaf uint32) (eax, ebx, ecx, edx uint32)
 
 func cpuInfo() string {
 	switch {
