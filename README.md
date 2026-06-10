@@ -84,6 +84,45 @@ fmt.Println(cpu.HasPCLMULQDQ()) // true/false (x86 carry-less multiply)
 fmt.Println(cpu.HasPMULL())    // true/false (ARM64 polynomial multiply)
 ```
 
+#### Disabling feature tiers with `SIMD_DISABLE`
+
+Set the `SIMD_DISABLE` environment variable before the process starts to mask
+detected CPU features. This is useful for forcing a lower tier on parts where
+heavy AVX-512 use causes frequency downclocking, exercising the SSE2/NEON/pure-Go
+paths locally, and benchmarking tiers against each other on one machine.
+
+The value is a comma-separated, case-insensitive list of tokens, read once at
+program start. Each token clears its own flag plus everything that depends on it:
+
+| Token       | Clears                                    |
+| ----------- | ----------------------------------------- |
+| `avx512`    | AVX512F, AVX512VL                         |
+| `avx2`      | AVX2 (and the `avx512` set)               |
+| `avx`       | AVX, FMA (and the `avx2` set)             |
+| `fma`       | FMA only                                  |
+| `sse42`     | SSE42 (and the `avx` set)                 |
+| `sse41`     | SSE41 (and the `sse42` set)               |
+| `ssse3`     | SSSE3 (and the `sse41` set)               |
+| `sse3`      | SSE3 (and the `ssse3` set)                |
+| `pclmulqdq` | PCLMULQDQ only                            |
+| `neon`      | NEON, FP16, SVE, SVE2, PMULL              |
+| `fp16`      | FP16 only                                 |
+| `sve`       | SVE, SVE2                                 |
+| `pmull`     | PMULL only                                |
+| `all`       | every flag (forces the pure-Go path)      |
+
+Unknown tokens are ignored (the library never panics or writes to stderr on env
+input). `cpu.Info()` reflects the cleared flags.
+
+```sh
+SIMD_DISABLE=avx512 go test ./...   # run as if the CPU had no AVX-512
+SIMD_DISABLE=all go test ./...      # force the pure-Go path everywhere
+```
+
+The variable must be set before the process starts; it cannot be toggled at
+runtime, because the amd64 packages freeze their kernel function pointers during
+package init based on the features visible at that moment.
+
 ### `crc` - Cyclic Redundancy Checks
 
 ```go

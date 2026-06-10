@@ -1,6 +1,8 @@
 // Package cpu provides CPU feature detection for SIMD operations.
 package cpu
 
+import "strings"
+
 // Features contains detected CPU SIMD capabilities.
 type Features struct {
 	// x86/AMD64 features
@@ -63,4 +65,121 @@ func HasAVX512VL() bool { return X86.AVX512VL }
 // Info returns a string describing the available SIMD features.
 func Info() string {
 	return cpuInfo()
+}
+
+// applyDisable clears CPU feature flags in f according to the comma-separated,
+// case-insensitive token list in spec (the value of the SIMD_DISABLE env var).
+// Each token clears its own flag plus every flag that depends on it, so the
+// resulting Features value never describes an impossible CPU (for example, AVX2
+// set while AVX is cleared). Unknown and empty tokens are ignored: a library must
+// not panic or write to stderr in response to environment input.
+//
+// Recognized tokens:
+//
+//	avx512     AVX512F, AVX512VL
+//	avx2       AVX2 and the avx512 set
+//	avx        AVX, FMA and the avx2 set
+//	fma        FMA only
+//	sse42      SSE42 and the avx set
+//	sse41      SSE41 and the sse42 set
+//	ssse3      SSSE3 and the sse41 set
+//	sse3       SSE3 and the ssse3 set
+//	pclmulqdq  PCLMULQDQ only
+//	neon       NEON, FP16, SVE, SVE2, PMULL
+//	fp16       FP16 only
+//	sve        SVE, SVE2
+//	pmull      PMULL only
+//	all        every flag (forces the pure-Go path everywhere)
+func applyDisable(f *Features, spec string) {
+	for tok := range strings.SplitSeq(spec, ",") {
+		switch strings.ToLower(strings.TrimSpace(tok)) {
+		case "":
+			// Empty token (e.g. trailing comma): ignore.
+		case "avx512":
+			clearAVX512(f)
+		case "avx2":
+			clearAVX2(f)
+		case "avx":
+			clearAVX(f)
+		case "fma":
+			f.FMA = false
+		case "sse42":
+			clearSSE42(f)
+		case "sse41":
+			clearSSE41(f)
+		case "ssse3":
+			clearSSSE3(f)
+		case "sse3":
+			clearSSE3(f)
+		case "pclmulqdq":
+			f.PCLMULQDQ = false
+		case "neon":
+			clearNEON(f)
+		case "fp16":
+			f.FP16 = false
+		case "sve":
+			clearSVE(f)
+		case "pmull":
+			f.PMULL = false
+		case "all":
+			*f = Features{}
+		default:
+			// Unknown token: ignore.
+		}
+	}
+}
+
+// The clearXxx helpers encode the x86 tier dependency chain: disabling a lower
+// tier also disables every higher tier that requires it, because the runtime
+// dispatch checks the highest tier first.
+
+func clearAVX512(f *Features) {
+	f.AVX512F = false
+	f.AVX512VL = false
+}
+
+func clearAVX2(f *Features) {
+	f.AVX2 = false
+	clearAVX512(f)
+}
+
+func clearAVX(f *Features) {
+	f.AVX = false
+	f.FMA = false
+	clearAVX2(f)
+}
+
+func clearSSE42(f *Features) {
+	f.SSE42 = false
+	clearAVX(f)
+}
+
+func clearSSE41(f *Features) {
+	f.SSE41 = false
+	clearSSE42(f)
+}
+
+func clearSSSE3(f *Features) {
+	f.SSSE3 = false
+	clearSSE41(f)
+}
+
+func clearSSE3(f *Features) {
+	f.SSE3 = false
+	clearSSSE3(f)
+}
+
+// clearNEON disables the entire ARM64 SIMD feature set.
+func clearNEON(f *Features) {
+	f.NEON = false
+	f.FP16 = false
+	f.SVE = false
+	f.SVE2 = false
+	f.PMULL = false
+}
+
+// clearSVE disables the scalable-vector tiers without touching NEON.
+func clearSVE(f *Features) {
+	f.SVE = false
+	f.SVE2 = false
 }

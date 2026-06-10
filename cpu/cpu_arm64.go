@@ -2,7 +2,11 @@
 
 package cpu
 
-import "golang.org/x/sys/cpu"
+import (
+	"os"
+
+	"golang.org/x/sys/cpu"
+)
 
 func init() {
 	ARM64.NEON = cpu.ARM64.HasASIMD
@@ -10,6 +14,9 @@ func init() {
 	ARM64.SVE = cpu.ARM64.HasSVE
 	ARM64.SVE2 = cpu.ARM64.HasSVE2
 	ARM64.PMULL = cpu.ARM64.HasPMULL // FEAT_PMULL - polynomial multiply
+
+	// Honor SIMD_DISABLE last, so the env var can mask any detected feature.
+	applyDisable(&ARM64, os.Getenv("SIMD_DISABLE"))
 }
 
 func cpuInfo() string {

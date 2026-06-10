@@ -2,7 +2,11 @@
 
 package cpu
 
-import "golang.org/x/sys/cpu"
+import (
+	"os"
+
+	"golang.org/x/sys/cpu"
+)
 
 func init() {
 	X86.SSE = true // SSE is baseline for amd64
@@ -20,6 +24,9 @@ func init() {
 	X86.BMI2 = cpu.X86.HasBMI2
 	X86.POPCNT = cpu.X86.HasPOPCNT
 	X86.PCLMULQDQ = cpu.X86.HasPCLMULQDQ
+
+	// Honor SIMD_DISABLE last, so the env var can mask any detected feature.
+	applyDisable(&X86, os.Getenv("SIMD_DISABLE"))
 }
 
 func cpuInfo() string {
