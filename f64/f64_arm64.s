@@ -2458,13 +2458,14 @@ powelem64_neon_loop2:
     WORD $0x4e67d4eb                  // FADD V11.2D, V7.2D, V7.2D    2s
     WORD $0x4e68cd4b                  // FMLA V11.2D, V10.2D, V8.2D   lnm
 
-    // ln(base) = e*ln2hi + (e*ln2lo + lnm)
+    // ln(base) = e*ln2hi + (e*ln2lo + lnm); the exponent load is issued
+    // first so it overlaps the dependent FMUL/FADD/FMLA chain
+    VLD1.P 16(R2), [V12.D2]           // V12 = exponents (finite)
     WORD $0x6e77dcaa                  // FMUL V10.2D, V5.2D, V23.2D   e * ln2lo
     WORD $0x4e6bd54a                  // FADD V10.2D, V10.2D, V11.2D  + lnm
     WORD $0x4e76ccaa                  // FMLA V10.2D, V5.2D, V22.2D   += e * ln2hi
 
     // y = exp[i]*ln(base[i]), clamped to [-746, 710]
-    VLD1.P 16(R2), [V12.D2]           // V12 = exponents (finite)
     WORD $0x6e6cdd40                  // FMUL V0.2D, V10.2D, V12.2D   y
     WORD $0x4eedf400                  // FMIN V0.2D, V0.2D, V13.2D
     WORD $0x4e6ef400                  // FMAX V0.2D, V0.2D, V14.2D

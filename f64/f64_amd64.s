@@ -5267,8 +5267,7 @@ log64_scalar:
     MOVQ $0x0010000000000000, BX       // DBL_MIN bits
     CMPQ AX, BX
     JGE  log64_scalar_normal
-    MOVQ $0x43F0000000000000, R10      // 2^64
-    VMOVQ R10, X2
+    VMOVSD log64_two64<>(SB), X2       // 2^64
     VMULSD X2, X0, X0                  // x *= 2^64
     VMOVQ X0, AX
     MOVQ $-64, R9
@@ -5454,8 +5453,7 @@ pow64_scalar:
     MOVQ $0x0010000000000000, BX
     CMPQ AX, BX
     JGE  pow64_scalar_normal
-    MOVQ $0x43F0000000000000, R10
-    VMOVQ R10, X2
+    VMOVSD log64_two64<>(SB), X2       // 2^64
     VMULSD X2, X0, X0
     VMOVQ X0, AX
     MOVQ $-64, R9
@@ -5646,8 +5644,7 @@ powelem64_scalar:
     MOVQ $0x0010000000000000, BX
     CMPQ AX, BX
     JGE  powelem64_scalar_normal
-    MOVQ $0x43F0000000000000, R10
-    VMOVQ R10, X2
+    VMOVSD log64_two64<>(SB), X2       // 2^64
     VMULSD X2, X0, X0
     VMOVQ X0, AX
     MOVQ $-64, R9
