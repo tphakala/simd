@@ -5847,3 +5847,366 @@ dot4_512_done:
     VMOVSS X5, 12(DX)
     VZEROUPPER
     RET
+
+// ============================================================================
+// VARIANCE / EUCLIDEAN DISTANCE REDUCTIONS
+// Ported from the f64 kernels (f64/f64_amd64.s). float32 doubles the lane count
+// versus float64: 4 per XMM (SSE), 8 per YMM (AVX). Accumulation is in float32
+// to match variance32Go / euclideanDistance32Go (f32/f32_go.go).
+// ============================================================================
+
+// func varianceSSE(a []float32, mean float32) float32
+// Population variance: sum((a[i]-mean)^2) / len(a). 4 accumulators of 4 floats.
+TEXT ·varianceSSE(SB), NOSPLIT, $0-36
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVSS mean+24(FP), X2
+    SHUFPS $0, X2, X2          // broadcast mean to all 4 lanes
+
+    XORPS X0, X0
+    XORPS X3, X3
+    XORPS X4, X4
+    XORPS X5, X5
+
+    // Process 16 elements (4 vectors of 4) per iteration
+    MOVQ CX, AX
+    SHRQ $4, AX                // len / 16
+    JZ   var32_sse_loop4_check
+
+var32_sse_loop16:
+    MOVUPS 0(SI), X1
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X0
+
+    MOVUPS 16(SI), X1
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X3
+
+    MOVUPS 32(SI), X1
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X4
+
+    MOVUPS 48(SI), X1
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X5
+
+    ADDQ $64, SI
+    DECQ AX
+    JNZ  var32_sse_loop16
+
+    ADDPS X3, X0
+    ADDPS X5, X4
+    ADDPS X4, X0
+
+var32_sse_loop4_check:
+    ANDQ $15, CX
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   var32_sse_remainder
+
+var32_sse_loop4:
+    MOVUPS (SI), X1
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X0
+    ADDQ $16, SI
+    DECQ AX
+    JNZ  var32_sse_loop4
+
+var32_sse_remainder:
+    // Horizontal sum of the 4 float lanes in X0 into X0[0].
+    MOVAPS X0, X1
+    SHUFPS $0x0E, X1, X1
+    ADDPS X1, X0
+    MOVAPS X0, X1
+    SHUFPS $0x01, X1, X1
+    ADDSS X1, X0
+
+    ANDQ $3, CX
+    JZ   var32_sse_divide
+    MOVSS mean+24(FP), X2      // scalar mean for the tail
+
+var32_sse_scalar:
+    MOVSS (SI), X1
+    SUBSS X2, X1
+    MULSS X1, X1
+    ADDSS X1, X0
+    ADDQ $4, SI
+    DECQ CX
+    JNZ  var32_sse_scalar
+
+var32_sse_divide:
+    MOVQ a_len+8(FP), CX
+    CVTSQ2SS CX, X1
+    DIVSS X1, X0
+    MOVSS X0, ret+32(FP)
+    RET
+
+// func varianceAVX(a []float32, mean float32) float32
+// 4 independent FMA accumulators of 8 floats to hide FMA latency.
+TEXT ·varianceAVX(SB), NOSPLIT, $0-36
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    VBROADCASTSS mean+24(FP), Y2
+
+    VXORPS Y0, Y0, Y0
+    VXORPS Y3, Y3, Y3
+    VXORPS Y4, Y4, Y4
+    VXORPS Y5, Y5, Y5
+
+    // Process 32 elements (4 vectors of 8) per iteration
+    MOVQ CX, AX
+    SHRQ $5, AX                // len / 32
+    JZ   var32_avx_loop8_check
+
+var32_avx_loop32:
+    VMOVUPS 0(SI), Y1
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y0
+
+    VMOVUPS 32(SI), Y1
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y3
+
+    VMOVUPS 64(SI), Y1
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y4
+
+    VMOVUPS 96(SI), Y1
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y5
+
+    ADDQ $128, SI
+    DECQ AX
+    JNZ  var32_avx_loop32
+
+    VADDPS Y3, Y0, Y0
+    VADDPS Y5, Y4, Y4
+    VADDPS Y4, Y0, Y0
+
+var32_avx_loop8_check:
+    ANDQ $31, CX
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   var32_avx_remainder
+
+var32_avx_loop8:
+    VMOVUPS (SI), Y1
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y0
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  var32_avx_loop8
+
+var32_avx_remainder:
+    // Reduce Y0 (8 floats) to X0[0] before any VEX scalar op zeroes the upper YMM.
+    VEXTRACTF128 $1, Y0, X1
+    VADDPS X1, X0, X0
+    VHADDPS X0, X0, X0
+    VHADDPS X0, X0, X0
+
+    ANDQ $7, CX
+    JZ   var32_avx_divide
+    VMOVSS mean+24(FP), X2
+
+var32_avx_scalar:
+    VMOVSS (SI), X1
+    VSUBSS X2, X1, X1
+    VFMADD231SS X1, X1, X0
+    ADDQ $4, SI
+    DECQ CX
+    JNZ  var32_avx_scalar
+
+var32_avx_divide:
+    MOVQ a_len+8(FP), CX
+    CVTSQ2SS CX, X1
+    VDIVSS X1, X0, X0
+    VMOVSS X0, ret+32(FP)
+    VZEROUPPER
+    RET
+
+// func euclideanDistanceSSE(a, b []float32) float32
+// sqrt(sum((a[i]-b[i])^2)). 4 accumulators of 4 floats. Callers pass equal-length
+// slices (EuclideanDistance slices both to min length).
+TEXT ·euclideanDistanceSSE(SB), NOSPLIT, $0-52
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    XORPS X0, X0
+    XORPS X3, X3
+    XORPS X4, X4
+    XORPS X5, X5
+
+    MOVQ CX, AX
+    SHRQ $4, AX                // len / 16
+    JZ   euclid32_sse_loop4_check
+
+euclid32_sse_loop16:
+    MOVUPS 0(SI), X1
+    MOVUPS 0(DI), X2
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X0
+
+    MOVUPS 16(SI), X1
+    MOVUPS 16(DI), X2
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X3
+
+    MOVUPS 32(SI), X1
+    MOVUPS 32(DI), X2
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X4
+
+    MOVUPS 48(SI), X1
+    MOVUPS 48(DI), X2
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X5
+
+    ADDQ $64, SI
+    ADDQ $64, DI
+    DECQ AX
+    JNZ  euclid32_sse_loop16
+
+    ADDPS X3, X0
+    ADDPS X5, X4
+    ADDPS X4, X0
+
+euclid32_sse_loop4_check:
+    ANDQ $15, CX
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   euclid32_sse_remainder
+
+euclid32_sse_loop4:
+    MOVUPS (SI), X1
+    MOVUPS (DI), X2
+    SUBPS X2, X1
+    MULPS X1, X1
+    ADDPS X1, X0
+    ADDQ $16, SI
+    ADDQ $16, DI
+    DECQ AX
+    JNZ  euclid32_sse_loop4
+
+euclid32_sse_remainder:
+    MOVAPS X0, X1
+    SHUFPS $0x0E, X1, X1
+    ADDPS X1, X0
+    MOVAPS X0, X1
+    SHUFPS $0x01, X1, X1
+    ADDSS X1, X0
+
+    ANDQ $3, CX
+    JZ   euclid32_sse_sqrt
+
+euclid32_sse_scalar:
+    MOVSS (SI), X1
+    MOVSS (DI), X2
+    SUBSS X2, X1
+    MULSS X1, X1
+    ADDSS X1, X0
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ CX
+    JNZ  euclid32_sse_scalar
+
+euclid32_sse_sqrt:
+    SQRTSS X0, X0
+    MOVSS X0, ret+48(FP)
+    RET
+
+// func euclideanDistanceAVX(a, b []float32) float32
+// 4 independent FMA accumulators of 8 floats, then horizontal reduce and sqrt.
+TEXT ·euclideanDistanceAVX(SB), NOSPLIT, $0-52
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    VXORPS Y0, Y0, Y0
+    VXORPS Y3, Y3, Y3
+    VXORPS Y4, Y4, Y4
+    VXORPS Y5, Y5, Y5
+
+    MOVQ CX, AX
+    SHRQ $5, AX                // len / 32
+    JZ   euclid32_avx_loop8_check
+
+euclid32_avx_loop32:
+    VMOVUPS (SI), Y1
+    VMOVUPS (DI), Y2
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y0
+
+    VMOVUPS 32(SI), Y1
+    VMOVUPS 32(DI), Y2
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y3
+
+    VMOVUPS 64(SI), Y1
+    VMOVUPS 64(DI), Y2
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y4
+
+    VMOVUPS 96(SI), Y1
+    VMOVUPS 96(DI), Y2
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y5
+
+    ADDQ $128, SI
+    ADDQ $128, DI
+    DECQ AX
+    JNZ  euclid32_avx_loop32
+
+    VADDPS Y3, Y0, Y0
+    VADDPS Y5, Y4, Y4
+    VADDPS Y4, Y0, Y0
+
+euclid32_avx_loop8_check:
+    ANDQ $31, CX
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   euclid32_avx_remainder
+
+euclid32_avx_loop8:
+    VMOVUPS (SI), Y1
+    VMOVUPS (DI), Y2
+    VSUBPS Y2, Y1, Y1
+    VFMADD231PS Y1, Y1, Y0
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  euclid32_avx_loop8
+
+euclid32_avx_remainder:
+    VEXTRACTF128 $1, Y0, X1
+    VADDPS X1, X0, X0
+    VHADDPS X0, X0, X0
+    VHADDPS X0, X0, X0
+
+    ANDQ $7, CX
+    JZ   euclid32_avx_sqrt
+
+euclid32_avx_scalar:
+    VMOVSS (SI), X1
+    VMOVSS (DI), X2
+    VSUBSS X2, X1, X1
+    VFMADD231SS X1, X1, X0
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ CX
+    JNZ  euclid32_avx_scalar
+
+euclid32_avx_sqrt:
+    VSQRTSS X0, X0, X0
+    VMOVSS X0, ret+48(FP)
+    VZEROUPPER
+    RET

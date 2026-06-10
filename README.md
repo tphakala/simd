@@ -570,7 +570,14 @@ Like the `i32` interleave kernels, these are pure 16-bit-lane movement (AVX2/SSE
 |                | Sum        | 41        | 123     | **3.0x**  |
 |                | Min        | 65        | 340     | **5.2x**  |
 |                | Max        | 66        | 352     | **5.3x**  |
+| **Statistical**| Variance\*  | 174       | 522     | **3.0x**  |
+|                | StdDev\*    | 208       | 529     | **2.5x**  |
+| **Vector**     | EuclideanDistance\* | 38 | 579     | **15.1x** |
 | **Range**      | Clamp      | 47        | 701     | **14.8x** |
+
+\*Variance/StdDev/EuclideanDistance gained their amd64 SSE/AVX kernels later than
+the rows above and were benchmarked in a separate run, so compare their SIMD/Go
+speedup rather than absolute ns against the other rows.
 
 #### Activation Functions - SIMD vs Pure Go
 
