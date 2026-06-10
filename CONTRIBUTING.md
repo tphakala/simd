@@ -37,6 +37,12 @@ go test ./f32 -bench=. -benchmem
 # Run linter
 golangci-lint run
 
+# Differential fuzzing: each SIMD path is fuzzed against its pure-Go reference
+# (fuzz_test.go in f32, f64, i32, crc). The seed corpus runs as part of
+# `go test ./...`; to actively fuzz a single target, run for example:
+go test ./f32 -run '^$' -fuzz '^FuzzF32Reductions$' -fuzztime=30s
+go test ./i32 -run '^$' -fuzz '^FuzzI32LPC$' -fuzztime=30s
+
 # Generate test expectations from C reference
 cd testdata
 gcc -O2 -march=native -o generate_expectations generate_expectations.c -lm
