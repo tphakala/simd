@@ -6210,3 +6210,815 @@ euclid32_avx_sqrt:
     VMOVSS X0, ret+48(FP)
     VZEROUPPER
     RET
+
+// ============================================================================
+// logAVX / powAVX / powElemAVX (f32): vectorized natural log core (issue #109)
+// ============================================================================
+
+// Mantissa reduction offset: bits(x) - log32_off puts the biased exponent of
+// m = x / 2^e in the tmp exponent field such that m in [sqrt(2)/2, sqrt(2)),
+// with e = tmp >> 23 (arithmetic) and bits(m) = bits(x) - (tmp & 0xff800000).
+DATA log32_off<>+0x00(SB)/4, $0x3f350000
+DATA log32_off<>+0x04(SB)/4, $0x3f350000
+DATA log32_off<>+0x08(SB)/4, $0x3f350000
+DATA log32_off<>+0x0c(SB)/4, $0x3f350000
+DATA log32_off<>+0x10(SB)/4, $0x3f350000
+DATA log32_off<>+0x14(SB)/4, $0x3f350000
+DATA log32_off<>+0x18(SB)/4, $0x3f350000
+DATA log32_off<>+0x1c(SB)/4, $0x3f350000
+GLOBL log32_off<>(SB), RODATA|NOPTR, $32
+
+DATA log32_expmask<>+0x00(SB)/4, $0xff800000
+DATA log32_expmask<>+0x04(SB)/4, $0xff800000
+DATA log32_expmask<>+0x08(SB)/4, $0xff800000
+DATA log32_expmask<>+0x0c(SB)/4, $0xff800000
+DATA log32_expmask<>+0x10(SB)/4, $0xff800000
+DATA log32_expmask<>+0x14(SB)/4, $0xff800000
+DATA log32_expmask<>+0x18(SB)/4, $0xff800000
+DATA log32_expmask<>+0x1c(SB)/4, $0xff800000
+GLOBL log32_expmask<>(SB), RODATA|NOPTR, $32
+
+// FLT_MIN = 1.1754944e-38: positive inputs below this are subnormal and
+// pre-scaled by 2^32 (exponent bias -32) before the reduction.
+DATA log32_fltmin<>+0x00(SB)/4, $0x00800000
+DATA log32_fltmin<>+0x04(SB)/4, $0x00800000
+DATA log32_fltmin<>+0x08(SB)/4, $0x00800000
+DATA log32_fltmin<>+0x0c(SB)/4, $0x00800000
+DATA log32_fltmin<>+0x10(SB)/4, $0x00800000
+DATA log32_fltmin<>+0x14(SB)/4, $0x00800000
+DATA log32_fltmin<>+0x18(SB)/4, $0x00800000
+DATA log32_fltmin<>+0x1c(SB)/4, $0x00800000
+GLOBL log32_fltmin<>(SB), RODATA|NOPTR, $32
+
+DATA log32_two32<>+0x00(SB)/4, $0x4f800000  // 2^32
+DATA log32_two32<>+0x04(SB)/4, $0x4f800000
+DATA log32_two32<>+0x08(SB)/4, $0x4f800000
+DATA log32_two32<>+0x0c(SB)/4, $0x4f800000
+DATA log32_two32<>+0x10(SB)/4, $0x4f800000
+DATA log32_two32<>+0x14(SB)/4, $0x4f800000
+DATA log32_two32<>+0x18(SB)/4, $0x4f800000
+DATA log32_two32<>+0x1c(SB)/4, $0x4f800000
+GLOBL log32_two32<>(SB), RODATA|NOPTR, $32
+
+DATA log32_negsc<>+0x00(SB)/4, $0xc2000000  // -32.0 (exponent bias)
+DATA log32_negsc<>+0x04(SB)/4, $0xc2000000
+DATA log32_negsc<>+0x08(SB)/4, $0xc2000000
+DATA log32_negsc<>+0x0c(SB)/4, $0xc2000000
+DATA log32_negsc<>+0x10(SB)/4, $0xc2000000
+DATA log32_negsc<>+0x14(SB)/4, $0xc2000000
+DATA log32_negsc<>+0x18(SB)/4, $0xc2000000
+DATA log32_negsc<>+0x1c(SB)/4, $0xc2000000
+GLOBL log32_negsc<>(SB), RODATA|NOPTR, $32
+
+// Cephes logf minimax polynomial for ln(m), m in [sqrt(2)/2, sqrt(2)):
+// with z = m-1, ln(m) = z - 0.5*z^2 + z^3*P(z),
+// P(z) = ((((((((p0*z + p1)*z + p2)*z + p3)*z + p4)*z + p5)*z + p6)*z
+// + p7)*z + p8). Worst-case relative error of the full ln(x) is ~1.2 ulps.
+DATA log32_p0<>+0x00(SB)/4, $0x3d9021bb  // +7.0376836292e-2
+DATA log32_p0<>+0x04(SB)/4, $0x3d9021bb
+DATA log32_p0<>+0x08(SB)/4, $0x3d9021bb
+DATA log32_p0<>+0x0c(SB)/4, $0x3d9021bb
+DATA log32_p0<>+0x10(SB)/4, $0x3d9021bb
+DATA log32_p0<>+0x14(SB)/4, $0x3d9021bb
+DATA log32_p0<>+0x18(SB)/4, $0x3d9021bb
+DATA log32_p0<>+0x1c(SB)/4, $0x3d9021bb
+GLOBL log32_p0<>(SB), RODATA|NOPTR, $32
+
+DATA log32_p1<>+0x00(SB)/4, $0xbdebd1b8  // -1.1514610310e-1
+DATA log32_p1<>+0x04(SB)/4, $0xbdebd1b8
+DATA log32_p1<>+0x08(SB)/4, $0xbdebd1b8
+DATA log32_p1<>+0x0c(SB)/4, $0xbdebd1b8
+DATA log32_p1<>+0x10(SB)/4, $0xbdebd1b8
+DATA log32_p1<>+0x14(SB)/4, $0xbdebd1b8
+DATA log32_p1<>+0x18(SB)/4, $0xbdebd1b8
+DATA log32_p1<>+0x1c(SB)/4, $0xbdebd1b8
+GLOBL log32_p1<>(SB), RODATA|NOPTR, $32
+
+DATA log32_p2<>+0x00(SB)/4, $0x3def251a  // +1.1676998740e-1
+DATA log32_p2<>+0x04(SB)/4, $0x3def251a
+DATA log32_p2<>+0x08(SB)/4, $0x3def251a
+DATA log32_p2<>+0x0c(SB)/4, $0x3def251a
+DATA log32_p2<>+0x10(SB)/4, $0x3def251a
+DATA log32_p2<>+0x14(SB)/4, $0x3def251a
+DATA log32_p2<>+0x18(SB)/4, $0x3def251a
+DATA log32_p2<>+0x1c(SB)/4, $0x3def251a
+GLOBL log32_p2<>(SB), RODATA|NOPTR, $32
+
+DATA log32_p3<>+0x00(SB)/4, $0xbdfe5d4f  // -1.2420140846e-1
+DATA log32_p3<>+0x04(SB)/4, $0xbdfe5d4f
+DATA log32_p3<>+0x08(SB)/4, $0xbdfe5d4f
+DATA log32_p3<>+0x0c(SB)/4, $0xbdfe5d4f
+DATA log32_p3<>+0x10(SB)/4, $0xbdfe5d4f
+DATA log32_p3<>+0x14(SB)/4, $0xbdfe5d4f
+DATA log32_p3<>+0x18(SB)/4, $0xbdfe5d4f
+DATA log32_p3<>+0x1c(SB)/4, $0xbdfe5d4f
+GLOBL log32_p3<>(SB), RODATA|NOPTR, $32
+
+DATA log32_p4<>+0x00(SB)/4, $0x3e11e9bf  // +1.4249322787e-1
+DATA log32_p4<>+0x04(SB)/4, $0x3e11e9bf
+DATA log32_p4<>+0x08(SB)/4, $0x3e11e9bf
+DATA log32_p4<>+0x0c(SB)/4, $0x3e11e9bf
+DATA log32_p4<>+0x10(SB)/4, $0x3e11e9bf
+DATA log32_p4<>+0x14(SB)/4, $0x3e11e9bf
+DATA log32_p4<>+0x18(SB)/4, $0x3e11e9bf
+DATA log32_p4<>+0x1c(SB)/4, $0x3e11e9bf
+GLOBL log32_p4<>(SB), RODATA|NOPTR, $32
+
+DATA log32_p5<>+0x00(SB)/4, $0xbe2aae50  // -1.6668057665e-1
+DATA log32_p5<>+0x04(SB)/4, $0xbe2aae50
+DATA log32_p5<>+0x08(SB)/4, $0xbe2aae50
+DATA log32_p5<>+0x0c(SB)/4, $0xbe2aae50
+DATA log32_p5<>+0x10(SB)/4, $0xbe2aae50
+DATA log32_p5<>+0x14(SB)/4, $0xbe2aae50
+DATA log32_p5<>+0x18(SB)/4, $0xbe2aae50
+DATA log32_p5<>+0x1c(SB)/4, $0xbe2aae50
+GLOBL log32_p5<>(SB), RODATA|NOPTR, $32
+
+DATA log32_p6<>+0x00(SB)/4, $0x3e4cceac  // +2.0000714765e-1
+DATA log32_p6<>+0x04(SB)/4, $0x3e4cceac
+DATA log32_p6<>+0x08(SB)/4, $0x3e4cceac
+DATA log32_p6<>+0x0c(SB)/4, $0x3e4cceac
+DATA log32_p6<>+0x10(SB)/4, $0x3e4cceac
+DATA log32_p6<>+0x14(SB)/4, $0x3e4cceac
+DATA log32_p6<>+0x18(SB)/4, $0x3e4cceac
+DATA log32_p6<>+0x1c(SB)/4, $0x3e4cceac
+GLOBL log32_p6<>(SB), RODATA|NOPTR, $32
+
+DATA log32_p7<>+0x00(SB)/4, $0xbe7ffffc  // -2.4999993993e-1
+DATA log32_p7<>+0x04(SB)/4, $0xbe7ffffc
+DATA log32_p7<>+0x08(SB)/4, $0xbe7ffffc
+DATA log32_p7<>+0x0c(SB)/4, $0xbe7ffffc
+DATA log32_p7<>+0x10(SB)/4, $0xbe7ffffc
+DATA log32_p7<>+0x14(SB)/4, $0xbe7ffffc
+DATA log32_p7<>+0x18(SB)/4, $0xbe7ffffc
+DATA log32_p7<>+0x1c(SB)/4, $0xbe7ffffc
+GLOBL log32_p7<>(SB), RODATA|NOPTR, $32
+
+DATA log32_p8<>+0x00(SB)/4, $0x3eaaaaaa  // +3.3333331174e-1
+DATA log32_p8<>+0x04(SB)/4, $0x3eaaaaaa
+DATA log32_p8<>+0x08(SB)/4, $0x3eaaaaaa
+DATA log32_p8<>+0x0c(SB)/4, $0x3eaaaaaa
+DATA log32_p8<>+0x10(SB)/4, $0x3eaaaaaa
+DATA log32_p8<>+0x14(SB)/4, $0x3eaaaaaa
+DATA log32_p8<>+0x18(SB)/4, $0x3eaaaaaa
+DATA log32_p8<>+0x1c(SB)/4, $0x3eaaaaaa
+GLOBL log32_p8<>(SB), RODATA|NOPTR, $32
+
+// Cephes logf ln(2) hi/lo split for the pow kernels' fixed natural-log
+// reconstruction (logAVX takes its split via arguments instead).
+DATA log32_ln2hi<>+0x00(SB)/4, $0x3f318000  // 0.693359375
+DATA log32_ln2hi<>+0x04(SB)/4, $0x3f318000
+DATA log32_ln2hi<>+0x08(SB)/4, $0x3f318000
+DATA log32_ln2hi<>+0x0c(SB)/4, $0x3f318000
+DATA log32_ln2hi<>+0x10(SB)/4, $0x3f318000
+DATA log32_ln2hi<>+0x14(SB)/4, $0x3f318000
+DATA log32_ln2hi<>+0x18(SB)/4, $0x3f318000
+DATA log32_ln2hi<>+0x1c(SB)/4, $0x3f318000
+GLOBL log32_ln2hi<>(SB), RODATA|NOPTR, $32
+
+DATA log32_ln2lo<>+0x00(SB)/4, $0xb95e8083  // -2.12194440e-4
+DATA log32_ln2lo<>+0x04(SB)/4, $0xb95e8083
+DATA log32_ln2lo<>+0x08(SB)/4, $0xb95e8083
+DATA log32_ln2lo<>+0x0c(SB)/4, $0xb95e8083
+DATA log32_ln2lo<>+0x10(SB)/4, $0xb95e8083
+DATA log32_ln2lo<>+0x14(SB)/4, $0xb95e8083
+DATA log32_ln2lo<>+0x18(SB)/4, $0xb95e8083
+DATA log32_ln2lo<>+0x1c(SB)/4, $0xb95e8083
+GLOBL log32_ln2lo<>(SB), RODATA|NOPTR, $32
+
+DATA log32_posinf<>+0x00(SB)/4, $0x7f800000
+DATA log32_posinf<>+0x04(SB)/4, $0x7f800000
+DATA log32_posinf<>+0x08(SB)/4, $0x7f800000
+DATA log32_posinf<>+0x0c(SB)/4, $0x7f800000
+DATA log32_posinf<>+0x10(SB)/4, $0x7f800000
+DATA log32_posinf<>+0x14(SB)/4, $0x7f800000
+DATA log32_posinf<>+0x18(SB)/4, $0x7f800000
+DATA log32_posinf<>+0x1c(SB)/4, $0x7f800000
+GLOBL log32_posinf<>(SB), RODATA|NOPTR, $32
+
+DATA log32_neginf<>+0x00(SB)/4, $0xff800000
+DATA log32_neginf<>+0x04(SB)/4, $0xff800000
+DATA log32_neginf<>+0x08(SB)/4, $0xff800000
+DATA log32_neginf<>+0x0c(SB)/4, $0xff800000
+DATA log32_neginf<>+0x10(SB)/4, $0xff800000
+DATA log32_neginf<>+0x14(SB)/4, $0xff800000
+DATA log32_neginf<>+0x18(SB)/4, $0xff800000
+DATA log32_neginf<>+0x1c(SB)/4, $0xff800000
+GLOBL log32_neginf<>(SB), RODATA|NOPTR, $32
+
+DATA log32_nan<>+0x00(SB)/4, $0x7fc00000
+DATA log32_nan<>+0x04(SB)/4, $0x7fc00000
+DATA log32_nan<>+0x08(SB)/4, $0x7fc00000
+DATA log32_nan<>+0x0c(SB)/4, $0x7fc00000
+DATA log32_nan<>+0x10(SB)/4, $0x7fc00000
+DATA log32_nan<>+0x14(SB)/4, $0x7fc00000
+DATA log32_nan<>+0x18(SB)/4, $0x7fc00000
+DATA log32_nan<>+0x1c(SB)/4, $0x7fc00000
+GLOBL log32_nan<>(SB), RODATA|NOPTR, $32
+
+// func logAVX(dst, src []float32, k1hi, k1lo, k2 float32)
+// Shared kernel for Log, Log2, and Log10: per lane it computes
+// result = e*k1hi + (lnm*k2 + e*k1lo), with x = m*2^e, m in
+// [sqrt(2)/2, sqrt(2)) and lnm = ln(m) = z - 0.5*z^2 + z^3*P(z) for
+// z = m-1 (Cephes logf degree-8 minimax polynomial). Positive subnormal
+// inputs are pre-scaled by 2^32 (exponent bias -32). Special lanes are fixed
+// up with blends from the original input: +Inf -> +Inf, +-0 -> -Inf,
+// x < 0 or NaN -> NaN, matching math.Log. Requires AVX2 (YMM integer ops in
+// the exponent extraction) and FMA. Processes 8 elements per iteration; the
+// 0-7 element tail uses the scalar path below.
+TEXT ·logAVX(SB), NOSPLIT, $0-60
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    // Loop-invariant constants. The low 128 bits (X7-X15) are reused by the
+    // scalar remainder path.
+    VMOVUPS log32_negsc<>(SB), Y7      // Y7 = -32.0 (subnormal exponent bias)
+    VMOVUPS log32_two32<>(SB), Y8      // Y8 = 2^32 (subnormal pre-scale)
+    VMOVUPS log32_fltmin<>(SB), Y9     // Y9 = FLT_MIN
+    VMOVUPS exp_one<>(SB), Y10         // Y10 = 1.0
+    VMOVUPS log32_expmask<>(SB), Y11   // Y11 = 0xff800000
+    VMOVUPS log32_off<>(SB), Y12       // Y12 = reduction offset
+    VBROADCASTSS k2+56(FP), Y13        // Y13 = k2
+    VBROADCASTSS k1lo+52(FP), Y14      // Y14 = k1lo
+    VBROADCASTSS k1hi+48(FP), Y15      // Y15 = k1hi
+
+    MOVQ CX, R8
+    SHRQ $3, R8                        // len / 8
+    JZ   log32_remainder
+
+log32_loop8:
+    VMOVUPS (SI), Y0                   // Y0 = x (kept for the special-lane blends)
+
+    // Subnormal pre-scale: lanes with 0 < x < FLT_MIN are scaled by 2^32 and
+    // carry an exponent bias of -32. (Negative/NaN lanes fail the compare or
+    // produce garbage that the final blends overwrite.)
+    VCMPPS $17, Y9, Y0, Y1             // Y1 = mask: x < FLT_MIN (LT_OQ)
+    VMULPS Y8, Y0, Y2                  // Y2 = x * 2^32
+    VBLENDVPS Y1, Y2, Y0, Y2           // Y2 = xs
+    VANDPS Y7, Y1, Y1                  // Y1 = ebias = subnormal ? -32.0 : 0.0
+
+    // Exponent/mantissa split: tmp = bits(xs) - OFF; e = tmp >> 23
+    // (arithmetic, directly on the 32-bit lanes); bits(m) = bits(xs) -
+    // (tmp & 0xff800000), leaving m in [sqrt(2)/2, sqrt(2)).
+    VPSUBD Y12, Y2, Y3                 // Y3 = tmp
+    VPAND Y11, Y3, Y4                  // Y4 = tmp & expmask
+    VPSUBD Y4, Y2, Y4                  // Y4 = m
+    VPSRAD $23, Y3, Y3                 // Y3 = e (int32)
+    VCVTDQ2PS Y3, Y3                   // Y3 = e as float32
+    VADDPS Y1, Y3, Y3                  // Y3 = e + ebias
+
+    // z = m - 1, zz = z^2
+    VSUBPS Y10, Y4, Y5                 // Y5 = z
+    VMULPS Y5, Y5, Y4                  // Y4 = zz
+
+    // P(z), Horner with memory-operand FMAs
+    VMOVUPS log32_p0<>(SB), Y2
+    VFMADD213PS log32_p1<>(SB), Y5, Y2 // Y2 = Y2*z + p1
+    VFMADD213PS log32_p2<>(SB), Y5, Y2
+    VFMADD213PS log32_p3<>(SB), Y5, Y2
+    VFMADD213PS log32_p4<>(SB), Y5, Y2
+    VFMADD213PS log32_p5<>(SB), Y5, Y2
+    VFMADD213PS log32_p6<>(SB), Y5, Y2
+    VFMADD213PS log32_p7<>(SB), Y5, Y2
+    VFMADD213PS log32_p8<>(SB), Y5, Y2 // Y2 = P(z)
+
+    // lnm = z + (z^3*P(z) - 0.5*zz)
+    VMULPS Y5, Y4, Y6                  // Y6 = z^3
+    VMULPS Y6, Y2, Y2                  // Y2 = z^3 * P(z)
+    VFNMADD231PS exp_half<>(SB), Y4, Y2 // Y2 -= 0.5*zz
+    VADDPS Y5, Y2, Y2                  // Y2 = lnm
+
+    // result = e*k1hi + (lnm*k2 + e*k1lo)
+    VMULPS Y14, Y3, Y4                 // Y4 = e * k1lo
+    VFMADD231PS Y13, Y2, Y4            // Y4 += lnm * k2
+    VFMADD231PS Y15, Y3, Y4            // Y4 += e * k1hi
+
+    // Special lanes from the original x: +Inf -> +Inf, +-0 -> -Inf,
+    // x < 0 or NaN -> NaN (canonical quiet NaN, like math.Log).
+    VMOVUPS log32_posinf<>(SB), Y2
+    VCMPPS $0, Y2, Y0, Y1              // Y1 = mask: x == +Inf (EQ_OQ)
+    VBLENDVPS Y1, Y2, Y4, Y4
+    VXORPS Y2, Y2, Y2
+    VCMPPS $0, Y2, Y0, Y1              // Y1 = mask: x == +-0
+    VMOVUPS log32_neginf<>(SB), Y3
+    VBLENDVPS Y1, Y3, Y4, Y4
+    VCMPPS $17, Y2, Y0, Y1             // Y1 = mask: x < 0
+    VCMPPS $3, Y0, Y0, Y2              // Y2 = mask: x unordered (NaN)
+    VORPS Y2, Y1, Y1
+    VMOVUPS log32_nan<>(SB), Y3
+    VBLENDVPS Y1, Y3, Y4, Y4
+
+    VMOVUPS Y4, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ R8
+    JNZ  log32_loop8
+
+log32_remainder:
+    ANDQ $7, CX
+    JZ   log32_done
+
+log32_scalar:
+    MOVL (SI), AX                      // AX = bits(x)
+    VMOVSS (SI), X0                    // X0 = x
+
+    // Specials first (JP before JB/JE: unordered sets ZF=PF=CF=1)
+    VXORPS X1, X1, X1
+    VUCOMISS X1, X0
+    JP   log32_scalar_nan
+    JB   log32_scalar_nan              // x < 0
+    JE   log32_scalar_neginf           // x == +-0
+    MOVL $0x7F800000, BX
+    CMPL AX, BX
+    JEQ  log32_scalar_posinf
+
+    // Subnormal pre-scale (x positive finite; bits compare as ints)
+    XORL R9, R9
+    MOVL $0x00800000, BX
+    CMPL AX, BX
+    JGE  log32_scalar_normal
+    VMOVSS log32_two32<>(SB), X2       // 2^32
+    VMULSS X2, X0, X0
+    VMOVD X0, AX
+    MOVL $-32, R9
+
+log32_scalar_normal:
+    MOVL $0x3F350000, BX
+    MOVL AX, R10
+    SUBL BX, R10                       // R10 = tmp = bits - OFF
+    MOVL R10, R11
+    SARL $23, R11                      // R11 = e
+    ADDL R9, R11                       // e += bias
+    MOVL $0xFF800000, BX
+    ANDL BX, R10
+    SUBL R10, AX                       // AX = bits(m)
+    VMOVD AX, X2                       // X2 = m
+    CVTSL2SS R11, X3                   // X3 = e as float32
+
+    // z = m - 1, zz = z^2 (X10 = 1.0 from the vector constants)
+    VSUBSS X10, X2, X4                 // X4 = z
+    VMULSS X4, X4, X5                  // X5 = zz
+
+    VMOVSS log32_p0<>(SB), X1
+    VFMADD213SS log32_p1<>(SB), X4, X1
+    VFMADD213SS log32_p2<>(SB), X4, X1
+    VFMADD213SS log32_p3<>(SB), X4, X1
+    VFMADD213SS log32_p4<>(SB), X4, X1
+    VFMADD213SS log32_p5<>(SB), X4, X1
+    VFMADD213SS log32_p6<>(SB), X4, X1
+    VFMADD213SS log32_p7<>(SB), X4, X1
+    VFMADD213SS log32_p8<>(SB), X4, X1 // X1 = P(z)
+
+    VMULSS X4, X5, X6                  // X6 = z^3
+    VMULSS X6, X1, X1                  // X1 = z^3*P(z)
+    VFNMADD231SS exp_half<>(SB), X5, X1 // X1 -= 0.5*zz
+    VADDSS X4, X1, X1                  // X1 = lnm
+
+    VMULSS X14, X3, X5                 // e * k1lo
+    VFMADD231SS X13, X1, X5            // += lnm * k2
+    VFMADD231SS X15, X3, X5            // += e * k1hi
+    VMOVSS X5, (DX)
+    JMP  log32_scalar_next
+
+log32_scalar_nan:
+    MOVL $0x7FC00000, AX
+    MOVL AX, (DX)
+    JMP  log32_scalar_next
+
+log32_scalar_neginf:
+    MOVL $0xFF800000, AX
+    MOVL AX, (DX)
+    JMP  log32_scalar_next
+
+log32_scalar_posinf:
+    MOVL $0x7F800000, AX
+    MOVL AX, (DX)
+
+log32_scalar_next:
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  log32_scalar
+
+log32_done:
+    VZEROUPPER
+    RET
+
+// func powAVX(dst, src []float32, exp float32)
+// Fused pow(x, p) = exp(p*ln(x)) for slices whose elements are all positive
+// and finite (the dispatcher guarantees this, see powSIMDOK32). The log core
+// matches logAVX (constants from memory instead of registers); the exp core
+// matches expAVX except y = p*ln(x) is clamped to [-104, 89] (past
+// ln(MaxFloat32) and ln of the smallest subnormal) and the 2^k
+// reconstruction is split into 2^(k>>1) * 2^(k-(k>>1)), so overflow goes to
+// +Inf and underflow degrades gradually through subnormals to 0, matching
+// math.Pow's result classes. Accuracy is ~1.4e-5 relative (log error
+// amplified by |y|, then the exp polynomial). Requires AVX2 and FMA.
+TEXT ·powAVX(SB), NOSPLIT, $0-52
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    // Exp-core constants in registers (the log core uses memory operands).
+    // The low 128 bits (X7-X15) are reused by the scalar remainder path.
+    VBROADCASTSS exp+48(FP), Y7        // Y7 = p
+    VMOVUPS exp_c5<>(SB), Y8           // Y8 = 1/120
+    VMOVUPS exp_c4<>(SB), Y9           // Y9 = 1/24
+    VMOVUPS exp_c3<>(SB), Y10          // Y10 = 1/6
+    VMOVUPS exp_c2<>(SB), Y11          // Y11 = 0.5
+    VMOVUPS exp_one<>(SB), Y12         // Y12 = 1.0
+    VMOVUPS exp_magic<>(SB), Y13       // Y13 = rounding magic
+    VMOVUPS exp_ln2<>(SB), Y14         // Y14 = ln(2)
+    VMOVUPS exp_log2e<>(SB), Y15       // Y15 = log2(e)
+
+    MOVQ CX, R8
+    SHRQ $3, R8
+    JZ   pow32_remainder
+
+pow32_loop8:
+    VMOVUPS (SI), Y0                   // Y0 = x (positive finite)
+
+    // --- log core (see logAVX) ---
+    VCMPPS $17, log32_fltmin<>(SB), Y0, Y1
+    VMULPS log32_two32<>(SB), Y0, Y2
+    VBLENDVPS Y1, Y2, Y0, Y0           // x, subnormals pre-scaled
+    VANDPS log32_negsc<>(SB), Y1, Y1   // ebias
+    VPSUBD log32_off<>(SB), Y0, Y2     // tmp
+    VPAND log32_expmask<>(SB), Y2, Y3
+    VPSUBD Y3, Y0, Y3                  // m
+    VPSRAD $23, Y2, Y2
+    VCVTDQ2PS Y2, Y2
+    VADDPS Y1, Y2, Y2                  // e
+    VSUBPS Y12, Y3, Y5                 // z = m - 1
+    VMULPS Y5, Y5, Y4                  // zz
+    VMOVUPS log32_p0<>(SB), Y3
+    VFMADD213PS log32_p1<>(SB), Y5, Y3
+    VFMADD213PS log32_p2<>(SB), Y5, Y3
+    VFMADD213PS log32_p3<>(SB), Y5, Y3
+    VFMADD213PS log32_p4<>(SB), Y5, Y3
+    VFMADD213PS log32_p5<>(SB), Y5, Y3
+    VFMADD213PS log32_p6<>(SB), Y5, Y3
+    VFMADD213PS log32_p7<>(SB), Y5, Y3
+    VFMADD213PS log32_p8<>(SB), Y5, Y3 // P(z)
+    VMULPS Y5, Y4, Y6                  // z^3
+    VMULPS Y6, Y3, Y3                  // z^3*P(z)
+    VFNMADD231PS exp_half<>(SB), Y4, Y3 // -= 0.5*zz
+    VADDPS Y5, Y3, Y3                  // lnm
+    VMULPS log32_ln2lo<>(SB), Y2, Y4   // e*ln2lo
+    VADDPS Y3, Y4, Y4                  // + lnm
+    VFMADD231PS log32_ln2hi<>(SB), Y2, Y4 // Y4 = ln(x)
+
+    // y = p*ln(x); keep the pre-clamp y in Y6 for the overflow blends, then
+    // clamp to [-88, 88] for the exp core
+    VMULPS Y7, Y4, Y0
+    VMINPS log32_powclamp_hi<>(SB), Y0, Y0
+    VMAXPS log32_powclamp_lo<>(SB), Y0, Y0
+
+    // --- exp core (see expAVX) ---
+    VMULPS Y15, Y0, Y1                 // y * log2e
+    VADDPS Y13, Y1, Y2                 // + magic
+    VSUBPS Y13, Y2, Y3                 // Y3 = k = round(y * log2e)
+    VMULPS Y14, Y3, Y4                 // k * ln2
+    VSUBPS Y4, Y0, Y0                  // r
+    VMULPS Y0, Y8, Y1                  // r*c5
+    VADDPS Y9, Y1, Y1
+    VMULPS Y0, Y1, Y1
+    VADDPS Y10, Y1, Y1
+    VMULPS Y0, Y1, Y1
+    VADDPS Y11, Y1, Y1
+    VMULPS Y0, Y1, Y1
+    VADDPS Y12, Y1, Y1
+    VMULPS Y0, Y1, Y1
+    VADDPS Y12, Y1, Y1                 // exp(r)
+    // Split 2^k reconstruction: k can reach +-150 here, past the biased
+    // exponent range, so build 2^(k>>1) and 2^(k-(k>>1)) separately. The
+    // double multiply overflows to +Inf / underflows through subnormals to 0
+    // exactly where math.Pow does.
+    VCVTPS2DQ Y3, Y4                   // int(k)
+    VPSRAD $1, Y4, Y3                  // k1 = k >> 1
+    VPSUBD Y3, Y4, Y4                  // k2 = k - k1
+    VPSLLD $23, Y3, Y3
+    VPADDD Y12, Y3, Y3                 // 2^k1 bits
+    VPSLLD $23, Y4, Y4
+    VPADDD Y12, Y4, Y4                 // 2^k2 bits
+    VMULPS Y3, Y1, Y1                  // exp(r) * 2^k1
+    VMULPS Y4, Y1, Y1                  // * 2^k2 = exp(y)
+
+    VMOVUPS Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ R8
+    JNZ  pow32_loop8
+
+pow32_remainder:
+    ANDQ $7, CX
+    JZ   pow32_done
+
+pow32_scalar:
+    MOVL (SI), AX
+    VMOVSS (SI), X0
+
+    // log core, scalar (x positive finite; subnormal pre-scale via GPR)
+    XORL R9, R9
+    MOVL $0x00800000, BX
+    CMPL AX, BX
+    JGE  pow32_scalar_normal
+    VMOVSS log32_two32<>(SB), X2       // 2^32
+    VMULSS X2, X0, X0
+    VMOVD X0, AX
+    MOVL $-32, R9
+
+pow32_scalar_normal:
+    MOVL $0x3F350000, BX
+    MOVL AX, R10
+    SUBL BX, R10                       // tmp
+    MOVL R10, R11
+    SARL $23, R11                      // e
+    ADDL R9, R11
+    MOVL $0xFF800000, BX
+    ANDL BX, R10
+    SUBL R10, AX                       // bits(m)
+    VMOVD AX, X2                       // m
+    CVTSL2SS R11, X3                   // e
+
+    VSUBSS X12, X2, X4                 // z = m - 1 (X12 = 1.0)
+    VMULSS X4, X4, X5                  // zz
+    VMOVSS log32_p0<>(SB), X1
+    VFMADD213SS log32_p1<>(SB), X4, X1
+    VFMADD213SS log32_p2<>(SB), X4, X1
+    VFMADD213SS log32_p3<>(SB), X4, X1
+    VFMADD213SS log32_p4<>(SB), X4, X1
+    VFMADD213SS log32_p5<>(SB), X4, X1
+    VFMADD213SS log32_p6<>(SB), X4, X1
+    VFMADD213SS log32_p7<>(SB), X4, X1
+    VFMADD213SS log32_p8<>(SB), X4, X1 // P(z)
+    VMULSS X4, X5, X6                  // z^3
+    VMULSS X6, X1, X1
+    VFNMADD231SS exp_half<>(SB), X5, X1 // -= 0.5*zz
+    VADDSS X4, X1, X1                  // lnm
+    VMULSS log32_ln2lo<>(SB), X3, X5
+    VADDSS X1, X5, X5
+    VFMADD231SS log32_ln2hi<>(SB), X3, X5 // X5 = ln(x)
+
+    // y = p*ln(x); pre-clamp copy in X6, clamp (X7 = p)
+    VMULSS X7, X5, X0
+    VMINSS log32_powclamp_hi<>(SB), X0, X0
+    VMAXSS log32_powclamp_lo<>(SB), X0, X0
+
+    // exp core, scalar (X8-X15 = exp constants)
+    VMULSS X15, X0, X1
+    VADDSS X13, X1, X2
+    VSUBSS X13, X2, X3                 // k
+    VMULSS X14, X3, X4
+    VSUBSS X4, X0, X0                  // r
+    VMULSS X0, X8, X1
+    VADDSS X9, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X10, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X11, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X12, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X12, X1, X1                 // exp(r)
+    // Split 2^k reconstruction (see the vector body)
+    VCVTSS2SI X3, AX                   // k
+    MOVL AX, R10
+    SARL $1, R10                       // k1 = k >> 1
+    SUBL R10, AX                       // k2 = k - k1
+    MOVL $0x3F800000, BX
+    SHLL $23, R10
+    ADDL BX, R10
+    VMOVD R10, X4
+    VMULSS X4, X1, X1                  // exp(r) * 2^k1
+    SHLL $23, AX
+    ADDL BX, AX
+    VMOVD AX, X4
+    VMULSS X4, X1, X1                  // * 2^k2 = exp(y)
+
+    VMOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  pow32_scalar
+
+pow32_done:
+    VZEROUPPER
+    RET
+
+// func powElemAVX(dst, base, exp []float32)
+// Elementwise pow(base[i], exp[i]) = exp(exp[i]*ln(base[i])). Same cores and
+// preconditions as powAVX (all bases positive finite, all exponents finite),
+// with the exponent loaded per lane instead of broadcast.
+TEXT ·powElemAVX(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ base_base+24(FP), SI
+    MOVQ exp_base+48(FP), DI
+
+    VMOVUPS exp_c5<>(SB), Y8           // Y8 = 1/120
+    VMOVUPS exp_c4<>(SB), Y9           // Y9 = 1/24
+    VMOVUPS exp_c3<>(SB), Y10          // Y10 = 1/6
+    VMOVUPS exp_c2<>(SB), Y11          // Y11 = 0.5
+    VMOVUPS exp_one<>(SB), Y12         // Y12 = 1.0
+    VMOVUPS exp_magic<>(SB), Y13       // Y13 = rounding magic
+    VMOVUPS exp_ln2<>(SB), Y14         // Y14 = ln(2)
+    VMOVUPS exp_log2e<>(SB), Y15       // Y15 = log2(e)
+
+    MOVQ CX, R8
+    SHRQ $3, R8
+    JZ   powelem32_remainder
+
+powelem32_loop8:
+    VMOVUPS (SI), Y0                   // Y0 = base (positive finite)
+
+    // --- log core (see logAVX) ---
+    VCMPPS $17, log32_fltmin<>(SB), Y0, Y1
+    VMULPS log32_two32<>(SB), Y0, Y2
+    VBLENDVPS Y1, Y2, Y0, Y0
+    VANDPS log32_negsc<>(SB), Y1, Y1   // ebias
+    VPSUBD log32_off<>(SB), Y0, Y2     // tmp
+    VPAND log32_expmask<>(SB), Y2, Y3
+    VPSUBD Y3, Y0, Y3                  // m
+    VPSRAD $23, Y2, Y2
+    VCVTDQ2PS Y2, Y2
+    VADDPS Y1, Y2, Y2                  // e
+    VSUBPS Y12, Y3, Y5                 // z = m - 1
+    VMULPS Y5, Y5, Y4                  // zz
+    VMOVUPS log32_p0<>(SB), Y3
+    VFMADD213PS log32_p1<>(SB), Y5, Y3
+    VFMADD213PS log32_p2<>(SB), Y5, Y3
+    VFMADD213PS log32_p3<>(SB), Y5, Y3
+    VFMADD213PS log32_p4<>(SB), Y5, Y3
+    VFMADD213PS log32_p5<>(SB), Y5, Y3
+    VFMADD213PS log32_p6<>(SB), Y5, Y3
+    VFMADD213PS log32_p7<>(SB), Y5, Y3
+    VFMADD213PS log32_p8<>(SB), Y5, Y3 // P(z)
+    VMULPS Y5, Y4, Y6                  // z^3
+    VMULPS Y6, Y3, Y3
+    VFNMADD231PS exp_half<>(SB), Y4, Y3 // -= 0.5*zz
+    VADDPS Y5, Y3, Y3                  // lnm
+    VMULPS log32_ln2lo<>(SB), Y2, Y4
+    VADDPS Y3, Y4, Y4
+    VFMADD231PS log32_ln2hi<>(SB), Y2, Y4 // Y4 = ln(base)
+
+    // y = exp[i]*ln(base[i]); pre-clamp copy in Y6, clamp for the exp core
+    VMOVUPS (DI), Y7                   // Y7 = exponents (finite)
+    VMULPS Y7, Y4, Y0
+    VMINPS log32_powclamp_hi<>(SB), Y0, Y0
+    VMAXPS log32_powclamp_lo<>(SB), Y0, Y0
+
+    // --- exp core (see expAVX) ---
+    VMULPS Y15, Y0, Y1
+    VADDPS Y13, Y1, Y2
+    VSUBPS Y13, Y2, Y3                 // k
+    VMULPS Y14, Y3, Y4
+    VSUBPS Y4, Y0, Y0                  // r
+    VMULPS Y0, Y8, Y1
+    VADDPS Y9, Y1, Y1
+    VMULPS Y0, Y1, Y1
+    VADDPS Y10, Y1, Y1
+    VMULPS Y0, Y1, Y1
+    VADDPS Y11, Y1, Y1
+    VMULPS Y0, Y1, Y1
+    VADDPS Y12, Y1, Y1
+    VMULPS Y0, Y1, Y1
+    VADDPS Y12, Y1, Y1                 // exp(r)
+    // Split 2^k reconstruction (see powAVX)
+    VCVTPS2DQ Y3, Y4                   // int(k)
+    VPSRAD $1, Y4, Y3                  // k1 = k >> 1
+    VPSUBD Y3, Y4, Y4                  // k2 = k - k1
+    VPSLLD $23, Y3, Y3
+    VPADDD Y12, Y3, Y3                 // 2^k1 bits
+    VPSLLD $23, Y4, Y4
+    VPADDD Y12, Y4, Y4                 // 2^k2 bits
+    VMULPS Y3, Y1, Y1                  // exp(r) * 2^k1
+    VMULPS Y4, Y1, Y1                  // * 2^k2 = exp(y)
+
+    VMOVUPS Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ R8
+    JNZ  powelem32_loop8
+
+powelem32_remainder:
+    ANDQ $7, CX
+    JZ   powelem32_done
+
+powelem32_scalar:
+    MOVL (SI), AX
+    VMOVSS (SI), X0
+
+    XORL R9, R9
+    MOVL $0x00800000, BX
+    CMPL AX, BX
+    JGE  powelem32_scalar_normal
+    VMOVSS log32_two32<>(SB), X2       // 2^32
+    VMULSS X2, X0, X0
+    VMOVD X0, AX
+    MOVL $-32, R9
+
+powelem32_scalar_normal:
+    MOVL $0x3F350000, BX
+    MOVL AX, R10
+    SUBL BX, R10                       // tmp
+    MOVL R10, R11
+    SARL $23, R11                      // e
+    ADDL R9, R11
+    MOVL $0xFF800000, BX
+    ANDL BX, R10
+    SUBL R10, AX                       // bits(m)
+    VMOVD AX, X2
+    CVTSL2SS R11, X3                   // e
+
+    VSUBSS X12, X2, X4                 // z
+    VMULSS X4, X4, X5                  // zz
+    VMOVSS log32_p0<>(SB), X1
+    VFMADD213SS log32_p1<>(SB), X4, X1
+    VFMADD213SS log32_p2<>(SB), X4, X1
+    VFMADD213SS log32_p3<>(SB), X4, X1
+    VFMADD213SS log32_p4<>(SB), X4, X1
+    VFMADD213SS log32_p5<>(SB), X4, X1
+    VFMADD213SS log32_p6<>(SB), X4, X1
+    VFMADD213SS log32_p7<>(SB), X4, X1
+    VFMADD213SS log32_p8<>(SB), X4, X1
+    VMULSS X4, X5, X6                  // z^3
+    VMULSS X6, X1, X1
+    VFNMADD231SS exp_half<>(SB), X5, X1
+    VADDSS X4, X1, X1                  // lnm
+    VMULSS log32_ln2lo<>(SB), X3, X5
+    VADDSS X1, X5, X5
+    VFMADD231SS log32_ln2hi<>(SB), X3, X5 // ln(base)
+
+    VMOVSS (DI), X7                    // p
+    VMULSS X7, X5, X0
+    VMINSS log32_powclamp_hi<>(SB), X0, X0
+    VMAXSS log32_powclamp_lo<>(SB), X0, X0
+
+    VMULSS X15, X0, X1
+    VADDSS X13, X1, X2
+    VSUBSS X13, X2, X3                 // k
+    VMULSS X14, X3, X4
+    VSUBSS X4, X0, X0                  // r
+    VMULSS X0, X8, X1
+    VADDSS X9, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X10, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X11, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X12, X1, X1
+    VMULSS X0, X1, X1
+    VADDSS X12, X1, X1                 // exp(r)
+    // Split 2^k reconstruction (see the vector body)
+    VCVTSS2SI X3, AX                   // k
+    MOVL AX, R10
+    SARL $1, R10                       // k1 = k >> 1
+    SUBL R10, AX                       // k2 = k - k1
+    MOVL $0x3F800000, BX
+    SHLL $23, R10
+    ADDL BX, R10
+    VMOVD R10, X4
+    VMULSS X4, X1, X1                  // exp(r) * 2^k1
+    SHLL $23, AX
+    ADDL BX, AX
+    VMOVD AX, X4
+    VMULSS X4, X1, X1                  // * 2^k2 = exp(y)
+
+    VMOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  powelem32_scalar
+
+powelem32_done:
+    VZEROUPPER
+    RET
+
+// Pow clamp bounds: wider than the Exp kernel's +-88 because the pow kernels
+// split the 2^k reconstruction (2^(k>>1) * 2^(k-(k>>1))), which covers the
+// full float32 result range: overflow goes to +Inf and underflow degrades
+// gradually through subnormals to 0, matching math.Pow's classes.
+// ln(MaxFloat32) ~ 88.72, ln(min subnormal) ~ -103.28.
+DATA log32_powclamp_hi<>+0x00(SB)/4, $0x42b20000  // 89.0
+DATA log32_powclamp_hi<>+0x04(SB)/4, $0x42b20000
+DATA log32_powclamp_hi<>+0x08(SB)/4, $0x42b20000
+DATA log32_powclamp_hi<>+0x0c(SB)/4, $0x42b20000
+DATA log32_powclamp_hi<>+0x10(SB)/4, $0x42b20000
+DATA log32_powclamp_hi<>+0x14(SB)/4, $0x42b20000
+DATA log32_powclamp_hi<>+0x18(SB)/4, $0x42b20000
+DATA log32_powclamp_hi<>+0x1c(SB)/4, $0x42b20000
+GLOBL log32_powclamp_hi<>(SB), RODATA|NOPTR, $32
+
+DATA log32_powclamp_lo<>+0x00(SB)/4, $0xc2d00000  // -104.0
+DATA log32_powclamp_lo<>+0x04(SB)/4, $0xc2d00000
+DATA log32_powclamp_lo<>+0x08(SB)/4, $0xc2d00000
+DATA log32_powclamp_lo<>+0x0c(SB)/4, $0xc2d00000
+DATA log32_powclamp_lo<>+0x10(SB)/4, $0xc2d00000
+DATA log32_powclamp_lo<>+0x14(SB)/4, $0xc2d00000
+DATA log32_powclamp_lo<>+0x18(SB)/4, $0xc2d00000
+DATA log32_powclamp_lo<>+0x1c(SB)/4, $0xc2d00000
+GLOBL log32_powclamp_lo<>(SB), RODATA|NOPTR, $32

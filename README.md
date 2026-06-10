@@ -188,10 +188,10 @@ live in `f32` instead, so the two float surfaces are intentionally asymmetric.
 |                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 4x (AVX2) / 2x (NEON)               |
 |                 | `Exp(dst, src)`                     | Exponential e^x               | 4x (AVX2) / 2x (NEON)               |
 |                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 4x (AVX) / 2x (NEON)                |
-| **Transcendental** | `Log(dst, src)`                  | Natural log ln(x)             | f64: 4x (AVX2+FMA) / 2x (NEON); f32 pure Go |
-|                 | `Log2(dst, src)` / `Log10(dst, src)`| Base-2 / base-10 log          | f64: 4x (AVX2+FMA) / 2x (NEON); f32 pure Go |
-|                 | `Pow(dst, src, exp)`                | Scalar power x^exp (PCEN, dB) | f64: 4x (AVX2+FMA) / 2x (NEON); f32 pure Go |
-|                 | `PowElem(dst, base, exp)`           | Elementwise base^exp          | f64: 4x (AVX2+FMA) / 2x (NEON); f32 pure Go |
+| **Transcendental** | `Log(dst, src)`                  | Natural log ln(x)             | 8x / 4x (AVX2+FMA) / 4x / 2x (NEON) |
+|                 | `Log2(dst, src)` / `Log10(dst, src)`| Base-2 / base-10 log          | 8x / 4x (AVX2+FMA) / 4x / 2x (NEON) |
+|                 | `Pow(dst, src, exp)`                | Scalar power x^exp (PCEN, dB) | 8x / 4x (AVX2+FMA) / 4x / 2x (NEON) |
+|                 | `PowElem(dst, base, exp)`           | Elementwise base^exp          | 8x / 4x (AVX2+FMA) / 4x / 2x (NEON) |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |

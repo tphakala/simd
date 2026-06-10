@@ -3,6 +3,7 @@
 package f32
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/tphakala/simd/cpu"
@@ -640,6 +641,62 @@ func exp32(dst, src []float32) {
 
 //go:noescape
 func expNEON(dst, src []float32)
+
+func log32(dst, src []float32) {
+	// Assumes len(src) >= len(dst); caller ensures this via public API
+	if hasNEON && len(dst) >= 4 {
+		logNEON32(dst, src, logLn2Hi32, logLn2Lo32, 1.0)
+		return
+	}
+	logGo(dst, src)
+}
+
+func log2_32(dst, src []float32) {
+	// log2(x) = e + ln(m)*log2(e): the e term is exact, so no hi/lo split is
+	// needed and exact powers of two come out exact.
+	if hasNEON && len(dst) >= 4 {
+		logNEON32(dst, src, 1.0, 0.0, logLog2E32)
+		return
+	}
+	log2Go(dst, src)
+}
+
+func log10_32(dst, src []float32) {
+	if hasNEON && len(dst) >= 4 {
+		logNEON32(dst, src, logL102Hi32, logL102Lo32, logLog10E32)
+		return
+	}
+	log10Go(dst, src)
+}
+
+func pow32(dst, src []float32, exp float32) {
+	// A zero or non-finite exponent has whole-slice math.Pow semantics
+	// (for example Pow(x, 0) = 1 even for NaN x); keep those exact.
+	e := float64(exp)
+	if hasNEON && len(dst) >= 4 && exp != 0 && !math.IsNaN(e) && !math.IsInf(e, 0) &&
+		powSIMDOK32(src[:len(dst)]) {
+		powNEON32(dst, src, exp)
+		return
+	}
+	powGo(dst, src, exp)
+}
+
+func powElem32(dst, base, exp []float32) {
+	if hasNEON && len(dst) >= 4 && powSIMDOK32(base[:len(dst)]) && allFinite32(exp[:len(dst)]) {
+		powElemNEON32(dst, base, exp)
+		return
+	}
+	powElemGo(dst, base, exp)
+}
+
+//go:noescape
+func logNEON32(dst, src []float32, k1hi, k1lo, k2 float32)
+
+//go:noescape
+func powNEON32(dst, src []float32, exp float32)
+
+//go:noescape
+func powElemNEON32(dst, base, exp []float32)
 
 func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 	if hasNEON && len(dst) >= 4 {

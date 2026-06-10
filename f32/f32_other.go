@@ -83,3 +83,9 @@ func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 }
 func reverse32(dst, src []float32)             { reverse32Go(dst, src) }
 func addSub32(sumDst, diffDst, a, b []float32) { addSub32Go(sumDst, diffDst, a, b) }
+
+func log32(dst, src []float32)              { logGo(dst, src) }
+func log2_32(dst, src []float32)            { log2Go(dst, src) }
+func log10_32(dst, src []float32)           { log10Go(dst, src) }
+func pow32(dst, src []float32, exp float32) { powGo(dst, src, exp) }
+func powElem32(dst, base, exp []float32)    { powElemGo(dst, base, exp) }
