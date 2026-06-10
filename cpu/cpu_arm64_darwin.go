@@ -2,7 +2,11 @@
 
 package cpu
 
-import "golang.org/x/sys/cpu"
+import (
+	"os"
+
+	"golang.org/x/sys/cpu"
+)
 
 // Apple Silicon (M1/M2/M3/M4) all support FEAT_FP16 (half-precision floating point)
 // and FEAT_PMULL (polynomial multiply). The golang.org/x/sys/cpu package doesn't
@@ -14,6 +18,9 @@ func init() {
 	ARM64.SVE = cpu.ARM64.HasSVE
 	ARM64.SVE2 = cpu.ARM64.HasSVE2
 	ARM64.PMULL = true // All Apple Silicon chips support PMULL
+
+	// Honor SIMD_DISABLE last, so the env var can mask any detected feature.
+	applyDisable(&ARM64, os.Getenv("SIMD_DISABLE"))
 }
 
 func cpuInfo() string {

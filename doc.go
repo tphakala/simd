@@ -18,6 +18,17 @@
 //   - ARM64: NEON/ASIMD instructions (2x float64, 4x float32)
 //   - Other: Pure Go fallback
 //
+// # Disabling SIMD tiers
+//
+// Set the SIMD_DISABLE environment variable before the process starts to mask
+// detected CPU features (a comma-separated, case-insensitive token list such as
+// "avx512", "avx", "neon", or "all"). It is useful for avoiding AVX-512
+// downclocking, exercising the lower tiers locally, and benchmarking tiers
+// against each other. Unknown tokens are ignored. The variable cannot be toggled
+// at runtime, because the SIMD packages cache their selected kernels during
+// package init (function pointers on amd64, capability flags on arm64). See the
+// cpu package for the full token table.
+//
 // # Quick Start
 //
 //	import (
