@@ -484,8 +484,7 @@ func BenchmarkLog(b *testing.B) {
 	}
 	dst := make([]float64, len(src))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		Log(dst, src)
 	}
 }
@@ -497,8 +496,7 @@ func BenchmarkPow(b *testing.B) {
 	}
 	dst := make([]float64, len(src))
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		Pow(dst, src, 0.35)
 	}
 }
