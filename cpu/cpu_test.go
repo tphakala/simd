@@ -61,6 +61,10 @@ func TestInfo(t *testing.T) {
 	if info == "" {
 		t.Error("Info() returned empty string")
 	}
+	// Surface the selected tier in `go test -v` output so CI logs show which
+	// dispatch path each runner exercised (e.g. the native linux/arm64 leg
+	// reporting an ARM64 NEON configuration rather than the darwin override).
+	t.Logf("cpu.Info() = %q", info)
 }
 
 // TestCpuInfo tests the cpuInfo function directly
