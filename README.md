@@ -13,7 +13,8 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 - **Zero allocations** - All operations work on pre-allocated slices
 - **80+ operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, and complex number operations
 - **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
-- **Half-precision support** - Native FP16 SIMD on ARM64 with FP16 extension (Apple Silicon, Cortex-A55+)
+- **Half-precision support** - Native FP16 SIMD on ARM64 with FP16 extension (Apple Silicon, Cortex-A55+); F16C-accelerated conversions on AMD64
+- **Tunable dispatch** - `SIMD_DISABLE` env var masks feature tiers at startup (avoid AVX-512 downclocking, exercise lower tiers, benchmark tier-vs-tier)
 - **Thread-safe** - All functions are safe for concurrent use
 
 ## Installation
@@ -81,6 +82,7 @@ fmt.Println(cpu.HasAVX512VL()) // true/false (AVX-512 F+VL)
 fmt.Println(cpu.HasNEON())     // true/false
 fmt.Println(cpu.HasFP16())     // true/false (ARM64 half-precision SIMD)
 fmt.Println(cpu.HasPCLMULQDQ()) // true/false (x86 carry-less multiply)
+fmt.Println(cpu.HasF16C())     // true/false (x86 half<->single conversion)
 fmt.Println(cpu.HasPMULL())    // true/false (ARM64 polynomial multiply)
 ```
 
@@ -272,6 +274,8 @@ Results are identical to the per-row path either way.
 
 IEEE 754 half-precision floating-point operations, optimized for ML inference, audio DSP, and memory-bandwidth-bound workloads.
 
+`Float16` is a storage type. On ARM64 the full operation set runs on NEON; on AMD64 the `ToFloat32Slice`/`FromFloat32Slice` conversions use F16C hardware instructions (`VCVTPH2PS`/`VCVTPS2PH`, available on every AVX2-capable x86 since 2012) while the other ops use the pure-Go reference (x86 has no half-precision arithmetic outside AVX512-FP16).
+
 ```go
 import "github.com/tphakala/simd/f16"
 
@@ -293,8 +297,8 @@ f16.ReLU(dst, a)             // Activation functions
 | --------------- | ----------------------------------- | ----------------------------- | ---------------- |
 | **Conversion**  | `ToFloat32(h)`                      | FP16 → float32                | Scalar           |
 |                 | `FromFloat32(f)`                    | float32 → FP16                | Scalar           |
-|                 | `ToFloat32Slice(dst, src)`          | Batch FP16 → float32          | 8x (NEON+FP16)   |
-|                 | `FromFloat32Slice(dst, src)`        | Batch float32 → FP16          | 8x (NEON+FP16)   |
+|                 | `ToFloat32Slice(dst, src)`          | Batch FP16 → float32          | 8x (F16C) / 8x (NEON+FP16) |
+|                 | `FromFloat32Slice(dst, src)`        | Batch float32 → FP16          | 8x (F16C) / 8x (NEON+FP16) |
 | **Arithmetic**  | `Add(dst, a, b)`                    | Element-wise addition         | 8x (NEON+FP16)   |
 |                 | `Sub(dst, a, b)`                    | Element-wise subtraction      | 8x (NEON+FP16)   |
 |                 | `Mul(dst, a, b)`                    | Element-wise multiplication   | 8x (NEON+FP16)   |
@@ -763,14 +767,18 @@ The Go fallback for small slices is intentional and likely optimal - SIMD setup 
 
 ## Architecture Support
 
-| Architecture | Instruction Set | f64/f32/c128/c64  | f16               |
-| ------------ | --------------- | ----------------- | ----------------- |
-| AMD64        | AVX-512         | Full SIMD support | Pure Go fallback  |
-| AMD64        | AVX + FMA       | Full SIMD support | Pure Go fallback  |
-| AMD64        | SSE4.1          | Full SIMD support | Pure Go fallback  |
-| ARM64        | NEON + FP16     | Full SIMD support | Full SIMD support |
-| ARM64        | NEON only       | Full SIMD support | Pure Go fallback  |
-| Other        | -               | Pure Go fallback  | Pure Go fallback  |
+| Architecture | Instruction Set | f64/f32/c128/c64  | f16                    |
+| ------------ | --------------- | ----------------- | ---------------------- |
+| AMD64        | AVX-512         | Full SIMD support | F16C conversions       |
+| AMD64        | AVX + FMA       | Full SIMD support | F16C conversions       |
+| AMD64        | SSE4.1          | Full SIMD support | Pure Go fallback       |
+| ARM64        | NEON + FP16     | Full SIMD support | Full SIMD support      |
+| ARM64        | NEON only       | Full SIMD support | Pure Go fallback       |
+| Other        | -               | Pure Go fallback  | Pure Go fallback       |
+
+(AMD64 f16 "F16C conversions" = hardware `ToFloat32Slice`/`FromFloat32Slice`; all
+other f16 ops run the pure-Go reference. F16C needs AVX, so SSE4.1-only parts use
+pure Go.)
 
 **ARM64 FP16 support by device:**
 
