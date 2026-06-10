@@ -1,15 +1,16 @@
-package f64
+package f32
 
 import (
 	"errors"
 	"math"
 )
 
-// This file implements a fused, real-input Short-Time Fourier Transform. The
-// transform is the missing middle of a spectral feature pipeline: the library
-// already covers windowing inputs, the post-FFT power spectrum (c128.AbsSq), mel
-// projection (DotProductBatch), and PCEN/log-mel normalization (Exp/Mul/Log),
-// but not the FFT itself.
+// This file implements a fused, real-input Short-Time Fourier Transform for
+// float32, mirroring the f64 STFTPlan (see f64/stft.go). The transform is the
+// missing middle of a spectral feature pipeline: the library already covers
+// windowing inputs, the post-FFT power spectrum (c64.AbsSq), mel projection
+// (DotProductBatch), and PCEN/log-mel normalization (Exp/Mul/Log), but not the
+// FFT itself.
 //
 // Design (matches the rest of the library's batched primitives such as
 // DotProductBatch / ConvolveValidMulti):
@@ -25,13 +26,16 @@ import (
 //     frame is packed into the FFT input, and STFTPower emits |X|^2 directly
 //     without materializing the complex bins.
 //
-// This first cut is a correct scalar radix-2 transform (power-of-two nfft only);
-// vectorizing the inner butterfly is a separate, profile-gated change. See #108.
+// The transform runs in float32 to match the rest of the f32 package; the
+// twiddle and unravel tables are computed in float64 and rounded once to float32
+// so the resident constants carry full precision. This first cut is a correct
+// scalar radix-2 transform (power-of-two nfft only); vectorizing the inner
+// butterfly is a separate, profile-gated change. See #108.
 
 // ErrSTFT* describe invalid STFTPlan configurations.
 var (
 	// ErrNotPowerOfTwo is returned when nfft is not a power of two >= 2.
-	ErrNotPowerOfTwo = errors.New("f64: STFT nfft must be a power of two >= 2")
+	ErrNotPowerOfTwo = errors.New("f32: STFT nfft must be a power of two >= 2")
 )
 
 // rfftHalf is the 1/2 factor in the real-FFT even/odd half-spectrum split.
@@ -52,14 +56,14 @@ type STFTPlan struct {
 
 	// Twiddles for the size-half radix-2 FFT: twRe[t] = cos(2*pi*t/half),
 	// twIm[t] = -sin(2*pi*t/half) for t in [0, half/2).
-	twRe, twIm []float64
+	twRe, twIm []float32
 
 	// Unravel twiddles W_N^k = exp(-i*2*pi*k/nfft) for k in [0, half], used to
 	// recombine the even/odd half-spectra into the real-input spectrum.
-	unRe, unIm []float64
+	unRe, unIm []float32
 
 	// Per-transform scratch (the packed complex frame, FFT'd in place).
-	re, im []float64
+	re, im []float32
 }
 
 // NumBins returns the number of output bins per frame, nfft/2 + 1 (the Hermitian
@@ -81,12 +85,12 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 		nfft:   nfft,
 		half:   half,
 		bitrev: make([]int, half),
-		twRe:   make([]float64, max(half>>1, 1)),
-		twIm:   make([]float64, max(half>>1, 1)),
-		unRe:   make([]float64, half+1),
-		unIm:   make([]float64, half+1),
-		re:     make([]float64, half),
-		im:     make([]float64, half),
+		twRe:   make([]float32, max(half>>1, 1)),
+		twIm:   make([]float32, max(half>>1, 1)),
+		unRe:   make([]float32, half+1),
+		unIm:   make([]float32, half+1),
+		re:     make([]float32, half),
+		im:     make([]float32, half),
 	}
 
 	// Bit-reversal permutation for a size-half FFT.
@@ -102,20 +106,20 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 		p.bitrev[i] = r
 	}
 
-	// Size-half FFT twiddles.
+	// Size-half FFT twiddles (computed in float64, stored as float32).
 	for t := range p.twRe {
 		ang := 2 * math.Pi * float64(t) / float64(half)
 		s, c := math.Sincos(ang)
-		p.twRe[t] = c
-		p.twIm[t] = -s
+		p.twRe[t] = float32(c)
+		p.twIm[t] = float32(-s)
 	}
 
 	// Real-input unravel twiddles W_N^k.
 	for k := 0; k <= half; k++ {
 		ang := 2 * math.Pi * float64(k) / float64(nfft)
 		s, c := math.Sincos(ang)
-		p.unRe[k] = c
-		p.unIm[k] = -s
+		p.unRe[k] = float32(c)
+		p.unIm[k] = float32(-s)
 	}
 
 	return p, nil
@@ -153,10 +157,10 @@ func (p *STFTPlan) fftHalf() {
 	}
 }
 
-// packFrame loads frame f (signal[f*hop : f*hop+nfft]) into the scratch as half
+// packFrame loads frame f (signal[base : base+nfft]) into the scratch as half
 // complex samples c[j] = x[2j] + i*x[2j+1], applying the window during the pack.
 // window may be nil (rectangular). The caller guarantees the frame fits.
-func (p *STFTPlan) packFrame(signal, window []float64, base int) {
+func (p *STFTPlan) packFrame(signal, window []float32, base int) {
 	re, im := p.re, p.im
 	if window == nil {
 		for j := range p.half {
@@ -182,7 +186,7 @@ func (p *STFTPlan) numFrames(signalLen, hop int) int {
 
 // unravelBin computes the real-input spectrum bin X[k] (k in [0, half]) from the
 // half-length complex FFT result currently in p.re/p.im, returning (re, im).
-func (p *STFTPlan) unravelBin(k int) (re, im float64) {
+func (p *STFTPlan) unravelBin(k int) (re, im float32) {
 	// k runs 0..half inclusive; the half-size spectrum C wraps at p.half,
 	// so both k == 0 and k == p.half read C[0]. Branch instead of modulo
 	// to keep integer division off this per-bin path.
@@ -208,7 +212,7 @@ func (p *STFTPlan) unravelBin(k int) (re, im float64) {
 }
 
 // STFT computes the real-input STFT of signal and writes one Hermitian
-// half-spectrum (NumBins complex128 values) per frame into dst. Frame f is
+// half-spectrum (NumBins complex64 values) per frame into dst. Frame f is
 // signal[f*hop : f*hop+nfft], windowed by window when non-nil (which must have
 // length nfft). This is the center=false / no-padding convention (matching
 // librosa stft(..., center=False)); pre-pad the signal yourself for centered
@@ -217,7 +221,7 @@ func (p *STFTPlan) unravelBin(k int) (re, im float64) {
 // It writes min(len(dst), numFrames) frames and, per frame, min(len(dst[f]),
 // NumBins) bins, and returns the number of frames written. It is allocation-free
 // and reuses the plan scratch.
-func (p *STFTPlan) STFT(dst [][]complex128, signal, window []float64, hop int) int {
+func (p *STFTPlan) STFT(dst [][]complex64, signal, window []float32, hop int) int {
 	frames := min(p.numFrames(len(signal), hop), len(dst))
 	if frames == 0 {
 		return 0
@@ -244,7 +248,7 @@ func (p *STFTPlan) STFT(dst [][]complex128, signal, window []float64, hop int) i
 // STFTPower computes the real-input STFT power spectrum |X|^2 directly, skipping
 // materialization of the complex bins. dst, signal, window, and hop follow the
 // same conventions as STFT. Returns the number of frames written. Allocation-free.
-func (p *STFTPlan) STFTPower(dst [][]float64, signal, window []float64, hop int) int {
+func (p *STFTPlan) STFTPower(dst [][]float32, signal, window []float32, hop int) int {
 	frames := min(p.numFrames(len(signal), hop), len(dst))
 	if frames == 0 {
 		return 0
