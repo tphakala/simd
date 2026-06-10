@@ -6554,7 +6554,7 @@ log32_scalar_normal:
     ANDL BX, R10
     SUBL R10, AX                       // AX = bits(m)
     VMOVD AX, X2                       // X2 = m
-    CVTSL2SS R11, X3                   // X3 = e as float32
+    VCVTSI2SSL R11, X3, X3             // X3 = e as float32
 
     // z = m - 1, zz = z^2 (X10 = 1.0 from the vector constants)
     VSUBSS X10, X2, X4                 // X4 = z
@@ -6740,7 +6740,7 @@ pow32_scalar_normal:
     ANDL BX, R10
     SUBL R10, AX                       // bits(m)
     VMOVD AX, X2                       // m
-    CVTSL2SS R11, X3                   // e
+    VCVTSI2SSL R11, X3, X3             // e
 
     VSUBSS X12, X2, X4                 // z = m - 1 (X12 = 1.0)
     VMULSS X4, X4, X5                  // zz
@@ -6931,7 +6931,7 @@ powelem32_scalar_normal:
     ANDL BX, R10
     SUBL R10, AX                       // bits(m)
     VMOVD AX, X2
-    CVTSL2SS R11, X3                   // e
+    VCVTSI2SSL R11, X3, X3             // e
 
     VSUBSS X12, X2, X4                 // z
     VMULSS X4, X4, X5                  // zz
