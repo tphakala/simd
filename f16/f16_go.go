@@ -10,6 +10,7 @@ const (
 	fp16ExpMask     = 0x1F
 	fp16MantMask    = 0x3FF
 	fp16MantHighBit = 0x400
+	fp16QuietBit    = 0x200 // MSB of the 10-bit FP16 mantissa; set to quiet a NaN
 	fp16ExpMax      = 31
 	fp16ExpBias     = 15
 	fp16Infinity    = 0x7C00
@@ -98,8 +99,14 @@ func fromFloat32Go(f float32) Float16 {
 			// Infinity
 			return sign | fp16Infinity
 		}
-		// NaN - preserve some payload bits
-		return sign | fp16Infinity | uint16(mant>>fp32MantShift)
+		// NaN: keep the high payload bits and force the quiet bit so a NaN never
+		// collapses to infinity. Truncating the f32 mantissa to its top 10 bits
+		// zeroes every set bit when the payload lives in the low 13 bits (for
+		// example src 0xff800030 has mant>>13 == 0), which previously returned an
+		// infinity. The F16C VCVTPS2PH instruction quiets NaNs instead, so the
+		// scalar reference must too or the SIMD and Go paths disagree (the
+		// divergence FuzzF16FromFloat32 caught).
+		return sign | fp16Infinity | uint16(mant>>fp32MantShift) | fp16QuietBit
 
 	case exp > expOverflow:
 		// Overflow to infinity (exp > 127 + 15)
