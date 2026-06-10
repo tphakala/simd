@@ -1,0 +1,356 @@
+package f64
+
+import (
+	"fmt"
+	"math"
+	"testing"
+)
+
+// dftBin computes a single DFT bin X[k] = sum_n frame[n] * exp(-i 2pi k n / N)
+// directly, as an independent reference for the FFT-based STFT.
+func dftBin(frame []float64, k int) complex128 {
+	n := len(frame)
+	var re, im float64
+	for t := range n {
+		ang := -2 * math.Pi * float64(k) * float64(t) / float64(n)
+		s, c := math.Sincos(ang)
+		re += frame[t] * c
+		im += frame[t] * s
+	}
+	return complex(re, im)
+}
+
+func hann(nfft int) []float64 {
+	w := make([]float64, nfft)
+	for i := range w {
+		w[i] = 0.5 - 0.5*math.Cos(2*math.Pi*float64(i)/float64(nfft))
+	}
+	return w
+}
+
+// testSignal builds a deterministic pseudo-random-ish real signal.
+func testSignal(n int) []float64 {
+	s := make([]float64, n)
+	for i := range s {
+		s[i] = math.Sin(0.3*float64(i)) + 0.5*math.Cos(0.11*float64(i)+1) - 0.25*math.Sin(0.027*float64(i))
+	}
+	return s
+}
+
+func cmplxClose(t *testing.T, ctx string, got, want complex128, scale float64) {
+	t.Helper()
+	tol := 1e-9*scale + 1e-9
+	if d := math.Hypot(real(got)-real(want), imag(got)-imag(want)); d > tol {
+		t.Fatalf("%s: got %v want %v (|diff|=%g tol=%g)", ctx, got, want, d, tol)
+	}
+}
+
+func TestNewSTFTPlanErrors(t *testing.T) {
+	for _, bad := range []int{0, 1, 3, 5, 6, 7, 9, 100, 1000} {
+		if _, err := NewSTFTPlan(bad); err == nil {
+			t.Errorf("NewSTFTPlan(%d) = nil error, want ErrNotPowerOfTwo", bad)
+		}
+	}
+	for _, good := range []int{2, 4, 8, 16, 1024} {
+		p, err := NewSTFTPlan(good)
+		if err != nil {
+			t.Errorf("NewSTFTPlan(%d) unexpected error: %v", good, err)
+			continue
+		}
+		if p.NFFT() != good || p.NumBins() != good/2+1 {
+			t.Errorf("NewSTFTPlan(%d): NFFT=%d NumBins=%d", good, p.NFFT(), p.NumBins())
+		}
+	}
+}
+
+// TestSTFTAgainstDFT is the core correctness gate: every bin of every frame must
+// match a direct DFT of the windowed frame, across nfft sizes, hops, and with or
+// without a window.
+func TestSTFTAgainstDFT(t *testing.T) {
+	signal := testSignal(5000)
+	for _, nfft := range []int{2, 4, 8, 16, 64, 256, 1024} {
+		for _, useWin := range []bool{false, true} {
+			plan, err := NewSTFTPlan(nfft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var window []float64
+			if useWin {
+				window = hann(nfft)
+			}
+			hop := max(nfft/2, 1)
+			nf := plan.numFrames(len(signal), hop)
+			dst := make([][]complex128, nf)
+			for f := range dst {
+				dst[f] = make([]complex128, plan.NumBins())
+			}
+			got := plan.STFT(dst, signal, window, hop)
+			if got != nf {
+				t.Fatalf("nfft=%d: STFT wrote %d frames, want %d", nfft, got, nf)
+			}
+
+			frame := make([]float64, nfft)
+			for f := range nf {
+				base := f * hop
+				var scale float64
+				for i := range nfft {
+					v := signal[base+i]
+					if window != nil {
+						v *= window[i]
+					}
+					frame[i] = v
+					scale += math.Abs(v)
+				}
+				for k := range plan.NumBins() {
+					want := dftBin(frame, k)
+					ctx := fmt.Sprintf("nfft=%d win=%v frame=%d bin=%d", nfft, useWin, f, k)
+					cmplxClose(t, ctx, dst[f][k], want, scale)
+				}
+			}
+		}
+	}
+}
+
+// TestSTFTPowerMatchesSTFT verifies STFTPower equals |STFT|^2 bin-for-bin.
+func TestSTFTPowerMatchesSTFT(t *testing.T) {
+	signal := testSignal(4096)
+	plan, _ := NewSTFTPlan(512)
+	window := hann(512)
+	hop := 128
+	nf := plan.numFrames(len(signal), hop)
+
+	spec := make([][]complex128, nf)
+	pow := make([][]float64, nf)
+	for f := range spec {
+		spec[f] = make([]complex128, plan.NumBins())
+		pow[f] = make([]float64, plan.NumBins())
+	}
+	plan.STFT(spec, signal, window, hop)
+	plan.STFTPower(pow, signal, window, hop)
+
+	for f := range nf {
+		for k := range plan.NumBins() {
+			want := real(spec[f][k])*real(spec[f][k]) + imag(spec[f][k])*imag(spec[f][k])
+			if d := math.Abs(pow[f][k] - want); d > 1e-9*(1+want) {
+				t.Fatalf("STFTPower[%d][%d] = %v, want |X|^2 = %v", f, k, pow[f][k], want)
+			}
+		}
+	}
+}
+
+// TestSTFTPureTone checks a single-bin cosine concentrates its energy in that
+// bin and that DC/Nyquist come out (numerically) real.
+func TestSTFTPureTone(t *testing.T) {
+	const nfft = 64
+	plan, _ := NewSTFTPlan(nfft)
+	k0 := 5
+	signal := make([]float64, nfft)
+	for n := range signal {
+		signal[n] = math.Cos(2 * math.Pi * float64(k0) * float64(n) / float64(nfft))
+	}
+	dst := [][]complex128{make([]complex128, plan.NumBins())}
+	plan.STFT(dst, signal, nil, nfft)
+
+	mag := func(c complex128) float64 { return math.Hypot(real(c), imag(c)) }
+	// Bin k0 should hold ~nfft/2; every other bin should be ~0.
+	if got := mag(dst[0][k0]); math.Abs(got-float64(nfft)/2) > 1e-7 {
+		t.Errorf("tone bin %d magnitude = %v, want ~%v", k0, got, float64(nfft)/2)
+	}
+	for k := range plan.NumBins() {
+		if k == k0 {
+			continue
+		}
+		if got := mag(dst[0][k]); got > 1e-7 {
+			t.Errorf("non-tone bin %d magnitude = %v, want ~0", k, got)
+		}
+	}
+	// DC and Nyquist bins of a real signal are real.
+	if math.Abs(imag(dst[0][0])) > 1e-9 {
+		t.Errorf("DC bin not real: %v", dst[0][0])
+	}
+	if math.Abs(imag(dst[0][plan.NumBins()-1])) > 1e-9 {
+		t.Errorf("Nyquist bin not real: %v", dst[0][plan.NumBins()-1])
+	}
+}
+
+// TestSTFTFraming checks frame counting and the no-padding (center=false)
+// convention: frame f starts at f*hop.
+func TestSTFTFraming(t *testing.T) {
+	plan, _ := NewSTFTPlan(8)
+	signal := make([]float64, 20)
+	for i := range signal {
+		signal[i] = float64(i)
+	}
+	hop := 4
+	// frames at offsets 0,4,8,12 fit (need 8 samples): 12+8=20 ok, 16+8=24 no.
+	wantFrames := 4
+	if got := plan.numFrames(len(signal), hop); got != wantFrames {
+		t.Fatalf("numFrames = %d, want %d", got, wantFrames)
+	}
+	dst := make([][]complex128, wantFrames)
+	for f := range dst {
+		dst[f] = make([]complex128, plan.NumBins())
+	}
+	if n := plan.STFT(dst, signal, nil, hop); n != wantFrames {
+		t.Fatalf("STFT frames = %d, want %d", n, wantFrames)
+	}
+	// DC bin of frame f is the sum of signal[f*hop : f*hop+8].
+	for f := range wantFrames {
+		var sum float64
+		for i := range 8 {
+			sum += signal[f*hop+i]
+		}
+		if math.Abs(real(dst[f][0])-sum) > 1e-9 {
+			t.Errorf("frame %d DC = %v, want %v", f, real(dst[f][0]), sum)
+		}
+	}
+}
+
+// TestSTFTClamps verifies dst shorter than the frame count, and rows shorter than
+// NumBins, are handled without panic.
+func TestSTFTClamps(t *testing.T) {
+	plan, _ := NewSTFTPlan(16)
+	signal := testSignal(200)
+	hop := 8
+	full := plan.numFrames(len(signal), hop)
+
+	// Fewer rows than frames: only len(dst) frames written.
+	short := make([][]complex128, full-2)
+	for f := range short {
+		short[f] = make([]complex128, plan.NumBins())
+	}
+	if n := plan.STFT(short, signal, nil, hop); n != full-2 {
+		t.Errorf("clamped frames = %d, want %d", n, full-2)
+	}
+
+	// Rows shorter than NumBins: only the available bins written, no panic.
+	rows := make([][]complex128, 1)
+	rows[0] = make([]complex128, 3)
+	if n := plan.STFT(rows, signal, nil, hop); n != 1 {
+		t.Errorf("partial-row frames = %d, want 1", n)
+	}
+}
+
+func TestSTFTAllocFree(t *testing.T) {
+	plan, _ := NewSTFTPlan(512)
+	signal := testSignal(8192)
+	window := hann(512)
+	hop := 128
+	nf := plan.numFrames(len(signal), hop)
+	spec := make([][]complex128, nf)
+	pow := make([][]float64, nf)
+	for f := range spec {
+		spec[f] = make([]complex128, plan.NumBins())
+		pow[f] = make([]float64, plan.NumBins())
+	}
+	if a := testing.AllocsPerRun(5, func() { plan.STFT(spec, signal, window, hop) }); a != 0 {
+		t.Errorf("STFT allocated %v times per run, want 0", a)
+	}
+	if a := testing.AllocsPerRun(5, func() { plan.STFTPower(pow, signal, window, hop) }); a != 0 {
+		t.Errorf("STFTPower allocated %v times per run, want 0", a)
+	}
+}
+
+// FuzzSTFT is a differential fuzz target: every STFT bin must match a direct DFT
+// of the windowed frame, across fuzzed signal contents, nfft, hop, and window
+// choice. Inputs are bounded to [-1, 1] so the DFT bin magnitudes stay
+// well-conditioned for the epsilon-scaled tolerance. Seeds run under plain
+// `go test`; `go test -fuzz=FuzzSTFT` widens the space.
+func FuzzSTFT(f *testing.F) {
+	f.Add(make([]byte, 256), uint8(3), uint8(7), false)
+	f.Add(make([]byte, 600), uint8(5), uint8(3), true)
+
+	f.Fuzz(func(t *testing.T, raw []byte, nfftSel, hopSel uint8, useWin bool) {
+		// nfft in {4, 8, 16, 32, 64}; keep it small so the O(n^2) DFT is cheap.
+		nfft := 1 << (2 + int(nfftSel)%5)
+		samples := len(raw) / 8
+		if samples < nfft {
+			return
+		}
+		signal := make([]float64, samples)
+		for i := range signal {
+			signal[i] = float64(int64(binU64(raw[i*8:]))) / 9223372036854775808.0
+		}
+		plan, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var window []float64
+		if useWin {
+			window = hann(nfft)
+		}
+		hop := 1 + int(hopSel)%nfft
+		nf := plan.numFrames(samples, hop)
+		if nf == 0 {
+			return
+		}
+		dst := make([][]complex128, nf)
+		for i := range dst {
+			dst[i] = make([]complex128, plan.NumBins())
+		}
+		plan.STFT(dst, signal, window, hop)
+
+		frame := make([]float64, nfft)
+		for fr := range nf {
+			base := fr * hop
+			var scale float64
+			for i := range nfft {
+				v := signal[base+i]
+				if window != nil {
+					v *= window[i]
+				}
+				frame[i] = v
+				scale += math.Abs(v)
+			}
+			for k := range plan.NumBins() {
+				want := dftBin(frame, k)
+				got := dst[fr][k]
+				tol := 1e-9*scale + 1e-9
+				if d := math.Hypot(real(got)-real(want), imag(got)-imag(want)); d > tol {
+					t.Fatalf("nfft=%d hop=%d frame=%d bin=%d: got %v want %v |diff|=%g", nfft, hop, fr, k, got, want, d)
+				}
+			}
+		}
+	})
+}
+
+func binU64(b []byte) uint64 {
+	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
+		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
+}
+
+func BenchmarkSTFT(b *testing.B) {
+	const nfft = 1024
+	plan, _ := NewSTFTPlan(nfft)
+	window := hann(nfft)
+	signal := testSignal(48000) // ~1s of 48 kHz audio
+	hop := 256
+	nf := plan.numFrames(len(signal), hop)
+	dst := make([][]complex128, nf)
+	for f := range dst {
+		dst[f] = make([]complex128, plan.NumBins())
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		plan.STFT(dst, signal, window, hop)
+	}
+}
+
+func BenchmarkSTFTPower(b *testing.B) {
+	const nfft = 1024
+	plan, _ := NewSTFTPlan(nfft)
+	window := hann(nfft)
+	signal := testSignal(48000)
+	hop := 256
+	nf := plan.numFrames(len(signal), hop)
+	dst := make([][]float64, nf)
+	for f := range dst {
+		dst[f] = make([]float64, plan.NumBins())
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		plan.STFTPower(dst, signal, window, hop)
+	}
+}
