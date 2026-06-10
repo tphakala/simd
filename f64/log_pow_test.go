@@ -47,7 +47,7 @@ func relErrF64(got, want float64) float64 {
 // subnormal x. Normalizing by 2^54 first gives the correct value on every
 // architecture.
 func refLn64(x float64) float64 {
-	if x > 0 && x < 2.2250738585072014e-308 {
+	if x > 0 && x < dblMinNormal64 {
 		return math.Log(x*0x1p54) - 54*math.Ln2
 	}
 	return math.Log(x)
@@ -118,8 +118,8 @@ func TestLogSubnormals(t *testing.T) {
 	src := []float64{
 		5e-324,         // smallest subnormal
 		1e-310, 1e-320, // assorted subnormals
-		2.2250738585072014e-308, // DBL_MIN, smallest normal
-		2.225073858507201e-308,  // largest subnormal
+		dblMinNormal64,         // DBL_MIN, smallest normal
+		2.225073858507201e-308, // largest subnormal
 		4e-308, 1e-300, 1,
 	}
 	for _, fn := range []struct {
@@ -157,7 +157,7 @@ func TestLogAccuracy(t *testing.T) {
 	for i := -40; i <= 40; i++ {
 		src = append(src, 1+float64(i)*1e-3, 1+float64(i)*1e-9)
 	}
-	src = append(src, math.MaxFloat64, 2.2250738585072014e-308, math.Sqrt2, math.Sqrt2/2)
+	src = append(src, math.MaxFloat64, dblMinNormal64, math.Sqrt2, math.Sqrt2/2)
 
 	for _, fn := range []struct {
 		name string
@@ -191,7 +191,7 @@ func TestLogLengths(t *testing.T) {
 		}
 		Log(dst, src)
 		for i, x := range src {
-			want := math.Log(x)
+			want := refLn64(x)
 			if re := relErrF64(dst[i], want); re > logRelTol64 {
 				t.Errorf("len=%d Log(%v)[%d] = %v, want %v (relErr %g)", n, x, i, dst[i], want, re)
 			}
