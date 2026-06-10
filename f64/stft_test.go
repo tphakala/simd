@@ -331,8 +331,7 @@ func BenchmarkSTFT(b *testing.B) {
 		dst[f] = make([]complex128, plan.NumBins())
 	}
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		plan.STFT(dst, signal, window, hop)
 	}
 }
@@ -349,8 +348,7 @@ func BenchmarkSTFTPower(b *testing.B) {
 		dst[f] = make([]float64, plan.NumBins())
 	}
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		plan.STFTPower(dst, signal, window, hop)
 	}
 }
