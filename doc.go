@@ -88,7 +88,7 @@
 //
 // Complex (c64/c128): Add, Sub, Mul, MulConj, DotProduct, DotProductConj, Conj, Abs, AbsSq, Scale
 //
-// CRC (crc): Checksum16 (CRC-16/ANSI, poly 0x8005; used by FLAC among others, PCLMULQDQ/PMULL carry-less-multiply fold)
+// CRC (crc): Checksum16 (CRC-16, poly 0x8005, MSB-first, no reflection; used by FLAC among others, PCLMULQDQ/PMULL carry-less-multiply fold)
 //
 // # Design Principles
 //
