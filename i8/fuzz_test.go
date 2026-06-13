@@ -149,6 +149,31 @@ func FuzzI8AbsOps(f *testing.F) {
 	})
 }
 
+func FuzzI8ScalarSaturate(f *testing.F) {
+	lenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := i8FromBytes(raw)
+		// Derive the scalar from the first byte (or 0 for empty input); the
+		// fuzzer explores the full range including -128/127.
+		var s int8
+		if len(v) > 0 {
+			s = v[0]
+		}
+
+		gotAdd := make([]int8, len(v))
+		wantAdd := make([]int8, len(v))
+		AddScalarSaturate(gotAdd, v, s)
+		addScalarSatGo(wantAdd, v, s)
+		assertI8Eq(t, "AddScalarSaturate", len(v), gotAdd, wantAdd)
+
+		gotSub := make([]int8, len(v))
+		wantSub := make([]int8, len(v))
+		SubScalarSaturate(gotSub, v, s)
+		subScalarSatGo(wantSub, v, s)
+		assertI8Eq(t, "SubScalarSaturate", len(v), gotSub, wantSub)
+	})
+}
+
 func FuzzI8Convert(f *testing.F) {
 	lenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {

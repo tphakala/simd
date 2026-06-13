@@ -128,6 +128,22 @@ func absDiffI8(dst, a, b []int8) {
 	absDiffGo(dst, a, b)
 }
 
+func addScalarSatI8(dst, a []int8, s int8) {
+	if hasNEON && len(dst) >= minNEON16 {
+		addScalarSatNEON(dst, a, s)
+		return
+	}
+	addScalarSatGo(dst, a, s)
+}
+
+func subScalarSatI8(dst, a []int8, s int8) {
+	if hasNEON && len(dst) >= minNEON16 {
+		subScalarSatNEON(dst, a, s)
+		return
+	}
+	subScalarSatGo(dst, a, s)
+}
+
 //go:noescape
 func addSatNEON(dst, a, b []int8)
 
@@ -172,3 +188,9 @@ func maxAbsNEON(a []int8) int
 
 //go:noescape
 func absDiffNEON(dst, a, b []int8)
+
+//go:noescape
+func addScalarSatNEON(dst, a []int8, s int8)
+
+//go:noescape
+func subScalarSatNEON(dst, a []int8, s int8)

@@ -32,6 +32,20 @@ func subSatGo(dst, a, b []int8) {
 	}
 }
 
+// addScalarSatGo / subScalarSatGo broadcast a scalar with signed saturation;
+// they reuse clampI8, so they are bit-exact with AddSaturate/SubSaturate.
+func addScalarSatGo(dst, a []int8, s int8) {
+	for i := range dst {
+		dst[i] = clampI8(int(a[i]) + int(s))
+	}
+}
+
+func subScalarSatGo(dst, a []int8, s int8) {
+	for i := range dst {
+		dst[i] = clampI8(int(a[i]) - int(s))
+	}
+}
+
 func minGo(dst, a, b []int8) {
 	for i := range dst {
 		dst[i] = min(a[i], b[i])

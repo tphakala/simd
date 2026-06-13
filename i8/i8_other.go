@@ -20,3 +20,6 @@ func absI8(dst, a []int8)                    { absGo(dst, a) }
 func negI8(dst, a []int8)                    { negGo(dst, a) }
 func maxAbsI8(a []int8) int                  { return maxAbsGo(a) }
 func absDiffI8(dst, a, b []int8)             { absDiffGo(dst, a, b) }
+
+func addScalarSatI8(dst, a []int8, s int8) { addScalarSatGo(dst, a, s) }
+func subScalarSatI8(dst, a []int8, s int8) { subScalarSatGo(dst, a, s) }

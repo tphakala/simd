@@ -128,6 +128,22 @@ func absDiffI8(dst, a, b []int8) {
 	absDiffGo(dst, a, b)
 }
 
+func addScalarSatI8(dst, a []int8, s int8) {
+	if hasAVX2 && len(dst) >= blockSat32 {
+		addScalarSatAVX2(dst, a, s)
+		return
+	}
+	addScalarSatGo(dst, a, s)
+}
+
+func subScalarSatI8(dst, a []int8, s int8) {
+	if hasAVX2 && len(dst) >= blockSat32 {
+		subScalarSatAVX2(dst, a, s)
+		return
+	}
+	subScalarSatGo(dst, a, s)
+}
+
 //go:noescape
 func addSatAVX2(dst, a, b []int8)
 
@@ -169,3 +185,9 @@ func maxAbsAVX2(a []int8) int
 
 //go:noescape
 func absDiffAVX2(dst, a, b []int8)
+
+//go:noescape
+func addScalarSatAVX2(dst, a []int8, s int8)
+
+//go:noescape
+func subScalarSatAVX2(dst, a []int8, s int8)
