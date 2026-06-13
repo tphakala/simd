@@ -188,10 +188,10 @@ live in `f32` instead, so the two float surfaces are intentionally asymmetric.
 |                 | `Tanh(dst, src)`                    | Hyperbolic tangent            | 4x (AVX2) / 2x (NEON)               |
 |                 | `Exp(dst, src)`                     | Exponential e^x               | 4x (AVX2) / 2x (NEON)               |
 |                 | `ClampScale(dst, src, min, max, s)` | Fused clamp and scale         | 4x (AVX) / 2x (NEON)                |
-| **Transcendental** | `Log(dst, src)`                  | Natural log ln(x)             | 8x / 4x (AVX2+FMA) / 4x / 2x (NEON) |
-|                 | `Log2(dst, src)` / `Log10(dst, src)`| Base-2 / base-10 log          | 8x / 4x (AVX2+FMA) / 4x / 2x (NEON) |
-|                 | `Pow(dst, src, exp)`                | Scalar power x^exp (PCEN, dB) | 8x / 4x (AVX2+FMA) / 4x / 2x (NEON) |
-|                 | `PowElem(dst, base, exp)`           | Elementwise base^exp          | 8x / 4x (AVX2+FMA) / 4x / 2x (NEON) |
+| **Transcendental** | `Log(dst, src)`                  | Natural log ln(x)             | 4x (AVX2+FMA) / 2x (NEON)           |
+|                 | `Log2(dst, src)` / `Log10(dst, src)`| Base-2 / base-10 log          | 4x (AVX2+FMA) / 2x (NEON)           |
+|                 | `Pow(dst, src, exp)`                | Scalar power x^exp (PCEN, dB) | 4x (AVX2+FMA) / 2x (NEON)           |
+|                 | `PowElem(dst, base, exp)`           | Elementwise base^exp          | 4x (AVX2+FMA) / 2x (NEON)           |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
@@ -408,11 +408,11 @@ f16.ReLU(dst, a)             // Activation functions
 
 | Operation         | SIMD   | Pure Go  | Speedup   |
 | ----------------- | ------ | -------- | --------- |
-| EuclideanDistance | 481 ns | 5995 ns  | **12.5x** |
-| Variance          | 506 ns | 8901 ns  | **17.6x** |
-| Interleave2       | 178 ns | 2163 ns  | **12.2x** |
-| Deinterleave2     | 178 ns | 2167 ns  | **12.2x** |
-| ClampScale        | 531 ns | 12211 ns | **23.0x** |
+| EuclideanDistance | 481 ns | 5996 ns  | **12.5x** |
+| Variance          | 506 ns | 8971 ns  | **17.7x** |
+| Interleave2       | 177 ns | 2159 ns  | **12.2x** |
+| Deinterleave2     | 177 ns | 2166 ns  | **12.2x** |
+| ClampScale        | 531 ns | 12788 ns | **24.1x** |
 
 **Hardware requirements:**
 
@@ -472,17 +472,17 @@ c128.Abs(magnitude, signalFFT)                  // Extract magnitude for display
 - **Conj**: Cross-correlation, frequency-domain filtering
 - **Mul/MulConj**: FFT-based convolution, filtering, correlation
 
-**Benchmark (1024 elements, Intel Xeon Platinum 8362 AVX-512):**
+**Benchmark (1024 elements, Intel Core i7-1260P, AVX+FMA):**
 
 | Operation | SIMD    | Pure Go | Speedup   |
 | --------- | ------- | ------- | --------- |
-| Mul       | 239 ns  | 1021 ns | **4.3x**  |
-| MulConj   | 314 ns  | 1434 ns | **4.6x**  |
-| Scale     | 180 ns  | 959 ns  | **5.3x**  |
-| Add       | 255 ns  | 733 ns  | **2.9x**  |
-| Abs       | 918 ns  | 3453 ns | **3.8x**  |
-| AbsSq     | 237 ns  | 594 ns  | **2.5x**  |
-| Conj      | 163 ns  | 594 ns  | **3.7x**  |
+| Mul       | 252 ns  | 679 ns  | **2.7x**  |
+| MulConj   | 260 ns  | 723 ns  | **2.8x**  |
+| Scale     | 193 ns  | 643 ns  | **3.3x**  |
+| Add       | 165 ns  | 461 ns  | **2.8x**  |
+| Abs       | 661 ns  | 2252 ns | **3.4x**  |
+| AbsSq     | 228 ns  | 430 ns  | **1.9x**  |
+| Conj      | 125 ns  | 405 ns  | **3.2x**  |
 
 ### `c64` - complex64 Operations
 
@@ -604,28 +604,28 @@ Like the `i32` interleave kernels, these are pure 16-bit-lane movement (AVX2/SSE
 
 | Category        | Operation         | SIMD (ns) | Go (ns) | Speedup  |
 | --------------- | ----------------- | --------- | ------- | -------- |
-| **Arithmetic**  | Add               | 84        | 446     | **5.3x** |
-|                 | Sub               | 84        | 335     | **4.0x** |
-|                 | Mul               | 86        | 436     | **5.1x** |
-|                 | Div               | 441       | 941     | **2.1x** |
-|                 | Scale             | 68        | 272     | **4.0x** |
-|                 | AddScalar         | 68        | 286     | **4.2x** |
-|                 | FMA               | 110       | 557     | **5.0x** |
-| **Unary**       | Abs               | 66        | 365     | **5.6x** |
-|                 | Neg               | 66        | 306     | **4.6x** |
-|                 | Sqrt              | 658       | 1323    | **2.0x** |
-|                 | Reciprocal        | 447       | 920     | **2.1x** |
-| **Reduction**   | DotProduct        | 162       | 859     | **5.3x** |
-|                 | Sum               | 82        | 184     | **2.3x** |
-|                 | Min               | 157       | 340     | **2.2x** |
-|                 | Max               | 154       | 352     | **2.3x** |
-| **Statistical** | Mean              | 82        | 184     | **2.3x** |
-|                 | Variance\*        | 820       | 902     | **1.1x** |
-|                 | StdDev\*          | 825       | 905     | **1.1x** |
-| **Vector**      | EuclideanDistance | 216       | 1071    | **5.0x** |
-|                 | Normalize         | 220       | 1080    | **4.9x** |
-|                 | CumulativeSum     | 428       | 425     | 1.0x     |
-| **Range**       | Clamp             | 81        | 640     | **7.9x** |
+| **Arithmetic**  | Add               | 88        | 210     | **2.4x**  |
+|                 | Sub               | 87        | 211     | **2.4x**  |
+|                 | Mul               | 87        | 210     | **2.4x**  |
+|                 | Div               | 459       | 899     | **2.0x**  |
+|                 | Scale             | 86        | 237     | **2.8x**  |
+|                 | AddScalar         | 76        | 235     | **3.1x**  |
+|                 | FMA               | 120       | 470     | **3.9x**  |
+| **Unary**       | Abs               | 71        | 246     | **3.5x**  |
+|                 | Neg               | 74        | 235     | **3.2x**  |
+|                 | Sqrt              | 690       | 1388    | **2.0x**  |
+|                 | Reciprocal        | 513       | 938     | **1.8x**  |
+| **Reduction**   | DotProduct        | 54        | 887     | **16.5x** |
+|                 | Sum               | 35        | 427     | **12.1x** |
+|                 | Min               | 148       | 350     | **2.4x**  |
+|                 | Max               | 151       | 370     | **2.5x**  |
+| **Statistical** | Mean              | 33        | 419     | **12.7x** |
+|                 | Variance\*        | 552       | 3893    | **7.1x**  |
+|                 | StdDev\*          | 556       | 3900    | **7.0x**  |
+| **Vector**      | EuclideanDistance | 76        | 1173    | **15.4x** |
+|                 | Normalize         | 536       | 692     | **1.3x**  |
+|                 | CumulativeSum     | 472       | 457     | 1.0x      |
+| **Range**       | Clamp             | 83        | 880     | **10.6x** |
 
 \*Variance/StdDev benchmarked at 4096 elements (SIMD benefits at larger sizes)
 
@@ -633,27 +633,26 @@ Like the `i32` interleave kernels, these are pure 16-bit-lane movement (AVX2/SSE
 
 | Category       | Operation  | SIMD (ns) | Go (ns) | Speedup   |
 | -------------- | ---------- | --------- | ------- | --------- |
-| **Arithmetic** | Add        | 47        | 441     | **9.4x**  |
-|                | Sub        | 49        | 339     | **6.9x**  |
-|                | Mul        | 49        | 436     | **8.9x**  |
-|                | Div        | 138       | 655     | **4.8x**  |
-|                | Scale      | 40        | 299     | **7.4x**  |
-|                | AddScalar  | 39        | 272     | **7.0x**  |
-|                | FMA        | 64        | 444     | **6.9x**  |
-| **Unary**      | Abs        | 37        | 656     | **17.6x** |
-|                | Neg        | 40        | 273     | **6.9x**  |
-| **Reduction**  | DotProduct | 71        | 424     | **5.9x**  |
-|                | Sum        | 41        | 123     | **3.0x**  |
-|                | Min        | 65        | 340     | **5.2x**  |
-|                | Max        | 66        | 352     | **5.3x**  |
-| **Statistical**| Variance\*  | 174       | 522     | **3.0x**  |
-|                | StdDev\*    | 208       | 529     | **2.5x**  |
-| **Vector**     | EuclideanDistance\* | 38 | 579     | **15.1x** |
-| **Range**      | Clamp      | 47        | 701     | **14.8x** |
+| **Arithmetic** | Add        | 61        | 287     | **4.7x**  |
+|                | Sub        | 48        | 205     | **4.3x**  |
+|                | Mul        | 49        | 206     | **4.2x**  |
+|                | Div        | 137       | 664     | **4.8x**  |
+|                | Scale      | 43        | 229     | **5.3x**  |
+|                | AddScalar  | 36        | 228     | **6.3x**  |
+|                | FMA        | 60        | 290     | **4.9x**  |
+| **Unary**      | Abs        | 40        | 250     | **6.2x**  |
+|                | Neg        | 82        | 471     | **5.8x**  |
+| **Reduction**  | DotProduct | 32        | 426     | **13.3x** |
+|                | Sum        | 18        | 416     | **22.6x** |
+|                | Min        | 66        | 347     | **5.2x**  |
+|                | Max        | 120       | 382     | **3.2x**  |
+| **Statistical**| Variance\*  | 164       | 921     | **5.6x**  |
+|                | StdDev\*    | 164       | 903     | **5.5x**  |
+| **Vector**     | EuclideanDistance\* | 35 | 434     | **12.4x** |
+| **Range**      | Clamp      | 45        | 753     | **16.6x** |
 
-\*Variance/StdDev/EuclideanDistance gained their amd64 SSE/AVX kernels later than
-the rows above and were benchmarked in a separate run, so compare their SIMD/Go
-speedup rather than absolute ns against the other rows.
+\*Variance/StdDev/EuclideanDistance use their own fixed 1000-element benchmark
+(the other rows are at 1024 elements); all numbers come from one run on this host.
 
 #### Activation Functions - SIMD vs Pure Go
 
@@ -661,48 +660,48 @@ speedup rather than absolute ns against the other rows.
 
 | Function   | SIMD (ns) | Go (ns)  | Speedup    | SIMD Throughput |
 | ---------- | --------- | -------- | ---------- | --------------- |
-| Sigmoid    | 138       | 5906     | **43x**    | 59.3 GB/s       |
-| ReLU       | 39        | 662      | **17x**    | 211 GB/s        |
-| Tanh       | 138       | 28116    | **204x**   | 59.5 GB/s       |
-| Exp        | 312       | 5555     | **18x**    | 26.3 GB/s       |
+| Sigmoid    | 348       | 5826     | **17x**    | 23.5 GB/s       |
+| ReLU       | 36        | 480      | **13x**    | 226 GB/s        |
+| Tanh       | 385       | 28219    | **73x**    | 21.3 GB/s       |
+| Exp        | 264       | 5123     | **19x**    | 31.0 GB/s       |
 
 **float64 (1024 elements):**
 
 | Function   | SIMD (ns) | Go (ns)  | Speedup    | SIMD Throughput |
 | ---------- | --------- | -------- | ---------- | --------------- |
-| Sigmoid    | 745       | 5640     | **7.6x**   | 22.0 GB/s       |
-| ReLU       | 68        | 646      | **9.5x**   | 240 GB/s        |
-| Tanh       | 836       | 6529     | **7.8x**   | 19.6 GB/s       |
-| Exp        | 606       | 4698     | **7.8x**   | 27.0 GB/s       |
+| Sigmoid    | 745       | 5367     | **7.2x**   | 22.0 GB/s       |
+| ReLU       | 79        | 537      | **6.8x**   | 240 GB/s        |
+| Tanh       | 894       | 6600     | **7.4x**   | 18.3 GB/s       |
+| Exp        | 622       | 4848     | **7.8x**   | 26.4 GB/s       |
 
 **Key Characteristics:**
 
-- **Tanh**: 200x+ speedup for f32 - fast approximation with saturation vs math.Tanh
-- **ReLU**: Highest throughput (211-240 GB/s) - simple max(0, x) operation
-- **Sigmoid**: 43x speedup for f32 - fast approximation with exponential
-- **Exp**: 18x speedup for f32 (12x on ARM64 NEON) via range reduction plus a degree-5 polynomial; max relative error ~7e-6 (f32), ~3e-6 (f64)
+- **Tanh**: 73x speedup for f32 - fast approximation with saturation vs the slow math.Tanh
+- **ReLU**: Highest throughput (226-240 GB/s) - simple max(0, x) operation
+- **Sigmoid**: 17x speedup for f32 - fast approximation with exponential
+- **Exp**: 19x speedup for f32 (12x on ARM64 NEON) via range reduction plus a degree-5 polynomial; max relative error ~7e-6 (f32), ~3e-6 (f64)
 
 #### Batch & Signal Processing (varied sizes)
 
 | Operation                | Config                | SIMD    | Go      | Speedup  |
 | ------------------------ | --------------------- | ------- | ------- | -------- |
-| DotProductBatch (f64)    | 256 vec × 100 rows    | 3.2 µs  | 20.5 µs | **6.4x** |
-| DotProductBatch (f32)    | 256 vec × 100 rows    | 1.5 µs  | 9.8 µs  | **6.7x** |
-| ConvolveValid (f64)      | 4096 sig × 64 ker     | 26.6 µs | 169 µs  | **6.3x** |
-| ConvolveValid (f32)      | 4096 sig × 64 ker     | 17.9 µs | 80 µs   | **4.5x** |
-| ConvolveValidMulti (f64) | 1000 sig × 64 ker × 2 | 13.4 µs | -       | -        |
-| CubicInterpDot (f64)     | 241 taps              | 47 ns   | 88 ns   | **1.9x** |
-| CubicInterpDot (f32)     | 241 taps              | 21 ns   | 66 ns   | **3.1x** |
-| Int32ToFloat32Scale      | 1024 elements         | 50 ns   | 405 ns  | **8.1x** |
-| Int32ToFloat32Scale      | 4096 elements         | 157 ns  | 1586 ns | **10.1x**|
-| Int16ToFloat32Scale      | 1024 elements         | 58 ns   | 483 ns  | **8.3x** |
-| Int16ToFloat32Scale      | 4096 elements         | 200 ns  | 1914 ns | **9.6x** |
-| Float32ToInt16Scale      | 1024 elements         | 92 ns   | 1360 ns | **14.8x**|
-| Float32ToInt16Scale      | 4096 elements         | 365 ns  | 5420 ns | **14.8x**|
-| Interleave2 (f64)        | 1000 pairs            | 216 ns  | -       | -        |
-| Deinterleave2 (f64)      | 1000 pairs            | 216 ns  | -       | -        |
-| Interleave2 (f32)        | 1000 pairs            | 109 ns  | -       | -        |
-| Deinterleave2 (f32)      | 1000 pairs            | 216 ns  | -       | -        |
+| DotProductBatch (f64)    | 256 vec × 100 rows    | 1.3 µs  | 22.0 µs | **16.4x**|
+| DotProductBatch (f32)    | 256 vec × 100 rows    | 0.73 µs | 9.6 µs  | **13.2x**|
+| ConvolveValid (f64)      | 4096 sig × 64 ker     | 25.3 µs | 198 µs  | **7.8x** |
+| ConvolveValid (f32)      | 4096 sig × 64 ker     | 17.6 µs | 79 µs   | **4.5x** |
+| ConvolveValidMulti (f64) | 1000 sig × 64 ker × 2 | 10.5 µs | -       | -        |
+| CubicInterpDot (f64)     | 241 taps              | 35 ns   | 300 ns  | **8.6x** |
+| CubicInterpDot (f32)     | 241 taps              | 20 ns   | 201 ns  | **10.2x**|
+| Int32ToFloat32Scale      | 1024 elements         | 45 ns   | 366 ns  | **8.2x** |
+| Int32ToFloat32Scale      | 4096 elements         | 148 ns  | 1448 ns | **9.8x** |
+| Int16ToFloat32Scale      | 1024 elements         | 51 ns   | 473 ns  | **9.2x** |
+| Int16ToFloat32Scale      | 4096 elements         | 173 ns  | 1897 ns | **11.0x**|
+| Float32ToInt16Scale      | 1024 elements         | 88 ns   | 1262 ns | **14.4x**|
+| Float32ToInt16Scale      | 4096 elements         | 347 ns  | 5434 ns | **15.7x**|
+| Interleave2 (f64)        | 1000 pairs            | 218 ns  | -       | -        |
+| Deinterleave2 (f64)      | 1000 pairs            | 228 ns  | -       | -        |
+| Interleave2 (f32)        | 1000 pairs            | 108 ns  | -       | -        |
+| Deinterleave2 (f32)      | 1000 pairs            | 218 ns  | -       | -        |
 
 #### ConvolveDecimate (fused strided convolution)
 
@@ -716,11 +715,11 @@ a Raspberry Pi 5):
 
 | Config              | f32 x86 | f64 x86 | f32 NEON | f64 NEON |
 | ------------------- | ------- | ------- | -------- | -------- |
-| 20 taps, 2x decimate  | **2.0x** | **2.3x** | **1.7x** | **1.9x** |
-| 32 taps, 2x decimate  | **2.3x** | **1.7x** | **1.9x** | **1.7x** |
-| 64 taps, 2x decimate  | **2.0x** | **1.8x** | **1.7x** | **1.3x** |
-| 241 taps, 2x decimate | **1.5x** | **1.3x** | **1.2x** | **1.1x** |
-| 241 taps, 4x decimate | **1.4x** | **1.2x** | **1.2x** | **1.1x** |
+| 20 taps, 2x decimate  | **2.0x** | **2.2x** | **1.7x** | **2.0x** |
+| 32 taps, 2x decimate  | **2.3x** | **2.2x** | **1.9x** | **1.7x** |
+| 64 taps, 2x decimate  | **2.0x** | **1.9x** | **1.7x** | **1.3x** |
+| 241 taps, 2x decimate | **1.6x** | **1.2x** | **1.2x** | **1.1x** |
+| 241 taps, 4x decimate | **1.3x** | **1.2x** | **1.2x** | **1.1x** |
 
 #### Autocorrelate (lag-vectorized LPC autocorrelation, f64)
 
@@ -732,18 +731,18 @@ a Raspberry Pi 5):
 
 | Config (n=4096)       | amd64 (AVX2) | arm64 (NEON) |
 | --------------------- | ------------ | ------------ |
-| maxLag 8              | **2.9x**     | **2.4x**     |
-| maxLag 12             | **3.0x**     | **2.4x**     |
-| maxLag 32             | **3.5x**     | **2.7x**     |
+| maxLag 8              | **3.0x**     | **2.4x**     |
+| maxLag 12             | **3.2x**     | **2.5x**     |
+| maxLag 32             | **3.4x**     | **2.6x**     |
 
 #### Performance Summary
 
 | Package  | Average Speedup | Best         | Operations   |
 | -------- | --------------- | ------------ | ------------ |
-| **f32**  | **6.5x**        | 21.8x (Abs)  | 35 functions |
-| **f64**  | **3.2x**        | 7.9x (Clamp) | 32 functions |
-| **c128** | **2.7x**        | 3.4x (Abs)   | 8 functions  |
-| **c64**  | **~2x**         | ~3x (Mul)    | 9 functions  |
+| **f32**  | **6.6x**        | 22.6x (Sum)        | 62 functions |
+| **f64**  | **4.1x**        | 16.5x (DotProduct) | 51 functions |
+| **c128** | **2.8x**        | 3.4x (Abs)         | 11 functions |
+| **c64**  | **6.0x**        | 22.0x (Scale)      | 11 functions |
 
 ### ARM64 (Raspberry Pi 5, NEON)
 
@@ -751,63 +750,63 @@ a Raspberry Pi 5):
 
 | Operation  | Size | Time   | Throughput |
 | ---------- | ---- | ------ | ---------- |
-| DotProduct | 277  | 151 ns | 29 GB/s    |
-| DotProduct | 1000 | 513 ns | 31 GB/s    |
-| Add        | 1000 | 775 ns | 31 GB/s    |
-| Mul        | 1000 | 727 ns | 33 GB/s    |
-| FMA        | 1000 | 890 ns | 36 GB/s    |
-| Sum        | 1000 | 635 ns | 13 GB/s    |
-| Mean       | 1000 | 677 ns | 12 GB/s    |
+| DotProduct | 128  | 47 ns  | 44 GB/s    |
+| DotProduct | 1024 | 327 ns | 50 GB/s    |
+| Add        | 1024 | 495 ns | 50 GB/s    |
+| Mul        | 1024 | 495 ns | 50 GB/s    |
+| FMA        | 1024 | 604 ns | 54 GB/s    |
+| Sum        | 1024 | 435 ns | 19 GB/s    |
+| Mean       | 1024 | 431 ns | 19 GB/s    |
 
 #### float32 Operations
 
 | Operation  | Size  | Time    | Throughput |
 | ---------- | ----- | ------- | ---------- |
-| DotProduct | 100   | 37 ns   | 21 GB/s    |
-| DotProduct | 1000  | 263 ns  | 30 GB/s    |
-| DotProduct | 10000 | 2.78 µs | 29 GB/s    |
-| Add        | 1000  | 389 ns  | 31 GB/s    |
-| Mul        | 1000  | 390 ns  | 31 GB/s    |
-| FMA        | 1000  | 479 ns  | 33 GB/s    |
+| DotProduct | 128   | 27 ns   | 38 GB/s    |
+| DotProduct | 1024  | 167 ns  | 49 GB/s    |
+| DotProduct | 16384 | 2.86 µs | 46 GB/s    |
+| Add        | 1024  | 248 ns  | 50 GB/s    |
+| Mul        | 1024  | 248 ns  | 50 GB/s    |
+| FMA        | 1024  | 303 ns  | 54 GB/s    |
 
 #### Comparison vs Pure Go
 
 | Operation        | Size | SIMD   | Pure Go | Speedup  |
 | ---------------- | ---- | ------ | ------- | -------- |
-| DotProduct (f32) | 100  | 37 ns  | 137 ns  | **3.7x** |
-| DotProduct (f32) | 1000 | 262 ns | 1350 ns | **5.2x** |
-| DotProduct (f64) | 100  | 62 ns  | 138 ns  | **2.2x** |
-| DotProduct (f64) | 1000 | 513 ns | 1353 ns | **2.6x** |
-| Add (f32)        | 1000 | 389 ns | 2015 ns | **5.2x** |
-| Sum (f32)        | 1000 | 343 ns | 1327 ns | **3.9x** |
+| DotProduct (f32) | 128  | 27 ns  | 112 ns  | **4.1x** |
+| DotProduct (f32) | 1024 | 167 ns | 861 ns  | **5.2x** |
+| DotProduct (f64) | 128  | 47 ns  | 111 ns  | **2.4x** |
+| DotProduct (f64) | 1024 | 327 ns | 861 ns  | **2.6x** |
+| Add (f32)        | 1024 | 248 ns | 863 ns  | **3.5x** |
+| Sum (f32)        | 1024 | 220 ns | 862 ns  | **3.9x** |
 
 ### int32 (i32) - SIMD vs Pure Go (1000 elements)
 
 | Operation     | AMD64 (AVX/AVX2)             | ARM64 (NEON, Pi 5)            |
 | ------------- | ---------------------------- | ----------------------------- |
-| Interleave2   | 121 ns vs 487 ns (**4.0x**)  | 322 ns vs 1679 ns (**5.2x**)  |
-| Deinterleave2 | 228 ns vs 482 ns (**2.1x**)  | 322 ns vs 1682 ns (**5.2x**)  |
-| Restore1      | 181 ns vs 2019 ns (**11.2x**)| 605 ns vs 3763 ns (**6.2x**)  |
-| Restore2      | 320 ns vs 2296 ns (**7.2x**) | 1101 ns vs 4592 ns (**4.2x**) |
-| Restore3      | 462 ns vs 2493 ns (**5.4x**) | 1608 ns vs 5421 ns (**3.4x**) |
-| Restore4      | 575 ns vs 2778 ns (**4.8x**) | 2093 ns vs 6245 ns (**3.0x**) |
-| LPCResidualEncode (order 8)  | 743 ns vs 5333 ns (**7.2x**)  | 2495 ns vs 10707 ns (**4.3x**) |
-| LPCResidualEncode (order 32) | 2397 ns vs 22046 ns (**9.2x**)| 8148 ns vs 40811 ns (**5.0x**) |
-| LPCRestore (order 8)         | 3583 ns vs 4944 ns (**1.4x**) | 6128 ns vs 10889 ns (**1.8x**) |
-| LPCRestore (order 32)        | 4443 ns vs 17529 ns (**3.9x**)| 11303 ns vs 41026 ns (**3.6x**) |
-| RiceSums (k=0..14)           | 810 ns vs 10490 ns (**13.0x**)| 4090 ns vs 17163 ns (**4.2x**) |
-| RiceBestParam (k=0..14)      | 810 ns vs 10490 ns (**13.0x**)| 4081 ns vs 17163 ns (**4.2x**) |
-| RiceSums (k=0..30, 5-bit)    | 1685 ns vs 21401 ns (**12.7x**)| 8503 ns vs 34111 ns (**4.0x**) |
-| ZigzagSum                    | 88 ns vs 328 ns (**3.7x**)    | 476 ns vs 1124 ns (**2.4x**)  |
-| FixedAbsSums (orders 0..4)   | 752 ns vs 1952 ns (**2.6x**)  | 2881 ns vs 4777 ns (**1.7x**) |
-| MinMax                       | 47 ns vs 480 ns (**10.2x**)   | 216 ns vs 1103 ns (**5.1x**)  |
+| Interleave2   | 110 ns vs 440 ns (**4.0x**)  | 321 ns vs 1682 ns (**5.2x**)  |
+| Deinterleave2 | 217 ns vs 443 ns (**2.0x**)  | 322 ns vs 1684 ns (**5.2x**)  |
+| Restore1      | 161 ns vs 1917 ns (**11.9x**)| 606 ns vs 3762 ns (**6.2x**)  |
+| Restore2      | 301 ns vs 2142 ns (**7.1x**) | 1102 ns vs 4591 ns (**4.2x**) |
+| Restore3      | 429 ns vs 2366 ns (**5.5x**) | 1605 ns vs 5419 ns (**3.4x**) |
+| Restore4      | 556 ns vs 2593 ns (**4.7x**) | 2098 ns vs 6244 ns (**3.0x**) |
+| LPCResidualEncode (order 8)  | 688 ns vs 4774 ns (**6.9x**)  | 2430 ns vs 10689 ns (**4.4x**) |
+| LPCResidualEncode (order 32) | 2008 ns vs 18772 ns (**9.3x**)| 8145 ns vs 40793 ns (**5.0x**) |
+| LPCRestore (order 8)         | 3163 ns vs 4494 ns (**1.4x**) | 6658 ns vs 10865 ns (**1.6x**) |
+| LPCRestore (order 32)        | 4074 ns vs 16055 ns (**3.9x**)| 12992 ns vs 41024 ns (**3.2x**) |
+| RiceSums (k=0..14)           | 753 ns vs 10018 ns (**13.3x**)| 3997 ns vs 17159 ns (**4.3x**) |
+| RiceBestParam (k=0..14)      | 759 ns vs 10018 ns (**13.2x**)| 4119 ns vs 17159 ns (**4.2x**) |
+| RiceSums (k=0..30, 5-bit)    | 1588 ns vs 20456 ns (**12.9x**)| 8536 ns vs 34295 ns (**4.0x**) |
+| ZigzagSum                    | 82 ns vs 339 ns (**4.1x**)    | 479 ns vs 1123 ns (**2.3x**)  |
+| FixedAbsSums (orders 0..4)   | 720 ns vs 1872 ns (**2.6x**)  | 2876 ns vs 4777 ns (**1.7x**) |
+| MinMax                       | 40 ns vs 431 ns (**10.7x**)   | 211 ns vs 1102 ns (**5.2x**)  |
 
 ### int16 (i16) - SIMD vs Pure Go (1000 elements)
 
 | Operation     | AMD64 (AVX2/SSE2)           | ARM64 (NEON, Pi 5)            |
 | ------------- | --------------------------- | ----------------------------- |
-| Interleave2   | 60 ns vs 585 ns (**9.8x**)  | 165 ns vs 2106 ns (**12.8x**) |
-| Deinterleave2 | 59 ns vs 640 ns (**10.9x**) | 165 ns vs 2120 ns (**12.9x**) |
+| Interleave2   | 53 ns vs 560 ns (**10.6x**) | 165 ns vs 2105 ns (**12.8x**) |
+| Deinterleave2 | 54 ns vs 607 ns (**11.3x**) | 165 ns vs 2120 ns (**12.9x**) |
 
 Both i16 kernels are zero-allocation and bit-exact against the pure-Go reference (verified with negative values and the int16 extremes); they move whole 16-bit lanes, so the bit pattern of each sample is irrelevant to correctness.
 
@@ -815,13 +814,26 @@ All int32 kernels are zero-allocation and bit-exact against the pure-Go referenc
 
 ### Performance Notes
 
-- **AMD64**: Explicit SIMD provides **5x** speedups for most operations compared to pure Go, with consistent high throughput across all vector sizes.
+- **AMD64**: Explicit SIMD ranges from roughly **2-6x** on memory-bound elementwise
+  operations up to **10-16x** on reductions and fused kernels (DotProduct, Sum,
+  EuclideanDistance, Clamp). The elementwise multiples are more modest than on older
+  Go toolchains because Go 1.26 generates tighter code for the scalar reference loops,
+  which speeds up the pure-Go baseline the SIMD path is measured against.
 
 - **ARM64**: NEON SIMD provides substantial speedups over pure Go across all operations:
-  - float32: **3.7x - 5.2x** faster (4 elements per 128-bit vector)
-  - float64: **2.2x - 2.6x** faster (2 elements per 128-bit vector)
+  - float32: **3.5x - 5.2x** faster (4 elements per 128-bit vector)
+  - float64: **2.4x - 2.6x** faster (2 elements per 128-bit vector)
 
 - **CumulativeSum** is inherently sequential (each element depends on the previous) and uses pure Go on all platforms.
+
+- **Methodology**: amd64 numbers are from the Intel Core i7-1260P (AVX+FMA) and arm64
+  numbers from a Raspberry Pi 5 (Cortex-A76, NEON), both pinned to the `performance`
+  CPU governor, built with the Go 1.26 toolchain (the module itself still targets the
+  Go 1.25 minimum in `go.mod`; 1.26 is only what these benchmarks were measured on).
+  Pure-Go baselines use the same binary via `SIMD_DISABLE=all` or each operation's
+  `*Go` reference; each pair reports the best of repeated runs. Displayed nanoseconds
+  are rounded to whole ns, so the speedup column (computed from the raw timings) may
+  differ from a recomputation using the rounded ns shown.
 
 ## Known Limitations
 
