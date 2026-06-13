@@ -106,4 +106,5 @@ func TestFeatures(_ *testing.T) {
 	_ = ARM64.SVE
 	_ = ARM64.SVE2
 	_ = ARM64.PMULL
+	_ = ARM64.DOTPROD
 }

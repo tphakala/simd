@@ -220,10 +220,29 @@ func TestZeroAllocations(t *testing.T) {
 func TestTrailingCapacityUntouched(t *testing.T) {
 	a := []int8{1, 2, 3}
 	b := []int8{4, 5, 6}
+
 	dst := []int8{-9, -9, -9, 42, 42}
 	AddSaturate(dst, a, b)
 	if dst[3] != 42 || dst[4] != 42 {
 		t.Errorf("AddSaturate clobbered trailing capacity: %v", dst)
+	}
+
+	dstSub := []int8{-9, -9, -9, 42, 42}
+	SubSaturate(dstSub, a, b)
+	if dstSub[3] != 42 || dstSub[4] != 42 {
+		t.Errorf("SubSaturate clobbered trailing capacity: %v", dstSub)
+	}
+
+	dst16 := []int16{-9, -9, -9, 4242, 4242}
+	ToInt16(dst16, a)
+	if dst16[3] != 4242 || dst16[4] != 4242 {
+		t.Errorf("ToInt16 clobbered trailing capacity: %v", dst16)
+	}
+
+	dst32 := []int32{-9, -9, -9, 424242, 424242}
+	ToInt32(dst32, a)
+	if dst32[3] != 424242 || dst32[4] != 424242 {
+		t.Errorf("ToInt32 clobbered trailing capacity: %v", dst32)
 	}
 }
 

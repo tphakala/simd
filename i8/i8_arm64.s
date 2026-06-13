@@ -39,17 +39,17 @@ addsat_loop16:
 addsat_remainder:
     AND  $15, R3
     CBZ  R3, addsat_done
+    MOVD $127, R8                 // clamp constants, hoisted out of the loop
+    MOVD $-128, R9
 
 addsat_scalar:
     MOVB (R1), R5                 // a (sign-extended)
     MOVB (R2), R6                 // b
     ADD  R6, R5, R5               // a + b (exact in 64-bit)
-    MOVD $127, R7
-    CMP  R7, R5
-    CSEL GT, R7, R5, R5           // clamp high
-    MOVD $-128, R7
-    CMP  R7, R5
-    CSEL LT, R7, R5, R5           // clamp low
+    CMP  R8, R5
+    CSEL GT, R8, R5, R5           // clamp high
+    CMP  R9, R5
+    CSEL LT, R9, R5, R5           // clamp low
     MOVB R5, (R0)
     ADD  $1, R1
     ADD  $1, R2
@@ -81,17 +81,17 @@ subsat_loop16:
 subsat_remainder:
     AND  $15, R3
     CBZ  R3, subsat_done
+    MOVD $127, R8                 // clamp constants, hoisted out of the loop
+    MOVD $-128, R9
 
 subsat_scalar:
     MOVB (R1), R5
     MOVB (R2), R6
     SUB  R6, R5, R5               // a - b
-    MOVD $127, R7
-    CMP  R7, R5
-    CSEL GT, R7, R5, R5
-    MOVD $-128, R7
-    CMP  R7, R5
-    CSEL LT, R7, R5, R5
+    CMP  R8, R5
+    CSEL GT, R8, R5, R5           // clamp high
+    CMP  R9, R5
+    CSEL LT, R9, R5, R5           // clamp low
     MOVB R5, (R0)
     ADD  $1, R1
     ADD  $1, R2

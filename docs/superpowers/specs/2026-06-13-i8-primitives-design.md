@@ -61,7 +61,7 @@ running total can wrap, and it wraps identically to the reference.
 
 ## File layout (mirrors i32)
 
-```
+```text
 i8/
   i8.go              public API (AddSaturate, SubSaturate, ToInt16, ToInt32,
                      Sum, MinMax, DotProduct) + package doc + dispatch helpers

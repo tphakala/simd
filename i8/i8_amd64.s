@@ -275,8 +275,8 @@ dot_reduce:
 
 dot_scalar:
     MOVBLSX (SI), BX
-    MOVBLSX (DI), R8
-    IMULL R8, BX               // a*b (signed, fits int32)
+    MOVBLSX (DI), DX
+    IMULL DX, BX               // a*b (signed, fits int32)
     ADDL BX, AX
     INCQ SI
     INCQ DI
@@ -340,27 +340,28 @@ mm_reduce:
     VPMAXSB X3, X1, X1
     MOVD X1, DX                // DL = running max
 
-    // scalar tail: (n mod 32) residuals at &a[fullBlocks*32]
+    // scalar tail: (n mod 32) residuals at &a[fullBlocks*32]. Legacy GPRs only:
+    // DI = tail ptr (SI free after), SI = loaded byte, CX = sign-extend temp.
     MOVQ CX, BX
     ANDQ $31, BX
     JZ   mm_done
-    MOVQ CX, R9
-    ANDQ $-32, R9              // fullBlocks*32 bytes
-    ADDQ SI, R9               // tail ptr
+    MOVQ CX, DI
+    ANDQ $-32, DI              // fullBlocks*32 bytes
+    ADDQ SI, DI               // tail ptr
 
 mm_tail:
-    MOVBLSX (R9), R10          // r (sign-extended)
-    MOVBLSX AX, R11            // current min (sign-extend AL)
-    CMPL R10, R11
+    MOVBLSX (DI), SI           // r (sign-extended)
+    MOVBLSX AX, CX             // current min (sign-extend AL)
+    CMPL SI, CX
     JGE  mm_tail_max
-    MOVB R10, AX              // r < min -> new min (low byte)
+    MOVB SI, AX               // r < min -> new min (low byte)
 mm_tail_max:
-    MOVBLSX DX, R11            // current max (sign-extend DL)
-    CMPL R10, R11
+    MOVBLSX DX, CX             // current max (sign-extend DL)
+    CMPL SI, CX
     JLE  mm_tail_next
-    MOVB R10, DX              // r > max -> new max
+    MOVB SI, DX               // r > max -> new max
 mm_tail_next:
-    INCQ R9
+    INCQ DI
     DECQ BX
     JNZ  mm_tail
 
