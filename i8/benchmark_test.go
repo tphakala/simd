@@ -139,3 +139,23 @@ func BenchmarkAbsDiff(b *testing.B) {
 		AbsDiff(dst, a, c)
 	}
 }
+
+func BenchmarkAddScalarSaturate(b *testing.B) {
+	a := genI8(benchN, 1)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		AddScalarSaturate(dst, a, 7)
+	}
+}
+
+func BenchmarkSubScalarSaturate(b *testing.B) {
+	a := genI8(benchN, 1)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		SubScalarSaturate(dst, a, 7)
+	}
+}
