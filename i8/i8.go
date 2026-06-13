@@ -6,9 +6,10 @@
 // i16/i32 packages one-to-one. Instead it ships the operations that are
 // genuinely high-impact and well-defined at 8-bit width:
 //
-//   - Saturating arithmetic (AddSaturate, SubSaturate): single hardware
-//     instructions (PADDSB/PSUBSB, SQADD/SQSUB) that clamp to [-128, 127]
-//     instead of wrapping, which is what 8-bit arithmetic almost always wants.
+//   - Saturating arithmetic (AddSaturate, SubSaturate, and the scalar-broadcast
+//     AddScalarSaturate, SubScalarSaturate): single hardware instructions
+//     (PADDSB/PSUBSB, SQADD/SQSUB) that clamp to [-128, 127] instead of wrapping,
+//     which is what 8-bit arithmetic almost always wants.
 //   - int32-accumulated reductions (Sum, DotProduct): widen to int32 so the
 //     running total has headroom. DotProduct is the inner loop of quantized
 //     matmul/conv; it uses ARM64 SDOT (FEAT_DotProd) where available and AVX2
