@@ -136,6 +136,20 @@ func addScalarSatI8(dst, a []int8, s int8) {
 	addScalarSatGo(dst, a, s)
 }
 
+func sumAbsI8(a []int8) int32 {
+	if hasAVX2 && len(a) >= blockSat32 {
+		return sumAbsAVX2(a)
+	}
+	return sumAbsGo(a)
+}
+
+func sadI8(a, b []int8) int32 {
+	if hasAVX2 && len(a) >= blockSat32 {
+		return sadAVX2(a, b)
+	}
+	return sadGo(a, b)
+}
+
 func subScalarSatI8(dst, a []int8, s int8) {
 	if hasAVX2 && len(dst) >= blockSat32 {
 		subScalarSatAVX2(dst, a, s)
@@ -191,3 +205,9 @@ func addScalarSatAVX2(dst, a []int8, s int8)
 
 //go:noescape
 func subScalarSatAVX2(dst, a []int8, s int8)
+
+//go:noescape
+func sumAbsAVX2(a []int8) int32
+
+//go:noescape
+func sadAVX2(a, b []int8) int32

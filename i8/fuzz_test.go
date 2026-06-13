@@ -174,6 +174,23 @@ func FuzzI8ScalarSaturate(f *testing.F) {
 	})
 }
 
+func FuzzI8AbsReduce(f *testing.F) {
+	lenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := i8FromBytes(raw)
+
+		if got, want := SumAbs(v), sumAbsGo(v); got != want {
+			t.Fatalf("SumAbs: got %d want %d (len=%d)", got, want, len(v))
+		}
+
+		h := len(v) / 2
+		a, b := v[:h], v[h:2*h]
+		if got, want := SAD(a, b), sadGo(a, b); got != want {
+			t.Fatalf("SAD: got %d want %d (len=%d)", got, want, h)
+		}
+	})
+}
+
 func FuzzI8Convert(f *testing.F) {
 	lenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {

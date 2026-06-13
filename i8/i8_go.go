@@ -32,6 +32,27 @@ func subSatGo(dst, a, b []int8) {
 	}
 }
 
+// sumAbsGo accumulates sum_i |a[i]| (the L1 norm) into int32 with
+// two's-complement wraparound. It is the source of truth for the SumAbs kernels.
+func sumAbsGo(a []int8) int32 {
+	var s int32
+	for _, v := range a {
+		s += int32(absInt(int(v)))
+	}
+	return s
+}
+
+// sadGo accumulates sum_i |a[i] - b[i]| (sum of absolute differences) into int32
+// with two's-complement wraparound. a and b are equal length (guaranteed by the
+// public SAD clamp). It is the source of truth for the SAD kernels.
+func sadGo(a, b []int8) int32 {
+	var s int32
+	for i := range a {
+		s += int32(absInt(int(a[i]) - int(b[i])))
+	}
+	return s
+}
+
 // addScalarSatGo / subScalarSatGo broadcast a scalar with signed saturation;
 // they reuse clampI8, so they are bit-exact with AddSaturate/SubSaturate.
 func addScalarSatGo(dst, a []int8, s int8) {

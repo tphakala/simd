@@ -159,3 +159,21 @@ func BenchmarkSubScalarSaturate(b *testing.B) {
 		SubScalarSaturate(dst, a, 7)
 	}
 }
+
+func BenchmarkSumAbs(b *testing.B) {
+	a := genI8(benchN, 1)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		_ = SumAbs(a)
+	}
+}
+
+func BenchmarkSAD(b *testing.B) {
+	a, c := genI8(benchN, 1), genI8(benchN, 2)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		_ = SAD(a, c)
+	}
+}
