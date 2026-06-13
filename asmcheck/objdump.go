@@ -1,4 +1,4 @@
-package asmencoding
+package asmcheck
 
 // This file adds an optional cross-check that decodes hand-encoded ARM64 words
 // with an external aarch64 objdump (GNU binutils). It exists because
@@ -95,7 +95,7 @@ func DisassembleWords(ctx context.Context, tool string, words []uint32) (map[uin
 		return map[uint32]string{}, nil
 	}
 
-	f, err := os.CreateTemp("", "asmencoding-*.bin")
+	f, err := os.CreateTemp("", "asmcheck-*.bin")
 	if err != nil {
 		return nil, fmt.Errorf("create temp: %w", err)
 	}

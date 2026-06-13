@@ -1,4 +1,4 @@
-package asmencoding
+package asmcheck
 
 import (
 	"strings"

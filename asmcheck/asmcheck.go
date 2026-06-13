@@ -1,8 +1,8 @@
-// Package asmencoding validates hand-encoded ARM64 WORD directives against
+// Package asmcheck validates hand-encoded ARM64 WORD directives against
 // the instruction described in their comment. It decodes each 32-bit word with
 // the same disassembler go tool objdump uses, so it runs on any architecture
 // with no ARM hardware.
-package asmencoding
+package asmcheck
 
 import (
 	"encoding/binary"

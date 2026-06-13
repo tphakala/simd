@@ -53,7 +53,7 @@ switched to `BX`.
 NEON instructions in this repo are hand-encoded as `WORD $0x...` with a decoded
 mnemonic in the trailing comment. The comment must match the encoding: the test
 suite cross-checks every `WORD` against `golang.org/x/arch/arm64asm` (see
-`asmcheck_test.go` / `internal/asmencoding`). When you add or change a `WORD`,
+`asmcheck_test.go` / the public `asmcheck` package). When you add or change a `WORD`,
 verify the encoding with `aarch64-linux-gnu-as` + objdump or `arm64asm`.
 
 ## Testing across architectures

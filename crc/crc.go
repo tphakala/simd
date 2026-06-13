@@ -1,11 +1,14 @@
 // Package crc provides SIMD-accelerated cyclic redundancy checks.
 //
-// The initial focus is the FLAC CRC-16 (polynomial x^16+x^15+x^2+1 = 0x8005,
-// init 0, MSB-first with no input/output reflection), which a pure-Go FLAC
-// encoder computes over every coded frame. Checksum16 folds the bulk of the
-// buffer 16 bytes at a time using a carry-less-multiply kernel (PCLMULQDQ on
-// amd64, PMULL on arm64) and falls back to a slice-by-16 table loop on
-// architectures without a polynomial-multiply instruction.
+// Checksum16 computes a CRC-16 over the generator polynomial x^16+x^15+x^2+1 =
+// 0x8005 with init 0, MSB-first and no input/output reflection. The 0x8005
+// polynomial is shared by many CRC-16 variants (ARC, Modbus, USB, and others,
+// which differ in reflection, init, and xorout); this MSB-first, unreflected
+// parameterization is the one a FLAC encoder computes over every coded frame,
+// but it is not FLAC-specific. Checksum16 folds the bulk of the buffer 16 bytes
+// at a time using a carry-less-multiply kernel (PCLMULQDQ on amd64, PMULL on
+// arm64) and falls back to a slice-by-16 table loop on architectures without a
+// polynomial-multiply instruction.
 //
 // All functions are bit-identical to the scalar reference and allocation-free.
 //
@@ -14,7 +17,7 @@ package crc
 
 import "encoding/binary"
 
-// poly16 is the FLAC CRC-16 generator polynomial x^16+x^15+x^2+1 without its
+// poly16 is the CRC-16 generator polynomial x^16+x^15+x^2+1 (0x8005) without its
 // implicit x^16 term (the full 17-bit form is 0x18005).
 const poly16 = 0x8005
 
@@ -80,7 +83,7 @@ func update16(c uint16, b byte) uint16 {
 	return (c << bitsPerByte) ^ table16[byte(c>>bitsPerByte)^b]
 }
 
-// Checksum16 returns the FLAC CRC-16 of p (polynomial 0x8005, init 0, MSB-first,
+// Checksum16 returns the CRC-16 of p (polynomial 0x8005, init 0, MSB-first,
 // no reflection). It is bit-identical to a byte-at-a-time reference loop and
 // allocation-free.
 func Checksum16(p []byte) uint16 {

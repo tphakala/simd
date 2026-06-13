@@ -23,18 +23,3 @@ func fillPattern(a, b []int32) {
 // paritySizes straddle both SIMD block sizes (4 lanes on NEON, 8 on AVX) so the
 // vector body and the scalar tail are both covered on either architecture.
 var paritySizes = []int{0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 100, 1000, 1023, 1024, 1025}
-
-// fillRiceRes fills res with sign-exercising values, pinning the extremes so the
-// zigzag overflow at math.MinInt32 (-> 2^32-1) and the unsigned widening are
-// covered alongside the block-straddling sizes.
-func fillRiceRes(res []int32) {
-	for i := range res {
-		res[i] = int32(i*7-3) ^ math.MinInt32
-	}
-	if len(res) > 3 {
-		res[0] = math.MinInt32
-		res[1] = math.MaxInt32
-		res[2] = -1
-		res[3] = 0
-	}
-}
