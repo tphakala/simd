@@ -223,29 +223,39 @@ non-AVX2/NEON CPUs and short blocks use the scalar reference.
 the post-FFT power spectrum (`c128.AbsSq`), mel projection (`DotProductBatch`),
 and PCEN / log-mel normalization (`Exp`, `Mul`, `Log`), but not the transform.
 
+Both `f64` and `f32` provide it (with `complex64` output for `f32`).
+
 ```go
-plan, _ := f64.NewSTFTPlan(1024)         // power-of-two nfft; reuse across calls
-bins := plan.NumBins()                   // nfft/2 + 1 (Hermitian half-spectrum)
+plan, _ := f64.NewSTFTPlan(1024)               // power-of-two nfft; reuse across calls
+bins := plan.NumBins()                         // nfft/2 + 1 (Hermitian half-spectrum)
+nFrames := plan.NumFrames(len(signal), hop, f64.PadZero)
 
-spec := make([][]complex128, nFrames)    // caller-owned output, one row per frame
+spec := make([][]complex128, nFrames)          // caller-owned output, one row per frame
 for i := range spec { spec[i] = make([]complex128, bins) }
-n := plan.STFT(spec, signal, hann, hop)  // returns frames written
+plan.STFT(spec, signal, hann, hop, f64.PadZero) // fills spec; returns frames written
 
-// Or skip the complex bins and get |X|^2 directly:
-power := make([][]float64, nFrames)
-for i := range power { power[i] = make([]float64, bins) }
-plan.STFTPower(power, signal, hann, hop)
+// Flat, frame-contiguous power (stride NumBins) feeds DotProductBatch directly
+// as a mel-filterbank projection, with no per-frame allocation:
+power := make([]float64, nFrames*bins)
+plan.STFTPowerInto(power, signal, hann, hop, f64.PadZero)
+for f := range nFrames {
+    f64.DotProductBatch(mel[f], filterbank, power[f*bins:(f+1)*bins])
+}
 ```
 
 The transform uses a half-length complex FFT (rfft, ~2x cheaper than a full
 complex FFT), keeps the twiddle/bit-reversal plan resident, and fuses the window
-multiply into the frame pack (and the `|.|^2` power step in `STFTPower`). Frames
-follow the no-padding convention (frame `f` is `signal[f*hop : f*hop+nfft]`,
-matching librosa `stft(..., center=False)`; pre-pad for centered frames). The
-plan is allocation-free across calls; a plan holds transform scratch, so use one
-plan per goroutine. This first cut is a correct scalar radix-2 transform
-(power-of-two `nfft`); vectorizing the inner butterfly is a profile-gated
-follow-up.
+multiply into the frame pack (and the `|.|^2` power step in `STFTPower` /
+`STFTPowerInto`). The `PadMode` argument selects the framing convention: `NoPad`
+is the no-padding case (frame `f` is `signal[f*hop : f*hop+nfft]`, matching
+librosa `stft(..., center=False)`), while `PadZero` and `PadReflect` center each
+frame with `nfft/2` of zero or reflect padding per side, matching librosa
+`center=True` (`pad_mode="constant"` / `"reflect"`). `NumFrames` reports the frame
+count for a given pad mode so you can size buffers. The centered output is pinned
+against a librosa golden vector in the tests. The plan is allocation-free across
+calls; a plan holds transform scratch, so use one plan per goroutine. This first
+cut is a correct scalar radix-2 transform (power-of-two `nfft`); vectorizing the
+inner butterfly is a profile-gated follow-up.
 
 ### `f32` - float32 Operations
 
