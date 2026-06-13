@@ -424,6 +424,10 @@ func TestTrailingCapacityUntouched(t *testing.T) {
 	}
 }
 
+// fillI8 mirrors fillI16/fillI32: the sentinel value is passed explicitly at
+// each call site so the trailing-capacity checks read uniformly across widths.
+//
+//nolint:unparam // sentinel kept explicit to match the fillI16/fillI32 family
 func fillI8(n int, v int8) []int8 {
 	s := make([]int8, n)
 	for i := range s {
