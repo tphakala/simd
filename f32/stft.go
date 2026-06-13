@@ -303,11 +303,12 @@ func (p *STFTPlan) unravelBin(k int) (re, im float32) {
 }
 
 // STFT computes the real-input STFT of signal and writes one Hermitian
-// half-spectrum (NumBins complex64 values) per frame into dst. Frame f is
-// signal[f*hop : f*hop+nfft], windowed by window when non-nil (which must have
-// length nfft). This is the center=false / no-padding convention (matching
-// librosa stft(..., center=False)); pre-pad the signal yourself for centered
-// frames.
+// half-spectrum (NumBins complex64 values) per frame into dst. window, when
+// non-nil, must have length nfft. The pad argument selects the framing
+// convention: NoPad applies no padding (frame f is signal[f*hop : f*hop+nfft],
+// matching librosa stft(..., center=False)); PadZero and PadReflect center each
+// frame with nfft/2 of zero or reflect padding per side, matching librosa
+// center=True. See PadMode and NumFrames.
 //
 // It writes min(len(dst), NumFrames) frames and, per frame, min(len(dst[f]),
 // NumBins) bins, and returns the number of frames written. It is allocation-free
@@ -396,10 +397,10 @@ func (p *STFTPlan) STFTPowerInto(dst, signal, window []float32, hop int, pad Pad
 	for f := range frames {
 		p.packFrameAt(signal, window, f*hop-off, pad)
 		p.fftHalf()
-		// Slice the frame's stride out of dst so the compiler can prove the
-		// inner-loop writes are in bounds (consistent with STFTPower).
+		// Slice the frame's stride out of dst and range over it so the compiler
+		// fully eliminates bounds checks on the inner-loop writes.
 		row := dst[f*bins : (f+1)*bins]
-		for k := range bins {
+		for k := range row {
 			xr, xi := p.unravelBin(k)
 			row[k] = xr*xr + xi*xi
 		}

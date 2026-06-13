@@ -446,12 +446,31 @@ func TestReflectIndexF32(t *testing.T) {
 // and the DFT (via dftBinF32, accumulated in float64), as a cross-check on the
 // float32 FFT-based centered STFT. They are a separate implementation from the
 // package's sampleAt/packFrameAt so a bug in one does not mask a bug in the other.
+// refReflectIndexF32 reimplements numpy "reflect" index folding locally, kept
+// deliberately independent of the production reflectIndex so the centered
+// reference and the fuzz target would catch a regression in either one (rather
+// than sharing the same mapping bug).
+func refReflectIndexF32(idx, n int) int {
+	if n == 1 {
+		return 0
+	}
+	period := (n - 1) << 1
+	m := idx % period
+	if m < 0 {
+		m += period
+	}
+	if m < n {
+		return m
+	}
+	return period - m
+}
+
 func refSampleAtF32(signal []float32, idx int, pad PadMode) float32 {
 	if idx >= 0 && idx < len(signal) {
 		return signal[idx]
 	}
 	if pad == PadReflect {
-		return signal[reflectIndex(idx, len(signal))]
+		return signal[refReflectIndexF32(idx, len(signal))]
 	}
 	return 0
 }
