@@ -256,7 +256,7 @@ func TestClamp(t *testing.T) {
 		{50, -10, 10, 10},
 		{-128, -128, 127, -128},
 		{127, -128, 127, 127},
-		{5, 5, 5, 5},     // lo == hi
+		{5, 5, 5, 5},      // lo == hi
 		{5, 10, -10, -10}, // lo > hi: every element maps to hi
 		{-5, 10, -10, -10},
 	}
@@ -329,6 +329,71 @@ func TestNeg(t *testing.T) {
 	}
 }
 
+func TestMaxAbs(t *testing.T) {
+	if got := MaxAbs(nil); got != 0 {
+		t.Errorf("MaxAbs(nil) = %d, want 0", got)
+	}
+	cases := []struct {
+		a    []int8
+		want int
+	}{
+		{[]int8{0}, 0},
+		{[]int8{5, -3, 2}, 5},
+		{[]int8{-3, 5, -2}, 5},
+		{[]int8{-128}, 128}, // |−128| = 128 does not fit int8
+		{[]int8{127, -128, 1}, 128},
+		{[]int8{-1, -2, -127}, 127},
+	}
+	for _, c := range cases {
+		if got := MaxAbs(c.a); got != c.want {
+			t.Errorf("MaxAbs(%v) = %d, want %d", c.a, got, c.want)
+		}
+	}
+	for _, n := range lengths {
+		if n == 0 {
+			continue
+		}
+		a := genI8(n, 20)
+		if got, want := MaxAbs(a), maxAbsGo(a); got != want {
+			t.Errorf("MaxAbs n=%d: got %d, want %d", n, got, want)
+		}
+	}
+}
+
+func TestAbsDiff(t *testing.T) {
+	cases := []struct{ a, b, want int8 }{
+		{0, 0, 0},
+		{5, 3, 2},
+		{3, 5, 2},
+		{-5, 5, 10},
+		{127, -128, 127}, // |255| saturates to 127
+		{-128, 127, 127}, // |−255| saturates to 127
+		{-128, -128, 0},
+		{100, -100, 127}, // |200| saturates to 127
+	}
+	for _, c := range cases {
+		dst := make([]int8, 1)
+		AbsDiff(dst, []int8{c.a}, []int8{c.b})
+		if dst[0] != c.want {
+			t.Errorf("AbsDiff(%d, %d) = %d, want %d", c.a, c.b, dst[0], c.want)
+		}
+	}
+	for _, n := range lengths {
+		a, b := genI8(n, 21), genI8(n, 22)
+		got := make([]int8, n)
+		want := make([]int8, n)
+		AbsDiff(got, a, b)
+		absDiffGo(want, a, b)
+		assertI8Eq(t, "AbsDiff", n, got, want)
+	}
+	// Mismatched lengths clamp to the shortest operand.
+	got := make([]int8, 3)
+	AbsDiff(got, []int8{10, 20, 30}, []int8{1, 2})
+	if got[0] != 9 || got[1] != 18 || got[2] != 0 {
+		t.Errorf("AbsDiff mismatched len = %v, want [9 18 0]", got)
+	}
+}
+
 func TestZeroAllocations(t *testing.T) {
 	const n = 1024
 	a, b := genI8(n, 11), genI8(n, 12)
@@ -352,6 +417,8 @@ func TestZeroAllocations(t *testing.T) {
 		{"Clamp", func() { Clamp(d8, a, -20, 20) }},
 		{"Abs", func() { Abs(d8, a) }},
 		{"Neg", func() { Neg(d8, a) }},
+		{"MaxAbs", func() { _ = MaxAbs(a) }},
+		{"AbsDiff", func() { AbsDiff(d8, a, b) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(10, c.fn); got != 0 {
@@ -420,6 +487,12 @@ func TestTrailingCapacityUntouched(t *testing.T) {
 		Neg(dst[:n], a)
 		if dst[n] != 42 || dst[n+1] != 42 {
 			t.Errorf("Neg (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
+
+		dst = fillI8(n+2, 42)
+		AbsDiff(dst[:n], a, b)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("AbsDiff (n=%d) clobbered trailing capacity: %v", n, dst[n:])
 		}
 	}
 }

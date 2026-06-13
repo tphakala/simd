@@ -607,3 +607,117 @@ neg_store:
 neg_done:
     VZEROUPPER
     RET
+
+// func maxAbsAVX2(a []int8) int
+// Per-tensor abs-max for dynamic quantization: VPABSB maps each byte to its
+// magnitude (abs(-128) -> 0x80, i.e. 128 read unsigned), VPMAXUB folds 32-byte
+// blocks into an unsigned-max accumulator, a VPMAXUB/VPSRLDQ cascade reduces a
+// 128-bit lane to one byte, and a scalar tail folds the (n mod 32) remainder.
+// The result is read zero-extended, so it lands in [0, 128].
+TEXT ·maxAbsAVX2(SB), NOSPLIT, $0-32
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    VPXOR Y0, Y0, Y0           // unsigned-max accumulator = 0
+
+    MOVQ CX, AX
+    SHRQ $5, AX                // AX = n / 32
+    JZ   maxabs_reduce
+
+maxabs_loop32:
+    VPABSB (SI), Y1            // |a| as unsigned bytes
+    VPMAXUB Y1, Y0, Y0         // unsigned max accumulate
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  maxabs_loop32
+
+maxabs_reduce:
+    VEXTRACTI128 $1, Y0, X1
+    VPMAXUB X1, X0, X0         // fold 32 -> 16 bytes
+    VPSRLDQ $8, X0, X1
+    VPMAXUB X1, X0, X0         // 8 bytes
+    VPSRLDQ $4, X0, X1
+    VPMAXUB X1, X0, X0         // 4 bytes
+    VPSRLDQ $2, X0, X1
+    VPMAXUB X1, X0, X0         // 2 bytes
+    VPSRLDQ $1, X0, X1
+    VPMAXUB X1, X0, X0         // 1 byte
+    MOVD X0, AX
+    ANDQ $0xFF, AX             // running abs-max (unsigned byte) in [0, 128]
+
+    ANDQ $31, CX
+    JZ   maxabs_done
+
+maxabs_scalar:
+    MOVBLSX (SI), BX           // v (sign-extended)
+    TESTL BX, BX
+    JGE  maxabs_cmp
+    NEGL BX                    // |v|; -(-128) = 128
+maxabs_cmp:
+    CMPL BX, AX                // both in [0, 128], unsigned == signed here
+    JLE  maxabs_next
+    MOVL BX, AX                // new running max
+maxabs_next:
+    INCQ SI
+    DECQ CX
+    JNZ  maxabs_scalar
+
+maxabs_done:
+    MOVQ AX, ret+24(FP)
+    VZEROUPPER
+    RET
+
+// func absDiffAVX2(dst, a, b []int8)
+// Saturating absolute difference clamped to [0, 127]: |a-b| = max(saturating
+// (a-b), saturating(b-a)); the VPMAXSB picks the non-negative capped difference,
+// so |127 - (-128)| = 255 saturates to 127. A scalar tail subtracts, negates if
+// negative, and clamps high on the (n mod 32) remainder.
+TEXT ·absDiffAVX2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    MOVQ b_base+48(FP), DI
+
+    MOVQ CX, AX
+    SHRQ $5, AX
+    JZ   absdiff_remainder
+
+absdiff_loop32:
+    VMOVDQU (SI), Y0           // a
+    VMOVDQU (DI), Y1           // b
+    VPSUBSB Y1, Y0, Y2         // Y2 = saturating(a - b)
+    VPSUBSB Y0, Y1, Y3         // Y3 = saturating(b - a)
+    VPMAXSB Y3, Y2, Y4         // Y4 = |a - b| clamped to [0, 127]
+    VMOVDQU Y4, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  absdiff_loop32
+
+absdiff_remainder:
+    ANDQ $31, CX
+    JZ   absdiff_done
+
+absdiff_scalar:
+    MOVBLSX (SI), AX
+    MOVBLSX (DI), BX
+    SUBL BX, AX                // a - b in int32 (|.| <= 255)
+    TESTL AX, AX
+    JGE  absdiff_clamp
+    NEGL AX                    // |a - b|
+absdiff_clamp:
+    CMPL AX, $127
+    JLE  absdiff_store
+    MOVL $127, AX              // saturate to 127
+absdiff_store:
+    MOVB AX, (DX)
+    INCQ SI
+    INCQ DI
+    INCQ DX
+    DECQ CX
+    JNZ  absdiff_scalar
+
+absdiff_done:
+    VZEROUPPER
+    RET

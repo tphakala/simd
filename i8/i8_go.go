@@ -73,6 +73,24 @@ func absInt(v int) int {
 	return v
 }
 
+// maxAbsGo returns max_i |a[i]| as int. |-128| = 128 does not fit int8, hence
+// the int return. It is the bit-exact source of truth for the MaxAbs kernels.
+func maxAbsGo(a []int8) int {
+	m := 0
+	for _, v := range a {
+		m = max(m, absInt(int(v)))
+	}
+	return m
+}
+
+// absDiffGo writes the saturating absolute difference clamped to [0, 127], so
+// |127 - (-128)| = 255 maps to 127.
+func absDiffGo(dst, a, b []int8) {
+	for i := range dst {
+		dst[i] = int8(min(absInt(int(a[i])-int(b[i])), math.MaxInt8))
+	}
+}
+
 func toI16Go(dst []int16, src []int8) {
 	for i := range dst {
 		dst[i] = int16(src[i])
