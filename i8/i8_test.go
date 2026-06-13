@@ -189,6 +189,146 @@ func TestMinMax(t *testing.T) {
 	}
 }
 
+func TestMin(t *testing.T) {
+	cases := []struct{ a, b, want int8 }{
+		{0, 0, 0},
+		{5, 3, 3},
+		{-128, 127, -128},
+		{127, -128, -128},
+		{-1, -2, -2},
+		{-128, -128, -128},
+	}
+	for _, c := range cases {
+		dst := make([]int8, 1)
+		Min(dst, []int8{c.a}, []int8{c.b})
+		if dst[0] != c.want {
+			t.Errorf("Min(%d, %d) = %d, want %d", c.a, c.b, dst[0], c.want)
+		}
+	}
+	for _, n := range lengths {
+		a, b := genI8(n, 13), genI8(n, 14)
+		got := make([]int8, n)
+		want := make([]int8, n)
+		Min(got, a, b)
+		minGo(want, a, b)
+		assertI8Eq(t, "Min", n, got, want)
+	}
+	// Mismatched lengths clamp to the shortest operand.
+	got := make([]int8, 3)
+	Min(got, []int8{1, 2, 3}, []int8{0, 9})
+	if got[0] != 0 || got[1] != 2 || got[2] != 0 {
+		t.Errorf("Min mismatched len = %v, want [0 2 0]", got)
+	}
+}
+
+func TestMax(t *testing.T) {
+	cases := []struct{ a, b, want int8 }{
+		{0, 0, 0},
+		{5, 3, 5},
+		{-128, 127, 127},
+		{127, -128, 127},
+		{-1, -2, -1},
+		{-128, -128, -128},
+	}
+	for _, c := range cases {
+		dst := make([]int8, 1)
+		Max(dst, []int8{c.a}, []int8{c.b})
+		if dst[0] != c.want {
+			t.Errorf("Max(%d, %d) = %d, want %d", c.a, c.b, dst[0], c.want)
+		}
+	}
+	for _, n := range lengths {
+		a, b := genI8(n, 15), genI8(n, 16)
+		got := make([]int8, n)
+		want := make([]int8, n)
+		Max(got, a, b)
+		maxGo(want, a, b)
+		assertI8Eq(t, "Max", n, got, want)
+	}
+}
+
+func TestClamp(t *testing.T) {
+	cases := []struct {
+		v, lo, hi, want int8
+	}{
+		{0, -10, 10, 0},
+		{-50, -10, 10, -10},
+		{50, -10, 10, 10},
+		{-128, -128, 127, -128},
+		{127, -128, 127, 127},
+		{5, 5, 5, 5},     // lo == hi
+		{5, 10, -10, -10}, // lo > hi: every element maps to hi
+		{-5, 10, -10, -10},
+	}
+	for _, c := range cases {
+		dst := make([]int8, 1)
+		Clamp(dst, []int8{c.v}, c.lo, c.hi)
+		if dst[0] != c.want {
+			t.Errorf("Clamp(%d, lo=%d, hi=%d) = %d, want %d", c.v, c.lo, c.hi, dst[0], c.want)
+		}
+	}
+	for _, n := range lengths {
+		src := genI8(n, 17)
+		got := make([]int8, n)
+		want := make([]int8, n)
+		Clamp(got, src, -20, 20)
+		clampGo(want, src, -20, 20)
+		assertI8Eq(t, "Clamp", n, got, want)
+	}
+}
+
+func TestAbs(t *testing.T) {
+	cases := []struct{ a, want int8 }{
+		{0, 0},
+		{5, 5},
+		{-5, 5},
+		{127, 127},
+		{-127, 127},
+		{-128, 127}, // saturating: |−128| clamps to 127
+	}
+	for _, c := range cases {
+		dst := make([]int8, 1)
+		Abs(dst, []int8{c.a})
+		if dst[0] != c.want {
+			t.Errorf("Abs(%d) = %d, want %d", c.a, dst[0], c.want)
+		}
+	}
+	for _, n := range lengths {
+		a := genI8(n, 18)
+		got := make([]int8, n)
+		want := make([]int8, n)
+		Abs(got, a)
+		absGo(want, a)
+		assertI8Eq(t, "Abs", n, got, want)
+	}
+}
+
+func TestNeg(t *testing.T) {
+	cases := []struct{ a, want int8 }{
+		{0, 0},
+		{5, -5},
+		{-5, 5},
+		{127, -127},
+		{-127, 127},
+		{-128, 127}, // saturating: −(−128) clamps to 127
+	}
+	for _, c := range cases {
+		dst := make([]int8, 1)
+		Neg(dst, []int8{c.a})
+		if dst[0] != c.want {
+			t.Errorf("Neg(%d) = %d, want %d", c.a, dst[0], c.want)
+		}
+	}
+	for _, n := range lengths {
+		a := genI8(n, 19)
+		got := make([]int8, n)
+		want := make([]int8, n)
+		Neg(got, a)
+		negGo(want, a)
+		assertI8Eq(t, "Neg", n, got, want)
+	}
+}
+
 func TestZeroAllocations(t *testing.T) {
 	const n = 1024
 	a, b := genI8(n, 11), genI8(n, 12)
@@ -207,6 +347,11 @@ func TestZeroAllocations(t *testing.T) {
 		{"Sum", func() { _ = Sum(a) }},
 		{"DotProduct", func() { _ = DotProduct(a, b) }},
 		{"MinMax", func() { _, _ = MinMax(a) }},
+		{"Min", func() { Min(d8, a, b) }},
+		{"Max", func() { Max(d8, a, b) }},
+		{"Clamp", func() { Clamp(d8, a, -20, 20) }},
+		{"Abs", func() { Abs(d8, a) }},
+		{"Neg", func() { Neg(d8, a) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(10, c.fn); got != 0 {
@@ -245,6 +390,36 @@ func TestTrailingCapacityUntouched(t *testing.T) {
 		ToInt32(dst32[:n], a)
 		if dst32[n] != 424242 || dst32[n+1] != 424242 {
 			t.Errorf("ToInt32 (n=%d) clobbered trailing capacity: %v", n, dst32[n:])
+		}
+
+		dst = fillI8(n+2, 42)
+		Min(dst[:n], a, b)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("Min (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
+
+		dst = fillI8(n+2, 42)
+		Max(dst[:n], a, b)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("Max (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
+
+		dst = fillI8(n+2, 42)
+		Clamp(dst[:n], a, -20, 20)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("Clamp (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
+
+		dst = fillI8(n+2, 42)
+		Abs(dst[:n], a)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("Abs (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
+
+		dst = fillI8(n+2, 42)
+		Neg(dst[:n], a)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("Neg (n=%d) clobbered trailing capacity: %v", n, dst[n:])
 		}
 	}
 }

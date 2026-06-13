@@ -370,3 +370,240 @@ mm_done:
     MOVB DX, maxVal+25(FP)
     VZEROUPPER
     RET
+
+// func minAVX2(dst, a, b []int8)
+// Element-wise signed min: VPMINSB folds 32-byte blocks; a signed scalar tail
+// handles the (n mod 32) remainder.
+TEXT ·minAVX2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    MOVQ b_base+48(FP), DI
+
+    MOVQ CX, AX
+    SHRQ $5, AX                // AX = n / 32
+    JZ   min_remainder
+
+min_loop32:
+    VMOVDQU (SI), Y0
+    VMOVDQU (DI), Y1
+    VPMINSB Y1, Y0, Y2         // Y2 = min(a, b)
+    VMOVDQU Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  min_loop32
+
+min_remainder:
+    ANDQ $31, CX
+    JZ   min_done
+
+min_scalar:
+    MOVBLSX (SI), AX           // a (sign-extended)
+    MOVBLSX (DI), BX           // b
+    CMPL AX, BX
+    JLE  min_store             // a <= b -> keep a
+    MOVL BX, AX
+min_store:
+    MOVB AX, (DX)
+    INCQ SI
+    INCQ DI
+    INCQ DX
+    DECQ CX
+    JNZ  min_scalar
+
+min_done:
+    VZEROUPPER
+    RET
+
+// func maxAVX2(dst, a, b []int8)
+// Element-wise signed max: VPMAXSB folds 32-byte blocks; a signed scalar tail
+// handles the (n mod 32) remainder.
+TEXT ·maxAVX2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    MOVQ b_base+48(FP), DI
+
+    MOVQ CX, AX
+    SHRQ $5, AX
+    JZ   max_remainder
+
+max_loop32:
+    VMOVDQU (SI), Y0
+    VMOVDQU (DI), Y1
+    VPMAXSB Y1, Y0, Y2         // Y2 = max(a, b)
+    VMOVDQU Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  max_loop32
+
+max_remainder:
+    ANDQ $31, CX
+    JZ   max_done
+
+max_scalar:
+    MOVBLSX (SI), AX
+    MOVBLSX (DI), BX
+    CMPL AX, BX
+    JGE  max_store             // a >= b -> keep a
+    MOVL BX, AX
+max_store:
+    MOVB AX, (DX)
+    INCQ SI
+    INCQ DI
+    INCQ DX
+    DECQ CX
+    JNZ  max_scalar
+
+max_done:
+    VZEROUPPER
+    RET
+
+// func clampAVX2(dst, src []int8, lo, hi int8)
+// Activation clip: broadcast lo/hi to all 32 lanes, then VPMAXSB(src, lo) and
+// VPMINSB(., hi) per block. With lo > hi every element maps to hi. A scalar tail
+// reproduces the max-then-min clamp on the (n mod 32) remainder.
+TEXT ·clampAVX2(SB), NOSPLIT, $0-50
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+    VPBROADCASTB lo+48(FP), Y3 // loVec: lo in all 32 lanes
+    VPBROADCASTB hi+49(FP), Y4 // hiVec
+
+    MOVQ CX, AX
+    SHRQ $5, AX
+    JZ   clamp_remainder
+
+clamp_loop32:
+    VMOVDQU (SI), Y0
+    VPMAXSB Y3, Y0, Y0         // max(src, lo)
+    VPMINSB Y4, Y0, Y2         // min(., hi)
+    VMOVDQU Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  clamp_loop32
+
+clamp_remainder:
+    ANDQ $31, CX
+    JZ   clamp_done
+    MOVBLSX lo+48(FP), DI      // lo (sign-extended)
+    MOVBLSX hi+49(FP), R8      // hi
+
+clamp_scalar:
+    MOVBLSX (SI), AX
+    CMPL AX, DI
+    JGE  clamp_chkhi
+    MOVL DI, AX                // v < lo -> lo
+clamp_chkhi:
+    CMPL AX, R8
+    JLE  clamp_store
+    MOVL R8, AX                // v > hi -> hi
+clamp_store:
+    MOVB AX, (DX)
+    INCQ SI
+    INCQ DX
+    DECQ CX
+    JNZ  clamp_scalar
+
+clamp_done:
+    VZEROUPPER
+    RET
+
+// func absAVX2(dst, a []int8)
+// Saturating absolute value: |a| = max(a, saturating(0 - a)), so abs(-128)
+// clamps to 127 (VPSUBSB saturates 0-(-128)=128 to 127, and the VPMAXSB picks
+// it). A scalar tail negates-if-negative then clamps the (n mod 32) remainder.
+TEXT ·absAVX2(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    VPXOR Y3, Y3, Y3           // zero
+
+    MOVQ CX, AX
+    SHRQ $5, AX
+    JZ   abs_remainder
+
+abs_loop32:
+    VMOVDQU (SI), Y0
+    VPSUBSB Y0, Y3, Y1         // Y1 = saturating(0 - a)
+    VPMAXSB Y1, Y0, Y2         // Y2 = max(a, -a) = |a|
+    VMOVDQU Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  abs_loop32
+
+abs_remainder:
+    ANDQ $31, CX
+    JZ   abs_done
+
+abs_scalar:
+    MOVBLSX (SI), AX
+    TESTL AX, AX
+    JGE  abs_clamp
+    NEGL AX                    // |a|; -(-128) = 128
+abs_clamp:
+    CMPL AX, $127
+    JLE  abs_store
+    MOVL $127, AX              // saturate 128 -> 127
+abs_store:
+    MOVB AX, (DX)
+    INCQ SI
+    INCQ DX
+    DECQ CX
+    JNZ  abs_scalar
+
+abs_done:
+    VZEROUPPER
+    RET
+
+// func negAVX2(dst, a []int8)
+// Saturating negation: VPSUBSB(a, 0) = saturating(0 - a), so neg(-128) clamps to
+// 127. A scalar tail negates then clamps high (-a is always >= -127, so the low
+// bound never binds) on the (n mod 32) remainder.
+TEXT ·negAVX2(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    VPXOR Y3, Y3, Y3           // zero
+
+    MOVQ CX, AX
+    SHRQ $5, AX
+    JZ   neg_remainder
+
+neg_loop32:
+    VMOVDQU (SI), Y0
+    VPSUBSB Y0, Y3, Y2         // Y2 = saturating(0 - a)
+    VMOVDQU Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  neg_loop32
+
+neg_remainder:
+    ANDQ $31, CX
+    JZ   neg_done
+
+neg_scalar:
+    MOVBLSX (SI), AX
+    NEGL AX                    // -a; -(-128) = 128
+    CMPL AX, $127
+    JLE  neg_store
+    MOVL $127, AX              // saturate 128 -> 127
+neg_store:
+    MOVB AX, (DX)
+    INCQ SI
+    INCQ DX
+    DECQ CX
+    JNZ  neg_scalar
+
+neg_done:
+    VZEROUPPER
+    RET

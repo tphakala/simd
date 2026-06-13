@@ -32,6 +32,47 @@ func subSatGo(dst, a, b []int8) {
 	}
 }
 
+func minGo(dst, a, b []int8) {
+	for i := range dst {
+		dst[i] = min(a[i], b[i])
+	}
+}
+
+func maxGo(dst, a, b []int8) {
+	for i := range dst {
+		dst[i] = max(a[i], b[i])
+	}
+}
+
+// clampGo clamps each element to [lo, hi]. With lo > hi every element maps to
+// hi, matching the SIMD kernels' max-then-min ordering.
+func clampGo(dst, src []int8, lo, hi int8) {
+	for i := range dst {
+		dst[i] = min(max(src[i], lo), hi)
+	}
+}
+
+// absGo writes the saturating absolute value: abs(-128) clamps to 127.
+func absGo(dst, a []int8) {
+	for i := range dst {
+		dst[i] = clampI8(absInt(int(a[i])))
+	}
+}
+
+// negGo writes the saturating negation: -(-128) clamps to 127.
+func negGo(dst, a []int8) {
+	for i := range dst {
+		dst[i] = clampI8(-int(a[i]))
+	}
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 func toI16Go(dst []int16, src []int8) {
 	for i := range dst {
 		dst[i] = int16(src[i])
