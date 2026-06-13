@@ -37,6 +37,28 @@ var (
 // rfftHalf is the 1/2 factor in the real-FFT even/odd half-spectrum split.
 const rfftHalf = 0.5
 
+// PadMode selects the STFT framing/centering convention.
+//
+//   - NoPad: center=false. Frame f is signal[f*hop : f*hop+nfft] with no
+//     padding (the original convention; matches librosa stft(center=False)).
+//   - PadZero: center=true with nfft/2 zero (constant) padding on each side.
+//     This matches librosa's modern default (pad_mode="constant" since 0.8.0).
+//   - PadReflect: center=true with nfft/2 reflect padding on each side (numpy
+//     "reflect" semantics, where edge samples are not repeated; this was
+//     librosa's pre-0.8.0 default pad_mode).
+//
+// Padding implies centering: the first centered frame is centered on sample 0.
+// The pad mode is always explicit because librosa's default pad_mode has changed
+// across versions, and getting centering subtly wrong shifts every frame.
+type PadMode int
+
+// Pad modes for STFT framing; see PadMode.
+const (
+	NoPad PadMode = iota
+	PadZero
+	PadReflect
+)
+
 // STFTPlan holds the resident twiddle tables, bit-reversal permutation, and
 // transform scratch for a fixed nfft. Build one with NewSTFTPlan and reuse it
 // across many STFT/STFTPower calls to stay allocation-free.
@@ -171,13 +193,82 @@ func (p *STFTPlan) packFrame(signal, window []float64, base int) {
 	}
 }
 
-// numFrames returns how many full, non-centered frames of nfft samples fit in
-// signal at the given hop.
-func (p *STFTPlan) numFrames(signalLen, hop int) int {
-	if signalLen < p.nfft || hop <= 0 {
+// NumFrames reports how many frames a call with the given signal length, hop,
+// and pad mode will write, so callers can size dst (or a flat STFTPowerInto
+// buffer) exactly.
+//
+//	NoPad:              1 + (signalLen-nfft)/hop, or 0 if signalLen < nfft
+//	PadZero/PadReflect: 1 + signalLen/hop,        or 0 if signalLen <= 0
+//
+// The centered count (1 + signalLen/hop for even nfft) matches librosa's
+// stft(center=True) framing.
+func (p *STFTPlan) NumFrames(signalLen, hop int, pad PadMode) int {
+	if hop <= 0 {
 		return 0
 	}
-	return 1 + (signalLen-p.nfft)/hop
+	if pad == NoPad {
+		if signalLen < p.nfft {
+			return 0
+		}
+		return 1 + (signalLen-p.nfft)/hop
+	}
+	if signalLen <= 0 {
+		return 0
+	}
+	return 1 + signalLen/hop
+}
+
+// reflectIndex maps an out-of-range index into [0,n) using numpy "reflect"
+// semantics (edge samples are not repeated), folding with period 2*(n-1) so it
+// is correct for arbitrary pad widths. n must be >= 1.
+func reflectIndex(idx, n int) int {
+	if n == 1 {
+		return 0
+	}
+	period := (n - 1) << 1 // 2*(n-1): the period of the reflection
+	m := idx % period
+	if m < 0 {
+		m += period
+	}
+	if m < n {
+		return m
+	}
+	return period - m
+}
+
+// sampleAt reads signal[idx], substituting the pad value when idx is out of
+// range. NoPad never reaches the out-of-range branch (callers keep NoPad frames
+// in bounds); out-of-range with anything but PadReflect yields zero.
+func sampleAt(signal []float64, idx int, pad PadMode) float64 {
+	if idx >= 0 && idx < len(signal) {
+		return signal[idx]
+	}
+	if pad == PadReflect {
+		return signal[reflectIndex(idx, len(signal))]
+	}
+	return 0
+}
+
+// packFrameAt packs the frame whose first sample is at source index base (which
+// may be negative for centered frames) into the scratch, applying the window and
+// pad mode. A frame fully inside the signal uses the fast packFrame path; only
+// edge frames pay for the bounds-aware sampleAt reads, so the common interior
+// frame is unaffected.
+func (p *STFTPlan) packFrameAt(signal, window []float64, base int, pad PadMode) {
+	if base >= 0 && base+p.nfft <= len(signal) {
+		p.packFrame(signal, window, base)
+		return
+	}
+	re, im := p.re, p.im
+	for j := range p.half {
+		s0 := sampleAt(signal, base+2*j, pad)
+		s1 := sampleAt(signal, base+2*j+1, pad)
+		if window == nil {
+			re[j], im[j] = s0, s1
+		} else {
+			re[j], im[j] = s0*window[2*j], s1*window[2*j+1]
+		}
+	}
 }
 
 // unravelBin computes the real-input spectrum bin X[k] (k in [0, half]) from the
@@ -214,11 +305,11 @@ func (p *STFTPlan) unravelBin(k int) (re, im float64) {
 // librosa stft(..., center=False)); pre-pad the signal yourself for centered
 // frames.
 //
-// It writes min(len(dst), numFrames) frames and, per frame, min(len(dst[f]),
+// It writes min(len(dst), NumFrames) frames and, per frame, min(len(dst[f]),
 // NumBins) bins, and returns the number of frames written. It is allocation-free
 // and reuses the plan scratch.
-func (p *STFTPlan) STFT(dst [][]complex128, signal, window []float64, hop int) int {
-	frames := min(p.numFrames(len(signal), hop), len(dst))
+func (p *STFTPlan) STFT(dst [][]complex128, signal, window []float64, hop int, pad PadMode) int {
+	frames := min(p.NumFrames(len(signal), hop, pad), len(dst))
 	if frames == 0 {
 		return 0
 	}
@@ -227,9 +318,13 @@ func (p *STFTPlan) STFT(dst [][]complex128, signal, window []float64, hop int) i
 		// library's lenient public-API style.
 		window = nil
 	}
+	off := 0
+	if pad != NoPad {
+		off = p.half // center: first sample of frame f is at f*hop - nfft/2
+	}
 	bins := p.NumBins()
 	for f := range frames {
-		p.packFrame(signal, window, f*hop)
+		p.packFrameAt(signal, window, f*hop-off, pad)
 		p.fftHalf()
 		row := dst[f]
 		nb := min(len(row), bins)
@@ -242,23 +337,65 @@ func (p *STFTPlan) STFT(dst [][]complex128, signal, window []float64, hop int) i
 }
 
 // STFTPower computes the real-input STFT power spectrum |X|^2 directly, skipping
-// materialization of the complex bins. dst, signal, window, and hop follow the
-// same conventions as STFT. Returns the number of frames written. Allocation-free.
-func (p *STFTPlan) STFTPower(dst [][]float64, signal, window []float64, hop int) int {
-	frames := min(p.numFrames(len(signal), hop), len(dst))
+// materialization of the complex bins. dst, signal, window, hop, and pad follow
+// the same conventions as STFT. Returns the number of frames written.
+// Allocation-free.
+func (p *STFTPlan) STFTPower(dst [][]float64, signal, window []float64, hop int, pad PadMode) int {
+	frames := min(p.NumFrames(len(signal), hop, pad), len(dst))
 	if frames == 0 {
 		return 0
 	}
 	if window != nil && len(window) < p.nfft {
 		window = nil
 	}
+	off := 0
+	if pad != NoPad {
+		off = p.half
+	}
 	bins := p.NumBins()
 	for f := range frames {
-		p.packFrame(signal, window, f*hop)
+		p.packFrameAt(signal, window, f*hop-off, pad)
 		p.fftHalf()
 		row := dst[f]
 		nb := min(len(row), bins)
 		for k := range nb {
+			xr, xi := p.unravelBin(k)
+			row[k] = xr*xr + xi*xi
+		}
+	}
+	return frames
+}
+
+// STFTPowerInto computes the real-input STFT power spectrum |X|^2 frame by frame
+// into a single flat buffer, frame-contiguous with stride NumBins(): the bins of
+// frame f occupy dst[f*NumBins : (f+1)*NumBins], ready to pass as the vec argument
+// to DotProductBatch for a mel-filterbank projection. signal, window, hop, and
+// pad follow the same conventions as STFTPower. It writes
+// min(NumFrames, len(dst)/NumBins) whole frames and returns that frame count.
+// Allocation-free.
+func (p *STFTPlan) STFTPowerInto(dst, signal, window []float64, hop int, pad PadMode) int {
+	bins := p.NumBins()
+	frames := p.NumFrames(len(signal), hop, pad)
+	if fit := len(dst) / bins; fit < frames {
+		frames = fit
+	}
+	if frames == 0 {
+		return 0
+	}
+	if window != nil && len(window) < p.nfft {
+		window = nil
+	}
+	off := 0
+	if pad != NoPad {
+		off = p.half
+	}
+	for f := range frames {
+		p.packFrameAt(signal, window, f*hop-off, pad)
+		p.fftHalf()
+		// Slice the frame's stride out of dst so the compiler can prove the
+		// inner-loop writes are in bounds (consistent with STFTPower).
+		row := dst[f*bins : (f+1)*bins]
+		for k := range bins {
 			xr, xi := p.unravelBin(k)
 			row[k] = xr*xr + xi*xi
 		}

@@ -38,7 +38,11 @@ testdata/*.txt
 # Benchmark output
 *.bench
 
-# Agent and tooling caches (Serena, Claude, CodeRabbit)
+# Agent and tooling caches (Serena, Claude, CodeRabbit, CodeGraph)
 .claude/
 .serena/
+.codegraph/
 cache/
+
+# Local Python venv for librosa golden-file generation
+.venv-librosa/

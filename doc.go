@@ -82,7 +82,7 @@
 //
 // Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
 //
-// Spectral (f64): STFTPlan (NewSTFTPlan, STFT, STFTPower) - fused real-input short-time Fourier transform
+// Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames) - fused real-input short-time Fourier transform with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //
 // Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MidSideEncode, MidSideDecode, Diff1..Diff4, Restore1..Restore4, LPCResidualEncode, LPCRestore, RiceSums, RiceBestParam
 //
