@@ -84,11 +84,11 @@
 //
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames) - fused real-input short-time Fourier transform with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //
-// Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MidSideEncode, MidSideDecode, Diff1..Diff4, Restore1..Restore4, LPCResidualEncode, LPCRestore, RiceSums, RiceBestParam
+// Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MinMax
 //
 // Complex (c64/c128): Add, Sub, Mul, MulConj, DotProduct, DotProductConj, Conj, Abs, AbsSq, Scale
 //
-// CRC (crc): Checksum16 (FLAC CRC-16, PCLMULQDQ/PMULL carry-less-multiply fold)
+// CRC (crc): Checksum16 (CRC-16, poly 0x8005, MSB-first, no reflection; used by FLAC among others, PCLMULQDQ/PMULL carry-less-multiply fold)
 //
 // # Design Principles
 //

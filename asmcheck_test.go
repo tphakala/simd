@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tphakala/simd/internal/asmencoding"
+	"github.com/tphakala/simd/asmcheck"
 )
 
 // requireObjdumpEnv, when set in the environment, makes a missing aarch64
@@ -59,7 +59,7 @@ type fp16Directive struct {
 // accepted unchecked (so the test stays green on machines lacking cross
 // binutils) unless SIMD_REQUIRE_OBJDUMP is set, which CI does.
 func TestArm64WordEncodings(t *testing.T) {
-	tool := asmencoding.FindObjdump()
+	tool := asmcheck.FindObjdump()
 	if os.Getenv(requireObjdumpEnv) != "" && tool == "" {
 		t.Fatalf("%s is set but no aarch64-capable objdump was found; install binutils-aarch64-linux-gnu", requireObjdumpEnv)
 	}
@@ -80,7 +80,7 @@ func checkArm64File(t *testing.T, file, tool string) {
 	if err != nil {
 		t.Fatalf("read %s: %v", file, err)
 	}
-	directives := asmencoding.ScanSource(string(src))
+	directives := asmcheck.ScanSource(string(src))
 
 	// matched holds hexes proven to match their comment, whether decoded by
 	// arm64asm or cross-checked by objdump. Uncommented repeats of a matched
@@ -91,16 +91,16 @@ func checkArm64File(t *testing.T, file, tool string) {
 	// Pass 1: every commented directive. Decodable ones are verified now;
 	// undecodable ones (FP16 .8H) are deferred to the objdump cross-check.
 	for _, d := range directives {
-		if d.Source == asmencoding.NoComment {
+		if d.Source == asmcheck.NoComment {
 			continue
 		}
-		res := asmencoding.Verify(d.Hex, d.Comment)
+		res := asmcheck.Verify(d.Hex, d.Comment)
 		switch res.Status {
-		case asmencoding.Match:
+		case asmcheck.Match:
 			matched[d.Hex] = true
-		case asmencoding.Mismatch:
+		case asmcheck.Mismatch:
 			t.Errorf("%s:%d  0x%08X  claims=%q  decodes=%q", file, d.Line, d.Hex, res.Claimed, res.Decoded)
-		case asmencoding.Undecodable:
+		case asmcheck.Undecodable:
 			// ARMv8.2 FP16 (.8H) SIMD is the only sanctioned reason arm64asm
 			// cannot decode a directive here. Any other undecodable WORD (a
 			// malformed encoding, or a future extension) is a real problem:
@@ -118,7 +118,7 @@ func checkArm64File(t *testing.T, file, tool string) {
 
 	// Pass 2: uncommented directives must reuse a hex proven above.
 	for _, d := range directives {
-		if d.Source != asmencoding.NoComment {
+		if d.Source != asmcheck.NoComment {
 			continue
 		}
 		if matched[d.Hex] {
@@ -149,7 +149,7 @@ func crossCheckFP16(t *testing.T, file, tool string, fp16 []fp16Directive, match
 	for _, d := range fp16 {
 		hexes = append(hexes, d.hex)
 	}
-	decoded, err := asmencoding.DisassembleWords(context.Background(), tool, hexes)
+	decoded, err := asmcheck.DisassembleWords(context.Background(), tool, hexes)
 	if err != nil {
 		t.Fatalf("objdump cross-check of %s failed: %v", file, err)
 	}
@@ -160,7 +160,7 @@ func crossCheckFP16(t *testing.T, file, tool string, fp16 []fp16Directive, match
 			t.Errorf("%s:%d  0x%08X  objdump produced no disassembly", file, d.line, d.hex)
 			continue
 		}
-		if res := asmencoding.VerifyDecoded(got, d.comment); res.Status == asmencoding.Match {
+		if res := asmcheck.VerifyDecoded(got, d.comment); res.Status == asmcheck.Match {
 			matched[d.hex] = true
 		} else {
 			t.Errorf("%s:%d  0x%08X  claims=%q  objdump=%q", file, d.line, d.hex, res.Claimed, res.Decoded)
