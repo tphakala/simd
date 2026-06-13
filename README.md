@@ -828,8 +828,12 @@ All int32 kernels are zero-allocation and bit-exact against the pure-Go referenc
 
 - **Methodology**: amd64 numbers are from the Intel Core i7-1260P (AVX+FMA) and arm64
   numbers from a Raspberry Pi 5 (Cortex-A76, NEON), both pinned to the `performance`
-  CPU governor. Pure-Go baselines use the same binary via `SIMD_DISABLE=all` or each
-  operation's `*Go` reference; each pair reports the best of repeated runs.
+  CPU governor, built with the Go 1.26 toolchain (the module itself still targets the
+  Go 1.25 minimum in `go.mod`; 1.26 is only what these benchmarks were measured on).
+  Pure-Go baselines use the same binary via `SIMD_DISABLE=all` or each operation's
+  `*Go` reference; each pair reports the best of repeated runs. Displayed nanoseconds
+  are rounded to whole ns, so the speedup column (computed from the raw timings) may
+  differ from a recomputation using the rounded ns shown.
 
 ## Known Limitations
 
