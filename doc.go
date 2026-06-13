@@ -9,6 +9,7 @@
 //   - [github.com/tphakala/simd/f16] - float16 storage type (ARM64 NEON+FP16 compute; amd64 F16C slice conversions)
 //   - [github.com/tphakala/simd/i32] - int32 SIMD operations (integer DSP)
 //   - [github.com/tphakala/simd/i16] - int16 SIMD operations (movement only; widen to i32 for arithmetic)
+//   - [github.com/tphakala/simd/i8] - int8 SIMD operations (saturating arithmetic, int32-accumulated reductions, quantized DSP)
 //   - [github.com/tphakala/simd/c64] - complex64 SIMD operations (FFT-pipeline helpers)
 //   - [github.com/tphakala/simd/c128] - complex128 SIMD operations (FFT-pipeline helpers)
 //   - [github.com/tphakala/simd/crc] - CRC checksums (carry-less-multiply folding)
@@ -21,12 +22,14 @@
 //
 //   - AMD64: AVX-512 (8x float64, 16x float32) > AVX+FMA (4x float64, 8x float32) >
 //     AVX (no FMA, f64/c128) > SSE2 (f32/f64/c128/i16) or SSE4.1 (c64) > pure Go.
-//     i32 needs AVX/AVX2, crc needs PCLMULQDQ, and f16 uses F16C for its slice
-//     conversions only (every other f16 op is pure Go on amd64). SSE2 is part of
-//     the amd64 baseline, so f32/f64/c128/i16 always get SIMD on amd64.
+//     i32 needs AVX/AVX2, i8 needs AVX2, crc needs PCLMULQDQ, and f16 uses F16C
+//     for its slice conversions only (every other f16 op is pure Go on amd64).
+//     SSE2 is part of the amd64 baseline, so f32/f64/c128/i16 always get SIMD on
+//     amd64.
 //   - ARM64: NEON/ASIMD throughout (2x float64, 4x float32), with an FP16
-//     (FEAT_FP16) fast path in the f16 package. SVE/SVE2 is detected by cpu.Info()
-//     but no SVE kernels exist yet, so SVE hosts run the NEON path.
+//     (FEAT_FP16) fast path in the f16 package and an SDOT (FEAT_DotProd) fast
+//     path for i8.DotProduct. SVE/SVE2 is detected by cpu.Info() but no SVE
+//     kernels exist yet, so SVE hosts run the NEON path.
 //   - Other: Pure Go fallback
 //
 // f16 is a storage type: SIMD acceleration is ARM64-only for compute (NEON+FP16),
@@ -85,6 +88,8 @@
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames) - fused real-input short-time Fourier transform with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //
 // Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MinMax
+//
+// Integer DSP (i8): AddSaturate, SubSaturate, ToInt16, ToInt32, Sum, MinMax, DotProduct (int32-accumulated; ARM64 SDOT / amd64 VPMADDWD)
 //
 // Complex (c64/c128): Add, Sub, Mul, MulConj, DotProduct, DotProductConj, Conj, Abs, AbsSq, Scale
 //

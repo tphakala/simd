@@ -42,22 +42,35 @@ func findArm64Asm(t *testing.T) []string {
 	return files
 }
 
-// fp16Directive is a WORD directive that golang.org/x/arch/arm64asm cannot
-// decode (an ARMv8.2 half-precision .8H FP16 SIMD instruction), deferred to the
-// objdump cross-check.
-type fp16Directive struct {
+// objdumpDirective is a WORD directive that golang.org/x/arch/arm64asm cannot
+// decode (an ARMv8.2 half-precision .8H FP16 SIMD instruction, or a FEAT_DotProd
+// SDOT/UDOT dot product), deferred to the objdump cross-check.
+type objdumpDirective struct {
 	line    int
 	hex     uint32
 	comment string
 }
 
+// deferredToObjdump reports whether a WORD directive that arm64asm cannot decode
+// is nonetheless a sanctioned encoding to be cross-checked with objdump: an
+// ARMv8.2 FP16 (.8H) SIMD instruction, or a FEAT_DotProd dot product (SDOT/UDOT,
+// which arm64asm does not know). Anything else is treated as a real error.
+func deferredToObjdump(comment string) bool {
+	u := strings.ToUpper(comment)
+	if strings.Contains(u, ".8H") {
+		return true
+	}
+	mnem, _, _ := strings.Cut(strings.TrimSpace(u), " ")
+	return mnem == "SDOT" || mnem == "UDOT"
+}
+
 // TestArm64WordEncodings decodes every hand-encoded WORD directive in the ARM64
 // assembly and asserts it matches the instruction named in its comment.
-// Instructions arm64asm can decode are checked directly; ARMv8.2 FP16 (.8H)
-// instructions, which it cannot decode, are cross-checked with an aarch64
-// objdump when one is available. Without objdump the FP16 directives are
-// accepted unchecked (so the test stays green on machines lacking cross
-// binutils) unless SIMD_REQUIRE_OBJDUMP is set, which CI does.
+// Instructions arm64asm can decode are checked directly; ARMv8.2 FP16 (.8H) and
+// FEAT_DotProd (SDOT/UDOT) instructions, which it cannot decode, are
+// cross-checked with an aarch64 objdump when one is available. Without objdump
+// these directives are accepted unchecked (so the test stays green on machines
+// lacking cross binutils) unless SIMD_REQUIRE_OBJDUMP is set, which CI does.
 func TestArm64WordEncodings(t *testing.T) {
 	tool := asmcheck.FindObjdump()
 	if os.Getenv(requireObjdumpEnv) != "" && tool == "" {
@@ -86,10 +99,11 @@ func checkArm64File(t *testing.T, file, tool string) {
 	// arm64asm or cross-checked by objdump. Uncommented repeats of a matched
 	// hex are then accepted.
 	matched := map[uint32]bool{}
-	var fp16 []fp16Directive
+	var deferred []objdumpDirective
 
 	// Pass 1: every commented directive. Decodable ones are verified now;
-	// undecodable ones (FP16 .8H) are deferred to the objdump cross-check.
+	// undecodable ones (FP16 .8H, or SDOT/UDOT) are deferred to the objdump
+	// cross-check.
 	for _, d := range directives {
 		if d.Source == asmcheck.NoComment {
 			continue
@@ -101,20 +115,21 @@ func checkArm64File(t *testing.T, file, tool string) {
 		case asmcheck.Mismatch:
 			t.Errorf("%s:%d  0x%08X  claims=%q  decodes=%q", file, d.Line, d.Hex, res.Claimed, res.Decoded)
 		case asmcheck.Undecodable:
-			// ARMv8.2 FP16 (.8H) SIMD is the only sanctioned reason arm64asm
-			// cannot decode a directive here. Any other undecodable WORD (a
-			// malformed encoding, or a future extension) is a real problem:
-			// fail loudly instead of funneling it into the objdump fallback,
-			// which is lenient when no objdump is installed.
-			if !strings.Contains(strings.ToUpper(d.Comment), ".8H") {
-				t.Errorf("%s:%d  0x%08X  undecodable WORD that is not FP16 (.8H): %q", file, d.Line, d.Hex, d.Comment)
+			// ARMv8.2 FP16 (.8H) SIMD and FEAT_DotProd (SDOT/UDOT) are the only
+			// sanctioned reasons arm64asm cannot decode a directive here; both are
+			// cross-checked with objdump. Any other undecodable WORD (a malformed
+			// encoding, or a future extension) is a real problem: fail loudly
+			// instead of funneling it into the objdump fallback, which is lenient
+			// when no objdump is installed.
+			if !deferredToObjdump(d.Comment) {
+				t.Errorf("%s:%d  0x%08X  undecodable WORD that is neither FP16 (.8H) nor DotProd (SDOT/UDOT): %q", file, d.Line, d.Hex, d.Comment)
 				continue
 			}
-			fp16 = append(fp16, fp16Directive{line: d.Line, hex: d.Hex, comment: d.Comment})
+			deferred = append(deferred, objdumpDirective{line: d.Line, hex: d.Hex, comment: d.Comment})
 		}
 	}
 
-	crossCheckFP16(t, file, tool, fp16, matched)
+	crossCheckObjdump(t, file, tool, deferred, matched)
 
 	// Pass 2: uncommented directives must reuse a hex proven above.
 	for _, d := range directives {
@@ -128,25 +143,25 @@ func checkArm64File(t *testing.T, file, tool string) {
 	}
 }
 
-// crossCheckFP16 verifies FP16 (.8H) directives that arm64asm cannot decode by
-// disassembling them with aarch64 objdump and comparing against their comments.
-// When no objdump is available it accepts them (marking each hex matched so
-// uncommented repeats pass) and relies on the warning and SIMD_REQUIRE_OBJDUMP
-// gate in TestArm64WordEncodings.
-func crossCheckFP16(t *testing.T, file, tool string, fp16 []fp16Directive, matched map[uint32]bool) {
+// crossCheckObjdump verifies directives that arm64asm cannot decode (FP16 .8H,
+// or SDOT/UDOT) by disassembling them with aarch64 objdump and comparing against
+// their comments. When no objdump is available it accepts them (marking each hex
+// matched so uncommented repeats pass) and relies on the warning and
+// SIMD_REQUIRE_OBJDUMP gate in TestArm64WordEncodings.
+func crossCheckObjdump(t *testing.T, file, tool string, deferred []objdumpDirective, matched map[uint32]bool) {
 	t.Helper()
-	if len(fp16) == 0 {
+	if len(deferred) == 0 {
 		return
 	}
 	if tool == "" {
-		for _, d := range fp16 {
+		for _, d := range deferred {
 			matched[d.hex] = true
 		}
 		return
 	}
 
-	hexes := make([]uint32, 0, len(fp16))
-	for _, d := range fp16 {
+	hexes := make([]uint32, 0, len(deferred))
+	for _, d := range deferred {
 		hexes = append(hexes, d.hex)
 	}
 	decoded, err := asmcheck.DisassembleWords(context.Background(), tool, hexes)
@@ -154,7 +169,7 @@ func crossCheckFP16(t *testing.T, file, tool string, fp16 []fp16Directive, match
 		t.Fatalf("objdump cross-check of %s failed: %v", file, err)
 	}
 
-	for _, d := range fp16 {
+	for _, d := range deferred {
 		got, ok := decoded[d.hex]
 		if !ok {
 			t.Errorf("%s:%d  0x%08X  objdump produced no disassembly", file, d.line, d.hex)

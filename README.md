@@ -580,6 +580,42 @@ i16.Deinterleave2(left, right, stereo) // inverse: split back to channels
 
 Like the `i32` interleave kernels, these are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plus a lane permute, NEON `ZIP`/`UZP` on `.8H`), so the bit pattern of each lane is irrelevant and every value round-trips exactly: negative values and the int16 extremes are preserved. Both kernels are zero-allocation.
 
+### `i8` - int8 Operations
+
+SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-128..127` range makes element-wise arithmetic overflow almost immediately, so this package does not mirror the wrapping arithmetic of `i16`/`i32`. It ships the operations that are genuinely high-impact and well-defined at 8-bit width: saturating arithmetic, int32-accumulated reductions, signed min/max, and sign-extending widening.
+
+| Category       | Function                   | Description                                                    | SIMD Width             |
+| -------------- | -------------------------- | -------------------------------------------------------------- | ---------------------- |
+| **Arithmetic** | `AddSaturate(dst, a, b)`   | Element-wise add, clamped to `[-128, 127]`                     | 32x (AVX2) / 16x (NEON)|
+|                | `SubSaturate(dst, a, b)`   | Element-wise subtract, clamped to `[-128, 127]`                | 32x (AVX2) / 16x (NEON)|
+| **Widening**   | `ToInt16(dst, src)`        | Sign-extend `int8` to `int16`                                  | 16x (AVX2) / 16x (NEON)|
+|                | `ToInt32(dst, src)`        | Sign-extend `int8` to `int32`                                  | 8x (AVX2) / 8x (NEON)  |
+| **Reduction**  | `Sum(a) int32`             | int32-accumulated sum                                          | 16x (AVX2) / 16x (NEON)|
+|                | `DotProduct(a, b) int32`   | int32-accumulated dot product (quantized matmul inner loop)    | 16x (AVX2) / 16x (NEON, SDOT)|
+|                | `MinMax(a) (min, max)`     | Signed int8 per-slice minimum and maximum in one pass          | 32x (AVX2) / 16x (NEON)|
+
+```go
+import "github.com/tphakala/simd/i8"
+
+a := []int8{ /* ... */ }
+b := []int8{ /* ... */ }
+
+dst := make([]int8, len(a))
+i8.AddSaturate(dst, a, b) // saturating dst = clamp(a + b, -128, 127)
+i8.SubSaturate(dst, a, b) // saturating dst = clamp(a - b, -128, 127)
+
+dot := i8.DotProduct(a, b) // int32-accumulated sum(a[i]*b[i])
+sum := i8.Sum(a)           // int32-accumulated sum
+mn, mx := i8.MinMax(a)     // smallest and largest value in one signed pass
+
+w16 := make([]int16, len(a))
+i8.ToInt16(w16, a) // sign-extend to int16 (exact)
+```
+
+`AddSaturate`/`SubSaturate` use single saturating instructions (`VPADDSB`/`VPSUBSB` on AVX2, `SQADD`/`SQSUB` on NEON) and clamp instead of wrapping, which is what 8-bit arithmetic almost always wants. `Sum` and `DotProduct` accumulate in int32 with two's-complement wraparound; since int32 wrapping addition is associative, the lane-parallel SIMD reductions are bit-identical to the scalar reference regardless of summation order, and the int8 products never overflow their lane (`|int8 * int8| <= 16384`). `DotProduct` is the inner loop of quantized matmul/convolution: on AVX2 it widens with `VPMOVSXBW` and reduces with `VPMADDWD`; on ARM64 with `FEAT_DotProd` it uses `SDOT` (16 multiply-accumulates per instruction), falling back to a `SMULL`/`SADALP` base-NEON path on cores without it. All operations are zero-allocation and bit-exact against the pure-Go reference.
+
+> **Planned follow-ups:** `float32 <-> int8` affine `Quantize`/`Dequantize` (scale + zero-point), an AVX-512 VNNI (`VPDPBUSD`) `DotProduct` fast path, and 8-bit channel `Interleave2`/`Deinterleave2`.
+
 ## Performance
 
 ### AMD64 (Intel Core i7-1260P, AVX+FMA)
@@ -835,6 +871,7 @@ each package's `*_amd64.go` dispatch):
 | `c64`   | SSE4.1 (BLENDPS)        | AVX+FMA, AVX-512        | pure Go |
 | `i16`   | SSE2                    | AVX2                    | pure Go (baseline guarantees SSE2) |
 | `i32`   | AVX (interleave), AVX2 (arithmetic) | -           | pure Go |
+| `i8`    | AVX2                    | -                       | pure Go |
 | `f16`   | F16C (slice conversions only) | -                 | pure Go (all f16 compute is pure Go on amd64) |
 | `crc`   | PCLMULQDQ               | -                       | scalar slice-by-16 |
 
@@ -845,7 +882,8 @@ AVX+FMA / AVX / SSE2 / scalar); a package whose minimum is above that tier (e.g.
 `i32` on an SSE-only host) runs pure Go even though `Info()` shows SSE2.
 
 ARM64 runs NEON kernels throughout, with an FP16 (FEAT_FP16) fast path in `f16`
-and FP16-widened variants elsewhere. **SVE/SVE2 is detected but unused:** there are
+and FP16-widened variants elsewhere, plus an SDOT (FEAT_DotProd) fast path for
+`i8.DotProduct` (base-NEON `SMULL`/`SADALP` on cores without it). **SVE/SVE2 is detected but unused:** there are
 no SVE kernels yet, so an SVE-capable host (Graviton 3, Neoverse V1) still runs the
 NEON path, and `cpu.Info()` annotates this as `ARM64 NEON+FP16 (SVE detected, unused)`.
 
