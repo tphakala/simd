@@ -16,6 +16,8 @@
 //   - Signed min/max (MinMax reduction; element-wise two-slice Min/Max).
 //   - Element-wise Clamp (activation clipping) and saturating Abs/Neg, where
 //     -128 maps to 127 (SQABS/SQNEG on NEON; saturating constructions on AVX2).
+//   - Saturating AbsDiff (|a-b| clamped to [0,127]) and MaxAbs (the per-tensor
+//     abs-max for dynamic quantization, returned as int because |-128| = 128).
 //   - Sign-extending widening (ToInt16, ToInt32) to hand off to the wider
 //     integer or float packages.
 //

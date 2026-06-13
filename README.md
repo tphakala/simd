@@ -582,7 +582,7 @@ Like the `i32` interleave kernels, these are pure 16-bit-lane movement (AVX2/SSE
 
 ### `i8` - int8 Operations
 
-SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-128..127` range makes element-wise arithmetic overflow almost immediately, so this package does not mirror the wrapping arithmetic of `i16`/`i32`. It ships the operations that are genuinely high-impact and well-defined at 8-bit width: saturating arithmetic, element-wise min/max/clamp and saturating abs/neg, int32-accumulated reductions, signed min/max, and sign-extending widening.
+SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-128..127` range makes element-wise arithmetic overflow almost immediately, so this package does not mirror the wrapping arithmetic of `i16`/`i32`. It ships the operations that are genuinely high-impact and well-defined at 8-bit width: saturating arithmetic, element-wise min/max/clamp and saturating abs/neg/abs-diff, int32-accumulated reductions, signed min/max, the per-tensor abs-max for dynamic quantization, and sign-extending widening.
 
 | Category       | Function                   | Description                                                    | SIMD Width             |
 | -------------- | -------------------------- | -------------------------------------------------------------- | ---------------------- |
@@ -593,11 +593,13 @@ SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-1
 |                | `Clamp(dst, src, lo, hi)`  | Clamp each element to `[lo, hi]` (activation clipping)         | 32x (AVX2) / 16x (NEON)|
 |                | `Abs(dst, a)`              | Saturating absolute value (`abs(-128) = 127`)                  | 32x (AVX2) / 16x (NEON)|
 |                | `Neg(dst, a)`              | Saturating negation (`neg(-128) = 127`)                        | 32x (AVX2) / 16x (NEON)|
+|                | `AbsDiff(dst, a, b)`       | Saturating `\|a - b\|`, clamped to `[0, 127]`                  | 32x (AVX2) / 16x (NEON)|
 | **Widening**   | `ToInt16(dst, src)`        | Sign-extend `int8` to `int16`                                  | 16x (AVX2) / 16x (NEON)|
 |                | `ToInt32(dst, src)`        | Sign-extend `int8` to `int32`                                  | 8x (AVX2) / 8x (NEON)  |
 | **Reduction**  | `Sum(a) int32`             | int32-accumulated sum                                          | 16x (AVX2) / 16x (NEON)|
 |                | `DotProduct(a, b) int32`   | int32-accumulated dot product (quantized matmul inner loop)    | 16x (AVX2) / 16x (NEON, SDOT)|
 |                | `MinMax(a) (min, max)`     | Signed int8 per-slice minimum and maximum in one pass          | 32x (AVX2) / 16x (NEON)|
+|                | `MaxAbs(a) int`            | Per-tensor abs-max (dynamic-quantization scale), range `[0,128]`| 32x (AVX2) / 16x (NEON)|
 
 ```go
 import "github.com/tphakala/simd/i8"
@@ -614,16 +616,18 @@ i8.Max(dst, a, b)         // element-wise signed max
 i8.Clamp(dst, a, -64, 64) // clamp each element to [-64, 64]
 i8.Abs(dst, a)            // saturating |a|, abs(-128) = 127
 i8.Neg(dst, a)            // saturating -a, neg(-128) = 127
+i8.AbsDiff(dst, a, b)     // saturating |a - b|, clamped to [0, 127]
 
 dot := i8.DotProduct(a, b) // int32-accumulated sum(a[i]*b[i])
 sum := i8.Sum(a)           // int32-accumulated sum
 mn, mx := i8.MinMax(a)     // smallest and largest value in one signed pass
+scale := i8.MaxAbs(a)      // per-tensor abs-max for dynamic quantization
 
 w16 := make([]int16, len(a))
 i8.ToInt16(w16, a) // sign-extend to int16 (exact)
 ```
 
-`AddSaturate`/`SubSaturate` use single saturating instructions (`VPADDSB`/`VPSUBSB` on AVX2, `SQADD`/`SQSUB` on NEON) and clamp instead of wrapping, which is what 8-bit arithmetic almost always wants. The element-wise group is single-instruction too: `Min`/`Max` map to `VPMINSB`/`VPMAXSB` (`SMIN`/`SMAX` on NEON), `Clamp` broadcasts the bounds and applies max-then-min, and `Abs`/`Neg` saturate so `-128` maps to `127` (`SQABS`/`SQNEG` on NEON; `max(a, saturating(0-a))` and `saturating(0-a)` on AVX2). `Sum` and `DotProduct` accumulate in int32 with two's-complement wraparound; since int32 wrapping addition is associative, the lane-parallel SIMD reductions are bit-identical to the scalar reference regardless of summation order, and the int8 products never overflow their lane (`|int8 * int8| <= 16384`). `DotProduct` is the inner loop of quantized matmul/convolution: on AVX2 it widens with `VPMOVSXBW` and reduces with `VPMADDWD`; on ARM64 with `FEAT_DotProd` it uses `SDOT` (16 multiply-accumulates per instruction), falling back to a `SMULL`/`SADALP` base-NEON path on cores without it. All operations are zero-allocation and bit-exact against the pure-Go reference.
+`AddSaturate`/`SubSaturate` use single saturating instructions (`VPADDSB`/`VPSUBSB` on AVX2, `SQADD`/`SQSUB` on NEON) and clamp instead of wrapping, which is what 8-bit arithmetic almost always wants. The element-wise group is single-instruction too: `Min`/`Max` map to `VPMINSB`/`VPMAXSB` (`SMIN`/`SMAX` on NEON), `Clamp` broadcasts the bounds and applies max-then-min, and `Abs`/`Neg` saturate so `-128` maps to `127` (`SQABS`/`SQNEG` on NEON; `max(a, saturating(0-a))` and `saturating(0-a)` on AVX2). `AbsDiff` saturates `|a - b|` to `[0, 127]` (`SABD` then an unsigned min with 127 on NEON; `max(saturating(a-b), saturating(b-a))` on AVX2), and `MaxAbs` returns the per-tensor abs-max as `int` (range `[0, 128]`, since `|-128| = 128` does not fit `int8`) via `PABSB`+unsigned `PMAXUB` on AVX2 and `ABS`+`UMAXV` on NEON, which is the scale a dynamic quantizer needs. `Sum` and `DotProduct` accumulate in int32 with two's-complement wraparound; since int32 wrapping addition is associative, the lane-parallel SIMD reductions are bit-identical to the scalar reference regardless of summation order, and the int8 products never overflow their lane (`|int8 * int8| <= 16384`). `DotProduct` is the inner loop of quantized matmul/convolution: on AVX2 it widens with `VPMOVSXBW` and reduces with `VPMADDWD`; on ARM64 with `FEAT_DotProd` it uses `SDOT` (16 multiply-accumulates per instruction), falling back to a `SMULL`/`SADALP` base-NEON path on cores without it. All operations are zero-allocation and bit-exact against the pure-Go reference.
 
 > **Planned follow-ups:** `float32 <-> int8` affine `Quantize`/`Dequantize` (scale + zero-point), an AVX-512 VNNI (`VPDPBUSD`) `DotProduct` fast path, and 8-bit channel `Interleave2`/`Deinterleave2`.
 
