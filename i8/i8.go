@@ -59,6 +59,30 @@ func SubSaturate(dst, a, b []int8) {
 	subSatI8(dst[:n], a[:n], b[:n])
 }
 
+// AddScalarSaturate writes dst[i] = clamp(int(a[i]) + int(s), -128, 127) for i
+// in [0, n), n = min(len(dst), len(a)). It broadcasts the scalar s and adds with
+// signed saturation (VPADDSB on AVX2, SQADD on NEON). Any trailing capacity in
+// dst is left untouched.
+func AddScalarSaturate(dst, a []int8, s int8) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	addScalarSatI8(dst[:n], a[:n], s)
+}
+
+// SubScalarSaturate writes dst[i] = clamp(int(a[i]) - int(s), -128, 127) for i
+// in [0, n), n = min(len(dst), len(a)). It broadcasts the scalar s and subtracts
+// with signed saturation (VPSUBSB on AVX2, SQSUB on NEON). Any trailing capacity
+// in dst is left untouched.
+func SubScalarSaturate(dst, a []int8, s int8) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	subScalarSatI8(dst[:n], a[:n], s)
+}
+
 // ToInt16 sign-extends src into dst: dst[i] = int16(src[i]) for i in [0, n),
 // n = min(len(dst), len(src)). It is exact (int8 fits in int16). Any trailing
 // capacity in dst is left untouched.

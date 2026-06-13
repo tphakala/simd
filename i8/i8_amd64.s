@@ -721,3 +721,99 @@ absdiff_store:
 absdiff_done:
     VZEROUPPER
     RET
+
+// func addScalarSatAVX2(dst, a []int8, s int8)
+// Broadcast s to all 32 lanes and add with signed saturation (VPADDSB). A scalar
+// tail reproduces the widened add + clamp on the (n mod 32) remainder.
+TEXT ·addScalarSatAVX2(SB), NOSPLIT, $0-49
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    VPBROADCASTB s+48(FP), Y1  // s in all 32 lanes
+
+    MOVQ CX, AX
+    SHRQ $5, AX
+    JZ   addscalar_remainder
+
+addscalar_loop32:
+    VMOVDQU (SI), Y0
+    VPADDSB Y1, Y0, Y2         // saturating(a + s)
+    VMOVDQU Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  addscalar_loop32
+
+addscalar_remainder:
+    ANDQ $31, CX
+    JZ   addscalar_done
+    MOVBLSX s+48(FP), DI       // s (sign-extended)
+
+addscalar_scalar:
+    MOVBLSX (SI), AX
+    ADDL DI, AX                // a + s (|.| <= 255)
+    CMPL AX, $127
+    JLE  addscalar_chklo
+    MOVL $127, AX
+addscalar_chklo:
+    CMPL AX, $-128
+    JGE  addscalar_store
+    MOVL $-128, AX
+addscalar_store:
+    MOVB AX, (DX)
+    INCQ SI
+    INCQ DX
+    DECQ CX
+    JNZ  addscalar_scalar
+
+addscalar_done:
+    VZEROUPPER
+    RET
+
+// func subScalarSatAVX2(dst, a []int8, s int8)
+// Broadcast s to all 32 lanes and subtract with signed saturation (VPSUBSB). A
+// scalar tail reproduces the widened subtract + clamp on the (n mod 32) tail.
+TEXT ·subScalarSatAVX2(SB), NOSPLIT, $0-49
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    VPBROADCASTB s+48(FP), Y1  // s in all 32 lanes
+
+    MOVQ CX, AX
+    SHRQ $5, AX
+    JZ   subscalar_remainder
+
+subscalar_loop32:
+    VMOVDQU (SI), Y0
+    VPSUBSB Y1, Y0, Y2         // saturating(a - s)
+    VMOVDQU Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  subscalar_loop32
+
+subscalar_remainder:
+    ANDQ $31, CX
+    JZ   subscalar_done
+    MOVBLSX s+48(FP), DI       // s (sign-extended)
+
+subscalar_scalar:
+    MOVBLSX (SI), AX
+    SUBL DI, AX                // a - s (|.| <= 255)
+    CMPL AX, $127
+    JLE  subscalar_chklo
+    MOVL $127, AX
+subscalar_chklo:
+    CMPL AX, $-128
+    JGE  subscalar_store
+    MOVL $-128, AX
+subscalar_store:
+    MOVB AX, (DX)
+    INCQ SI
+    INCQ DX
+    DECQ CX
+    JNZ  subscalar_scalar
+
+subscalar_done:
+    VZEROUPPER
+    RET

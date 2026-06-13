@@ -394,6 +394,58 @@ func TestAbsDiff(t *testing.T) {
 	}
 }
 
+func TestAddScalarSaturate(t *testing.T) {
+	cases := []struct{ a, s, want int8 }{
+		{0, 0, 0},
+		{100, 100, 127}, // positive saturation
+		{-100, -100, -128},
+		{50, -60, -10},
+		{127, 1, 127},
+		{-128, -1, -128},
+	}
+	for _, c := range cases {
+		dst := make([]int8, 1)
+		AddScalarSaturate(dst, []int8{c.a}, c.s)
+		if dst[0] != c.want {
+			t.Errorf("AddScalarSaturate(%d, %d) = %d, want %d", c.a, c.s, dst[0], c.want)
+		}
+	}
+	for _, n := range lengths {
+		a := genI8(n, 23)
+		got := make([]int8, n)
+		want := make([]int8, n)
+		AddScalarSaturate(got, a, -37)
+		addScalarSatGo(want, a, -37)
+		assertI8Eq(t, "AddScalarSaturate", n, got, want)
+	}
+}
+
+func TestSubScalarSaturate(t *testing.T) {
+	cases := []struct{ a, s, want int8 }{
+		{0, 0, 0},
+		{100, -100, 127}, // positive saturation
+		{-100, 100, -128},
+		{10, 30, -20},
+		{127, -128, 127}, // 127 - (-128) = 255 -> 127
+		{-128, 1, -128},
+	}
+	for _, c := range cases {
+		dst := make([]int8, 1)
+		SubScalarSaturate(dst, []int8{c.a}, c.s)
+		if dst[0] != c.want {
+			t.Errorf("SubScalarSaturate(%d, %d) = %d, want %d", c.a, c.s, dst[0], c.want)
+		}
+	}
+	for _, n := range lengths {
+		a := genI8(n, 24)
+		got := make([]int8, n)
+		want := make([]int8, n)
+		SubScalarSaturate(got, a, 37)
+		subScalarSatGo(want, a, 37)
+		assertI8Eq(t, "SubScalarSaturate", n, got, want)
+	}
+}
+
 func TestZeroAllocations(t *testing.T) {
 	const n = 1024
 	a, b := genI8(n, 11), genI8(n, 12)
@@ -419,6 +471,8 @@ func TestZeroAllocations(t *testing.T) {
 		{"Neg", func() { Neg(d8, a) }},
 		{"MaxAbs", func() { _ = MaxAbs(a) }},
 		{"AbsDiff", func() { AbsDiff(d8, a, b) }},
+		{"AddScalarSaturate", func() { AddScalarSaturate(d8, a, 7) }},
+		{"SubScalarSaturate", func() { SubScalarSaturate(d8, a, 7) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(10, c.fn); got != 0 {
@@ -493,6 +547,18 @@ func TestTrailingCapacityUntouched(t *testing.T) {
 		AbsDiff(dst[:n], a, b)
 		if dst[n] != 42 || dst[n+1] != 42 {
 			t.Errorf("AbsDiff (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
+
+		dst = fillI8(n+2, 42)
+		AddScalarSaturate(dst[:n], a, 9)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("AddScalarSaturate (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
+
+		dst = fillI8(n+2, 42)
+		SubScalarSaturate(dst[:n], a, 9)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("SubScalarSaturate (n=%d) clobbered trailing capacity: %v", n, dst[n:])
 		}
 	}
 }
