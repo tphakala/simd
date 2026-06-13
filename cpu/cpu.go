@@ -24,11 +24,12 @@ type Features struct {
 	F16C      bool // half<->single float conversion (VCVTPH2PS/VCVTPS2PH)
 
 	// ARM64 features
-	NEON  bool
-	FP16  bool // ARM64 half-precision floating point (FEAT_FP16)
-	SVE   bool
-	SVE2  bool
-	PMULL bool // polynomial multiply (FEAT_PMULL) - used for CRC folding
+	NEON    bool
+	FP16    bool // ARM64 half-precision floating point (FEAT_FP16)
+	SVE     bool
+	SVE2    bool
+	PMULL   bool // polynomial multiply (FEAT_PMULL) - used for CRC folding
+	DOTPROD bool // int8 dot product (FEAT_DotProd) - SDOT/UDOT
 }
 
 // X86 contains x86/AMD64 CPU features (populated on amd64).
@@ -62,6 +63,11 @@ func HasF16C() bool { return X86.F16C }
 // is available. It is used to accelerate CRC folding.
 func HasPMULL() bool { return ARM64.PMULL }
 
+// HasDOTPROD returns true if the ARM64 int8 dot-product instructions
+// (SDOT/UDOT, FEAT_DotProd) are available. They accelerate int8 dot products
+// and quantized matmul inner loops.
+func HasDOTPROD() bool { return ARM64.DOTPROD }
+
 // HasFP16 returns true if ARM FP16 (half-precision) is available.
 func HasFP16() bool { return ARM64.FP16 }
 
@@ -91,10 +97,11 @@ func Info() string {
 //	ssse3      SSSE3 and the sse41 set
 //	sse3       SSE3 and the ssse3 set
 //	pclmulqdq  PCLMULQDQ only
-//	neon       NEON, FP16, SVE, SVE2, PMULL
+//	neon       NEON, FP16, SVE, SVE2, PMULL, DOTPROD
 //	fp16       FP16 only
 //	sve        SVE, SVE2
 //	pmull      PMULL only
+//	dotprod    DOTPROD only
 //	all        every flag (forces the pure-Go path everywhere)
 func applyDisable(f *Features, spec string) {
 	if spec == "" {
@@ -130,6 +137,8 @@ func applyDisable(f *Features, spec string) {
 			clearSVE(f)
 		case "pmull":
 			f.PMULL = false
+		case "dotprod":
+			f.DOTPROD = false
 		case "all":
 			*f = Features{}
 		default:
@@ -190,6 +199,7 @@ func clearNEON(f *Features) {
 	f.SVE = false
 	f.SVE2 = false
 	f.PMULL = false
+	f.DOTPROD = false
 }
 
 // clearSVE disables the scalable-vector tiers without touching NEON.

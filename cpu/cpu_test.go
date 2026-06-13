@@ -49,6 +49,12 @@ func TestHasPMULL(_ *testing.T) {
 	_ = got
 }
 
+// TestHasDOTPROD tests the HasDOTPROD function
+func TestHasDOTPROD(_ *testing.T) {
+	got := HasDOTPROD()
+	_ = got
+}
+
 // TestHasAVX512VL tests the HasAVX512VL function
 func TestHasAVX512VL(_ *testing.T) {
 	got := HasAVX512VL()
@@ -100,4 +106,5 @@ func TestFeatures(_ *testing.T) {
 	_ = ARM64.SVE
 	_ = ARM64.SVE2
 	_ = ARM64.PMULL
+	_ = ARM64.DOTPROD
 }

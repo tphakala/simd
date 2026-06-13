@@ -56,10 +56,11 @@ func TestApplyDisable(t *testing.T) {
 		{"ssse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE41", "SSE42", "SSSE3"}},
 		{"sse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE3", "SSE41", "SSE42", "SSSE3"}},
 		{"pclmulqdq", []string{"PCLMULQDQ"}},
-		{"neon", []string{"FP16", "NEON", "PMULL", "SVE", "SVE2"}},
+		{"neon", []string{"DOTPROD", "FP16", "NEON", "PMULL", "SVE", "SVE2"}},
 		{"fp16", []string{"FP16"}},
 		{"sve", []string{"SVE", "SVE2"}},
 		{"pmull", []string{"PMULL"}},
+		{"dotprod", []string{"DOTPROD"}},
 		// Case-insensitivity and surrounding whitespace.
 		{"AVX512", []string{"AVX512F", "AVX512VL"}},
 		{"  avx512  ", []string{"AVX512F", "AVX512VL"}},
@@ -68,9 +69,9 @@ func TestApplyDisable(t *testing.T) {
 		{"foobar", nil},
 		{"avx512,foobar", []string{"AVX512F", "AVX512VL"}},
 		// Empty tokens between commas are ignored.
-		{"avx512,,neon", []string{"AVX512F", "AVX512VL", "FP16", "NEON", "PMULL", "SVE", "SVE2"}},
+		{"avx512,,neon", []string{"AVX512F", "AVX512VL", "DOTPROD", "FP16", "NEON", "PMULL", "SVE", "SVE2"}},
 		// Multiple tokens combine.
-		{"avx512,neon", []string{"AVX512F", "AVX512VL", "FP16", "NEON", "PMULL", "SVE", "SVE2"}},
+		{"avx512,neon", []string{"AVX512F", "AVX512VL", "DOTPROD", "FP16", "NEON", "PMULL", "SVE", "SVE2"}},
 	}
 	for _, tt := range tests {
 		f := fullFeatures()
