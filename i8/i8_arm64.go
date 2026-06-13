@@ -113,6 +113,21 @@ func negI8(dst, a []int8) {
 	negGo(dst, a)
 }
 
+func maxAbsI8(a []int8) int {
+	if hasNEON && len(a) >= minNEON16 {
+		return maxAbsNEON(a)
+	}
+	return maxAbsGo(a)
+}
+
+func absDiffI8(dst, a, b []int8) {
+	if hasNEON && len(dst) >= minNEON16 {
+		absDiffNEON(dst, a, b)
+		return
+	}
+	absDiffGo(dst, a, b)
+}
+
 //go:noescape
 func addSatNEON(dst, a, b []int8)
 
@@ -151,3 +166,9 @@ func absNEON(dst, a []int8)
 
 //go:noescape
 func negNEON(dst, a []int8)
+
+//go:noescape
+func maxAbsNEON(a []int8) int
+
+//go:noescape
+func absDiffNEON(dst, a, b []int8)

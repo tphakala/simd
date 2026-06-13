@@ -13,8 +13,10 @@ func dotI8(a, b []int8) int32     { return dotGo(a, b) }
 
 func minMaxI8(a []int8) (minVal, maxVal int8) { return minMaxGo(a) }
 
-func minI8(dst, a, b []int8)                  { minGo(dst, a, b) }
-func maxI8(dst, a, b []int8)                  { maxGo(dst, a, b) }
-func clampElemI8(dst, s []int8, lo, hi int8)  { clampGo(dst, s, lo, hi) }
-func absI8(dst, a []int8)                      { absGo(dst, a) }
-func negI8(dst, a []int8)                      { negGo(dst, a) }
+func minI8(dst, a, b []int8)                 { minGo(dst, a, b) }
+func maxI8(dst, a, b []int8)                 { maxGo(dst, a, b) }
+func clampElemI8(dst, s []int8, lo, hi int8) { clampGo(dst, s, lo, hi) }
+func absI8(dst, a []int8)                    { absGo(dst, a) }
+func negI8(dst, a []int8)                    { negGo(dst, a) }
+func maxAbsI8(a []int8) int                  { return maxAbsGo(a) }
+func absDiffI8(dst, a, b []int8)             { absDiffGo(dst, a, b) }

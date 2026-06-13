@@ -89,7 +89,7 @@
 //
 // Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MinMax
 //
-// Integer DSP (i8): AddSaturate, SubSaturate, Min, Max, Clamp, Abs, Neg, ToInt16, ToInt32, Sum, MinMax, DotProduct (int32-accumulated; ARM64 SDOT / amd64 VPMADDWD)
+// Integer DSP (i8): AddSaturate, SubSaturate, Min, Max, Clamp, Abs, Neg, AbsDiff, MaxAbs, ToInt16, ToInt32, Sum, MinMax, DotProduct (int32-accumulated; ARM64 SDOT / amd64 VPMADDWD)
 //
 // Complex (c64/c128): Add, Sub, Mul, MulConj, DotProduct, DotProductConj, Conj, Abs, AbsSq, Scale
 //

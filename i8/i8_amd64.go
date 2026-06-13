@@ -113,6 +113,21 @@ func negI8(dst, a []int8) {
 	negGo(dst, a)
 }
 
+func maxAbsI8(a []int8) int {
+	if hasAVX2 && len(a) >= blockMinMax {
+		return maxAbsAVX2(a)
+	}
+	return maxAbsGo(a)
+}
+
+func absDiffI8(dst, a, b []int8) {
+	if hasAVX2 && len(dst) >= blockSat32 {
+		absDiffAVX2(dst, a, b)
+		return
+	}
+	absDiffGo(dst, a, b)
+}
+
 //go:noescape
 func addSatAVX2(dst, a, b []int8)
 
@@ -148,3 +163,9 @@ func absAVX2(dst, a []int8)
 
 //go:noescape
 func negAVX2(dst, a []int8)
+
+//go:noescape
+func maxAbsAVX2(a []int8) int
+
+//go:noescape
+func absDiffAVX2(dst, a, b []int8)

@@ -120,3 +120,22 @@ func BenchmarkNeg(b *testing.B) {
 		Neg(dst, a)
 	}
 }
+
+func BenchmarkMaxAbs(b *testing.B) {
+	a := genI8(benchN, 1)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		_ = MaxAbs(a)
+	}
+}
+
+func BenchmarkAbsDiff(b *testing.B) {
+	a, c := genI8(benchN, 1), genI8(benchN, 2)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		AbsDiff(dst, a, c)
+	}
+}

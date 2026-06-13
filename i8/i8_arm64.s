@@ -537,3 +537,96 @@ neg_scalar:
 
 neg_done:
     RET
+
+// func maxAbsNEON(a []int8) int
+// Per-tensor abs-max for dynamic quantization: ABS maps each byte to its
+// magnitude (abs(-128) -> 0x80, i.e. 128 read unsigned), UMAX folds 16-byte
+// blocks into an unsigned-max accumulator, UMAXV reduces it to a byte, and a
+// scalar tail folds the (n mod 16) remainder. The byte is read zero-extended,
+// so the result lands in [0, 128].
+TEXT ·maxAbsNEON(SB), NOSPLIT, $0-32
+    MOVD a_base+0(FP), R1
+    MOVD a_len+8(FP), R3
+
+    VEOR V2.B16, V2.B16, V2.B16   // unsigned-max accumulator = 0
+    LSR  $4, R3, R4               // R4 = n / 16
+    CBZ  R4, maxabs_reduce
+
+maxabs_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x4E20B800             // ABS  V0.16B, V0.16B   (|a|; abs(-128)=0x80)
+    WORD $0x6E206442             // UMAX V2.16B, V2.16B, V0.16B
+    SUB  $1, R4
+    CBNZ R4, maxabs_loop16
+
+maxabs_reduce:
+    WORD $0x6E30A843             // UMAXV B3, V2.16B
+    FMOVS F3, R5                  // R5 = abs-max byte (zero-extended)
+    AND  $0xFF, R5, R5            // defensively keep only the byte, [0, 128]
+
+    AND  $15, R3
+    CBZ  R3, maxabs_done
+
+maxabs_scalar:
+    MOVB (R1), R6                 // v (sign-extended)
+    NEG  R6, R7                   // -v
+    CMP  $0, R6
+    CSEL LT, R7, R6, R6           // |v| = v < 0 ? -v : v   (can be 128)
+    CMP  R5, R6
+    CSEL HI, R6, R5, R5           // unsigned: |v| > max ? |v| : max
+    ADD  $1, R1
+    SUB  $1, R3
+    CBNZ R3, maxabs_scalar
+
+maxabs_done:
+    MOVD R5, ret+24(FP)
+    RET
+
+// func absDiffNEON(dst, a, b []int8)
+// Saturating absolute difference clamped to [0, 127]: SABD computes |a-b| as an
+// unsigned byte in [0, 255], and an unsigned min with a broadcast 127 saturates
+// it, so |127 - (-128)| = 255 maps to 127. A scalar tail subtracts, negates if
+// negative, and clamps high on the (n mod 16) remainder.
+TEXT ·absDiffNEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVD b_base+48(FP), R2
+
+    MOVD $127, R5                 // clamp constant, also the SABD-min broadcast
+    WORD $0x4E010CA3             // DUP V3.16B, W5   (127 in all 16 lanes)
+
+    LSR  $4, R3, R4
+    CBZ  R4, absdiff_remainder
+
+absdiff_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    VLD1.P 16(R2), [V1.B16]
+    WORD $0x4E217402             // SABD V2.16B, V0.16B, V1.16B   (|a-b|, 0..255)
+    WORD $0x6E236C42             // UMIN V2.16B, V2.16B, V3.16B   (clamp to <= 127)
+    VST1.P [V2.B16], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, absdiff_loop16
+
+absdiff_remainder:
+    AND  $15, R3
+    CBZ  R3, absdiff_done
+
+absdiff_scalar:
+    MOVB (R1), R6                 // a (sign-extended)
+    MOVB (R2), R7                 // b
+    SUB  R7, R6, R6               // a - b
+    NEG  R6, R9                   // -(a - b)
+    CMP  $0, R6
+    CSEL LT, R9, R6, R6           // |a - b|  (0..255)
+    CMP  R5, R6
+    CSEL GT, R5, R6, R6           // |a - b| > 127 ? 127 : |a - b|
+    MOVB R6, (R0)
+    ADD  $1, R1
+    ADD  $1, R2
+    ADD  $1, R0
+    SUB  $1, R3
+    CBNZ R3, absdiff_scalar
+
+absdiff_done:
+    RET

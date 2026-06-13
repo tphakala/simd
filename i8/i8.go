@@ -16,6 +16,8 @@
 //   - Signed min/max (MinMax reduction; element-wise two-slice Min/Max).
 //   - Element-wise Clamp (activation clipping) and saturating Abs/Neg, where
 //     -128 maps to 127 (SQABS/SQNEG on NEON; saturating constructions on AVX2).
+//   - Saturating AbsDiff (|a-b| clamped to [0,127]) and MaxAbs (the per-tensor
+//     abs-max for dynamic quantization, returned as int because |-128| = 128).
 //   - Sign-extending widening (ToInt16, ToInt32) to hand off to the wider
 //     integer or float packages.
 //
@@ -175,4 +177,28 @@ func Neg(dst, a []int8) {
 		return
 	}
 	negI8(dst[:n], a[:n])
+}
+
+// MaxAbs returns max_i |a[i]| accumulated as int (range [0, 128], since
+// |-128| = 128 does not fit int8). It is the per-tensor scale for dynamic
+// quantization (PABSB+PMAXUB on AVX2; ABS+UMAXV on NEON). An empty a returns 0.
+// a is read-only; the call allocates nothing.
+func MaxAbs(a []int8) int {
+	if len(a) == 0 {
+		return 0
+	}
+	return maxAbsI8(a)
+}
+
+// AbsDiff writes the saturating absolute difference dst[i] = |a[i] - b[i]|,
+// clamped to [0, 127], for i in [0, n), n = min(len(dst), len(a), len(b)).
+// |127 - (-128)| = 255 saturates to 127, consistent with Abs. It uses
+// max(saturating(a-b), saturating(b-a)) on AVX2 and SABD then an unsigned min
+// with 127 on NEON. Any trailing capacity in dst is left untouched.
+func AbsDiff(dst, a, b []int8) {
+	n := min(len(dst), len(a), len(b))
+	if n == 0 {
+		return
+	}
+	absDiffI8(dst[:n], a[:n], b[:n])
 }
