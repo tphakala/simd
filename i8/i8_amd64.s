@@ -817,3 +817,113 @@ subscalar_store:
 subscalar_done:
     VZEROUPPER
     RET
+
+// func sumAbsAVX2(a []int8) int32
+// L1 norm: VPABSB maps each byte to its magnitude, VPSADBW against zero sums
+// each group of 8 unsigned bytes into a u64 lane, accumulated in Y2; a fold and
+// a scalar tail produce the int32 total (low 32 bits of the u64 sum, which equals
+// the int32 two's-complement-wraparound sum of the non-negative terms).
+TEXT ·sumAbsAVX2(SB), NOSPLIT, $0-28
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    VPXOR Y0, Y0, Y0           // zero (PSADBW reference)
+    VPXOR Y2, Y2, Y2           // u64 accumulator
+
+    MOVQ CX, AX
+    SHRQ $5, AX                // AX = n / 32
+    JZ   sumabs_reduce
+
+sumabs_loop32:
+    VPABSB (SI), Y1            // |a| as unsigned bytes
+    VPSADBW Y0, Y1, Y3         // sum|Y1 - 0| -> 4 u64 lanes
+    VPADDQ Y3, Y2, Y2          // accumulate
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  sumabs_loop32
+
+sumabs_reduce:
+    VEXTRACTI128 $1, Y2, X3
+    VPADDQ X3, X2, X2          // fold 4 -> 2 u64
+    VPSHUFD $0x4E, X2, X3      // swap 64-bit halves
+    VPADDQ X3, X2, X2          // -> total in low qword
+    MOVQ X2, AX                // u64 running total
+
+    ANDQ $31, CX
+    JZ   sumabs_done
+
+sumabs_scalar:
+    MOVBLSX (SI), BX           // v (sign-extended)
+    TESTL BX, BX
+    JGE  sumabs_add
+    NEGL BX                    // |v|
+sumabs_add:
+    ADDQ BX, AX
+    INCQ SI
+    DECQ CX
+    JNZ  sumabs_scalar
+
+sumabs_done:
+    MOVL AX, ret+24(FP)        // low 32 bits = int32 wraparound sum
+    VZEROUPPER
+    RET
+
+// func sadAVX2(a, b []int8) int32
+// Sum of absolute differences. PSADBW is unsigned, so both operands are offset
+// by 128 (XOR 0x80) - (a+128)-(b+128) = a-b - making the unsigned PSADBW compute
+// the true signed sum|a-b| (per element in [0,255], not saturated). The 0x80
+// mask is built in-register (VPCMPEQB -> VPABSB -> VPSLLW $7 = 0x80 per byte).
+TEXT ·sadAVX2(SB), NOSPLIT, $0-52
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_base+24(FP), DI
+
+    VPCMPEQB Y4, Y4, Y4        // 0xFF bytes
+    VPABSB Y4, Y4             // 0x01 bytes
+    VPSLLW $7, Y4, Y4          // 0x0101<<7 = 0x8080 per word -> 0x80 per byte
+    VPXOR Y2, Y2, Y2           // u64 accumulator
+
+    MOVQ CX, AX
+    SHRQ $5, AX
+    JZ   sad_reduce
+
+sad_loop32:
+    VMOVDQU (SI), Y0
+    VMOVDQU (DI), Y1
+    VPXOR Y4, Y0, Y0           // a + 128
+    VPXOR Y4, Y1, Y1           // b + 128
+    VPSADBW Y1, Y0, Y3         // sum|(a+128)-(b+128)| = sum|a-b| -> 4 u64 lanes
+    VPADDQ Y3, Y2, Y2
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  sad_loop32
+
+sad_reduce:
+    VEXTRACTI128 $1, Y2, X3
+    VPADDQ X3, X2, X2
+    VPSHUFD $0x4E, X2, X3
+    VPADDQ X3, X2, X2
+    MOVQ X2, AX                // u64 running total
+
+    ANDQ $31, CX
+    JZ   sad_done
+
+sad_scalar:
+    MOVBLSX (SI), BX
+    MOVBLSX (DI), DX
+    SUBL DX, BX                // a - b
+    TESTL BX, BX
+    JGE  sad_add
+    NEGL BX                    // |a - b|
+sad_add:
+    ADDQ BX, AX
+    INCQ SI
+    INCQ DI
+    DECQ CX
+    JNZ  sad_scalar
+
+sad_done:
+    MOVL AX, ret+48(FP)
+    VZEROUPPER
+    RET

@@ -23,3 +23,5 @@ func absDiffI8(dst, a, b []int8)             { absDiffGo(dst, a, b) }
 
 func addScalarSatI8(dst, a []int8, s int8) { addScalarSatGo(dst, a, s) }
 func subScalarSatI8(dst, a []int8, s int8) { subScalarSatGo(dst, a, s) }
+func sumAbsI8(a []int8) int32              { return sumAbsGo(a) }
+func sadI8(a, b []int8) int32              { return sadGo(a, b) }

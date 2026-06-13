@@ -446,6 +446,71 @@ func TestSubScalarSaturate(t *testing.T) {
 	}
 }
 
+func TestSumAbs(t *testing.T) {
+	if got := SumAbs(nil); got != 0 {
+		t.Errorf("SumAbs(nil) = %d, want 0", got)
+	}
+	cases := []struct {
+		a    []int8
+		want int32
+	}{
+		{[]int8{0}, 0},
+		{[]int8{5, -3, 2}, 10},
+		{[]int8{-128}, 128}, // |−128| = 128
+		{[]int8{-128, 127, -1}, 256},
+	}
+	for _, c := range cases {
+		if got := SumAbs(c.a); got != c.want {
+			t.Errorf("SumAbs(%v) = %d, want %d", c.a, got, c.want)
+		}
+	}
+	for _, n := range lengths {
+		a := genI8(n, 25)
+		if got, want := SumAbs(a), sumAbsGo(a); got != want {
+			t.Errorf("SumAbs n=%d: got %d, want %d", n, got, want)
+		}
+	}
+	// int32 accumulation headroom: 300 elements of -128 sum to 38400 (> int16).
+	big := make([]int8, 300)
+	for i := range big {
+		big[i] = -128
+	}
+	if got, want := SumAbs(big), int32(300*128); got != want {
+		t.Errorf("SumAbs(300x-128) = %d, want %d", got, want)
+	}
+}
+
+func TestSAD(t *testing.T) {
+	if got := SAD(nil, nil); got != 0 {
+		t.Errorf("SAD(nil) = %d, want 0", got)
+	}
+	cases := []struct {
+		a, b []int8
+		want int32
+	}{
+		{[]int8{0}, []int8{0}, 0},
+		{[]int8{5, 3}, []int8{3, 5}, 4},
+		{[]int8{-1}, []int8{1}, 2},       // signed: |−1−1| = 2 (not unsigned 254)
+		{[]int8{127}, []int8{-128}, 255}, // true |255|, NOT saturated
+		{[]int8{-128}, []int8{127}, 255},
+	}
+	for _, c := range cases {
+		if got := SAD(c.a, c.b); got != c.want {
+			t.Errorf("SAD(%v, %v) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+	for _, n := range lengths {
+		a, b := genI8(n, 26), genI8(n, 27)
+		if got, want := SAD(a, b), sadGo(a, b); got != want {
+			t.Errorf("SAD n=%d: got %d, want %d", n, got, want)
+		}
+	}
+	// Mismatched lengths clamp to the shorter operand.
+	if got, want := SAD([]int8{10, 20, 30}, []int8{1, 2}), int32(9+18); got != want {
+		t.Errorf("SAD mismatched len = %d, want %d", got, want)
+	}
+}
+
 func TestZeroAllocations(t *testing.T) {
 	const n = 1024
 	a, b := genI8(n, 11), genI8(n, 12)
@@ -473,6 +538,8 @@ func TestZeroAllocations(t *testing.T) {
 		{"AbsDiff", func() { AbsDiff(d8, a, b) }},
 		{"AddScalarSaturate", func() { AddScalarSaturate(d8, a, 7) }},
 		{"SubScalarSaturate", func() { SubScalarSaturate(d8, a, 7) }},
+		{"SumAbs", func() { _ = SumAbs(a) }},
+		{"SAD", func() { _ = SAD(a, b) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(10, c.fn); got != 0 {

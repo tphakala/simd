@@ -60,6 +60,36 @@ func SubSaturate(dst, a, b []int8) {
 	subSatI8(dst[:n], a[:n], b[:n])
 }
 
+// SumAbs returns sum_i |a[i]| (the L1 norm), accumulated in int32 with
+// two's-complement wraparound. |-128| = 128 contributes the full 128. An empty a
+// returns 0. a is read-only; the call allocates nothing.
+//
+// On AVX2 it uses PABSB then PSADBW (sum of absolute differences against zero);
+// on NEON, ABS then UADDLP/UADALP widen-accumulate.
+func SumAbs(a []int8) int32 {
+	if len(a) == 0 {
+		return 0
+	}
+	return sumAbsI8(a)
+}
+
+// SAD returns sum_i |a[i] - b[i]| (the sum of absolute differences) over i in
+// [0, n), n = min(len(a), len(b)), accumulated in int32 with two's-complement
+// wraparound. The per-element difference is the true |a-b| in [0, 255] (not
+// saturated), so |127 - (-128)| contributes 255. An empty operand returns 0.
+// a and b are read-only; the call allocates nothing.
+//
+// SAD is the block-matching / feature-distance reduction (the scalar companion
+// to AbsDiff). On AVX2 it offsets both operands by 128 and uses PSADBW; on NEON,
+// SABD then UADDLP/UADALP widen-accumulate.
+func SAD(a, b []int8) int32 {
+	n := min(len(a), len(b))
+	if n == 0 {
+		return 0
+	}
+	return sadI8(a[:n], b[:n])
+}
+
 // AddScalarSaturate writes dst[i] = clamp(int(a[i]) + int(s), -128, 127) for i
 // in [0, n), n = min(len(dst), len(a)). It broadcasts the scalar s and adds with
 // signed saturation (VPADDSB on AVX2, SQADD on NEON). Any trailing capacity in
