@@ -13,7 +13,9 @@
 //     running total has headroom. DotProduct is the inner loop of quantized
 //     matmul/conv; it uses ARM64 SDOT (FEAT_DotProd) where available and AVX2
 //     VPMADDWD otherwise.
-//   - Signed min/max (MinMax).
+//   - Signed min/max (MinMax reduction; element-wise two-slice Min/Max).
+//   - Element-wise Clamp (activation clipping) and saturating Abs/Neg, where
+//     -128 maps to 127 (SQABS/SQNEG on NEON; saturating constructions on AVX2).
 //   - Sign-extending widening (ToInt16, ToInt32) to hand off to the wider
 //     integer or float packages.
 //
