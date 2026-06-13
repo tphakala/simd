@@ -216,34 +216,59 @@ func TestZeroAllocations(t *testing.T) {
 }
 
 // TestTrailingCapacityUntouched verifies the binary ops and conversions write
-// exactly n elements and leave trailing dst capacity alone.
+// exactly n elements and leave trailing dst capacity alone. It runs sizes both
+// below and above the SIMD dispatch thresholds (32/16/8), so the assembly
+// kernels and their scalar tails are covered, not just the pure-Go fallback.
 func TestTrailingCapacityUntouched(t *testing.T) {
-	a := []int8{1, 2, 3}
-	b := []int8{4, 5, 6}
+	for _, n := range []int{3, 35} {
+		a, b := genI8(n, 1), genI8(n, 2)
 
-	dst := []int8{-9, -9, -9, 42, 42}
-	AddSaturate(dst, a, b)
-	if dst[3] != 42 || dst[4] != 42 {
-		t.Errorf("AddSaturate clobbered trailing capacity: %v", dst)
-	}
+		dst := fillI8(n+2, 42)
+		AddSaturate(dst[:n], a, b)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("AddSaturate (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
 
-	dstSub := []int8{-9, -9, -9, 42, 42}
-	SubSaturate(dstSub, a, b)
-	if dstSub[3] != 42 || dstSub[4] != 42 {
-		t.Errorf("SubSaturate clobbered trailing capacity: %v", dstSub)
-	}
+		dst = fillI8(n+2, 42)
+		SubSaturate(dst[:n], a, b)
+		if dst[n] != 42 || dst[n+1] != 42 {
+			t.Errorf("SubSaturate (n=%d) clobbered trailing capacity: %v", n, dst[n:])
+		}
 
-	dst16 := []int16{-9, -9, -9, 4242, 4242}
-	ToInt16(dst16, a)
-	if dst16[3] != 4242 || dst16[4] != 4242 {
-		t.Errorf("ToInt16 clobbered trailing capacity: %v", dst16)
-	}
+		dst16 := fillI16(n+2, 4242)
+		ToInt16(dst16[:n], a)
+		if dst16[n] != 4242 || dst16[n+1] != 4242 {
+			t.Errorf("ToInt16 (n=%d) clobbered trailing capacity: %v", n, dst16[n:])
+		}
 
-	dst32 := []int32{-9, -9, -9, 424242, 424242}
-	ToInt32(dst32, a)
-	if dst32[3] != 424242 || dst32[4] != 424242 {
-		t.Errorf("ToInt32 clobbered trailing capacity: %v", dst32)
+		dst32 := fillI32(n+2, 424242)
+		ToInt32(dst32[:n], a)
+		if dst32[n] != 424242 || dst32[n+1] != 424242 {
+			t.Errorf("ToInt32 (n=%d) clobbered trailing capacity: %v", n, dst32[n:])
+		}
 	}
+}
+
+func fillI8(n int, v int8) []int8 {
+	s := make([]int8, n)
+	for i := range s {
+		s[i] = v
+	}
+	return s
+}
+func fillI16(n int, v int16) []int16 {
+	s := make([]int16, n)
+	for i := range s {
+		s[i] = v
+	}
+	return s
+}
+func fillI32(n int, v int32) []int32 {
+	s := make([]int32, n)
+	for i := range s {
+		s[i] = v
+	}
+	return s
 }
 
 func assertI8Eq(t *testing.T, op string, n int, got, want []int8) {
