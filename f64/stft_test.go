@@ -437,6 +437,25 @@ func TestReflectIndex(t *testing.T) {
 	}
 }
 
+// refReflectIndex reimplements numpy "reflect" index folding locally, kept
+// deliberately independent of the production reflectIndex so the centered
+// reference and the fuzz target would catch a regression in either one (rather
+// than sharing the same mapping bug).
+func refReflectIndex(idx, n int) int {
+	if n == 1 {
+		return 0
+	}
+	period := (n - 1) << 1
+	m := idx % period
+	if m < 0 {
+		m += period
+	}
+	if m < n {
+		return m
+	}
+	return period - m
+}
+
 // refSampleAt and stftRef independently re-implement centering, windowing, and
 // the DFT (via dftBin), as a cross-check on the FFT-based centered STFT. They are
 // deliberately a separate implementation from the package's sampleAt/packFrameAt
@@ -446,7 +465,7 @@ func refSampleAt(signal []float64, idx int, pad PadMode) float64 {
 		return signal[idx]
 	}
 	if pad == PadReflect {
-		return signal[reflectIndex(idx, len(signal))]
+		return signal[refReflectIndex(idx, len(signal))]
 	}
 	return 0
 }
