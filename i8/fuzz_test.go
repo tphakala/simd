@@ -130,6 +130,25 @@ func FuzzI8Elementwise(f *testing.F) {
 	})
 }
 
+func FuzzI8AbsOps(f *testing.F) {
+	lenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := i8FromBytes(raw)
+
+		if got, want := MaxAbs(v), maxAbsGo(v); got != want {
+			t.Fatalf("MaxAbs: got %d want %d (len=%d)", got, want, len(v))
+		}
+
+		h := len(v) / 2
+		a, b := v[:h], v[h:2*h]
+		got := make([]int8, h)
+		want := make([]int8, h)
+		AbsDiff(got, a, b)
+		absDiffGo(want, a, b)
+		assertI8Eq(t, "AbsDiff", h, got, want)
+	})
+}
+
 func FuzzI8Convert(f *testing.F) {
 	lenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {
