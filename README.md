@@ -232,7 +232,7 @@ nFrames := plan.NumFrames(len(signal), hop, f64.PadZero)
 
 spec := make([][]complex128, nFrames)          // caller-owned output, one row per frame
 for i := range spec { spec[i] = make([]complex128, bins) }
-n := plan.STFT(spec, signal, hann, hop, f64.PadZero) // returns frames written
+plan.STFT(spec, signal, hann, hop, f64.PadZero) // fills spec; returns frames written
 
 // Flat, frame-contiguous power (stride NumBins) feeds DotProductBatch directly
 // as a mel-filterbank projection, with no per-frame allocation:
