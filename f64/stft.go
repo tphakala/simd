@@ -392,10 +392,12 @@ func (p *STFTPlan) STFTPowerInto(dst, signal, window []float64, hop int, pad Pad
 	for f := range frames {
 		p.packFrameAt(signal, window, f*hop-off, pad)
 		p.fftHalf()
-		base := f * bins
+		// Slice the frame's stride out of dst so the compiler can prove the
+		// inner-loop writes are in bounds (consistent with STFTPower).
+		row := dst[f*bins : (f+1)*bins]
 		for k := range bins {
 			xr, xi := p.unravelBin(k)
-			dst[base+k] = xr*xr + xi*xi
+			row[k] = xr*xr + xi*xi
 		}
 	}
 	return frames
