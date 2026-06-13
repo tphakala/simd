@@ -13,7 +13,9 @@
 //     running total has headroom. DotProduct is the inner loop of quantized
 //     matmul/conv; it uses ARM64 SDOT (FEAT_DotProd) where available and AVX2
 //     VPMADDWD otherwise.
-//   - Signed min/max (MinMax).
+//   - Signed min/max (MinMax reduction; element-wise two-slice Min/Max).
+//   - Element-wise Clamp (activation clipping) and saturating Abs/Neg, where
+//     -128 maps to 127 (SQABS/SQNEG on NEON; saturating constructions on AVX2).
 //   - Sign-extending widening (ToInt16, ToInt32) to hand off to the wider
 //     integer or float packages.
 //
@@ -114,4 +116,63 @@ func MinMax(a []int8) (minVal, maxVal int8) {
 		return 0, 0
 	}
 	return minMaxI8(a)
+}
+
+// Min writes dst[i] = min(a[i], b[i]) (signed) for i in [0, n),
+// n = min(len(dst), len(a), len(b)). This is the element-wise two-slice minimum
+// (PMINSB/SMIN), distinct from the MinMax reduction. Any trailing capacity in
+// dst is left untouched.
+func Min(dst, a, b []int8) {
+	n := min(len(dst), len(a), len(b))
+	if n == 0 {
+		return
+	}
+	minI8(dst[:n], a[:n], b[:n])
+}
+
+// Max writes dst[i] = max(a[i], b[i]) (signed) for i in [0, n),
+// n = min(len(dst), len(a), len(b)). This is the element-wise two-slice maximum
+// (PMAXSB/SMAX), distinct from the MinMax reduction. Any trailing capacity in
+// dst is left untouched.
+func Max(dst, a, b []int8) {
+	n := min(len(dst), len(a), len(b))
+	if n == 0 {
+		return
+	}
+	maxI8(dst[:n], a[:n], b[:n])
+}
+
+// Clamp writes dst[i] = min(max(src[i], lo), hi) (signed) for i in [0, n),
+// n = min(len(dst), len(src)). It is the activation-clipping primitive. If
+// lo > hi every element maps to hi (max-then-min ordering). Any trailing
+// capacity in dst is left untouched.
+func Clamp(dst, src []int8, lo, hi int8) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	clampElemI8(dst[:n], src[:n], lo, hi)
+}
+
+// Abs writes the saturating absolute value dst[i] = |a[i]| for i in [0, n),
+// n = min(len(dst), len(a)). abs(-128) saturates to 127 (SQABS on NEON; on AVX2
+// max(a, saturating(0-a))). Any trailing capacity in dst is left untouched.
+func Abs(dst, a []int8) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	absI8(dst[:n], a[:n])
+}
+
+// Neg writes the saturating negation dst[i] = -a[i] for i in [0, n),
+// n = min(len(dst), len(a)). neg(-128) saturates to 127 (SQNEG on NEON;
+// saturating(0-a) via VPSUBSB on AVX2). Any trailing capacity in dst is left
+// untouched.
+func Neg(dst, a []int8) {
+	n := min(len(dst), len(a))
+	if n == 0 {
+		return
+	}
+	negI8(dst[:n], a[:n])
 }

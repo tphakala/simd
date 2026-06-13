@@ -73,6 +73,46 @@ func minMaxI8(a []int8) (minVal, maxVal int8) {
 	return minMaxGo(a)
 }
 
+func minI8(dst, a, b []int8) {
+	if hasNEON && len(dst) >= minNEON16 {
+		minNEON(dst, a, b)
+		return
+	}
+	minGo(dst, a, b)
+}
+
+func maxI8(dst, a, b []int8) {
+	if hasNEON && len(dst) >= minNEON16 {
+		maxNEON(dst, a, b)
+		return
+	}
+	maxGo(dst, a, b)
+}
+
+func clampElemI8(dst, src []int8, lo, hi int8) {
+	if hasNEON && len(dst) >= minNEON16 {
+		clampNEON(dst, src, lo, hi)
+		return
+	}
+	clampGo(dst, src, lo, hi)
+}
+
+func absI8(dst, a []int8) {
+	if hasNEON && len(dst) >= minNEON16 {
+		absNEON(dst, a)
+		return
+	}
+	absGo(dst, a)
+}
+
+func negI8(dst, a []int8) {
+	if hasNEON && len(dst) >= minNEON16 {
+		negNEON(dst, a)
+		return
+	}
+	negGo(dst, a)
+}
+
 //go:noescape
 func addSatNEON(dst, a, b []int8)
 
@@ -96,3 +136,18 @@ func dotSDOT(a, b []int8) int32
 
 //go:noescape
 func minMaxNEON(a []int8) (minVal, maxVal int8)
+
+//go:noescape
+func minNEON(dst, a, b []int8)
+
+//go:noescape
+func maxNEON(dst, a, b []int8)
+
+//go:noescape
+func clampNEON(dst, src []int8, lo, hi int8)
+
+//go:noescape
+func absNEON(dst, a []int8)
+
+//go:noescape
+func negNEON(dst, a []int8)

@@ -339,3 +339,201 @@ mm_done:
     MOVB R5, minVal+24(FP)
     MOVB R6, maxVal+25(FP)
     RET
+
+// func minNEON(dst, a, b []int8)
+// Element-wise signed min: SMIN folds 16-byte blocks; a signed CSEL scalar tail
+// handles the (n mod 16) remainder.
+TEXT ·minNEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVD b_base+48(FP), R2
+
+    LSR  $4, R3, R4               // R4 = n / 16
+    CBZ  R4, min_remainder
+
+min_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    VLD1.P 16(R2), [V1.B16]
+    WORD $0x4E216C02              // SMIN V2.16B, V0.16B, V1.16B
+    VST1.P [V2.B16], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, min_loop16
+
+min_remainder:
+    AND  $15, R3
+    CBZ  R3, min_done
+
+min_scalar:
+    MOVB (R1), R5                 // a (sign-extended)
+    MOVB (R2), R6                 // b
+    CMP  R6, R5
+    CSEL LT, R5, R6, R5           // a < b ? a : b
+    MOVB R5, (R0)
+    ADD  $1, R1
+    ADD  $1, R2
+    ADD  $1, R0
+    SUB  $1, R3
+    CBNZ R3, min_scalar
+
+min_done:
+    RET
+
+// func maxNEON(dst, a, b []int8)
+// Element-wise signed max: SMAX folds 16-byte blocks; a signed CSEL scalar tail
+// handles the (n mod 16) remainder.
+TEXT ·maxNEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVD b_base+48(FP), R2
+
+    LSR  $4, R3, R4
+    CBZ  R4, max_remainder
+
+max_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    VLD1.P 16(R2), [V1.B16]
+    WORD $0x4E216402              // SMAX V2.16B, V0.16B, V1.16B
+    VST1.P [V2.B16], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, max_loop16
+
+max_remainder:
+    AND  $15, R3
+    CBZ  R3, max_done
+
+max_scalar:
+    MOVB (R1), R5
+    MOVB (R2), R6
+    CMP  R6, R5
+    CSEL GT, R5, R6, R5           // a > b ? a : b
+    MOVB R5, (R0)
+    ADD  $1, R1
+    ADD  $1, R2
+    ADD  $1, R0
+    SUB  $1, R3
+    CBNZ R3, max_scalar
+
+max_done:
+    RET
+
+// func clampNEON(dst, src []int8, lo, hi int8)
+// Activation clip: DUP lo/hi into all 16 lanes, then SMAX(src, lo) and
+// SMIN(., hi) per block. With lo > hi every element maps to hi. A signed CSEL
+// scalar tail reproduces the max-then-min clamp on the (n mod 16) remainder.
+TEXT ·clampNEON(SB), NOSPLIT, $0-50
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+    MOVB lo+48(FP), R5            // lo (sign-extended)
+    MOVB hi+49(FP), R6            // hi
+    WORD $0x4E010CA3              // DUP V3.16B, W5   (lo in all 16 lanes)
+    WORD $0x4E010CC4              // DUP V4.16B, W6   (hi in all 16 lanes)
+
+    LSR  $4, R3, R4
+    CBZ  R4, clamp_remainder
+
+clamp_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x4E236400              // SMAX V0.16B, V0.16B, V3.16B   (max(src, lo))
+    WORD $0x4E246C02              // SMIN V2.16B, V0.16B, V4.16B   (min(., hi))
+    VST1.P [V2.B16], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, clamp_loop16
+
+clamp_remainder:
+    AND  $15, R3
+    CBZ  R3, clamp_done
+
+clamp_scalar:
+    MOVB (R1), R7
+    CMP  R5, R7
+    CSEL LT, R5, R7, R7           // src < lo ? lo : src   (max)
+    CMP  R6, R7
+    CSEL GT, R6, R7, R7           // val > hi ? hi : val   (min)
+    MOVB R7, (R0)
+    ADD  $1, R1
+    ADD  $1, R0
+    SUB  $1, R3
+    CBNZ R3, clamp_scalar
+
+clamp_done:
+    RET
+
+// func absNEON(dst, a []int8)
+// Saturating absolute value: SQABS clamps abs(-128) to 127. A scalar tail negates
+// if negative then clamps high on the (n mod 16) remainder.
+TEXT ·absNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+
+    LSR  $4, R3, R4
+    CBZ  R4, abs_remainder
+
+abs_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x4E207802              // SQABS V2.16B, V0.16B
+    VST1.P [V2.B16], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, abs_loop16
+
+abs_remainder:
+    AND  $15, R3
+    CBZ  R3, abs_done
+    MOVD $127, R8                 // clamp constant, hoisted out of the loop
+
+abs_scalar:
+    MOVB (R1), R5                 // a (sign-extended)
+    NEG  R5, R6                   // -a
+    CMP  $0, R5
+    CSEL LT, R6, R5, R5           // a < 0 ? -a : a   (|a|, can be 128)
+    CMP  R8, R5
+    CSEL GT, R8, R5, R5           // |a| > 127 ? 127 : |a|   (saturate -128 case)
+    MOVB R5, (R0)
+    ADD  $1, R1
+    ADD  $1, R0
+    SUB  $1, R3
+    CBNZ R3, abs_scalar
+
+abs_done:
+    RET
+
+// func negNEON(dst, a []int8)
+// Saturating negation: SQNEG clamps neg(-128) to 127. A scalar tail negates then
+// clamps high (-a is always >= -127, so the low bound never binds) on the
+// (n mod 16) remainder.
+TEXT ·negNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+
+    LSR  $4, R3, R4
+    CBZ  R4, neg_remainder
+
+neg_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x6E207802              // SQNEG V2.16B, V0.16B
+    VST1.P [V2.B16], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, neg_loop16
+
+neg_remainder:
+    AND  $15, R3
+    CBZ  R3, neg_done
+    MOVD $127, R8                 // clamp constant, hoisted out of the loop
+
+neg_scalar:
+    MOVB (R1), R5
+    NEG  R5, R5                   // -a; -(-128) = 128
+    CMP  R8, R5
+    CSEL GT, R8, R5, R5           // -a > 127 ? 127 : -a   (saturate -128 case)
+    MOVB R5, (R0)
+    ADD  $1, R1
+    ADD  $1, R0
+    SUB  $1, R3
+    CBNZ R3, neg_scalar
+
+neg_done:
+    RET

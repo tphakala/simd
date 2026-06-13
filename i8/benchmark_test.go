@@ -70,3 +70,53 @@ func BenchmarkMinMax(b *testing.B) {
 		_, _ = MinMax(a)
 	}
 }
+
+func BenchmarkMin(b *testing.B) {
+	a, c := genI8(benchN, 1), genI8(benchN, 2)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		Min(dst, a, c)
+	}
+}
+
+func BenchmarkMax(b *testing.B) {
+	a, c := genI8(benchN, 1), genI8(benchN, 2)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		Max(dst, a, c)
+	}
+}
+
+func BenchmarkClamp(b *testing.B) {
+	a := genI8(benchN, 1)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		Clamp(dst, a, -64, 64)
+	}
+}
+
+func BenchmarkAbs(b *testing.B) {
+	a := genI8(benchN, 1)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		Abs(dst, a)
+	}
+}
+
+func BenchmarkNeg(b *testing.B) {
+	a := genI8(benchN, 1)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN)
+	b.ResetTimer()
+	for b.Loop() {
+		Neg(dst, a)
+	}
+}

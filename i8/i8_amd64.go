@@ -73,6 +73,46 @@ func minMaxI8(a []int8) (minVal, maxVal int8) {
 	return minMaxGo(a)
 }
 
+func minI8(dst, a, b []int8) {
+	if hasAVX2 && len(dst) >= blockSat32 {
+		minAVX2(dst, a, b)
+		return
+	}
+	minGo(dst, a, b)
+}
+
+func maxI8(dst, a, b []int8) {
+	if hasAVX2 && len(dst) >= blockSat32 {
+		maxAVX2(dst, a, b)
+		return
+	}
+	maxGo(dst, a, b)
+}
+
+func clampElemI8(dst, src []int8, lo, hi int8) {
+	if hasAVX2 && len(dst) >= blockSat32 {
+		clampAVX2(dst, src, lo, hi)
+		return
+	}
+	clampGo(dst, src, lo, hi)
+}
+
+func absI8(dst, a []int8) {
+	if hasAVX2 && len(dst) >= blockSat32 {
+		absAVX2(dst, a)
+		return
+	}
+	absGo(dst, a)
+}
+
+func negI8(dst, a []int8) {
+	if hasAVX2 && len(dst) >= blockSat32 {
+		negAVX2(dst, a)
+		return
+	}
+	negGo(dst, a)
+}
+
 //go:noescape
 func addSatAVX2(dst, a, b []int8)
 
@@ -93,3 +133,18 @@ func dotAVX2(a, b []int8) int32
 
 //go:noescape
 func minMaxAVX2(a []int8) (minVal, maxVal int8)
+
+//go:noescape
+func minAVX2(dst, a, b []int8)
+
+//go:noescape
+func maxAVX2(dst, a, b []int8)
+
+//go:noescape
+func clampAVX2(dst, src []int8, lo, hi int8)
+
+//go:noescape
+func absAVX2(dst, a []int8)
+
+//go:noescape
+func negAVX2(dst, a []int8)

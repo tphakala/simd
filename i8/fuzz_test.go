@@ -85,6 +85,51 @@ func FuzzI8MinMax(f *testing.F) {
 	})
 }
 
+func FuzzI8Elementwise(f *testing.F) {
+	lenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := i8FromBytes(raw)
+		h := len(v) / 2
+		a, b := v[:h], v[h:2*h]
+
+		gotMin := make([]int8, h)
+		wantMin := make([]int8, h)
+		Min(gotMin, a, b)
+		minGo(wantMin, a, b)
+		assertI8Eq(t, "Min", h, gotMin, wantMin)
+
+		gotMax := make([]int8, h)
+		wantMax := make([]int8, h)
+		Max(gotMax, a, b)
+		maxGo(wantMax, a, b)
+		assertI8Eq(t, "Max", h, gotMax, wantMax)
+
+		// Derive lo/hi from the first two bytes (or defaults for tiny inputs);
+		// the fuzzer will explore lo > hi too.
+		var lo, hi int8
+		if len(v) >= 2 {
+			lo, hi = v[0], v[1]
+		}
+		gotClamp := make([]int8, len(v))
+		wantClamp := make([]int8, len(v))
+		Clamp(gotClamp, v, lo, hi)
+		clampGo(wantClamp, v, lo, hi)
+		assertI8Eq(t, "Clamp", len(v), gotClamp, wantClamp)
+
+		gotAbs := make([]int8, len(v))
+		wantAbs := make([]int8, len(v))
+		Abs(gotAbs, v)
+		absGo(wantAbs, v)
+		assertI8Eq(t, "Abs", len(v), gotAbs, wantAbs)
+
+		gotNeg := make([]int8, len(v))
+		wantNeg := make([]int8, len(v))
+		Neg(gotNeg, v)
+		negGo(wantNeg, v)
+		assertI8Eq(t, "Neg", len(v), gotNeg, wantNeg)
+	})
+}
+
 func FuzzI8Convert(f *testing.F) {
 	lenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {
