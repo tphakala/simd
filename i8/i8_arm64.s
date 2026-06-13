@@ -630,3 +630,87 @@ absdiff_scalar:
 
 absdiff_done:
     RET
+
+// func addScalarSatNEON(dst, a []int8, s int8)
+// Broadcast s into all 16 lanes (DUP) and add with signed saturation (SQADD). A
+// CSEL clamp scalar tail handles the (n mod 16) remainder.
+TEXT ·addScalarSatNEON(SB), NOSPLIT, $0-49
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVB s+48(FP), R5            // s (sign-extended)
+    WORD $0x4E010CA3             // DUP V3.16B, W5   (s in all 16 lanes)
+
+    LSR  $4, R3, R4
+    CBZ  R4, addscalar_remainder
+
+addscalar_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x4E230C02            // SQADD V2.16B, V0.16B, V3.16B
+    VST1.P [V2.B16], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, addscalar_loop16
+
+addscalar_remainder:
+    AND  $15, R3
+    CBZ  R3, addscalar_done
+    MOVD $127, R8                // clamp constants, hoisted out of the loop
+    MOVD $-128, R9
+
+addscalar_scalar:
+    MOVB (R1), R6                // a (sign-extended)
+    ADD  R5, R6, R6              // a + s (exact in 64-bit)
+    CMP  R8, R6
+    CSEL GT, R8, R6, R6          // clamp high
+    CMP  R9, R6
+    CSEL LT, R9, R6, R6          // clamp low
+    MOVB R6, (R0)
+    ADD  $1, R1
+    ADD  $1, R0
+    SUB  $1, R3
+    CBNZ R3, addscalar_scalar
+
+addscalar_done:
+    RET
+
+// func subScalarSatNEON(dst, a []int8, s int8)
+// Broadcast s into all 16 lanes (DUP) and subtract with signed saturation
+// (SQSUB). A CSEL clamp scalar tail handles the (n mod 16) remainder.
+TEXT ·subScalarSatNEON(SB), NOSPLIT, $0-49
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVB s+48(FP), R5            // s (sign-extended)
+    WORD $0x4E010CA3             // DUP V3.16B, W5   (s in all 16 lanes)
+
+    LSR  $4, R3, R4
+    CBZ  R4, subscalar_remainder
+
+subscalar_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x4E232C02            // SQSUB V2.16B, V0.16B, V3.16B
+    VST1.P [V2.B16], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, subscalar_loop16
+
+subscalar_remainder:
+    AND  $15, R3
+    CBZ  R3, subscalar_done
+    MOVD $127, R8
+    MOVD $-128, R9
+
+subscalar_scalar:
+    MOVB (R1), R6
+    SUB  R5, R6, R6              // a - s
+    CMP  R8, R6
+    CSEL GT, R8, R6, R6          // clamp high
+    CMP  R9, R6
+    CSEL LT, R9, R6, R6          // clamp low
+    MOVB R6, (R0)
+    ADD  $1, R1
+    ADD  $1, R0
+    SUB  $1, R3
+    CBNZ R3, subscalar_scalar
+
+subscalar_done:
+    RET
