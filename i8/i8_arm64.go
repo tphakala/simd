@@ -144,6 +144,20 @@ func subScalarSatI8(dst, a []int8, s int8) {
 	subScalarSatGo(dst, a, s)
 }
 
+func sumAbsI8(a []int8) int32 {
+	if hasNEON && len(a) >= minNEON16 {
+		return sumAbsNEON(a)
+	}
+	return sumAbsGo(a)
+}
+
+func sadI8(a, b []int8) int32 {
+	if hasNEON && len(a) >= minNEON16 {
+		return sadNEON(a, b)
+	}
+	return sadGo(a, b)
+}
+
 //go:noescape
 func addSatNEON(dst, a, b []int8)
 
@@ -194,3 +208,9 @@ func addScalarSatNEON(dst, a []int8, s int8)
 
 //go:noescape
 func subScalarSatNEON(dst, a []int8, s int8)
+
+//go:noescape
+func sumAbsNEON(a []int8) int32
+
+//go:noescape
+func sadNEON(a, b []int8) int32

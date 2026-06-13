@@ -714,3 +714,92 @@ subscalar_scalar:
 
 subscalar_done:
     RET
+
+// func sumAbsNEON(a []int8) int32
+// L1 norm: ABS maps each byte to its magnitude, UADDLP folds 16 bytes to 8
+// halfwords, UADALP accumulates those into a 4-lane int32 accumulator; ADDV
+// folds the lanes and a scalar tail adds the (n mod 16) remainder. int32 wrapping
+// addition is associative, so the lane-parallel total matches the reference.
+TEXT ·sumAbsNEON(SB), NOSPLIT, $0-28
+    MOVD a_base+0(FP), R1
+    MOVD a_len+8(FP), R3
+
+    VEOR V2.B16, V2.B16, V2.B16   // int32 accumulator = 0
+    LSR  $4, R3, R4               // R4 = n / 16
+    CBZ  R4, sumabs_reduce
+
+sumabs_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x4E20B800             // ABS    V0.16B, V0.16B
+    WORD $0x6E202801            // UADDLP V1.8H, V0.16B
+    WORD $0x6E606822            // UADALP V2.4S, V1.8H
+    SUB  $1, R4
+    CBNZ R4, sumabs_loop16
+
+sumabs_reduce:
+    WORD $0x4EB1B843             // ADDV S3, V2.4S
+    FMOVS F3, R5                  // R5 = vector total (low 32)
+
+    AND  $15, R3
+    CBZ  R3, sumabs_done
+
+sumabs_scalar:
+    MOVB (R1), R6                 // v (sign-extended)
+    NEG  R6, R7                   // -v
+    CMP  $0, R6
+    CSEL LT, R7, R6, R6           // |v|
+    ADDW R6, R5, R5               // 32-bit wrapping add
+    ADD  $1, R1
+    SUB  $1, R3
+    CBNZ R3, sumabs_scalar
+
+sumabs_done:
+    MOVW R5, ret+24(FP)
+    RET
+
+// func sadNEON(a, b []int8) int32
+// Sum of absolute differences: SABD computes the true unsigned |a-b| per byte
+// (0..255), UADDLP/UADALP widen-accumulate into a 4-lane int32 accumulator; ADDV
+// folds the lanes and a scalar tail adds the (n mod 16) remainder. No +128 offset
+// is needed (SABD handles the signed inputs directly).
+TEXT ·sadNEON(SB), NOSPLIT, $0-52
+    MOVD a_base+0(FP), R1
+    MOVD a_len+8(FP), R3
+    MOVD b_base+24(FP), R2
+
+    VEOR V4.B16, V4.B16, V4.B16   // int32 accumulator = 0
+    LSR  $4, R3, R4
+    CBZ  R4, sad_reduce
+
+sad_loop16:
+    VLD1.P 16(R1), [V0.B16]
+    VLD1.P 16(R2), [V1.B16]
+    WORD $0x4E217402            // SABD   V2.16B, V0.16B, V1.16B
+    WORD $0x6E202843            // UADDLP V3.8H, V2.16B
+    WORD $0x6E606864            // UADALP V4.4S, V3.8H
+    SUB  $1, R4
+    CBNZ R4, sad_loop16
+
+sad_reduce:
+    WORD $0x4EB1B885             // ADDV S5, V4.4S
+    FMOVS F5, R5
+
+    AND  $15, R3
+    CBZ  R3, sad_done
+
+sad_scalar:
+    MOVB (R1), R6                 // a (sign-extended)
+    MOVB (R2), R7                 // b
+    SUB  R7, R6, R6               // a - b
+    NEG  R6, R8                   // -(a - b)
+    CMP  $0, R6
+    CSEL LT, R8, R6, R6           // |a - b|
+    ADDW R6, R5, R5               // 32-bit wrapping add
+    ADD  $1, R1
+    ADD  $1, R2
+    SUB  $1, R3
+    CBNZ R3, sad_scalar
+
+sad_done:
+    MOVW R5, ret+48(FP)
+    RET
