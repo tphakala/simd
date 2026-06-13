@@ -10,10 +10,11 @@
 //     AddScalarSaturate, SubScalarSaturate): single hardware instructions
 //     (PADDSB/PSUBSB, SQADD/SQSUB) that clamp to [-128, 127] instead of wrapping,
 //     which is what 8-bit arithmetic almost always wants.
-//   - int32-accumulated reductions (Sum, DotProduct): widen to int32 so the
-//     running total has headroom. DotProduct is the inner loop of quantized
-//     matmul/conv; it uses ARM64 SDOT (FEAT_DotProd) where available and AVX2
-//     VPMADDWD otherwise.
+//   - int32-accumulated reductions (Sum, DotProduct, SumAbs, SAD): widen to
+//     int32 so the running total has headroom. DotProduct is the inner loop of
+//     quantized matmul/conv; it uses ARM64 SDOT (FEAT_DotProd) where available
+//     and AVX2 VPMADDWD otherwise. SumAbs is the L1 norm and SAD the sum of
+//     absolute differences (block matching), both via PSADBW on AVX2.
 //   - Signed min/max (MinMax reduction; element-wise two-slice Min/Max).
 //   - Element-wise Clamp (activation clipping) and saturating Abs/Neg, where
 //     -128 maps to 127 (SQABS/SQNEG on NEON; saturating constructions on AVX2).
