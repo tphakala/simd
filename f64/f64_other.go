@@ -30,6 +30,9 @@ func dotProductBatch64(results []float64, rows [][]float64, vec []float64) {
 	dotProductBatch64Go(results, rows, vec)
 }
 func convolveValid64(dst, signal, kernel []float64) { convolveValid64Go(dst, signal, kernel) }
+func convolveValidMaxAbs64(signal, kernel []float64) float64 {
+	return convolveValidMaxAbsGo(signal, kernel)
+}
 func convolveDecimate64(dst, signal, kernel []float64, factor, phase int) {
 	convolveDecimate64Go(dst, signal, kernel, factor, phase)
 }

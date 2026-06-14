@@ -650,21 +650,6 @@ func ConvolveValidMaxAbs(signal, kernel []float64) float64 {
 	return convolveValidMaxAbs64(signal, kernel)
 }
 
-// convolveValidMaxAbs64 fuses the valid convolution with the abs-max reduction.
-// It calls the dispatched SIMD dotProduct per output position, so it is
-// vectorized on every backend without a dedicated kernel.
-func convolveValidMaxAbs64(signal, kernel []float64) float64 {
-	kLen := len(kernel)
-	validLen := len(signal) - kLen + 1
-	var m float64 // abs values are >= 0, so 0 is the correct identity
-	for i := range validLen {
-		if v := math.Abs(dotProduct(signal[i:i+kLen], kernel)); v > m {
-			m = v
-		}
-	}
-	return m
-}
-
 // ConvolveValidMaxAbsMulti returns the single maximum of |valid-convolution
 // output| across every kernel applied to signal, without materializing any
 // output. This is the polyphase true-peak primitive: pass the N phase kernels and
