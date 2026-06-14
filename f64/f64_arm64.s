@@ -362,6 +362,47 @@ max_reduce:
     FMOVD F0, ret+24(FP)
     RET
 
+// func maxAbsNEON(a []float64) float64
+// max_i |a[i]|. Mirrors maxNEON with FABS folded into each loaded vector and the
+// scalar tail (2 x float64 per 128-bit register).
+TEXT ·maxAbsNEON(SB), NOSPLIT, $0-32
+    MOVD a_base+0(FP), R0
+    MOVD a_len+8(FP), R1
+
+    VLD1.P 16(R0), [V0.D2]
+    WORD $0x4EE0F800           // FABS V0.2D, V0.2D
+    SUB $2, R1
+
+    LSR $1, R1, R2
+    CBZ R2, maxabs_scalar
+
+maxabs_loop2:
+    VLD1.P 16(R0), [V1.D2]
+    WORD $0x4EE0F821           // FABS V1.2D, V1.2D
+    WORD $0x4E61F400           // FMAX V0.2D, V0.2D, V1.2D
+    SUB $1, R2
+    CBNZ R2, maxabs_loop2
+
+maxabs_scalar:
+    AND $1, R1
+    CBZ R1, maxabs_reduce
+
+    // Reduce vector FIRST before scalar ops
+    VDUP V0.D[1], V1.D2
+    FMAXD F0, F1, F0
+    FMOVD (R0), F1
+    FABSD F1, F1
+    FMAXD F0, F1, F0
+    FMOVD F0, ret+24(FP)
+    RET
+
+maxabs_reduce:
+    // No scalar remainder
+    VDUP V0.D[1], V1.D2
+    FMAXD F0, F1, F0
+    FMOVD F0, ret+24(FP)
+    RET
+
 // func absNEON(dst, a []float64)
 TEXT ·absNEON(SB), NOSPLIT, $0-48
     MOVD dst_base+0(FP), R0
