@@ -1728,6 +1728,80 @@ cd_neon_store:
 cd_neon_done:
     RET
 
+// func convolveValidMaxAbsNEON(signal, kernel []float64) float64
+//
+// Fused valid convolution + abs-max: returns max_i |dot(signal[i:i+kLen], kernel)|
+// over the n = len(signal)-kLen+1 windows. The inner dot replicates
+// convolveDecimateNEON (two FMLA accumulators, 4/2/scalar reduction, FADDP), so
+// each window is bit-identical to dotProductNEON / ConvolveValid; the per-window
+// store is replaced by FABS into a running max (F6). Caller guarantees kLen >= 2
+// and len(signal) >= kLen (kLen < 2 takes the Go fallback), so n >= 1.
+TEXT ·convolveValidMaxAbsNEON(SB), NOSPLIT, $0-56
+    MOVD signal_base+0(FP), R11   // R11 = &signal[pos], advances 8 bytes/output
+    MOVD signal_len+8(FP), R10
+    MOVD kernel_base+24(FP), R12
+    MOVD kernel_len+32(FP), R13    // R13 = kLen
+
+    SUB R13, R10                  // signal_len - kLen
+    ADD $1, R10                   // R10 = n
+    VEOR V6.B16, V6.B16, V6.B16   // running max F6 = 0
+
+cvma_neon_outer:
+    MOVD R11, R0                  // R0 = &signal[pos]
+    MOVD R12, R1                  // R1 = &kernel[0]
+    MOVD R13, R2                  // R2 = kLen
+
+    VEOR V0.B16, V0.B16, V0.B16
+    VEOR V1.B16, V1.B16, V1.B16
+
+    LSR $2, R2, R3                // kLen / 4
+    CBZ R3, cvma_neon_rem2
+
+cvma_neon_loop4:
+    VLD1.P 16(R0), [V2.D2]
+    VLD1.P 16(R0), [V3.D2]
+    VLD1.P 16(R1), [V4.D2]
+    VLD1.P 16(R1), [V5.D2]
+    WORD $0x4E64CC40             // FMLA V0.2D, V2.2D, V4.2D
+    WORD $0x4E65CC61             // FMLA V1.2D, V3.2D, V5.2D
+    SUB $1, R3
+    CBNZ R3, cvma_neon_loop4
+
+    WORD $0x4E61D400            // FADD V0.2D, V0.2D, V1.2D
+
+cvma_neon_rem2:
+    AND $3, R2, R3
+    LSR $1, R3, R4
+    CBZ R4, cvma_neon_rem1
+
+    VLD1.P 16(R0), [V2.D2]
+    VLD1.P 16(R1), [V4.D2]
+    WORD $0x4E64CC40            // FMLA V0.2D, V2.2D, V4.2D
+
+cvma_neon_rem1:
+    AND $1, R3, R4
+    CBZ R4, cvma_neon_reduce
+
+    // Reduce vector FIRST before scalar op (scalar ops zero upper V bits).
+    WORD $0x7E70D800           // FADDP D0, V0.2D
+    FMOVD (R0), F2
+    FMOVD (R1), F4
+    FMADDD F4, F0, F2, F0        // F0 = F2 * F4 + F0
+    B cvma_neon_absmax
+
+cvma_neon_reduce:
+    WORD $0x7E70D800           // FADDP D0, V0.2D
+
+cvma_neon_absmax:
+    FABSD F0, F0
+    FMAXD F0, F6, F6           // F6 = max(F6, |dot|)
+    ADD $8, R11               // pos += 1
+    SUB $1, R10
+    CBNZ R10, cvma_neon_outer
+
+    FMOVD F6, ret+48(FP)
+    RET
+
 // func autocorrStep2NEON(acc, broadcast, window *float64, count int)
 // Steady-region accumulation for two autocorrelation lags at once. V0 holds the
 // two seeded accumulators (lanes = lags base..base+1). Each iteration broadcasts

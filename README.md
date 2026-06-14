@@ -770,17 +770,23 @@ a Raspberry Pi 5):
 #### ConvolveValidMaxAbs (fused valid convolution + abs-max peak)
 
 `ConvolveValidMaxAbs` returns `max(|valid-convolution output|)` (the infinity
-norm of the FIR output) without materializing the output slice. Each output is
-still a SIMD dot product, but the abs-max reduction is folded into the same pass,
-so it removes both the per-output store to a scratch buffer and the separate
-scalar abs-max scan a consumer writes today. The baseline is `ConvolveValid`
-into a temporary slice followed by a `MaxAbs` over it; both compute the identical
-peak. `ConvolveValidMaxAbsMulti` takes the N phase kernels of a polyphase
-oversampling FIR and returns the single peak of the reconstructed signal in one
-call, which is the canonical true-peak (ITU-R BS.1770 / EBU R 128) primitive.
-The standalone `MaxAbs` reduction (`VANDPD`+`VMAXPD` on AVX2, `ANDPS`+`MAXPS` on
-SSE, `FABS`+`FMAX` on NEON) covers peak metering, clipping detection, and
-normalization headroom on its own.
+norm of the FIR output) without materializing the output slice. It is a single
+fused kernel (modeled on `ConvolveDecimate` with a stride of one): the kernel
+coefficients stay resident across output positions and the abs-max is folded into
+each window's reduce, so it removes the per-output dispatch and slice-header
+overhead, the per-output store to a scratch buffer, and the separate scalar
+abs-max scan a consumer writes today. The inner dot replicates `dotProduct`
+exactly, so the peak is bit-identical to `ConvolveValid` into a temporary slice
+followed by a `MaxAbs` over it. Versus that materialized baseline (and the
+Go-level fusion that just loops over `dotProduct`), the fused kernel runs roughly
+1.4x-2.2x faster for 16-64 tap kernels, the largest win at short kernels where
+the per-output overhead dominates the MAC work (AVX2; FMA-less CPUs use the SSE
+kernel, ARM64 uses NEON). `ConvolveValidMaxAbsMulti` takes the N phase kernels of
+a polyphase oversampling FIR and returns the single peak of the reconstructed
+signal in one call, which is the canonical true-peak (ITU-R BS.1770 / EBU R 128)
+primitive. The standalone `MaxAbs` reduction (`VANDPD`+`VMAXPD` on AVX2,
+`ANDPS`+`MAXPS` on SSE, `FABS`+`FMAX` on NEON) covers peak metering, clipping
+detection, and normalization headroom on its own.
 
 #### Autocorrelate (lag-vectorized LPC autocorrelation, f64)
 

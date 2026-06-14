@@ -315,6 +315,22 @@ func convolveValid64Go(dst, signal, kernel []float64) {
 	}
 }
 
+// convolveValidMaxAbsGo is the Go-level fused fallback for ConvolveValidMaxAbs:
+// it loops over the dispatched dotProduct (matching convolveValid64) and folds
+// the abs-max in, so it is bit-identical to max|ConvolveValid output| on every
+// backend. The dedicated convolveValidMaxAbs* kernels supersede it where present.
+func convolveValidMaxAbsGo(signal, kernel []float64) float64 {
+	kLen := len(kernel)
+	validLen := len(signal) - kLen + 1
+	var m float64 // abs values are >= 0, so 0 is the correct identity
+	for i := range validLen {
+		if v := math.Abs(dotProduct(signal[i:i+kLen], kernel)); v > m {
+			m = v
+		}
+	}
+	return m
+}
+
 // convolveDecimate64Go is the pure-Go decimating valid convolution. It is the
 // correctness oracle for the SIMD paths and the fallback on non-asm platforms.
 func convolveDecimate64Go(dst, signal, kernel []float64, factor, phase int) {

@@ -30,6 +30,9 @@ func dotProductStrided(dst, base, query []float32, rowCount, dims, stride int) b
 	return false
 }
 func convolveValid32(dst, signal, kernel []float32) { convolveValid32Go(dst, signal, kernel) }
+func convolveValidMaxAbs32(signal, kernel []float32) float32 {
+	return convolveValidMaxAbsGo(signal, kernel)
+}
 func convolveDecimate32(dst, signal, kernel []float32, factor, phase int) {
 	convolveDecimate32Go(dst, signal, kernel, factor, phase)
 }

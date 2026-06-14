@@ -627,6 +627,44 @@ func BenchmarkConvolveValid(b *testing.B) {
 	}
 }
 
+// BenchmarkConvolveValidMaxAbs compares the fused kernel against the Go-level
+// fusion it replaces (rc.1 behavior: a loop over the dispatched dotProduct). The
+// fused kernel keeps the kernel resident and folds the abs-max in, removing the
+// per-output dispatch overhead; the win is largest for short kernels.
+func BenchmarkConvolveValidMaxAbs(b *testing.B) {
+	signalSizes := []int{4096, 48000}
+	kernelSizes := []int{16, 32, 64}
+
+	for _, sigSize := range signalSizes {
+		for _, kerSize := range kernelSizes {
+			signal := make([]float64, sigSize)
+			kernel := make([]float64, kerSize)
+			for i := range signal {
+				signal[i] = float64(i%100) - 50
+			}
+			for i := range kernel {
+				kernel[i] = float64(i%10) - 5
+			}
+
+			name := fmt.Sprintf("sig%d_ker%d", sigSize, kerSize)
+			b.Run(fmt.Sprintf("Fused_%s", name), func(b *testing.B) {
+				var sink float64
+				for i := 0; i < b.N; i++ {
+					sink = ConvolveValidMaxAbs(signal, kernel)
+				}
+				_ = sink
+			})
+			b.Run(fmt.Sprintf("GoFusion_%s", name), func(b *testing.B) {
+				var sink float64
+				for i := 0; i < b.N; i++ {
+					sink = convolveValidMaxAbsGo(signal, kernel)
+				}
+				_ = sink
+			})
+		}
+	}
+}
+
 // =============================================================================
 // Activation Functions
 // =============================================================================

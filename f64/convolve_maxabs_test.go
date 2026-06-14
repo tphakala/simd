@@ -112,3 +112,39 @@ func TestConvolveValidMaxAbsNoAlloc(t *testing.T) {
 		t.Errorf("ConvolveValidMaxAbsMulti allocated %v, want 0", n)
 	}
 }
+
+// TestConvolveValidMaxAbsScalarOracle checks the dispatched (SIMD) path against an
+// independent pure-Go math.FMA oracle rather than ConvolveValid, so a bug shared
+// by the fused convolution and the dot-product path is still caught. Tolerance,
+// since the SIMD lane-parallel summation order differs from the sequential oracle.
+func TestConvolveValidMaxAbsScalarOracle(t *testing.T) {
+	for _, kl := range []int{1, 2, 3, 4, 5, 8, 13, 16, 17, 31, 32, 33, 64} {
+		for _, sl := range []int{kl, kl + 1, 65, 128, 257} {
+			if sl < kl {
+				continue
+			}
+			signal := make([]float64, sl)
+			kernel := make([]float64, kl)
+			for i := range signal {
+				signal[i] = math.Sin(float64(i)*0.17) - 0.25*float64(i%5)
+			}
+			for i := range kernel {
+				kernel[i] = math.Cos(float64(i)*0.23) * 0.6
+			}
+			got := ConvolveValidMaxAbs(signal, kernel)
+			var want float64
+			for i := range sl - kl + 1 {
+				var s float64
+				for j := range kl {
+					s = math.FMA(signal[i+j], kernel[j], s)
+				}
+				if a := math.Abs(s); a > want {
+					want = a
+				}
+			}
+			if d := math.Abs(got - want); d > 1e-9*(1+want) {
+				t.Errorf("sl=%d kl=%d: got %v want(scalar) %v diff=%g", sl, kl, got, want, d)
+			}
+		}
+	}
+}

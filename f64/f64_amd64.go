@@ -27,47 +27,49 @@ var hasAVX2 = cpu.X86.AVX2
 
 // Function pointer types for SIMD operations
 type (
-	dotProductFunc        func(a, b []float64) float64
-	binaryOpFunc          func(dst, a, b []float64)
-	scaleFunc             func(dst, a []float64, s float64)
-	unaryOpFunc           func(dst, a []float64)
-	reduceFunc            func(a []float64) float64
-	fmaFunc               func(dst, a, b, c []float64)
-	clampFunc             func(dst, a []float64, minVal, maxVal float64)
-	varianceFunc          func(a []float64, mean float64) float64
-	euclideanDistanceFunc func(a, b []float64) float64
-	interleave2Func       func(dst, a, b []float64)
-	deinterleave2Func     func(a, b, src []float64)
-	addScaledFunc         func(dst []float64, alpha float64, s []float64)
-	convolveDecimateFunc  func(dst, signal, kernel []float64, factor, phase int)
+	dotProductFunc          func(a, b []float64) float64
+	binaryOpFunc            func(dst, a, b []float64)
+	scaleFunc               func(dst, a []float64, s float64)
+	unaryOpFunc             func(dst, a []float64)
+	reduceFunc              func(a []float64) float64
+	fmaFunc                 func(dst, a, b, c []float64)
+	clampFunc               func(dst, a []float64, minVal, maxVal float64)
+	varianceFunc            func(a []float64, mean float64) float64
+	euclideanDistanceFunc   func(a, b []float64) float64
+	interleave2Func         func(dst, a, b []float64)
+	deinterleave2Func       func(a, b, src []float64)
+	addScaledFunc           func(dst []float64, alpha float64, s []float64)
+	convolveDecimateFunc    func(dst, signal, kernel []float64, factor, phase int)
+	convolveValidMaxAbsFunc func(signal, kernel []float64) float64
 )
 
 // Function pointers - assigned at init time based on CPU features
 var (
-	dotProductImpl        dotProductFunc
-	addImpl               binaryOpFunc
-	subImpl               binaryOpFunc
-	mulImpl               binaryOpFunc
-	divImpl               binaryOpFunc
-	scaleImpl             scaleFunc
-	addScalarImpl         scaleFunc
-	sumImpl               reduceFunc
-	minImpl               reduceFunc
-	maxImpl               reduceFunc
-	maxAbsImpl            reduceFunc
-	absImpl               unaryOpFunc
-	negImpl               unaryOpFunc
-	sqrtImpl              unaryOpFunc
-	reciprocalImpl        unaryOpFunc
-	roundImpl             unaryOpFunc
-	fmaImpl               fmaFunc
-	clampImpl             clampFunc
-	varianceImpl          varianceFunc
-	euclideanDistanceImpl euclideanDistanceFunc
-	interleave2Impl       interleave2Func
-	deinterleave2Impl     deinterleave2Func
-	addScaledImpl         addScaledFunc
-	convolveDecimateImpl  convolveDecimateFunc
+	dotProductImpl          dotProductFunc
+	addImpl                 binaryOpFunc
+	subImpl                 binaryOpFunc
+	mulImpl                 binaryOpFunc
+	divImpl                 binaryOpFunc
+	scaleImpl               scaleFunc
+	addScalarImpl           scaleFunc
+	sumImpl                 reduceFunc
+	minImpl                 reduceFunc
+	maxImpl                 reduceFunc
+	maxAbsImpl              reduceFunc
+	absImpl                 unaryOpFunc
+	negImpl                 unaryOpFunc
+	sqrtImpl                unaryOpFunc
+	reciprocalImpl          unaryOpFunc
+	roundImpl               unaryOpFunc
+	fmaImpl                 fmaFunc
+	clampImpl               clampFunc
+	varianceImpl            varianceFunc
+	euclideanDistanceImpl   euclideanDistanceFunc
+	interleave2Impl         interleave2Func
+	deinterleave2Impl       deinterleave2Func
+	addScaledImpl           addScaledFunc
+	convolveDecimateImpl    convolveDecimateFunc
+	convolveValidMaxAbsImpl convolveValidMaxAbsFunc
 )
 
 func init() {
@@ -113,6 +115,12 @@ func initAVX512() {
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledAVX512
 	convolveDecimateImpl = convolveDecimateAVX512
+	// AVX-512 keeps the Go-level fusion over the 8-wide dotProductAVX512: the fused
+	// kernel is 4-wide (AVX2) and its dot summation order would diverge from
+	// ConvolveValid here. A dedicated 8-wide fused kernel needs AVX-512 hardware to
+	// validate (none available; see #138), so the AVX-512 tier forgoes the fused
+	// speedup but stays bit-identical to ConvolveValid.
+	convolveValidMaxAbsImpl = convolveValidMaxAbsGo
 }
 
 func initAVX() {
@@ -141,6 +149,7 @@ func initAVX() {
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledAVX
 	convolveDecimateImpl = convolveDecimateAVX
+	convolveValidMaxAbsImpl = convolveValidMaxAbsAVX
 }
 
 // initAVXNoFMA runs on AVX-capable CPUs that lack FMA (rare but possible:
@@ -173,6 +182,7 @@ func initAVXNoFMA() {
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledSSE2
 	convolveDecimateImpl = convolveDecimateSSE2
+	convolveValidMaxAbsImpl = convolveValidMaxAbsSSE2
 }
 
 func initSSE2() {
@@ -200,6 +210,7 @@ func initSSE2() {
 	deinterleave2Impl = deinterleave2SSE2
 	addScaledImpl = addScaledSSE2
 	convolveDecimateImpl = convolveDecimateSSE2
+	convolveValidMaxAbsImpl = convolveValidMaxAbsSSE2
 }
 
 func initGo() {
@@ -227,6 +238,7 @@ func initGo() {
 	deinterleave2Impl = deinterleave2Go
 	addScaledImpl = addScaledGo64
 	convolveDecimateImpl = convolveDecimate64Go
+	convolveValidMaxAbsImpl = convolveValidMaxAbsGo
 }
 
 // Dispatch functions - call function pointers (zero overhead after init)
@@ -461,6 +473,10 @@ func convolveValid64(dst, signal, kernel []float64) {
 
 func convolveDecimate64(dst, signal, kernel []float64, factor, phase int) {
 	convolveDecimateImpl(dst, signal, kernel, factor, phase)
+}
+
+func convolveValidMaxAbs64(signal, kernel []float64) float64 {
+	return convolveValidMaxAbsImpl(signal, kernel)
 }
 
 func accumulateAdd64(dst, src []float64) {
@@ -793,6 +809,12 @@ func convolveDecimateAVX512(dst, signal, kernel []float64, factor, phase int)
 
 //go:noescape
 func convolveDecimateSSE2(dst, signal, kernel []float64, factor, phase int)
+
+//go:noescape
+func convolveValidMaxAbsAVX(signal, kernel []float64) float64
+
+//go:noescape
+func convolveValidMaxAbsSSE2(signal, kernel []float64) float64
 
 //go:noescape
 func addAVX(dst, a, b []float64)

@@ -12,58 +12,60 @@ import (
 // snapshotImpls captures every dispatch function pointer plus minSIMDElements
 // so a test that calls one of the init* functions can restore them in t.Cleanup.
 type implSnapshot struct {
-	dotProduct        dotProductFunc
-	add               binaryOpFunc
-	sub               binaryOpFunc
-	mul               binaryOpFunc
-	div               binaryOpFunc
-	scale             scaleFunc
-	addScalar         scaleFunc
-	sum               reduceFunc
-	min               reduceFunc
-	max               reduceFunc
-	maxAbs            reduceFunc
-	abs               unaryOpFunc
-	neg               unaryOpFunc
-	sqrt              unaryOpFunc
-	reciprocal        unaryOpFunc
-	round             unaryOpFunc
-	fma               fmaFunc
-	clamp             clampFunc
-	variance          varianceFunc
-	euclideanDistance euclideanDistanceFunc
-	interleave2       interleave2Func
-	deinterleave2     deinterleave2Func
-	addScaled         addScaledFunc
-	minSIMDElements   int
+	dotProduct          dotProductFunc
+	add                 binaryOpFunc
+	sub                 binaryOpFunc
+	mul                 binaryOpFunc
+	div                 binaryOpFunc
+	scale               scaleFunc
+	addScalar           scaleFunc
+	sum                 reduceFunc
+	min                 reduceFunc
+	max                 reduceFunc
+	maxAbs              reduceFunc
+	abs                 unaryOpFunc
+	neg                 unaryOpFunc
+	sqrt                unaryOpFunc
+	reciprocal          unaryOpFunc
+	round               unaryOpFunc
+	fma                 fmaFunc
+	clamp               clampFunc
+	variance            varianceFunc
+	euclideanDistance   euclideanDistanceFunc
+	interleave2         interleave2Func
+	deinterleave2       deinterleave2Func
+	addScaled           addScaledFunc
+	convolveValidMaxAbs convolveValidMaxAbsFunc
+	minSIMDElements     int
 }
 
 func snapshotDispatch() implSnapshot {
 	return implSnapshot{
-		dotProduct:        dotProductImpl,
-		add:               addImpl,
-		sub:               subImpl,
-		mul:               mulImpl,
-		div:               divImpl,
-		scale:             scaleImpl,
-		addScalar:         addScalarImpl,
-		sum:               sumImpl,
-		min:               minImpl,
-		max:               maxImpl,
-		maxAbs:            maxAbsImpl,
-		abs:               absImpl,
-		neg:               negImpl,
-		sqrt:              sqrtImpl,
-		reciprocal:        reciprocalImpl,
-		round:             roundImpl,
-		fma:               fmaImpl,
-		clamp:             clampImpl,
-		variance:          varianceImpl,
-		euclideanDistance: euclideanDistanceImpl,
-		interleave2:       interleave2Impl,
-		deinterleave2:     deinterleave2Impl,
-		addScaled:         addScaledImpl,
-		minSIMDElements:   minSIMDElements,
+		dotProduct:          dotProductImpl,
+		add:                 addImpl,
+		sub:                 subImpl,
+		mul:                 mulImpl,
+		div:                 divImpl,
+		scale:               scaleImpl,
+		addScalar:           addScalarImpl,
+		sum:                 sumImpl,
+		min:                 minImpl,
+		max:                 maxImpl,
+		maxAbs:              maxAbsImpl,
+		abs:                 absImpl,
+		neg:                 negImpl,
+		sqrt:                sqrtImpl,
+		reciprocal:          reciprocalImpl,
+		round:               roundImpl,
+		fma:                 fmaImpl,
+		clamp:               clampImpl,
+		variance:            varianceImpl,
+		euclideanDistance:   euclideanDistanceImpl,
+		interleave2:         interleave2Impl,
+		deinterleave2:       deinterleave2Impl,
+		addScaled:           addScaledImpl,
+		convolveValidMaxAbs: convolveValidMaxAbsImpl,
+		minSIMDElements:     minSIMDElements,
 	}
 }
 
@@ -91,6 +93,7 @@ func restoreDispatch(s *implSnapshot) {
 	interleave2Impl = s.interleave2
 	deinterleave2Impl = s.deinterleave2
 	addScaledImpl = s.addScaled
+	convolveValidMaxAbsImpl = s.convolveValidMaxAbs
 	minSIMDElements = s.minSIMDElements
 }
 
@@ -218,6 +221,7 @@ func TestInitAVXNoFMA(t *testing.T) {
 		{"varianceImpl", varianceImpl, varianceSSE2},
 		{"euclideanDistanceImpl", euclideanDistanceImpl, euclideanDistanceSSE2},
 		{"addScaledImpl", addScaledImpl, addScaledSSE2},
+		{"convolveValidMaxAbsImpl", convolveValidMaxAbsImpl, convolveValidMaxAbsSSE2},
 	} {
 		if !samePointer(c.got, c.want) {
 			t.Errorf("initAVXNoFMA: %s should fall back to SSE2 (FMA-free)", c.name)
