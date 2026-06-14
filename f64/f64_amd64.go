@@ -54,6 +54,7 @@ var (
 	sumImpl               reduceFunc
 	minImpl               reduceFunc
 	maxImpl               reduceFunc
+	maxAbsImpl            reduceFunc
 	absImpl               unaryOpFunc
 	negImpl               unaryOpFunc
 	sqrtImpl              unaryOpFunc
@@ -98,6 +99,7 @@ func initAVX512() {
 	sumImpl = sumAVX512
 	minImpl = minAVX512
 	maxImpl = maxAVX512
+	maxAbsImpl = maxAbsGo
 	absImpl = absAVX512
 	negImpl = negAVX512
 	sqrtImpl = sqrtAVX512
@@ -125,6 +127,7 @@ func initAVX() {
 	sumImpl = sumAVX
 	minImpl = minAVX
 	maxImpl = maxAVX
+	maxAbsImpl = maxAbsGo
 	absImpl = absAVX
 	negImpl = negAVX
 	sqrtImpl = sqrtAVX
@@ -156,6 +159,7 @@ func initAVXNoFMA() {
 	sumImpl = sumAVX
 	minImpl = minAVX
 	maxImpl = maxAVX
+	maxAbsImpl = maxAbsGo
 	absImpl = absAVX
 	negImpl = negAVX
 	sqrtImpl = sqrtAVX
@@ -182,6 +186,7 @@ func initSSE2() {
 	sumImpl = sumSSE2
 	minImpl = minSSE2
 	maxImpl = maxSSE2
+	maxAbsImpl = maxAbsGo
 	absImpl = absSSE2
 	negImpl = negSSE2
 	sqrtImpl = sqrtSSE2
@@ -208,6 +213,7 @@ func initGo() {
 	sumImpl = sumGo
 	minImpl = minGo
 	maxImpl = maxGo
+	maxAbsImpl = maxAbsGo
 	absImpl = absGo
 	negImpl = negGo
 	sqrtImpl = sqrt64Go
@@ -281,6 +287,15 @@ func max64(a []float64) float64 {
 		return maxGo(a)
 	}
 	return maxImpl(a)
+}
+
+func maxAbs64(a []float64) float64 {
+	// The SIMD kernels do a full-width initial vector load; fall back to Go for
+	// small slices to avoid reading beyond bounds (mirrors min64/max64).
+	if len(a) < minSIMDElements {
+		return maxAbsGo(a)
+	}
+	return maxAbsImpl(a)
 }
 
 func abs64(dst, a []float64) {

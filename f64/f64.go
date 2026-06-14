@@ -155,6 +155,22 @@ func Max(a []float64) float64 {
 	return max64(a)
 }
 
+// MaxAbs returns the maximum absolute value in the slice (the infinity norm),
+// max_i |a[i]|. Returns 0 for an empty slice.
+//
+// Uses AVX2/SSE2 on AMD64 (AVX-512 CPUs reuse the AVX2 kernel), NEON on ARM64,
+// with a pure Go fallback. a is read-only; the call allocates nothing.
+//
+// NaN handling: |NaN| is NaN and compares false, so the Go path skips NaN. On the
+// SIMD paths NaN handling is architecture-dependent, matching [Min] and [Max].
+// Callers needing strict NaN semantics should filter NaN first.
+func MaxAbs(a []float64) float64 {
+	if len(a) == 0 {
+		return 0
+	}
+	return maxAbs64(a)
+}
+
 // Abs computes element-wise absolute value: dst[i] = |a[i]|.
 // Processes min(len(dst), len(a)) elements.
 func Abs(dst, a []float64) {

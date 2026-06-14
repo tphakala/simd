@@ -97,6 +97,10 @@ func max64(a []float64) float64 {
 	return maxGo(a)
 }
 
+func maxAbs64(a []float64) float64 {
+	return maxAbsGo(a)
+}
+
 func abs64(dst, a []float64) {
 	if hasNEON && len(dst) >= 2 {
 		absNEON(dst, a)

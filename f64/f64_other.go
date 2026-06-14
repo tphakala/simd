@@ -15,6 +15,7 @@ func subFromScalar64(dst, a []float64, s float64)      { subFromScalarGo(dst, a,
 func sum(a []float64) float64                          { return sumGo(a) }
 func min64(a []float64) float64                        { return minGo(a) }
 func max64(a []float64) float64                        { return maxGo(a) }
+func maxAbs64(a []float64) float64                     { return maxAbsGo(a) }
 func abs64(dst, a []float64)                           { absGo(dst, a) }
 func neg64(dst, a []float64)                           { negGo(dst, a) }
 func fma64(dst, a, b, c []float64)                     { fmaGo(dst, a, b, c) }
