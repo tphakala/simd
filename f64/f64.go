@@ -634,6 +634,68 @@ func ConvolveValidMulti(dsts [][]float64, signal []float64, kernels [][]float64)
 	convolveValidMulti64(dsts, signal, kernels, n, kLen)
 }
 
+// ConvolveValidMaxAbs returns max(|valid-convolution output|) without
+// materializing the output slice: the peak (infinity norm) of the FIR applied to
+// signal with no zero-padding. Returns 0 when len(kernel) == 0 or
+// len(signal) < len(kernel).
+//
+// Each output element is a SIMD dot product; the abs-max is fused into the pass,
+// so there is no scratch buffer and no second scan over an output array. This is
+// the peak-detection / true-peak primitive. a is read-only; the call allocates
+// nothing.
+func ConvolveValidMaxAbs(signal, kernel []float64) float64 {
+	if len(kernel) == 0 || len(signal) < len(kernel) {
+		return 0
+	}
+	return convolveValidMaxAbs64(signal, kernel)
+}
+
+// convolveValidMaxAbs64 fuses the valid convolution with the abs-max reduction.
+// It calls the dispatched SIMD dotProduct per output position, so it is
+// vectorized on every backend without a dedicated kernel.
+func convolveValidMaxAbs64(signal, kernel []float64) float64 {
+	kLen := len(kernel)
+	validLen := len(signal) - kLen + 1
+	var m float64 // abs values are >= 0, so 0 is the correct identity
+	for i := range validLen {
+		if v := math.Abs(dotProduct(signal[i:i+kLen], kernel)); v > m {
+			m = v
+		}
+	}
+	return m
+}
+
+// ConvolveValidMaxAbsMulti returns the single maximum of |valid-convolution
+// output| across every kernel applied to signal, without materializing any
+// output. This is the polyphase true-peak primitive: pass the N phase kernels and
+// get back the peak of the reconstructed signal in one call. Returns 0 when
+// kernels is empty, the first kernel is empty, or len(signal) is shorter than the
+// kernel length. The call allocates nothing.
+//
+// Panics if the kernels do not all share one length, matching [ConvolveValidMulti].
+func ConvolveValidMaxAbsMulti(signal []float64, kernels [][]float64) float64 {
+	numKernels := len(kernels)
+	if numKernels == 0 {
+		return 0
+	}
+	kLen := len(kernels[0])
+	if kLen == 0 || len(signal) < kLen {
+		return 0
+	}
+	for i := 1; i < numKernels; i++ {
+		if len(kernels[i]) != kLen {
+			panic("simd: all kernels must have the same length")
+		}
+	}
+	var m float64
+	for _, kernel := range kernels {
+		if km := convolveValidMaxAbs64(signal, kernel); km > m {
+			m = km
+		}
+	}
+	return m
+}
+
 // Sigmoid computes the sigmoid activation function: dst[i] = 1 / (1 + e^(-src[i])).
 // This is commonly used as an activation function in neural networks.
 // Processes min(len(dst), len(src)) elements.
