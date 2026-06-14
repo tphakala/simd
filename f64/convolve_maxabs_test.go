@@ -32,7 +32,8 @@ func TestConvolveValidMaxAbs(t *testing.T) {
 			}
 			got := ConvolveValidMaxAbs(signal, kernel)
 			want := refConvolveValidMaxAbs(signal, kernel)
-			if math.Abs(got-want) > 1e-12*(1+math.Abs(want)) {
+			// Both paths run the same dispatched dotProduct, so they match exactly.
+			if got != want {
 				t.Errorf("sl=%d kl=%d: got %v want %v", sl, kl, got, want)
 			}
 		}
@@ -69,7 +70,8 @@ func TestConvolveValidMaxAbsMulti(t *testing.T) {
 			want = v
 		}
 	}
-	if math.Abs(got-want) > 1e-12*(1+math.Abs(want)) {
+	// Both paths run the same dispatched dotProduct, so they match exactly.
+	if got != want {
 		t.Errorf("Multi got %v want %v", got, want)
 	}
 }
