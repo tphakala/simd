@@ -72,3 +72,34 @@ func ExampleFMA() {
 	fmt.Println(dst)
 	// Output: [3 5 7]
 }
+
+func ExampleMaxAbs() {
+	a := []float32{1, -7, 3, -2}
+
+	result := f32.MaxAbs(a)
+	fmt.Printf("%.0f\n", result)
+	// Output: 7
+}
+
+func ExampleConvolveValidMaxAbs() {
+	signal := []float32{1, -2, 3, -4, 5}
+	kernel := []float32{1, -1}
+
+	// Peak of the valid-correlation output, no scratch buffer.
+	peak := f32.ConvolveValidMaxAbs(signal, kernel)
+	fmt.Printf("%.0f\n", peak)
+	// Output: 9
+}
+
+func ExampleConvolveValidMaxAbsMulti() {
+	signal := []float32{1, -2, 3, -4, 5}
+	kernels := [][]float32{
+		{1, 1},
+		{1, -1},
+	}
+
+	// Single peak across every kernel's output (polyphase true-peak).
+	peak := f32.ConvolveValidMaxAbsMulti(signal, kernels)
+	fmt.Printf("%.0f\n", peak)
+	// Output: 9
+}
