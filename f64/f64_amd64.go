@@ -115,7 +115,7 @@ func initAVX512() {
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledAVX512
 	convolveDecimateImpl = convolveDecimateAVX512
-	convolveValidMaxAbsImpl = convolveValidMaxAbsGo
+	convolveValidMaxAbsImpl = convolveValidMaxAbsAVX
 }
 
 func initAVX() {
@@ -144,7 +144,7 @@ func initAVX() {
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledAVX
 	convolveDecimateImpl = convolveDecimateAVX
-	convolveValidMaxAbsImpl = convolveValidMaxAbsGo
+	convolveValidMaxAbsImpl = convolveValidMaxAbsAVX
 }
 
 // initAVXNoFMA runs on AVX-capable CPUs that lack FMA (rare but possible:
@@ -177,7 +177,7 @@ func initAVXNoFMA() {
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledSSE2
 	convolveDecimateImpl = convolveDecimateSSE2
-	convolveValidMaxAbsImpl = convolveValidMaxAbsGo
+	convolveValidMaxAbsImpl = convolveValidMaxAbsSSE2
 }
 
 func initSSE2() {
@@ -205,7 +205,7 @@ func initSSE2() {
 	deinterleave2Impl = deinterleave2SSE2
 	addScaledImpl = addScaledSSE2
 	convolveDecimateImpl = convolveDecimateSSE2
-	convolveValidMaxAbsImpl = convolveValidMaxAbsGo
+	convolveValidMaxAbsImpl = convolveValidMaxAbsSSE2
 }
 
 func initGo() {
@@ -804,6 +804,12 @@ func convolveDecimateAVX512(dst, signal, kernel []float64, factor, phase int)
 
 //go:noescape
 func convolveDecimateSSE2(dst, signal, kernel []float64, factor, phase int)
+
+//go:noescape
+func convolveValidMaxAbsAVX(signal, kernel []float64) float64
+
+//go:noescape
+func convolveValidMaxAbsSSE2(signal, kernel []float64) float64
 
 //go:noescape
 func addAVX(dst, a, b []float64)

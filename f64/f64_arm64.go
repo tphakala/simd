@@ -286,8 +286,17 @@ func convolveDecimate64(dst, signal, kernel []float64, factor, phase int) {
 }
 
 func convolveValidMaxAbs64(signal, kernel []float64) float64 {
+	// Mirror dotProduct's NEON threshold (>= 2) so the fused kernel and the
+	// per-window dotProduct in ConvolveValid pick the same backend, keeping the
+	// peak bit-identical.
+	if hasNEON && len(kernel) >= 2 {
+		return convolveValidMaxAbsNEON(signal, kernel)
+	}
 	return convolveValidMaxAbsGo(signal, kernel)
 }
+
+//go:noescape
+func convolveValidMaxAbsNEON(signal, kernel []float64) float64
 
 //go:noescape
 func convolveDecimateNEON(dst, signal, kernel []float64, factor, phase int)
