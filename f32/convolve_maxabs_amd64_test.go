@@ -70,4 +70,16 @@ func TestConvolveValidMaxAbsKernelsAMD64(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("NoAlloc", func(t *testing.T) {
+		s, k := mkPair(256, 32)
+		if n := testing.AllocsPerRun(50, func() { _ = convolveValidMaxAbsSSE(s, k) }); n != 0 {
+			t.Errorf("convolveValidMaxAbsSSE allocated %v, want 0", n)
+		}
+		if cpu.X86.AVX && cpu.X86.FMA {
+			if n := testing.AllocsPerRun(50, func() { _ = convolveValidMaxAbsAVX(s, k) }); n != 0 {
+				t.Errorf("convolveValidMaxAbsAVX allocated %v, want 0", n)
+			}
+		}
+	})
 }
