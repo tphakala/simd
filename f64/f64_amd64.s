@@ -573,6 +573,53 @@ max_avx_done:
     VZEROUPPER
     RET
 
+// func maxAbsAVX(a []float64) float64
+// max_i |a[i]|. Mirrors maxAVX with the sign bit cleared (VANDPD absf64mask)
+// on each loaded vector and the scalar tail before the running max.
+TEXT ·maxAbsAVX(SB), NOSPLIT, $0-32
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    VMOVUPD absf64mask<>(SB), Y2   // Y2 = abs mask (X2 = low 128 for the tail)
+    VMOVUPD (SI), Y0
+    VANDPD Y0, Y2, Y0             // Y0 = |a[0:4]|
+    ADDQ $32, SI
+    SUBQ $4, CX
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   maxabs_avx_reduce
+
+maxabs_avx_loop4:
+    VMOVUPD (SI), Y1
+    VANDPD Y1, Y2, Y1
+    VMAXPD Y0, Y1, Y0
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  maxabs_avx_loop4
+
+maxabs_avx_reduce:
+    VEXTRACTF128 $1, Y0, X1
+    VMAXPD X0, X1, X0
+    VPERMILPD $1, X0, X1
+    VMAXSD X0, X1, X0
+
+    ANDQ $3, CX
+    JZ   maxabs_avx_done
+
+maxabs_avx_scalar:
+    VMOVSD (SI), X1
+    VANDPD X1, X2, X1
+    VMAXSD X0, X1, X0
+    ADDQ $8, SI
+    DECQ CX
+    JNZ  maxabs_avx_scalar
+
+maxabs_avx_done:
+    VMOVSD X0, ret+24(FP)
+    VZEROUPPER
+    RET
+
 // func absAVX(dst, a []float64)
 TEXT ·absAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
@@ -2774,6 +2821,46 @@ max_sse2_reduce:
     MAXSD X1, X0
 
 max_sse2_done:
+    MOVSD X0, ret+24(FP)
+    RET
+
+// func maxAbsSSE2(a []float64) float64
+// max_i |a[i]|. Mirrors maxSSE2 with ANDPD absf64mask folded into each load.
+TEXT ·maxAbsSSE2(SB), NOSPLIT, $0-32
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    MOVUPD absf64mask<>(SB), X2
+    MOVUPD (SI), X0
+    ANDPD X2, X0                 // X0 = |a[0:2]|
+    ADDQ $16, SI
+    SUBQ $2, CX
+
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   maxabs_sse2_reduce
+
+maxabs_sse2_loop2:
+    MOVUPD (SI), X1
+    ANDPD X2, X1
+    MAXPD X1, X0
+    ADDQ $16, SI
+    DECQ AX
+    JNZ  maxabs_sse2_loop2
+
+maxabs_sse2_reduce:
+    MOVAPD X0, X1
+    SHUFPD $1, X1, X1
+    MAXSD X1, X0
+
+    ANDQ $1, CX
+    JZ   maxabs_sse2_done
+
+    MOVSD (SI), X1
+    ANDPD X2, X1
+    MAXSD X1, X0
+
+maxabs_sse2_done:
     MOVSD X0, ret+24(FP)
     RET
 

@@ -22,6 +22,7 @@ type implSnapshot struct {
 	sum               reduceFunc
 	min               reduceFunc
 	max               reduceFunc
+	maxAbs            reduceFunc
 	abs               unaryOpFunc
 	neg               unaryOpFunc
 	sqrt              unaryOpFunc
@@ -49,6 +50,7 @@ func snapshotDispatch() implSnapshot {
 		sum:               sumImpl,
 		min:               minImpl,
 		max:               maxImpl,
+		maxAbs:            maxAbsImpl,
 		abs:               absImpl,
 		neg:               negImpl,
 		sqrt:              sqrtImpl,
@@ -76,6 +78,7 @@ func restoreDispatch(s *implSnapshot) {
 	sumImpl = s.sum
 	minImpl = s.min
 	maxImpl = s.max
+	maxAbsImpl = s.maxAbs
 	absImpl = s.abs
 	negImpl = s.neg
 	sqrtImpl = s.sqrt

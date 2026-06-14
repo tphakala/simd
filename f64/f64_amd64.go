@@ -99,7 +99,7 @@ func initAVX512() {
 	sumImpl = sumAVX512
 	minImpl = minAVX512
 	maxImpl = maxAVX512
-	maxAbsImpl = maxAbsGo
+	maxAbsImpl = maxAbsAVX
 	absImpl = absAVX512
 	negImpl = negAVX512
 	sqrtImpl = sqrtAVX512
@@ -127,7 +127,7 @@ func initAVX() {
 	sumImpl = sumAVX
 	minImpl = minAVX
 	maxImpl = maxAVX
-	maxAbsImpl = maxAbsGo
+	maxAbsImpl = maxAbsAVX
 	absImpl = absAVX
 	negImpl = negAVX
 	sqrtImpl = sqrtAVX
@@ -159,7 +159,7 @@ func initAVXNoFMA() {
 	sumImpl = sumAVX
 	minImpl = minAVX
 	maxImpl = maxAVX
-	maxAbsImpl = maxAbsGo
+	maxAbsImpl = maxAbsAVX
 	absImpl = absAVX
 	negImpl = negAVX
 	sqrtImpl = sqrtAVX
@@ -186,7 +186,7 @@ func initSSE2() {
 	sumImpl = sumSSE2
 	minImpl = minSSE2
 	maxImpl = maxSSE2
-	maxAbsImpl = maxAbsGo
+	maxAbsImpl = maxAbsSSE2
 	absImpl = absSSE2
 	negImpl = negSSE2
 	sqrtImpl = sqrtSSE2
@@ -822,6 +822,9 @@ func minAVX(a []float64) float64
 func maxAVX(a []float64) float64
 
 //go:noescape
+func maxAbsAVX(a []float64) float64
+
+//go:noescape
 func absAVX(dst, a []float64)
 
 //go:noescape
@@ -947,6 +950,9 @@ func minSSE2(a []float64) float64
 
 //go:noescape
 func maxSSE2(a []float64) float64
+
+//go:noescape
+func maxAbsSSE2(a []float64) float64
 
 //go:noescape
 func absSSE2(dst, a []float64)
