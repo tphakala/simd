@@ -2920,6 +2920,89 @@ cd_neon_store:
 cd_neon_done:
     RET
 
+// func convolveValidMaxAbsNEON(signal, kernel []float32) float32
+//
+// Fused valid convolution + abs-max: returns max_i |dot(signal[i:i+kLen], kernel)|
+// over the n = len(signal)-kLen+1 windows. The inner dot replicates
+// convolveDecimateNEON (two FMLA accumulators, 8/4/scalar reduction, FADDP), so
+// each window is bit-identical to dotProductNEON / ConvolveValid; the per-window
+// store is replaced by FABS into a running max (F6). Caller guarantees kLen >= 4
+// and len(signal) >= kLen (kLen < 4 takes the Go fallback), so n >= 1.
+TEXT ·convolveValidMaxAbsNEON(SB), NOSPLIT, $0-52
+    MOVD signal_base+0(FP), R11    // R11 = &signal[pos], advances 4 bytes/output
+    MOVD signal_len+8(FP), R10
+    MOVD kernel_base+24(FP), R12
+    MOVD kernel_len+32(FP), R13     // R13 = kLen
+
+    SUB R13, R10                   // signal_len - kLen
+    ADD $1, R10                    // R10 = n
+    VEOR V6.B16, V6.B16, V6.B16    // running max F6 = 0
+
+cvma_neon_outer:
+    MOVD R11, R0                   // R0 = &signal[pos]
+    MOVD R12, R1                   // R1 = &kernel[0]
+    MOVD R13, R2                   // R2 = kLen
+
+    VEOR V0.B16, V0.B16, V0.B16
+    VEOR V1.B16, V1.B16, V1.B16
+
+    LSR $3, R2, R3                 // kLen / 8
+    CBZ R3, cvma_neon_rem4
+
+cvma_neon_loop8:
+    VLD1.P 16(R0), [V2.S4]
+    VLD1.P 16(R0), [V3.S4]
+    VLD1.P 16(R1), [V4.S4]
+    VLD1.P 16(R1), [V5.S4]
+    WORD $0x4E24CC40              // FMLA V0.4S, V2.4S, V4.4S
+    WORD $0x4E25CC61              // FMLA V1.4S, V3.4S, V5.4S
+    SUB $1, R3
+    CBNZ R3, cvma_neon_loop8
+
+    WORD $0x4E21D400             // FADD V0.4S, V0.4S, V1.4S
+
+cvma_neon_rem4:
+    AND $7, R2, R3
+    LSR $2, R3, R4
+    CBZ R4, cvma_neon_rem
+
+    VLD1.P 16(R0), [V2.S4]
+    VLD1.P 16(R1), [V4.S4]
+    WORD $0x4E24CC40              // FMLA V0.4S, V2.4S, V4.4S
+
+cvma_neon_rem:
+    AND $3, R3, R4
+    CBZ R4, cvma_neon_reduce
+
+    // Reduce vector FIRST before scalar ops (scalar ops zero upper V bits).
+    WORD $0x6E20D400             // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800             // FADDP S0, V0.2S
+
+cvma_neon_scalar:
+    FMOVS (R0), F2
+    FMOVS (R1), F4
+    FMADDS F4, F0, F2, F0         // F0 = F2 * F4 + F0
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R4
+    CBNZ R4, cvma_neon_scalar
+
+    B cvma_neon_absmax
+
+cvma_neon_reduce:
+    WORD $0x6E20D400             // FADDP V0.4S, V0.4S, V0.4S
+    WORD $0x7E30D800             // FADDP S0, V0.2S
+
+cvma_neon_absmax:
+    FABSS F0, F0
+    FMAXS F0, F6, F6           // F6 = max(F6, |dot|)
+    ADD $4, R11               // pos += 1
+    SUB $1, R10
+    CBNZ R10, cvma_neon_outer
+
+    FMOVS F6, ret+48(FP)
+    RET
+
 // ============================================================================
 // INTERLEAVE / DEINTERLEAVE N=6 and N=8 (profiling-gated, 5.1/7.1 audio)
 // The pair trick: ZIP adjacent channel pairs at .4S so each 64-bit lane holds a

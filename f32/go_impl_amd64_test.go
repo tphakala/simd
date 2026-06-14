@@ -13,6 +13,9 @@ import (
 
 func TestInitGo(t *testing.T) {
 	savedDotProduct := dotProductImpl
+	// init* also reassigns convolveValidMaxAbsImpl; restore it so the fused kernel
+	// stays consistent with dotProductImpl for the exact-equality convolution tests.
+	savedConvolveValidMaxAbs := convolveValidMaxAbsImpl
 
 	initGo()
 
@@ -26,10 +29,14 @@ func TestInitGo(t *testing.T) {
 	}
 
 	dotProductImpl = savedDotProduct
+	convolveValidMaxAbsImpl = savedConvolveValidMaxAbs
 }
 
 func TestInitSSE(t *testing.T) {
 	savedDotProduct := dotProductImpl
+	// init* also reassigns convolveValidMaxAbsImpl; restore it so the fused kernel
+	// stays consistent with dotProductImpl for the exact-equality convolution tests.
+	savedConvolveValidMaxAbs := convolveValidMaxAbsImpl
 
 	initSSE()
 
@@ -43,6 +50,7 @@ func TestInitSSE(t *testing.T) {
 	}
 
 	dotProductImpl = savedDotProduct
+	convolveValidMaxAbsImpl = savedConvolveValidMaxAbs
 }
 
 func TestInitAVX512(t *testing.T) {
@@ -51,6 +59,9 @@ func TestInitAVX512(t *testing.T) {
 	}
 
 	savedDotProduct := dotProductImpl
+	// init* also reassigns convolveValidMaxAbsImpl; restore it so the fused kernel
+	// stays consistent with dotProductImpl for the exact-equality convolution tests.
+	savedConvolveValidMaxAbs := convolveValidMaxAbsImpl
 	savedMinSIMD := minSIMDElements
 
 	initAVX512()
@@ -69,5 +80,6 @@ func TestInitAVX512(t *testing.T) {
 	}
 
 	dotProductImpl = savedDotProduct
+	convolveValidMaxAbsImpl = savedConvolveValidMaxAbs
 	minSIMDElements = savedMinSIMD
 }

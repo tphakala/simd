@@ -5451,6 +5451,108 @@ cd_avx_ret:
     VZEROUPPER
     RET
 
+// func convolveValidMaxAbsAVX(signal, kernel []float32) float32
+//
+// Fused valid convolution + abs-max: returns max_i |dot(signal[i:i+kLen], kernel)|
+// over the n = len(signal)-kLen+1 windows without materializing the output. The
+// inner dot replicates convolveDecimateAVX / dotProductAVX (4 Y accumulators,
+// 32/8/scalar reduction), so each window is bit-identical to ConvolveValid; the
+// per-window store is replaced by an abs (VANDPS) into a running max (X7).
+// Caller guarantees kLen >= 1 and len(signal) >= kLen, so n >= 1.
+TEXT ·convolveValidMaxAbsAVX(SB), NOSPLIT, $0-52
+    MOVQ signal_base+0(FP), R10    // R10 = &signal[pos], advances 4 bytes/output
+    MOVQ signal_len+8(FP), R9
+    MOVQ kernel_base+24(FP), R11
+    MOVQ kernel_len+32(FP), R12    // R12 = kLen
+
+    SUBQ R12, R9
+    INCQ R9                        // R9 = n
+
+    VMOVUPS absf32mask<>(SB), X6   // abs mask
+    VXORPS X7, X7, X7              // running max = 0
+
+cvma_avx_outer:
+    MOVQ R10, SI
+    MOVQ R11, DI
+
+    VXORPS Y0, Y0, Y0
+    VXORPS Y3, Y3, Y3
+    VXORPS Y4, Y4, Y4
+    VXORPS Y5, Y5, Y5
+
+    MOVQ R12, CX
+    MOVQ CX, AX
+    SHRQ $5, AX                    // kLen / 32
+    JZ   cvma_avx_loop8_check
+
+cvma_avx_loop32:
+    VMOVUPS (SI), Y1
+    VMOVUPS (DI), Y2
+    VFMADD231PS Y1, Y2, Y0
+    VMOVUPS 32(SI), Y1
+    VMOVUPS 32(DI), Y2
+    VFMADD231PS Y1, Y2, Y3
+    VMOVUPS 64(SI), Y1
+    VMOVUPS 64(DI), Y2
+    VFMADD231PS Y1, Y2, Y4
+    VMOVUPS 96(SI), Y1
+    VMOVUPS 96(DI), Y2
+    VFMADD231PS Y1, Y2, Y5
+    ADDQ $128, SI
+    ADDQ $128, DI
+    DECQ AX
+    JNZ  cvma_avx_loop32
+
+    VADDPS Y3, Y0, Y0
+    VADDPS Y4, Y0, Y0
+    VADDPS Y5, Y0, Y0
+
+cvma_avx_loop8_check:
+    MOVQ R12, CX
+    ANDQ $31, CX
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   cvma_avx_reduce
+
+cvma_avx_loop8:
+    VMOVUPS (SI), Y1
+    VMOVUPS (DI), Y2
+    VFMADD231PS Y1, Y2, Y0
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  cvma_avx_loop8
+
+cvma_avx_reduce:
+    VEXTRACTF128 $1, Y0, X1
+    VADDPS X1, X0, X0
+    VHADDPS X0, X0, X0
+    VHADDPS X0, X0, X0
+
+    MOVQ R12, CX
+    ANDQ $7, CX
+    JZ   cvma_avx_absmax
+
+cvma_avx_scalar:
+    VMOVSS (SI), X1
+    VMOVSS (DI), X2
+    VFMADD231SS X1, X2, X0
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ CX
+    JNZ  cvma_avx_scalar
+
+cvma_avx_absmax:
+    VANDPS X0, X6, X0             // |dot|
+    VMAXSS X0, X7, X7            // running max = max(running, |dot|)
+    ADDQ $4, R10                  // pos += 1
+    DECQ R9
+    JNZ  cvma_avx_outer
+
+    VMOVSS X7, ret+48(FP)
+    VZEROUPPER
+    RET
+
 // func convolveDecimateAVX512(dst, signal, kernel []float32, factor, phase int)
 //
 // AVX-512 fused decimating valid convolution. Inner dot replicates
@@ -5620,6 +5722,76 @@ cd_sse_store:
     JNZ  cd_sse_outer
 
 cd_sse_ret:
+    RET
+
+// func convolveValidMaxAbsSSE(signal, kernel []float32) float32
+//
+// SSE fused valid convolution + abs-max. Inner dot replicates convolveDecimateSSE
+// / dotProductSSE (single accumulator, MULPS+ADDPS, 4/scalar reduction); the
+// per-window store is replaced by an abs (ANDPS) into a running max (X7). Caller
+// guarantees kLen >= 1 and len(signal) >= kLen, so n >= 1.
+TEXT ·convolveValidMaxAbsSSE(SB), NOSPLIT, $0-52
+    MOVQ signal_base+0(FP), R10
+    MOVQ signal_len+8(FP), R9
+    MOVQ kernel_base+24(FP), R11
+    MOVQ kernel_len+32(FP), R12
+
+    SUBQ R12, R9
+    INCQ R9                        // n
+
+    MOVUPS absf32mask<>(SB), X6
+    XORPS X7, X7                   // running max = 0
+
+cvma_sse_outer:
+    MOVQ R10, SI
+    MOVQ R11, DI
+    XORPS X0, X0
+
+    MOVQ R12, CX
+    MOVQ CX, AX
+    SHRQ $2, AX                    // kLen / 4
+    JZ   cvma_sse_reduce
+
+cvma_sse_loop4:
+    MOVUPS (SI), X1
+    MOVUPS (DI), X2
+    MULPS X2, X1
+    ADDPS X1, X0
+    ADDQ $16, SI
+    ADDQ $16, DI
+    DECQ AX
+    JNZ  cvma_sse_loop4
+
+cvma_sse_reduce:
+    MOVAPS X0, X1
+    SHUFPS $0x0E, X1, X1
+    ADDPS X1, X0
+    MOVAPS X0, X1
+    SHUFPS $0x01, X1, X1
+    ADDSS X1, X0
+
+    MOVQ R12, CX
+    ANDQ $3, CX
+    JZ   cvma_sse_absmax
+
+cvma_sse_scalar:
+    MOVSS (SI), X1
+    MOVSS (DI), X2
+    MULSS X2, X1
+    ADDSS X1, X0
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ CX
+    JNZ  cvma_sse_scalar
+
+cvma_sse_absmax:
+    ANDPS X6, X0                  // |dot|
+    MAXSS X0, X7                 // running max = max(X7, X0)
+    ADDQ $4, R10
+    DECQ R9
+    JNZ  cvma_sse_outer
+
+    MOVSS X7, ret+48(FP)
     RET
 
 // func dotProduct4AVX(results, row0, row1, row2, row3, vec *float32, n int)

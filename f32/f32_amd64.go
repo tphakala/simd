@@ -23,50 +23,52 @@ var minSIMDElements = minAVXElements
 
 // Function pointer types for SIMD operations
 type (
-	dotProductFunc        func(a, b []float32) float32
-	binaryOpFunc          func(dst, a, b []float32)
-	scaleFunc             func(dst, a []float32, s float32)
-	unaryOpFunc           func(dst, a []float32)
-	reduceFunc            func(a []float32) float32
-	reduceIdxFunc         func(a []float32) int
-	fmaFunc               func(dst, a, b, c []float32)
-	clampFunc             func(dst, a []float32, minVal, maxVal float32)
-	varianceFunc          func(a []float32, mean float32) float32
-	euclideanDistanceFunc func(a, b []float32) float32
-	addScaledFunc         func(dst []float32, alpha float32, s []float32)
-	convolveDecimateFunc  func(dst, signal, kernel []float32, factor, phase int)
-	interleave2Func       func(dst, a, b []float32)
-	deinterleave2Func     func(a, b, src []float32)
+	dotProductFunc          func(a, b []float32) float32
+	binaryOpFunc            func(dst, a, b []float32)
+	scaleFunc               func(dst, a []float32, s float32)
+	unaryOpFunc             func(dst, a []float32)
+	reduceFunc              func(a []float32) float32
+	reduceIdxFunc           func(a []float32) int
+	fmaFunc                 func(dst, a, b, c []float32)
+	clampFunc               func(dst, a []float32, minVal, maxVal float32)
+	varianceFunc            func(a []float32, mean float32) float32
+	euclideanDistanceFunc   func(a, b []float32) float32
+	addScaledFunc           func(dst []float32, alpha float32, s []float32)
+	convolveDecimateFunc    func(dst, signal, kernel []float32, factor, phase int)
+	convolveValidMaxAbsFunc func(signal, kernel []float32) float32
+	interleave2Func         func(dst, a, b []float32)
+	deinterleave2Func       func(a, b, src []float32)
 )
 
 // Function pointers - assigned at init time based on CPU features
 var (
-	dotProductImpl        dotProductFunc
-	addImpl               binaryOpFunc
-	subImpl               binaryOpFunc
-	mulImpl               binaryOpFunc
-	divImpl               binaryOpFunc
-	scaleImpl             scaleFunc
-	addScalarImpl         scaleFunc
-	sumImpl               reduceFunc
-	minImpl               reduceFunc
-	maxImpl               reduceFunc
-	maxAbsImpl            reduceFunc
-	absImpl               unaryOpFunc
-	negImpl               unaryOpFunc
-	sqrtImpl              unaryOpFunc
-	reciprocalImpl        unaryOpFunc
-	roundImpl             unaryOpFunc
-	fmaImpl               fmaFunc
-	clampImpl             clampFunc
-	varianceImpl          varianceFunc
-	euclideanDistanceImpl euclideanDistanceFunc
-	minIdxImpl            reduceIdxFunc
-	maxIdxImpl            reduceIdxFunc
-	addScaledImpl         addScaledFunc
-	convolveDecimateImpl  convolveDecimateFunc
-	interleave2Impl       interleave2Func
-	deinterleave2Impl     deinterleave2Func
+	dotProductImpl          dotProductFunc
+	addImpl                 binaryOpFunc
+	subImpl                 binaryOpFunc
+	mulImpl                 binaryOpFunc
+	divImpl                 binaryOpFunc
+	scaleImpl               scaleFunc
+	addScalarImpl           scaleFunc
+	sumImpl                 reduceFunc
+	minImpl                 reduceFunc
+	maxImpl                 reduceFunc
+	maxAbsImpl              reduceFunc
+	absImpl                 unaryOpFunc
+	negImpl                 unaryOpFunc
+	sqrtImpl                unaryOpFunc
+	reciprocalImpl          unaryOpFunc
+	roundImpl               unaryOpFunc
+	fmaImpl                 fmaFunc
+	clampImpl               clampFunc
+	varianceImpl            varianceFunc
+	euclideanDistanceImpl   euclideanDistanceFunc
+	minIdxImpl              reduceIdxFunc
+	maxIdxImpl              reduceIdxFunc
+	addScaledImpl           addScaledFunc
+	convolveDecimateImpl    convolveDecimateFunc
+	convolveValidMaxAbsImpl convolveValidMaxAbsFunc
+	interleave2Impl         interleave2Func
+	deinterleave2Impl       deinterleave2Func
 )
 
 func init() {
@@ -114,6 +116,7 @@ func initAVX512() {
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledAVX512
 	convolveDecimateImpl = convolveDecimateAVX512
+	convolveValidMaxAbsImpl = convolveValidMaxAbsAVX
 	// AVX-512 CPUs also support AVX, so the AVX1 interleave kernels are safe.
 	interleave2Impl, deinterleave2Impl = interleave2Kernels(true)
 }
@@ -143,6 +146,7 @@ func initAVX() {
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledAVX
 	convolveDecimateImpl = convolveDecimateAVX
+	convolveValidMaxAbsImpl = convolveValidMaxAbsAVX
 	interleave2Impl, deinterleave2Impl = interleave2Kernels(true)
 }
 
@@ -171,6 +175,7 @@ func initSSE() {
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledSSE
 	convolveDecimateImpl = convolveDecimateSSE
+	convolveValidMaxAbsImpl = convolveValidMaxAbsSSE
 	// No SSE2 interleave2 kernel exists; the AVX kernel would SIGILL here, so
 	// fall back to the scalar Go path on AVX-less CPUs (birdnet-go issue #3353).
 	interleave2Impl, deinterleave2Impl = interleave2Kernels(false)
@@ -201,6 +206,7 @@ func initGo() {
 	maxIdxImpl = maxIdxGo
 	addScaledImpl = addScaledGo
 	convolveDecimateImpl = convolveDecimate32Go
+	convolveValidMaxAbsImpl = convolveValidMaxAbsGo
 	interleave2Impl, deinterleave2Impl = interleave2Kernels(false)
 }
 
@@ -510,6 +516,10 @@ func convolveDecimate32(dst, signal, kernel []float32, factor, phase int) {
 	convolveDecimateImpl(dst, signal, kernel, factor, phase)
 }
 
+func convolveValidMaxAbs32(signal, kernel []float32) float32 {
+	return convolveValidMaxAbsImpl(signal, kernel)
+}
+
 func accumulateAdd32(dst, src []float32) {
 	// AccumulateAdd is dst += src, which is the same as add(dst, dst, src)
 	addImpl(dst, dst, src)
@@ -696,6 +706,12 @@ func convolveDecimateAVX512(dst, signal, kernel []float32, factor, phase int)
 
 //go:noescape
 func convolveDecimateSSE(dst, signal, kernel []float32, factor, phase int)
+
+//go:noescape
+func convolveValidMaxAbsAVX(signal, kernel []float32) float32
+
+//go:noescape
+func convolveValidMaxAbsSSE(signal, kernel []float32) float32
 
 //go:noescape
 func dotProduct4AVX(results, row0, row1, row2, row3, vec *float32, n int)
