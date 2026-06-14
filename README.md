@@ -175,6 +175,7 @@ live in `f32` instead, so the two float surfaces are intentionally asymmetric.
 |                 | `Sum(a)`                            | Sum of elements               | 8x / 4x / 2x                        |
 |                 | `Min(a)`                            | Minimum value                 | 8x / 4x / 2x                        |
 |                 | `Max(a)`                            | Maximum value                 | 8x / 4x / 2x                        |
+|                 | `MaxAbs(a)`                         | Max absolute value (∞-norm)   | 8x / 4x / 2x                        |
 |                 | `MinIdx(a)`                         | Index of minimum value        | Pure Go                             |
 |                 | `MaxIdx(a)`                         | Index of maximum value        | Pure Go                             |
 | **Statistical** | `Mean(a)`                           | Arithmetic mean               | 8x / 4x / 2x                        |
@@ -196,6 +197,8 @@ live in `f32` instead, so the two float surfaces are intentionally asymmetric.
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
+|                 | `ConvolveValidMaxAbs(sig, k)`       | Fused FIR abs-max peak (no scratch) | 8x / 4x / 2x                  |
+|                 | `ConvolveValidMaxAbsMulti(sig, ks)` | Multi-kernel abs-max peak (true-peak) | 8x / 4x / 2x                |
 |                 | `ConvolveDecimate(dst,sig,k,f,p)`   | Strided FIR downsample (decimate) | 8x / 4x / 2x                    |
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
 |                 | `Autocorrelate(autoc, x, maxLag)`   | LPC autocorrelation Σ x[i]·x[i-lag] (bit-exact) | 4x (AVX2) / 2x (NEON)     |
@@ -764,6 +767,21 @@ a Raspberry Pi 5):
 | 241 taps, 2x decimate | **1.6x** | **1.2x** | **1.2x** | **1.1x** |
 | 241 taps, 4x decimate | **1.3x** | **1.2x** | **1.2x** | **1.1x** |
 
+#### ConvolveValidMaxAbs (fused valid convolution + abs-max peak)
+
+`ConvolveValidMaxAbs` returns `max(|valid-convolution output|)` (the infinity
+norm of the FIR output) without materializing the output slice. Each output is
+still a SIMD dot product, but the abs-max reduction is folded into the same pass,
+so it removes both the per-output store to a scratch buffer and the separate
+scalar abs-max scan a consumer writes today. The baseline is `ConvolveValid`
+into a temporary slice followed by a `MaxAbs` over it; both compute the identical
+peak. `ConvolveValidMaxAbsMulti` takes the N phase kernels of a polyphase
+oversampling FIR and returns the single peak of the reconstructed signal in one
+call, which is the canonical true-peak (ITU-R BS.1770 / EBU R 128) primitive.
+The standalone `MaxAbs` reduction (`VANDPD`+`VMAXPD` on AVX2, `ANDPS`+`MAXPS` on
+SSE, `FABS`+`FMAX` on NEON) covers peak metering, clipping detection, and
+normalization headroom on its own.
+
 #### Autocorrelate (lag-vectorized LPC autocorrelation, f64)
 
 `Autocorrelate` is the LPC autocorrelation step in a FLAC-style encoder, the
@@ -869,7 +887,7 @@ All int32 kernels are zero-allocation and bit-exact against the pure-Go referenc
 
 ### Small Slice Fallback for Min/Max (AMD64)
 
-On AMD64, the `Min` and `Max` functions fall back to pure Go for small slices:
+On AMD64, the `Min`, `Max`, and `MaxAbs` functions fall back to pure Go for small slices:
 
 - **float64**: slices with fewer than 4 elements
 - **float32**: slices with fewer than 8 elements
