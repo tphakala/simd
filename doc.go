@@ -72,7 +72,7 @@
 //
 // Core arithmetic: Add, Sub, Mul, Div, Scale, AddScalar, AddScaled, FMA
 //
-// Reductions: Sum, DotProduct, DotProductBatch, DotProductIndexed, DotProductStrided, Min, Max, MinIdx, MaxIdx
+// Reductions: Sum, DotProduct, DotProductBatch, DotProductIndexed, DotProductStrided, Min, Max, MaxAbs, MinIdx, MaxIdx
 //
 // Statistics: Mean, Variance, StdDev, EuclideanDistance, Normalize
 //
@@ -83,7 +83,7 @@
 // Transcendental (f32/f64): Log, Log2, Log10, Pow, PowElem (plus LogInPlace, PowInPlace),
 // SIMD-accelerated on AVX2+FMA and NEON
 //
-// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
+// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
 //
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames) - fused real-input short-time Fourier transform with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //

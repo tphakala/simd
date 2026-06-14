@@ -155,6 +155,22 @@ func Max(a []float32) float32 {
 	return max32(a)
 }
 
+// MaxAbs returns the maximum absolute value in the slice (the infinity norm),
+// max_i |a[i]|. Returns 0 for an empty slice.
+//
+// Uses AVX2/SSE on AMD64 (AVX-512 CPUs reuse the AVX2 kernel), NEON on ARM64,
+// with a pure Go fallback. a is read-only; the call allocates nothing.
+//
+// NaN handling: |NaN| is NaN and compares false, so the Go path skips NaN. On the
+// SIMD paths NaN handling is architecture-dependent, matching [Min] and [Max].
+// Callers needing strict NaN semantics should filter NaN first.
+func MaxAbs(a []float32) float32 {
+	if len(a) == 0 {
+		return 0
+	}
+	return maxAbs32(a)
+}
+
 // Abs computes element-wise absolute value: dst[i] = |a[i]|.
 func Abs(dst, a []float32) {
 	n := min(len(a), len(dst))
@@ -616,6 +632,72 @@ func ConvolveValidMulti(dsts [][]float32, signal []float32, kernels [][]float32)
 	}
 
 	convolveValidMulti32(dsts, signal, kernels, n, kLen)
+}
+
+// ConvolveValidMaxAbs returns max(|valid-convolution output|) without
+// materializing the output slice: the peak (infinity norm) of the FIR applied to
+// signal with no zero-padding. Returns 0 when len(kernel) == 0 or
+// len(signal) < len(kernel).
+//
+// Each output element is a SIMD dot product; the abs-max is fused into the pass,
+// so there is no scratch buffer and no second scan over an output array. This is
+// the peak-detection / true-peak primitive. a is read-only; the call allocates
+// nothing.
+func ConvolveValidMaxAbs(signal, kernel []float32) float32 {
+	if len(kernel) == 0 || len(signal) < len(kernel) {
+		return 0
+	}
+	return convolveValidMaxAbs32(signal, kernel)
+}
+
+// convolveValidMaxAbs32 fuses the valid convolution with the abs-max reduction.
+// It calls the dispatched SIMD dotProduct per output position, so it is
+// vectorized on every backend without a dedicated kernel.
+func convolveValidMaxAbs32(signal, kernel []float32) float32 {
+	kLen := len(kernel)
+	validLen := len(signal) - kLen + 1
+	var m float32 // abs values are >= 0, so 0 is the correct identity
+	for i := range validLen {
+		v := dotProduct(signal[i:i+kLen], kernel)
+		if v < 0 {
+			v = -v
+		}
+		if v > m {
+			m = v
+		}
+	}
+	return m
+}
+
+// ConvolveValidMaxAbsMulti returns the single maximum of |valid-convolution
+// output| across every kernel applied to signal, without materializing any
+// output. This is the polyphase true-peak primitive: pass the N phase kernels and
+// get back the peak of the reconstructed signal in one call. Returns 0 when
+// kernels is empty, the first kernel is empty, or len(signal) is shorter than the
+// kernel length. The call allocates nothing.
+//
+// Panics if the kernels do not all share one length, matching [ConvolveValidMulti].
+func ConvolveValidMaxAbsMulti(signal []float32, kernels [][]float32) float32 {
+	numKernels := len(kernels)
+	if numKernels == 0 {
+		return 0
+	}
+	kLen := len(kernels[0])
+	if kLen == 0 || len(signal) < kLen {
+		return 0
+	}
+	for i := 1; i < numKernels; i++ {
+		if len(kernels[i]) != kLen {
+			panic("simd: all kernels must have the same length")
+		}
+	}
+	var m float32
+	for _, kernel := range kernels {
+		if km := convolveValidMaxAbs32(signal, kernel); km > m {
+			m = km
+		}
+	}
+	return m
 }
 
 // Sigmoid computes the sigmoid activation function: dst[i] = 1 / (1 + e^(-src[i])).

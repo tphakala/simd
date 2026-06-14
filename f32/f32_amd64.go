@@ -51,6 +51,7 @@ var (
 	sumImpl               reduceFunc
 	minImpl               reduceFunc
 	maxImpl               reduceFunc
+	maxAbsImpl            reduceFunc
 	absImpl               unaryOpFunc
 	negImpl               unaryOpFunc
 	sqrtImpl              unaryOpFunc
@@ -95,6 +96,9 @@ func initAVX512() {
 	sumImpl = sumAVX512
 	minImpl = minAVX512
 	maxImpl = maxAVX512
+	// AVX-512 reuses the AVX2 MaxAbs kernel (no AVX-512 hardware to verify a
+	// dedicated VL kernel; see #138), mirroring variance/euclidean above.
+	maxAbsImpl = maxAbsAVX
 	absImpl = absAVX512
 	negImpl = negAVX512
 	sqrtImpl = sqrtAVX512
@@ -125,6 +129,7 @@ func initAVX() {
 	sumImpl = sumAVX
 	minImpl = minAVX
 	maxImpl = maxAVX
+	maxAbsImpl = maxAbsAVX
 	absImpl = absAVX
 	negImpl = negAVX
 	sqrtImpl = sqrtAVX
@@ -152,6 +157,7 @@ func initSSE() {
 	sumImpl = sumSSE
 	minImpl = minSSE
 	maxImpl = maxSSE
+	maxAbsImpl = maxAbsSSE
 	absImpl = absSSE
 	negImpl = negSSE
 	sqrtImpl = sqrtSSE
@@ -181,6 +187,7 @@ func initGo() {
 	sumImpl = sumGo
 	minImpl = minGo
 	maxImpl = maxGo
+	maxAbsImpl = maxAbsGo
 	absImpl = absGo
 	negImpl = negGo
 	sqrtImpl = sqrt32Go
@@ -247,6 +254,15 @@ func max32(a []float32) float32 {
 		return maxGo(a)
 	}
 	return maxImpl(a)
+}
+
+func maxAbs32(a []float32) float32 {
+	// The SIMD kernels do a full-width initial vector load; fall back to Go for
+	// small slices to avoid reading beyond bounds (mirrors min32/max32).
+	if len(a) < minSIMDElements {
+		return maxAbsGo(a)
+	}
+	return maxAbsImpl(a)
 }
 
 func abs32(dst, a []float32) {
@@ -712,6 +728,9 @@ func minAVX(a []float32) float32
 func maxAVX(a []float32) float32
 
 //go:noescape
+func maxAbsAVX(a []float32) float32
+
+//go:noescape
 func absAVX(dst, a []float32)
 
 //go:noescape
@@ -840,6 +859,9 @@ func minSSE(a []float32) float32
 
 //go:noescape
 func maxSSE(a []float32) float32
+
+//go:noescape
+func maxAbsSSE(a []float32) float32
 
 //go:noescape
 func absSSE(dst, a []float32)

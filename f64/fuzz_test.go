@@ -255,6 +255,58 @@ func FuzzF64Convolve(f *testing.F) {
 	})
 }
 
+func FuzzF64MaxAbs(f *testing.F) {
+	addByteLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := f64sUnit(raw)
+		// abs and max are exact and order-independent, so the SIMD path matches
+		// the Go reference bit-for-bit.
+		if got, want := MaxAbs(v), maxAbsGo(v); got != want {
+			t.Fatalf("MaxAbs got %v want %v", got, want)
+		}
+	})
+}
+
+func FuzzF64ConvolveMaxAbs(f *testing.F) {
+	addByteLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := f64sUnit(raw)
+		if len(v) < 4 {
+			return
+		}
+		kLen := 1 + int(raw[0])%min(len(v)-1, 16)
+		kernel := v[:kLen]
+		signal := v[kLen:]
+		if len(signal) < kLen {
+			return
+		}
+		// ConvolveValid and ConvolveValidMaxAbs share the dispatched dotProduct,
+		// so the fused peak equals max|ConvolveValid output| exactly.
+		out := make([]float64, len(signal)-kLen+1)
+		ConvolveValid(out, signal, kernel)
+		want := maxAbsGo(out)
+		if got := ConvolveValidMaxAbs(signal, kernel); got != want {
+			t.Fatalf("ConvolveValidMaxAbs got %v want %v", got, want)
+		}
+
+		if kLen >= 2 {
+			half := kLen / 2
+			kernels := [][]float64{kernel[:half], kernel[half : half*2]}
+			var wantMulti float64
+			for _, k := range kernels {
+				o := make([]float64, len(signal)-len(k)+1)
+				ConvolveValid(o, signal, k)
+				if m := maxAbsGo(o); m > wantMulti {
+					wantMulti = m
+				}
+			}
+			if got := ConvolveValidMaxAbsMulti(signal, kernels); got != wantMulti {
+				t.Fatalf("ConvolveValidMaxAbsMulti got %v want %v", got, wantMulti)
+			}
+		}
+	})
+}
+
 func FuzzF64InterleaveN(f *testing.F) {
 	addByteLenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {

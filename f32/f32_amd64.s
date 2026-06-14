@@ -579,6 +579,55 @@ max32_done:
     VZEROUPPER
     RET
 
+// func maxAbsAVX(a []float32) float32
+// max_i |a[i]|. Mirrors maxAVX with the sign bit cleared (VANDPS absf32mask)
+// on each loaded vector and the scalar tail before the running max.
+TEXT ·maxAbsAVX(SB), NOSPLIT, $0-28
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    VMOVUPS absf32mask<>(SB), Y2   // Y2 = abs mask (X2 = low 128 for the tail)
+    VMOVUPS (SI), Y0
+    VANDPS Y0, Y2, Y0             // Y0 = |a[0:8]|
+    ADDQ $32, SI
+    SUBQ $8, CX
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   maxabs32_avx_reduce
+
+maxabs32_avx_loop8:
+    VMOVUPS (SI), Y1
+    VANDPS Y1, Y2, Y1
+    VMAXPS Y0, Y1, Y0
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  maxabs32_avx_loop8
+
+maxabs32_avx_reduce:
+    VEXTRACTF128 $1, Y0, X1
+    VMAXPS X0, X1, X0
+    VPERMILPS $0x0E, X0, X1
+    VMAXPS X0, X1, X0
+    VPERMILPS $0x01, X0, X1
+    VMAXSS X0, X1, X0
+
+    ANDQ $7, CX
+    JZ   maxabs32_avx_done
+
+maxabs32_avx_scalar:
+    VMOVSS (SI), X1
+    VANDPS X1, X2, X1
+    VMAXSS X0, X1, X0
+    ADDQ $4, SI
+    DECQ CX
+    JNZ  maxabs32_avx_scalar
+
+maxabs32_avx_done:
+    VMOVSS X0, ret+24(FP)
+    VZEROUPPER
+    RET
+
 // func absAVX(dst, a []float32)
 TEXT ·absAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
@@ -1847,6 +1896,53 @@ max32_sse_scalar:
     JNZ  max32_sse_scalar
 
 max32_sse_done:
+    MOVSS X0, ret+24(FP)
+    RET
+
+// func maxAbsSSE(a []float32) float32
+// max_i |a[i]|. Mirrors maxSSE with ANDPS absf32mask folded into each load.
+TEXT ·maxAbsSSE(SB), NOSPLIT, $0-28
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    MOVUPS absf32mask<>(SB), X2
+    MOVUPS (SI), X0
+    ANDPS X2, X0                 // X0 = |a[0:4]|
+    ADDQ $16, SI
+    SUBQ $4, CX
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   maxabs32_sse_reduce
+
+maxabs32_sse_loop4:
+    MOVUPS (SI), X1
+    ANDPS X2, X1
+    MAXPS X1, X0
+    ADDQ $16, SI
+    DECQ AX
+    JNZ  maxabs32_sse_loop4
+
+maxabs32_sse_reduce:
+    MOVAPS X0, X1
+    SHUFPS $0x0E, X1, X1
+    MAXPS X1, X0
+    MOVAPS X0, X1
+    SHUFPS $0x01, X1, X1
+    MAXSS X1, X0
+
+    ANDQ $3, CX
+    JZ   maxabs32_sse_done
+
+maxabs32_sse_scalar:
+    MOVSS (SI), X1
+    ANDPS X2, X1
+    MAXSS X1, X0
+    ADDQ $4, SI
+    DECQ CX
+    JNZ  maxabs32_sse_scalar
+
+maxabs32_sse_done:
     MOVSS X0, ret+24(FP)
     RET
 

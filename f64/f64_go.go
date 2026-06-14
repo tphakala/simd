@@ -134,6 +134,19 @@ func maxGo(a []float64) float64 {
 	return m
 }
 
+// maxAbsGo returns max_i |a[i]| (the infinity norm), 0 for an empty slice.
+// It is the bit-exact source of truth for the MaxAbs kernels.
+func maxAbsGo(a []float64) float64 {
+	m := 0.0
+	for _, v := range a {
+		av := math.Abs(v)
+		if av > m {
+			m = av
+		}
+	}
+	return m
+}
+
 func absGo(dst, a []float64) {
 	if len(dst) == 0 {
 		return

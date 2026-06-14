@@ -13,6 +13,7 @@ func subFromScalar32(dst, a []float32, s float32)      { subFromScalarGo(dst, a,
 func sum(a []float32) float32                          { return sumGo(a) }
 func min32(a []float32) float32                        { return minGo(a) }
 func max32(a []float32) float32                        { return maxGo(a) }
+func maxAbs32(a []float32) float32                     { return maxAbsGo(a) }
 func abs32(dst, a []float32)                           { absGo(dst, a) }
 func neg32(dst, a []float32)                           { negGo(dst, a) }
 func fma32(dst, a, b, c []float32)                     { fmaGo(dst, a, b, c) }

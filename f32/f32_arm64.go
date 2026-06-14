@@ -89,6 +89,13 @@ func max32(a []float32) float32 {
 	return maxGo(a)
 }
 
+func maxAbs32(a []float32) float32 {
+	if hasNEON && len(a) >= 4 {
+		return maxAbsNEON(a)
+	}
+	return maxAbsGo(a)
+}
+
 func abs32(dst, a []float32) {
 	if hasNEON && len(dst) >= 4 {
 		absNEON(dst, a)
@@ -347,6 +354,9 @@ func minNEON(a []float32) float32
 
 //go:noescape
 func maxNEON(a []float32) float32
+
+//go:noescape
+func maxAbsNEON(a []float32) float32
 
 //go:noescape
 func absNEON(dst, a []float32)
