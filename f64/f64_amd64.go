@@ -115,7 +115,12 @@ func initAVX512() {
 	deinterleave2Impl = deinterleave2AVX
 	addScaledImpl = addScaledAVX512
 	convolveDecimateImpl = convolveDecimateAVX512
-	convolveValidMaxAbsImpl = convolveValidMaxAbsAVX
+	// AVX-512 keeps the Go-level fusion over the 8-wide dotProductAVX512: the fused
+	// kernel is 4-wide (AVX2) and its dot summation order would diverge from
+	// ConvolveValid here. A dedicated 8-wide fused kernel needs AVX-512 hardware to
+	// validate (none available; see #138), so the AVX-512 tier forgoes the fused
+	// speedup but stays bit-identical to ConvolveValid.
+	convolveValidMaxAbsImpl = convolveValidMaxAbsGo
 }
 
 func initAVX() {
