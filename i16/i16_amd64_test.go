@@ -320,9 +320,10 @@ func TestXCorr4AMD64_ShortWindowIsBounded(t *testing.T) {
 }
 
 // TestXCorrDispatch_ReachesSIMD pins the dispatch STATE that XCorr's SIMD path
-// depends on. See the arm64 counterpart for what it does NOT prove: nothing
+// depends on. See the arm64 counterpart for what it does NOT prove (nothing
 // here establishes that xcorrI16 calls a kernel, because the kernel is
-// bit-identical to the Go reference and a dead dispatcher passes every test.
+// bit-identical to the Go reference and a dead dispatcher passes every test)
+// and for the build-tagged hook that would close that gap.
 func TestXCorrDispatch_ReachesSIMD(t *testing.T) {
 	if hasSSE2 != cpu.X86.SSE2 {
 		t.Fatalf("hasSSE2 = %v but cpu.X86.SSE2 = %v: dispatch flag is not wired to CPU detection", hasSSE2, cpu.X86.SSE2)
@@ -353,7 +354,15 @@ func TestXCorr4AMD64_LongWindowIsClamped(t *testing.T) {
 				t.Skipf("%s not available", k.name)
 			}
 			for _, xn := range []int{1, 8, 9, 16, 17, 32} {
-				x := genI16(xn, 209)
+				// x MUST be a prefix of a longer allocation: the mutant this
+				// test exists for reads past the end of x, and past a
+				// standalone slice that is zeroed memory, which multiplies to
+				// 0 and leaves the answer correct. Non-zero bytes past x are
+				// what make the over-read observable rather than a coin flip
+				// on heap layout. Without this, the test detects nothing on
+				// amd64 at any xn.
+				backing := genI16(xn+200, 209)
+				x := backing[:xn]
 				y := genI16(xn+40, 210) // len(y)-3 far exceeds len(x)
 				dst := make([]int32, xcorrLagBlock)
 				k.fn(dst, x, y)

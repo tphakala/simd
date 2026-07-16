@@ -235,14 +235,18 @@ func TestXCorr4NEON_ShortWindowIsBounded(t *testing.T) {
 // depends on: the feature flag is wired to CPU detection, and the threshold is
 // not absurd.
 //
-// Be clear about its limit: it does NOT prove xcorrI16 calls a kernel. Nothing
-// can, from the outside. The kernel is bit-identical to the Go reference by
-// design, so deleting the SIMD branch outright leaves every parity test green
-// and this test green too. Catching that would need an observable seam (a
-// package-level kernel func var to spy on), which would reintroduce the
-// indirect call that forces caller allocations (see xcorrWindow's comment).
-// The classes this does catch are a flag left unwired and a threshold retuned
-// out of range, which are the realistic regressions.
+// Be clear about its limit: it does NOT prove xcorrI16 calls a kernel. The
+// kernel is bit-identical to the Go reference by design, so deleting the SIMD
+// branch outright leaves every parity test green and this test green too. The
+// classes this does catch are a flag left unwired and a threshold retuned out
+// of range, which are the realistic regressions.
+//
+// That blind spot is closable and this test does not close it. A build-tagged
+// no-op hook in the dispatcher (a counter under a `simdspy` tag, an empty func
+// otherwise) would make routing observable while keeping the kernel call
+// direct, so it costs nothing in the default build. It is not done here only
+// because the gate judged the blind spot narrower than the change; do not read
+// this comment as evidence that it cannot be done.
 func TestXCorrDispatch_ReachesNEON(t *testing.T) {
 	if !cpu.ARM64.NEON {
 		t.Skip("NEON not available")
@@ -266,7 +270,13 @@ func TestXCorr4NEON_LongWindowIsClamped(t *testing.T) {
 		t.Skip("NEON not available")
 	}
 	for _, xn := range []int{1, 8, 9, 16, 17, 32} {
-		x := genI16(xn, 207)
+		// x MUST be a prefix of a longer allocation: the mutant this test
+		// exists for reads past the end of x, and past a standalone slice that
+		// is zeroed memory, which multiplies to 0 and leaves the answer
+		// correct. Non-zero bytes past x are what make the over-read
+		// observable rather than a coin flip on heap layout.
+		backing := genI16(xn+200, 207)
+		x := backing[:xn]
 		y := genI16(xn+40, 208) // len(y)-3 far exceeds len(x)
 		dst := make([]int32, xcorrLagBlock)
 		xcorr4NEON(dst, x, y)

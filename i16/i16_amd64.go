@@ -43,6 +43,11 @@ const (
 	minAVX2XCorr = 16
 )
 
+// The two block loops below are identical except for the kernel they call, and
+// extracting that difference into a shared driver taking the kernel as a
+// parameter is exactly the refactor that must not happen: an indirect call
+// defeats escape analysis and forces every caller of XCorr to heap-allocate.
+// See xcorrWindow in i16_go.go. TestXCorr_AllocFree catches it if it returns.
 func xcorrI16(dst []int32, x, y []int16) {
 	m := xcorrLags(dst, x, y)
 	k := 0

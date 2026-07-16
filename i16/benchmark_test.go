@@ -123,6 +123,25 @@ func BenchmarkXCorr_240x288(b *testing.B) { benchmarkXCorr(b, 240, 288, XCorr) }
 // 16-wide AVX2 body.
 func BenchmarkXCorr_480x64(b *testing.B) { benchmarkXCorr(b, 480, 64, XCorr) }
 
+// The lengths above are all multiples of 16 and 4, which is precisely why they
+// hide things. 240 % 16 == 0 and 480 % 16 == 0, so the AVX2 kernel's scalar
+// tail never runs in any of them; 4, 64 and 288 are all multiples of
+// xcorrLagBlock, so the remainder-lag path never runs either. The cases below
+// exist to make both visible.
+//
+// x=25 currently shows the AVX2 tail costing more than SSE2 would (issue
+// filed): a remainder of 8-15 elements is served by a 4-lag scalar tail rather
+// than an 8-wide block. x=248 is the same shape at a realistic length, and
+// lags=61 is the pitch-analysis count from the motivating caller, which leaves
+// one remainder lag.
+func BenchmarkXCorr_25x64(b *testing.B)  { benchmarkXCorr(b, 25, 64, XCorr) }
+func BenchmarkXCorr_248x64(b *testing.B) { benchmarkXCorr(b, 248, 64, XCorr) }
+func BenchmarkXCorr_240x61(b *testing.B) { benchmarkXCorr(b, 240, 61, XCorr) }
+
+func BenchmarkXCorrGo_25x64(b *testing.B)  { benchmarkXCorr(b, 25, 64, xcorrGo) }
+func BenchmarkXCorrGo_248x64(b *testing.B) { benchmarkXCorr(b, 248, 64, xcorrGo) }
+func BenchmarkXCorrGo_240x61(b *testing.B) { benchmarkXCorr(b, 240, 61, xcorrGo) }
+
 func BenchmarkXCorrGo_240x4(b *testing.B)   { benchmarkXCorr(b, 240, 4, xcorrGo) }
 func BenchmarkXCorrGo_240x64(b *testing.B)  { benchmarkXCorr(b, 240, 64, xcorrGo) }
 func BenchmarkXCorrGo_240x288(b *testing.B) { benchmarkXCorr(b, 240, 288, xcorrGo) }
