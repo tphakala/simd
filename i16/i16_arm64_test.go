@@ -187,3 +187,62 @@ func TestDotDispatch_ReachesNEON(t *testing.T) {
 		t.Fatalf("minNEONDot = %d exceeds two vector blocks: DotProduct would not vectorize at the short lengths it was written for", minNEONDot)
 	}
 }
+
+// TestXCorr4NEON_ParityWithGo drives the 4-lag kernel directly, over lengths
+// the dispatcher would never route to it, so a threshold change cannot quietly
+// reduce this to a test of the Go reference against itself.
+func TestXCorr4NEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, xn := range []int{1, 2, 7, 8, 9, 15, 16, 17, 23, 31, 32, 33, 64, 240} {
+		x := genI16(xn, 111)
+		y := genI16(xn+3, 112) // exactly the window the dispatcher passes
+		dst := make([]int32, xcorrLagBlock)
+		xcorr4NEON(dst, x, y)
+		for k := range xcorrLagBlock {
+			if got, want := dst[k], dotOracle(x, y[k:]); got != want {
+				t.Errorf("xcorr4NEON xn=%d: dst[%d] = %d, want %d", xn, k, got, want)
+			}
+		}
+	}
+}
+
+// TestXCorr4NEON_ShortWindowIsBounded feeds the kernel a y window shorter than
+// its contract (len(x)+3) and asserts it clamps instead of reading past the
+// end. The dispatcher never does this; the in-assembly clamp exists so that a
+// future wrapper bug is a wrong number rather than an out-of-bounds read, and
+// this is what proves the net is really there.
+func TestXCorr4NEON_ShortWindowIsBounded(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	x := genI16(32, 113)
+	for _, yn := range []int{0, 1, 2, 3, 4, 8, 16, 31, 34} {
+		y := genI16(yn, 114)
+		dst := make([]int32, xcorrLagBlock)
+		xcorr4NEON(dst, x, y) // must not fault or read past y
+		n := max(min(len(x), yn-3), 0)
+		for k := range xcorrLagBlock {
+			if got, want := dst[k], dotOracle(x[:n], y[min(k, yn):]); got != want {
+				t.Errorf("xcorr4NEON short window yn=%d: dst[%d] = %d, want %d", yn, k, got, want)
+			}
+		}
+	}
+}
+
+// TestXCorrDispatch_ReachesNEON asserts XCorr actually routes to the kernel.
+// As with the dot product this must be white-box: the kernel is bit-identical
+// to the Go reference by design, so a dead dispatcher would pass every parity
+// test above while the SIMD path sat unused.
+func TestXCorrDispatch_ReachesNEON(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	if !hasNEON {
+		t.Fatal("hasNEON is false though cpu.ARM64.NEON is true: XCorr silently runs the Go reference")
+	}
+	if minNEONXCorr > 16 {
+		t.Fatalf("minNEONXCorr = %d: XCorr would not vectorize at the x lengths it was written for", minNEONXCorr)
+	}
+}

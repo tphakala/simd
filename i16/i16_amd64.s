@@ -369,3 +369,226 @@ dot_avx2_done:
     MOVL AX, ret+48(FP)
     VZEROUPPER
     RET
+
+// Multi-lag cross-correlation: four lags per call.
+//
+// Load x once, then multiply-accumulate it against four overlapping y windows
+// at element offsets 0/1/2/3. Reusing the x load across four lags is the point
+// of the op.
+//
+// PMADDWD is per-lane commutative (it multiplies elementwise, then adds
+// pairwise), so the destructive two-operand SSE2 form costs nothing here: put
+// the freshly loaded y in the destination and x survives in its own register
+// across all four lags. y is reloaded per lag regardless.
+//
+// The four y loads are deliberately unaligned relative to one another, being
+// the same window stepped by 2 bytes, so MOVOU/VMOVDQU are load-bearing: an
+// aligned-load substitution would fault on three lags out of four.
+
+// func xcorr4SSE2(dst []int32, x, y []int16)
+// n = min(len(x), len(y)-3) is a safety net; the dispatcher passes a y window of
+// exactly len(x)+3, so the clamp never fires. It turns a wrapper bug into a
+// wrong number instead of an out-of-bounds read.
+TEXT ·xcorr4SSE2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DI
+    MOVQ x_base+24(FP), SI
+    MOVQ x_len+32(FP), CX
+    MOVQ y_base+48(FP), BX
+    MOVQ y_len+56(FP), DX
+
+    PXOR X4, X4                // lag 0 accumulator
+    PXOR X5, X5                // lag 1
+    PXOR X6, X6                // lag 2
+    PXOR X7, X7                // lag 3
+
+    SUBQ $3, DX                // DX = len(y) - 3
+    JLE  xcorr4_sse2_empty
+    CMPQ DX, CX
+    CMOVQLT DX, CX             // CX = n = min(len(x), len(y)-3)
+    JMP  xcorr4_sse2_blocks
+
+xcorr4_sse2_empty:
+    XORQ CX, CX                // n = 0: fold zeros, store zeros
+
+xcorr4_sse2_blocks:
+    MOVQ CX, AX
+    SHRQ $3, AX                // AX = n / 8
+    JZ   xcorr4_sse2_fold
+
+xcorr4_sse2_loop8:
+    MOVOU (SI), X0             // x[j..j+8), reused by all four lags
+    MOVOU (BX), X1             // y[j+0 ..) lag 0
+    PMADDWL X0, X1
+    PADDD X1, X4
+    MOVOU 2(BX), X1            // y[j+1 ..) lag 1
+    PMADDWL X0, X1
+    PADDD X1, X5
+    MOVOU 4(BX), X1            // y[j+2 ..) lag 2
+    PMADDWL X0, X1
+    PADDD X1, X6
+    MOVOU 6(BX), X1            // y[j+3 ..) lag 3
+    PMADDWL X0, X1
+    PADDD X1, X7
+    ADDQ $16, SI
+    ADDQ $16, BX
+    DECQ AX
+    JNZ  xcorr4_sse2_loop8
+
+xcorr4_sse2_fold:
+    PSHUFD $0x4E, X4, X0
+    PADDD X0, X4
+    PSHUFD $0xB1, X4, X0
+    PADDD X0, X4
+    MOVQ X4, R8                // lag 0 partial sum
+    PSHUFD $0x4E, X5, X0
+    PADDD X0, X5
+    PSHUFD $0xB1, X5, X0
+    PADDD X0, X5
+    MOVQ X5, R9                // lag 1
+    PSHUFD $0x4E, X6, X0
+    PADDD X0, X6
+    PSHUFD $0xB1, X6, X0
+    PADDD X0, X6
+    MOVQ X6, R10               // lag 2
+    PSHUFD $0x4E, X7, X0
+    PADDD X0, X7
+    PSHUFD $0xB1, X7, X0
+    PADDD X0, X7
+    MOVQ X7, R11               // lag 3
+
+    ANDQ $7, CX
+    JZ   xcorr4_sse2_store
+
+xcorr4_sse2_scalar:
+    MOVWLSX (SI), AX           // x[j], sign-extended
+    MOVWLSX (BX), DX
+    IMULL AX, DX
+    ADDL DX, R8
+    MOVWLSX 2(BX), DX
+    IMULL AX, DX
+    ADDL DX, R9
+    MOVWLSX 4(BX), DX
+    IMULL AX, DX
+    ADDL DX, R10
+    MOVWLSX 6(BX), DX
+    IMULL AX, DX
+    ADDL DX, R11
+    ADDQ $2, SI
+    ADDQ $2, BX
+    DECQ CX
+    JNZ  xcorr4_sse2_scalar
+
+xcorr4_sse2_store:
+    MOVL R8, 0(DI)
+    MOVL R9, 4(DI)
+    MOVL R10, 8(DI)
+    MOVL R11, 12(DI)
+    RET
+
+// func xcorr4AVX2(dst []int32, x, y []int16)
+// As xcorr4SSE2 at twice the width; VPMADDWD's three-operand form also spares
+// the reload-into-destination dance.
+TEXT ·xcorr4AVX2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DI
+    MOVQ x_base+24(FP), SI
+    MOVQ x_len+32(FP), CX
+    MOVQ y_base+48(FP), BX
+    MOVQ y_len+56(FP), DX
+
+    VPXOR Y4, Y4, Y4           // lag 0 accumulator
+    VPXOR Y5, Y5, Y5           // lag 1
+    VPXOR Y6, Y6, Y6           // lag 2
+    VPXOR Y7, Y7, Y7           // lag 3
+
+    SUBQ $3, DX                // DX = len(y) - 3
+    JLE  xcorr4_avx2_empty
+    CMPQ DX, CX
+    CMOVQLT DX, CX             // CX = n = min(len(x), len(y)-3)
+    JMP  xcorr4_avx2_blocks
+
+xcorr4_avx2_empty:
+    XORQ CX, CX
+
+xcorr4_avx2_blocks:
+    MOVQ CX, AX
+    SHRQ $4, AX                // AX = n / 16
+    JZ   xcorr4_avx2_fold
+
+xcorr4_avx2_loop16:
+    VMOVDQU (SI), Y0           // x[j..j+16), reused by all four lags
+    VMOVDQU (BX), Y1           // lag 0
+    VPMADDWD Y0, Y1, Y1
+    VPADDD Y1, Y4, Y4
+    VMOVDQU 2(BX), Y1          // lag 1
+    VPMADDWD Y0, Y1, Y1
+    VPADDD Y1, Y5, Y5
+    VMOVDQU 4(BX), Y1          // lag 2
+    VPMADDWD Y0, Y1, Y1
+    VPADDD Y1, Y6, Y6
+    VMOVDQU 6(BX), Y1          // lag 3
+    VPMADDWD Y0, Y1, Y1
+    VPADDD Y1, Y7, Y7
+    ADDQ $32, SI
+    ADDQ $32, BX
+    DECQ AX
+    JNZ  xcorr4_avx2_loop16
+
+xcorr4_avx2_fold:
+    VEXTRACTI128 $1, Y4, X0
+    VPADDD X0, X4, X4
+    VPSHUFD $0x4E, X4, X0
+    VPADDD X0, X4, X4
+    VPSHUFD $0xB1, X4, X0
+    VPADDD X0, X4, X4
+    MOVQ X4, R8                // lag 0 partial sum
+    VEXTRACTI128 $1, Y5, X0
+    VPADDD X0, X5, X5
+    VPSHUFD $0x4E, X5, X0
+    VPADDD X0, X5, X5
+    VPSHUFD $0xB1, X5, X0
+    VPADDD X0, X5, X5
+    MOVQ X5, R9                // lag 1
+    VEXTRACTI128 $1, Y6, X0
+    VPADDD X0, X6, X6
+    VPSHUFD $0x4E, X6, X0
+    VPADDD X0, X6, X6
+    VPSHUFD $0xB1, X6, X0
+    VPADDD X0, X6, X6
+    MOVQ X6, R10               // lag 2
+    VEXTRACTI128 $1, Y7, X0
+    VPADDD X0, X7, X7
+    VPSHUFD $0x4E, X7, X0
+    VPADDD X0, X7, X7
+    VPSHUFD $0xB1, X7, X0
+    VPADDD X0, X7, X7
+    MOVQ X7, R11               // lag 3
+
+    ANDQ $15, CX
+    JZ   xcorr4_avx2_store
+
+xcorr4_avx2_scalar:
+    MOVWLSX (SI), AX           // x[j], sign-extended
+    MOVWLSX (BX), DX
+    IMULL AX, DX
+    ADDL DX, R8
+    MOVWLSX 2(BX), DX
+    IMULL AX, DX
+    ADDL DX, R9
+    MOVWLSX 4(BX), DX
+    IMULL AX, DX
+    ADDL DX, R10
+    MOVWLSX 6(BX), DX
+    IMULL AX, DX
+    ADDL DX, R11
+    ADDQ $2, SI
+    ADDQ $2, BX
+    DECQ CX
+    JNZ  xcorr4_avx2_scalar
+
+xcorr4_avx2_store:
+    MOVL R8, 0(DI)
+    MOVL R9, 4(DI)
+    MOVL R10, 8(DI)
+    MOVL R11, 12(DI)
+    VZEROUPPER
+    RET

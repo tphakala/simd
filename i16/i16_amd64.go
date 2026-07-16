@@ -35,6 +35,25 @@ const (
 	minAVX2Dot = 16 // VPMADDWD retires 16
 )
 
+// XCorr vectorizes once x is long enough that reusing each x load across four
+// lags pays for the kernel call. The AVX2 body needs 16 elements; below that
+// SSE2's 8 still wins, and below 8 the Go reference runs.
+const (
+	minSSE2XCorr = 8
+	minAVX2XCorr = 16
+)
+
+func xcorrI16(dst []int32, x, y []int16) {
+	switch {
+	case hasAVX2 && len(x) >= minAVX2XCorr:
+		xcorrBlocked(dst, x, y, xcorr4AVX2, dotI16)
+	case hasSSE2 && len(x) >= minSSE2XCorr:
+		xcorrBlocked(dst, x, y, xcorr4SSE2, dotI16)
+	default:
+		xcorrGo(dst, x, y)
+	}
+}
+
 func dotI16(a, b []int16) int32 {
 	n := min(len(a), len(b))
 	switch {
@@ -68,6 +87,12 @@ func deinterleave2I16(a, b, src []int16) {
 		deinterleave2Go(a, b, src)
 	}
 }
+
+//go:noescape
+func xcorr4AVX2(dst []int32, x, y []int16)
+
+//go:noescape
+func xcorr4SSE2(dst []int32, x, y []int16)
 
 //go:noescape
 func dotAVX2(a, b []int16) int32

@@ -165,3 +165,118 @@ dot_neon_scalar:
 dot_neon_done:
     MOVW R5, ret+48(FP)
     RET
+
+// func xcorr4NEON(dst []int32, x, y []int16)
+// Evaluates four consecutive correlation lags in one pass.
+//
+// This is the libopus xcorr_kernel shape: load eight x elements once, then
+// multiply-accumulate them against four overlapping y windows at element
+// offsets 0/1/2/3. Reusing the x load across four lags is the whole point of
+// the op, and it is why this beats calling the dot kernel once per lag. Eight
+// accumulators (two per lag) keep four independent SMLAL chains in flight.
+//
+// The four y loads are deliberately unaligned relative to each other: NEON
+// loads have no alignment requirement, so the overlapping windows are just
+// loads at +0/+2/+4/+6 bytes. That is cheaper than VEXT-ing the window along,
+// and it is why no aligned-load instruction may ever be substituted here.
+//
+// Accumulation wraps in int32 exactly as dotNEON's does, so dst[k] is
+// bit-identical to DotProduct(x, y[k:]).
+//
+// n = min(len(x), len(y)-3) is a safety net rather than a semantic: the
+// dispatcher hands this kernel a y window of exactly len(x)+3 elements, so the
+// clamp never fires in practice. It is here so that a wrapper bug becomes a
+// wrong number instead of an out-of-bounds read.
+TEXT ·xcorr4NEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD x_base+24(FP), R1
+    MOVD x_len+32(FP), R2
+    MOVD y_base+48(FP), R3
+    MOVD y_len+56(FP), R4
+
+    // Two accumulators per lag: V16/V17 lag0, V18/V19 lag1, V20/V21 lag2,
+    // V22/V23 lag3.
+    VEOR V16.B16, V16.B16, V16.B16
+    VEOR V17.B16, V17.B16, V17.B16
+    VEOR V18.B16, V18.B16, V18.B16
+    VEOR V19.B16, V19.B16, V19.B16
+    VEOR V20.B16, V20.B16, V20.B16
+    VEOR V21.B16, V21.B16, V21.B16
+    VEOR V22.B16, V22.B16, V22.B16
+    VEOR V23.B16, V23.B16, V23.B16
+
+    SUBS $3, R4, R4            // R4 = len(y) - 3
+    BLE  xcorr4_neon_empty     // len(y) <= 3: no lag has a window
+    CMP  R4, R2
+    CSEL LT, R2, R4, R2        // R2 = n = min(len(x), len(y)-3)
+    B    xcorr4_neon_blocks
+
+xcorr4_neon_empty:
+    MOVD $0, R2                // n = 0: fold zeroed accumulators, store zeros
+
+xcorr4_neon_blocks:
+    LSR  $3, R2, R5            // R5 = n / 8
+    CBZ  R5, xcorr4_neon_fold
+
+xcorr4_neon_loop8:
+    VLD1.P 16(R1), [V0.H8]     // x[j..j+8), consumed by all four lags
+    VLD1   (R3), [V1.H8]       // y[j+0 .. j+8)  lag 0
+    ADD    $2, R3, R6
+    VLD1   (R6), [V2.H8]       // y[j+1 .. j+9)  lag 1
+    ADD    $2, R6, R6
+    VLD1   (R6), [V3.H8]       // y[j+2 .. j+10) lag 2
+    ADD    $2, R6, R6
+    VLD1   (R6), [V4.H8]       // y[j+3 .. j+11) lag 3
+    ADD    $16, R3             // advance y by 8 elements
+    WORD $0x0E618010           // SMLAL V16.4S, V0.4H, V1.4H
+    WORD $0x4E618011           // SMLAL2 V17.4S, V0.8H, V1.8H
+    WORD $0x0E628012           // SMLAL V18.4S, V0.4H, V2.4H
+    WORD $0x4E628013           // SMLAL2 V19.4S, V0.8H, V2.8H
+    WORD $0x0E638014           // SMLAL V20.4S, V0.4H, V3.4H
+    WORD $0x4E638015           // SMLAL2 V21.4S, V0.8H, V3.8H
+    WORD $0x0E648016           // SMLAL V22.4S, V0.4H, V4.4H
+    WORD $0x4E648017           // SMLAL2 V23.4S, V0.8H, V4.8H
+    SUB  $1, R5
+    CBNZ R5, xcorr4_neon_loop8
+
+xcorr4_neon_fold:
+    VADD V17.S4, V16.S4, V16.S4
+    VADD V19.S4, V18.S4, V18.S4
+    VADD V21.S4, V20.S4, V20.S4
+    VADD V23.S4, V22.S4, V22.S4
+    VADDV V16.S4, V16          // ADDV S16, V16.4S
+    VADDV V18.S4, V18          // ADDV S18, V18.4S
+    VADDV V20.S4, V20          // ADDV S20, V20.4S
+    VADDV V22.S4, V22          // ADDV S22, V22.4S
+    FMOVS F16, R7              // lag 0 partial sum
+    FMOVS F18, R8              // lag 1
+    FMOVS F20, R9              // lag 2
+    FMOVS F22, R10             // lag 3
+
+    AND  $7, R2, R11           // R11 = n mod 8
+    CBZ  R11, xcorr4_neon_store
+
+xcorr4_neon_scalar:
+    MOVH.P 2(R1), R12          // x[j], sign-extended
+    MOVH   0(R3), R13          // y[j+0]
+    MUL    R12, R13, R13
+    ADDW   R13, R7, R7
+    MOVH   2(R3), R13          // y[j+1]
+    MUL    R12, R13, R13
+    ADDW   R13, R8, R8
+    MOVH   4(R3), R13          // y[j+2]
+    MUL    R12, R13, R13
+    ADDW   R13, R9, R9
+    MOVH   6(R3), R13          // y[j+3]
+    MUL    R12, R13, R13
+    ADDW   R13, R10, R10
+    ADD    $2, R3
+    SUB    $1, R11
+    CBNZ   R11, xcorr4_neon_scalar
+
+xcorr4_neon_store:
+    MOVW R7, 0(R0)
+    MOVW R8, 4(R0)
+    MOVW R9, 8(R0)
+    MOVW R10, 12(R0)
+    RET

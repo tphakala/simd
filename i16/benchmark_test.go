@@ -93,3 +93,37 @@ func BenchmarkDotProductGo_64(b *testing.B)   { benchmarkDot(b, 64, dotGo) }
 func BenchmarkDotProductGo_240(b *testing.B)  { benchmarkDot(b, 240, dotGo) }
 func BenchmarkDotProductGo_480(b *testing.B)  { benchmarkDot(b, 480, dotGo) }
 func BenchmarkDotProductGo_4096(b *testing.B) { benchmarkDot(b, 4096, dotGo) }
+
+// XCorr benchmarks use the shape pitch analysis calls at: a 240-element frame
+// correlated over a sweep of lags. SetBytes counts x once plus the y span the
+// lags cover.
+
+func benchmarkXCorr(b *testing.B, xn, lags int, fn func(dst []int32, x, y []int16)) {
+	b.Helper()
+	x := make([]int16, xn)
+	y := make([]int16, xn+lags-1)
+	for i := range x {
+		x[i] = int16(i*7 - 3000)
+	}
+	for i := range y {
+		y[i] = int16(i*-5 + 2000)
+	}
+	dst := make([]int32, lags)
+	b.SetBytes(int64(xn+len(y)) * 2)
+	for b.Loop() {
+		fn(dst, x, y)
+	}
+}
+
+func BenchmarkXCorr_240x4(b *testing.B)   { benchmarkXCorr(b, 240, 4, XCorr) }
+func BenchmarkXCorr_240x64(b *testing.B)  { benchmarkXCorr(b, 240, 64, XCorr) }
+func BenchmarkXCorr_240x288(b *testing.B) { benchmarkXCorr(b, 240, 288, XCorr) }
+
+// 480 is a 20 ms frame at 24 kHz, and covers a second x length through the
+// 16-wide AVX2 body.
+func BenchmarkXCorr_480x64(b *testing.B) { benchmarkXCorr(b, 480, 64, XCorr) }
+
+func BenchmarkXCorrGo_240x4(b *testing.B)   { benchmarkXCorr(b, 240, 4, xcorrGo) }
+func BenchmarkXCorrGo_240x64(b *testing.B)  { benchmarkXCorr(b, 240, 64, xcorrGo) }
+func BenchmarkXCorrGo_240x288(b *testing.B) { benchmarkXCorr(b, 240, 288, xcorrGo) }
+func BenchmarkXCorrGo_480x64(b *testing.B)  { benchmarkXCorr(b, 480, 64, xcorrGo) }

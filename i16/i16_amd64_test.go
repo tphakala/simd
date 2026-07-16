@@ -256,3 +256,77 @@ func TestDotDispatch_ReachesSIMD(t *testing.T) {
 			minSSE2Dot, minAVX2Dot)
 	}
 }
+
+// xcorr4Kernels mirrors dotKernels for the 4-lag cross-correlation tiers.
+type xcorr4Kernel struct {
+	name      string
+	available bool
+	fn        func(dst []int32, x, y []int16)
+}
+
+func xcorr4Kernels() []xcorr4Kernel {
+	return []xcorr4Kernel{
+		{"AVX2", cpu.X86.AVX2, xcorr4AVX2},
+		{"SSE2", cpu.X86.SSE2, xcorr4SSE2},
+	}
+}
+
+// TestXCorr4AMD64_ParityWithGo drives each 4-lag kernel directly, over lengths
+// the dispatcher would never route to it, so a threshold change cannot quietly
+// reduce this to a test of the Go reference against itself.
+func TestXCorr4AMD64_ParityWithGo(t *testing.T) {
+	for _, k := range xcorr4Kernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			for _, xn := range []int{1, 2, 7, 8, 9, 15, 16, 17, 23, 31, 32, 33, 64, 240} {
+				x := genI16(xn, 121)
+				y := genI16(xn+3, 122) // exactly the window the dispatcher passes
+				dst := make([]int32, xcorrLagBlock)
+				k.fn(dst, x, y)
+				for lag := range xcorrLagBlock {
+					if got, want := dst[lag], dotOracle(x, y[lag:]); got != want {
+						t.Errorf("xcorr4%s xn=%d: dst[%d] = %d, want %d", k.name, xn, lag, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestXCorr4AMD64_ShortWindowIsBounded feeds each kernel a y window shorter
+// than its contract and asserts it clamps rather than reading past the end.
+func TestXCorr4AMD64_ShortWindowIsBounded(t *testing.T) {
+	for _, k := range xcorr4Kernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			x := genI16(32, 123)
+			for _, yn := range []int{0, 1, 2, 3, 4, 8, 16, 31, 34} {
+				y := genI16(yn, 124)
+				dst := make([]int32, xcorrLagBlock)
+				k.fn(dst, x, y) // must not fault or read past y
+				n := max(min(len(x), yn-3), 0)
+				for lag := range xcorrLagBlock {
+					if got, want := dst[lag], dotOracle(x[:n], y[min(lag, yn):]); got != want {
+						t.Errorf("xcorr4%s short window yn=%d: dst[%d] = %d, want %d", k.name, yn, lag, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestXCorrDispatch_ReachesSIMD asserts XCorr actually routes to a kernel.
+// See the arm64 counterpart for why this must be white-box.
+func TestXCorrDispatch_ReachesSIMD(t *testing.T) {
+	if !hasSSE2 {
+		t.Fatal("hasSSE2 is false on amd64: PMADDWD is SSE2 baseline, so XCorr should never fall back to Go here")
+	}
+	if minSSE2XCorr > 16 || minAVX2XCorr > 32 {
+		t.Fatalf("XCorr thresholds too high (SSE2 %d, AVX2 %d): would not vectorize at the x lengths it was written for",
+			minSSE2XCorr, minAVX2XCorr)
+	}
+}

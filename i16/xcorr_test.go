@@ -1,0 +1,204 @@
+package i16
+
+import (
+	"math"
+	"testing"
+)
+
+// Tests for XCorr.
+//
+// The defining property is that XCorr is DotProduct evaluated at every lag:
+// dst[k] must equal DotProduct(x, y[k:k+len(x))) exactly, for every k. That is
+// the invariant most of these tests assert, because it is stronger than
+// checking against a second hand-written loop and it ties the two primitives
+// together: a kernel that drifted from the dot product would be caught even if
+// its own reference drifted with it.
+//
+// The lag-blocking is where the bugs live. The SIMD path evaluates 4 lags per
+// call and finishes the remainder with the dot kernel, so lag counts that are
+// not multiples of 4 exercise the seam, and each lag reads y at a different
+// offset (only one of which can be even-aligned).
+
+// xcorrOracle computes each lag with the independent int64 oracle rather than
+// with dotGo, so a fault in the dot reference cannot hide by being consistent
+// with itself.
+func xcorrOracle(dst []int32, x, y []int16) []int32 {
+	out := make([]int32, len(dst))
+	copy(out, dst)
+	for k := range xcorrLags(dst, x, y) {
+		out[k] = dotOracle(x, y[k:])
+	}
+	return out
+}
+
+func equalI32(t *testing.T, what string, got, want []int32) {
+	t.Helper()
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("%s: dst[%d] = %d, want %d (len=%d)", what, i, got[i], want[i], len(got))
+		}
+	}
+}
+
+// TestXCorr_MatchesDotProductAtEveryLag is the core property test. The lag
+// counts deliberately straddle the 4-lag block boundary in both directions, and
+// the x lengths straddle the 8- and 16-wide kernel bodies plus their tails.
+func TestXCorr_MatchesDotProductAtEveryLag(t *testing.T) {
+	for _, xn := range []int{1, 2, 3, 7, 8, 9, 11, 15, 16, 17, 23, 24, 31, 32, 33, 64, 240} {
+		for _, lags := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 16, 17, 61} {
+			x := genI16(xn, 91)
+			y := genI16(xn+lags-1, 92)
+			dst := make([]int32, lags)
+			XCorr(dst, x, y)
+			for k := range lags {
+				if got, want := dst[k], DotProduct(x, y[k:k+xn]); got != want {
+					t.Fatalf("XCorr(xn=%d, lags=%d): dst[%d] = %d, want DotProduct = %d", xn, lags, k, got, want)
+				}
+			}
+		}
+	}
+}
+
+// TestXCorr_ParityWithReference checks the dispatched path against both the Go
+// reference and the independent int64 oracle across the same grid.
+func TestXCorr_ParityWithReference(t *testing.T) {
+	for _, xn := range []int{1, 8, 9, 16, 17, 33, 64, 240} {
+		for _, lags := range []int{1, 3, 4, 5, 8, 11, 16, 61} {
+			x := genI16(xn, 93)
+			y := genI16(xn+lags+5, 94)
+			dst := make([]int32, lags)
+			ref := make([]int32, lags)
+			XCorr(dst, x, y)
+			xcorrGo(ref, x, y)
+			equalI32(t, "XCorr vs reference", dst, ref)
+			equalI32(t, "XCorr vs oracle", dst, xcorrOracle(make([]int32, lags), x, y))
+		}
+	}
+}
+
+// TestXCorr_ClampLeavesTailUntouched pins the documented contract: only lags
+// with a full window are computed, and dst beyond that keeps its prior value.
+// The sentinel is what catches a kernel that wrote a partial window as if it
+// were a real result.
+func TestXCorr_ClampLeavesTailUntouched(t *testing.T) {
+	const sentinel = int32(-999111)
+	x := genI16(16, 95)
+	// y holds exactly 3 full windows worth of lags (16+2 elements -> lags 0..2).
+	y := genI16(18, 96)
+	dst := make([]int32, 10)
+	for i := range dst {
+		dst[i] = sentinel
+	}
+	XCorr(dst, x, y)
+
+	wantLags := len(y) - len(x) + 1 // 3
+	for k := range wantLags {
+		if got, want := dst[k], DotProduct(x, y[k:k+len(x)]); got != want {
+			t.Errorf("dst[%d] = %d, want %d", k, got, want)
+		}
+	}
+	for k := wantLags; k < len(dst); k++ {
+		if dst[k] != sentinel {
+			t.Errorf("dst[%d] = %d, want the sentinel %d left untouched (lag has no full window)", k, dst[k], sentinel)
+		}
+	}
+}
+
+// TestXCorr_Degenerate covers the inputs that compute nothing. Each must leave
+// dst entirely untouched rather than zeroing or panicking.
+func TestXCorr_Degenerate(t *testing.T) {
+	const sentinel = int32(4242)
+	cases := []struct {
+		name string
+		x, y []int16
+	}{
+		{"empty x", nil, genI16(8, 97)},
+		{"empty y", genI16(8, 97), nil},
+		{"y shorter than x", genI16(8, 97), genI16(7, 98)},
+		{"both empty", nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dst := []int32{sentinel, sentinel, sentinel}
+			XCorr(dst, c.x, c.y)
+			for i, v := range dst {
+				if v != sentinel {
+					t.Errorf("dst[%d] = %d, want untouched sentinel %d", i, v, sentinel)
+				}
+			}
+		})
+	}
+	// Empty dst must not panic.
+	XCorr(nil, genI16(8, 97), genI16(16, 98))
+	XCorr([]int32{}, genI16(8, 97), genI16(16, 98))
+}
+
+// TestXCorr_ExactWindow is the boundary the clamp math turns on: y is exactly
+// len(x) long, so lag 0 is the only one with a full window.
+func TestXCorr_ExactWindow(t *testing.T) {
+	const sentinel = int32(7)
+	x := genI16(16, 99)
+	y := genI16(16, 100)
+	dst := []int32{sentinel, sentinel, sentinel, sentinel, sentinel}
+	XCorr(dst, x, y)
+	if got, want := dst[0], DotProduct(x, y); got != want {
+		t.Errorf("dst[0] = %d, want %d", got, want)
+	}
+	for k := 1; k < len(dst); k++ {
+		if dst[k] != sentinel {
+			t.Errorf("dst[%d] = %d, want untouched: only lag 0 has a full window", k, dst[k])
+		}
+	}
+}
+
+// TestXCorr_MinInt16 drives the int32 accumulator past its range at every lag.
+// Note all-MinInt16 operands are sign-symmetric, so this catches a miscounted
+// element but NOT a sign or lane error; TestXCorr_MatchesDotProductAtEveryLag
+// with genI16 data is what covers those.
+func TestXCorr_MinInt16(t *testing.T) {
+	for _, xn := range []int{8, 9, 16, 17, 33} {
+		for _, lags := range []int{1, 4, 5, 8, 9} {
+			x := make([]int16, xn)
+			y := make([]int16, xn+lags-1)
+			for i := range x {
+				x[i] = math.MinInt16
+			}
+			for i := range y {
+				y[i] = math.MinInt16
+			}
+			dst := make([]int32, lags)
+			XCorr(dst, x, y)
+			equalI32(t, "XCorr all-MinInt16", dst, xcorrOracle(make([]int32, lags), x, y))
+		}
+	}
+}
+
+// TestXCorr_UnalignedOperands is not an edge case for this op, it is the normal
+// shape: lag k reads y at element offset k, so at most one lag in four can be
+// 16-byte aligned and the odd lags are only 2-byte aligned. An aligned-load
+// regression in the kernels would fault here.
+func TestXCorr_UnalignedOperands(t *testing.T) {
+	base := genI16(600, 101)
+	for _, xn := range []int{8, 16, 17, 32} {
+		for off := range 8 {
+			x := base[off : off+xn]
+			y := base[off+3 : off+3+xn+20]
+			dst := make([]int32, 20)
+			XCorr(dst, x, y)
+			for k := range 20 {
+				if got, want := dst[k], DotProduct(x, y[k:k+xn]); got != want {
+					t.Fatalf("XCorr unaligned xn=%d off=%d: dst[%d] = %d, want %d", xn, off, k, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestXCorr_AllocFree(t *testing.T) {
+	x := genI16(240, 102)
+	y := genI16(600, 103)
+	dst := make([]int32, 64)
+	if n := testing.AllocsPerRun(50, func() { XCorr(dst, x, y) }); n != 0 {
+		t.Errorf("XCorr allocates %v times per run, want 0", n)
+	}
+}

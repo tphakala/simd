@@ -48,6 +48,18 @@ func deinterleave2I16(a, b, src []int16) {
 	deinterleave2Go(a, b, src)
 }
 
+// XCorr vectorizes once x is long enough that reusing each x load across four
+// lags pays for the kernel call. Below that the Go reference runs.
+const minNEONXCorr = 8
+
+func xcorrI16(dst []int32, x, y []int16) {
+	if hasNEON && len(x) >= minNEONXCorr {
+		xcorrBlocked(dst, x, y, xcorr4NEON, dotNEON)
+		return
+	}
+	xcorrGo(dst, x, y)
+}
+
 func dotI16(a, b []int16) int32 {
 	if hasNEON && min(len(a), len(b)) >= minNEONDot {
 		return dotNEON(a, b)
@@ -57,6 +69,9 @@ func dotI16(a, b []int16) int32 {
 
 //go:noescape
 func dotNEON(a, b []int16) int32
+
+//go:noescape
+func xcorr4NEON(dst []int32, x, y []int16)
 
 //go:noescape
 func interleave2NEON(dst, a, b []int16)
