@@ -58,10 +58,18 @@ verify the encoding with `aarch64-linux-gnu-as` + objdump or `arm64asm`.
 
 ## Testing across architectures
 
-- AMD64 tests run natively here.
-- ARM64 is exercised on a native Raspberry Pi 5 host (`thakala@rpi5.local`,
-  aarch64, go installed). Cross-compile here, copy the test binary over, run it
-  there. No qemu emulation needed.
+- The dev machine is darwin/arm64 (Apple Silicon), so ARM64/NEON tests run
+  natively here. AMD64 is the one that needs a remote.
+- AMD64 is exercised on a native x86-64 Linux host (`thakala@192.168.4.176`,
+  go installed, AVX2 + SSE2 but **no AVX-512**). Cross-compile here, copy the
+  test binary over, run it there.
+- ARM64 Linux (a different microarchitecture from the Apple Silicon dev box, so
+  worth running for kernels whose timing or tuning matters) is exercised on a
+  native Raspberry Pi 5 host (`thakala@rpi5.local`, aarch64, go installed).
+  Same cross-compile-and-copy flow. No qemu emulation needed.
+- No AVX-512 hardware is available on any of these, so an AVX-512 kernel cannot
+  be runtime-verified locally; see issue #96 (execute the AVX-512 tier under
+  Intel SDE) and #75.
 - Each SIMD primitive ships a Go reference, parity tests against the active SIMD
   path, a bit-exactness check vs the per-element scalar path where applicable, and
   a `testing.AllocsPerRun == 0` allocation-free assertion.
