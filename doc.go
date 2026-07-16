@@ -8,7 +8,7 @@
 //   - [github.com/tphakala/simd/f32] - float32 SIMD operations (audio/FFT/ML surface)
 //   - [github.com/tphakala/simd/f16] - float16 storage type (ARM64 NEON+FP16 compute; amd64 F16C slice conversions)
 //   - [github.com/tphakala/simd/i32] - int32 SIMD operations (integer DSP)
-//   - [github.com/tphakala/simd/i16] - int16 SIMD operations (movement only; widen to i32 for arithmetic)
+//   - [github.com/tphakala/simd/i16] - int16 SIMD operations (PCM movement, and widening int16 x int16 -> int32 reductions)
 //   - [github.com/tphakala/simd/i8] - int8 SIMD operations (saturating arithmetic, int32-accumulated reductions, quantized DSP)
 //   - [github.com/tphakala/simd/c64] - complex64 SIMD operations (FFT-pipeline helpers)
 //   - [github.com/tphakala/simd/c128] - complex128 SIMD operations (FFT-pipeline helpers)
@@ -28,7 +28,8 @@
 //     amd64.
 //   - ARM64: NEON/ASIMD throughout (2x float64, 4x float32), with an FP16
 //     (FEAT_FP16) fast path in the f16 package and an SDOT (FEAT_DotProd) fast
-//     path for i8.DotProduct. SVE/SVE2 is detected by cpu.Info() but no SVE
+//     path for i8.DotProduct, and SMLAL/SMLAL2 widening multiply-accumulate
+//     for i16.DotProduct. SVE/SVE2 is detected by cpu.Info() but no SVE
 //     kernels exist yet, so SVE hosts run the NEON path.
 //   - Other: Pure Go fallback
 //
@@ -86,6 +87,8 @@
 // Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
 //
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames) - fused real-input short-time Fourier transform with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
+//
+// Integer DSP (i16): Interleave2, Deinterleave2, DotProduct, DotProductUnsafe (widening int16 x int16 -> wrapping int32; ARM64 SMLAL/SMLAL2, amd64 PMADDWD/VPMADDWD)
 //
 // Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MinMax
 //

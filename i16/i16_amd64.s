@@ -245,3 +245,127 @@ deinterleave2_sse2_scalar:
 
 deinterleave2_sse2_done:
     RET
+
+// Widening int16 dot product.
+//
+// PMADDWD multiplies eight int16 pairs and adds them pairwise into four int32
+// lanes; the AVX2 form does twice that. Note the Plan 9 spelling of the SSE2
+// form is PMADDWL ("long" for the 32-bit result); the VEX form keeps the Intel
+// name VPMADDWD.
+//
+// PMADDWD is SSE2, so it is present on the whole GOAMD64=v1 baseline: there is
+// no availability cliff below the SSE2 tier, and the AVX2 tier is a width win
+// rather than an availability one. The dispatcher still gates on hasSSE2, which
+// is always true on amd64; that mirrors the package's other kernels and keeps
+// the pure-Go path reachable as a non-amd64 safety net.
+//
+// Overflow: the only input that can exceed int32 within one instruction is a
+// pair of (-32768 * -32768), summing to 2^31, which PMADDWD wraps to
+// 0x80000000. The scalar reference wraps identically (two wrapping int32 adds
+// of 2^30), and because wrapping addition is associative the pairwise pre-add
+// inside PMADDWD is invisible. So no special-casing is needed and the kernels
+// are bit-exact with dotGo for every input; the tests pin this with all-MinInt16
+// sweeps.
+
+// func dotSSE2(a, b []int16) int32
+// Handles mismatched slice lengths: uses min(len(a), len(b)).
+TEXT ·dotSSE2(SB), NOSPLIT, $0-52
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_len+32(FP), DX
+    CMPQ DX, CX
+    CMOVQLT DX, CX             // CX = n = min(len(a), len(b))
+    MOVQ b_base+24(FP), DI
+
+    PXOR X0, X0                // int32 accumulator
+
+    MOVQ CX, BX
+    SHRQ $3, BX                // BX = n / 8
+    JZ   dot_sse2_reduce
+
+dot_sse2_loop8:
+    MOVOU (SI), X1
+    MOVOU (DI), X2
+    PMADDWL X2, X1             // X1 = pairwise (a*b) sums -> 4 int32
+    PADDD X1, X0               // accumulate (wrapping)
+    ADDQ $16, SI
+    ADDQ $16, DI
+    DECQ BX
+    JNZ  dot_sse2_loop8
+
+dot_sse2_reduce:
+    PSHUFD $0x4E, X0, X1       // swap 64-bit halves
+    PADDD X1, X0
+    PSHUFD $0xB1, X0, X1       // swap 32-bit within pairs
+    PADDD X1, X0
+    MOVQ X0, AX                // low int32 = vector total (in EAX)
+
+    ANDQ $7, CX
+    JZ   dot_sse2_done
+
+dot_sse2_scalar:
+    MOVWLSX (SI), BX           // sign-extending 16-bit load
+    MOVWLSX (DI), DX
+    IMULL DX, BX
+    ADDL BX, AX                // 32-bit add: wraps like dotGo
+    ADDQ $2, SI
+    ADDQ $2, DI
+    DECQ CX
+    JNZ  dot_sse2_scalar
+
+dot_sse2_done:
+    MOVL AX, ret+48(FP)
+    RET
+
+// func dotAVX2(a, b []int16) int32
+// Handles mismatched slice lengths: uses min(len(a), len(b)).
+TEXT ·dotAVX2(SB), NOSPLIT, $0-52
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+    MOVQ b_len+32(FP), DX
+    CMPQ DX, CX
+    CMOVQLT DX, CX             // CX = n = min(len(a), len(b))
+    MOVQ b_base+24(FP), DI
+
+    VPXOR Y0, Y0, Y0           // int32 accumulator
+
+    MOVQ CX, BX
+    SHRQ $4, BX                // BX = n / 16
+    JZ   dot_avx2_reduce
+
+dot_avx2_loop16:
+    VMOVDQU (SI), Y1
+    VMOVDQU (DI), Y2
+    VPMADDWD Y2, Y1, Y1        // 16 int16 pairs -> 8 int32
+    VPADDD Y1, Y0, Y0          // accumulate (wrapping)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ BX
+    JNZ  dot_avx2_loop16
+
+dot_avx2_reduce:
+    VEXTRACTI128 $1, Y0, X1
+    VPADDD X1, X0, X0          // fold 8 -> 4 int32
+    VPSHUFD $0x4E, X0, X1      // swap 64-bit halves
+    VPADDD X1, X0, X0
+    VPSHUFD $0xB1, X0, X1      // swap 32-bit within pairs
+    VPADDD X1, X0, X0
+    MOVQ X0, AX                // low int32 = vector total (in EAX)
+
+    ANDQ $15, CX
+    JZ   dot_avx2_done
+
+dot_avx2_scalar:
+    MOVWLSX (SI), BX           // sign-extending 16-bit load
+    MOVWLSX (DI), DX
+    IMULL DX, BX
+    ADDL BX, AX                // 32-bit add: wraps like dotGo
+    ADDQ $2, SI
+    ADDQ $2, DI
+    DECQ CX
+    JNZ  dot_avx2_scalar
+
+dot_avx2_done:
+    MOVL AX, ret+48(FP)
+    VZEROUPPER
+    RET

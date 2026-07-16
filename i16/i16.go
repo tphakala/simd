@@ -1,14 +1,24 @@
 // Package i16 provides SIMD-accelerated operations on int16 slices.
 //
-// It is the 16-bit integer counterpart to the i32 package and exists to serve
-// raw-PCM hot loops (for example a pure-Go FLAC codec) where the source samples
-// are 16-bit and the cheapest place to vectorize is the channel
-// (de)interleaving that happens before samples are widened to int32.
+// It is the 16-bit integer counterpart to the i32 package and serves two kinds
+// of hot loop: raw-PCM shuffling (for example a pure-Go FLAC codec), where the
+// cheapest place to vectorize is the channel (de)interleaving that happens
+// before samples are widened to int32; and fixed-point DSP, where int16 inputs
+// are multiplied and accumulated into int32.
 //
-// Scope note: FLAC decorrelation widens samples (the side and mid channels can
-// exceed the source bit depth by one bit), so the arithmetic primitives live in
-// the i32 package. This package only carries the operations that provably help
-// at 16-bit width, namely splitting and packing raw 16-bit interleaved PCM.
+// Widening semantics: an operation that multiplies int16 inputs accumulates
+// into int32 with two's-complement wraparound, never saturation. This is a
+// guarantee, not an implementation detail. Wrapping addition is associative and
+// commutative modulo 2^32, so any lane grouping and any horizontal reduction
+// order yields bit-identical results to the scalar loop; a saturating
+// accumulator is not associative and could not be vectorized without changing
+// results. Fixed-point codecs (Opus/CELT, FLAC LPC) depend on that
+// reproducibility, which is the whole reason they use integer arithmetic.
+//
+// Element-wise int16 arithmetic still belongs in the i32 package, because
+// inter-channel decorrelation can exceed the source bit depth by one bit. What
+// this package adds at 16-bit width is the widening direction, where the narrow
+// input is the point.
 //
 // All functions automatically select the optimal implementation based on
 // runtime CPU feature detection and fall back to a pure-Go implementation on

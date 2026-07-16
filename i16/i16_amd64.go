@@ -22,6 +22,29 @@ var (
 	hasSSE2 = cpu.X86.SSE2
 )
 
+// Dot thresholds are named separately from the interleave block sizes they
+// currently equal, so retuning one op cannot silently retune the other. The
+// values are one vector block each: the dot kernels are correct at any n (they
+// fall through to a scalar tail), so these are performance cuts only, never a
+// safety requirement. Measured kernel against Go reference at n=8: SSE2 wins
+// 2.2x, so unlike NEON there is no break-even region to avoid here.
+const (
+	minSSE2Dot = minSSE2Elements
+	minAVX2Dot = minAVX2Elements
+)
+
+func dotI16(a, b []int16) int32 {
+	n := min(len(a), len(b))
+	switch {
+	case hasAVX2 && n >= minAVX2Dot:
+		return dotAVX2(a, b)
+	case hasSSE2 && n >= minSSE2Dot:
+		return dotSSE2(a, b)
+	default:
+		return dotGo(a, b)
+	}
+}
+
 func interleave2I16(dst, a, b []int16) {
 	switch {
 	case hasAVX2 && len(a) >= minAVX2Elements:
@@ -43,6 +66,12 @@ func deinterleave2I16(a, b, src []int16) {
 		deinterleave2Go(a, b, src)
 	}
 }
+
+//go:noescape
+func dotAVX2(a, b []int16) int32
+
+//go:noescape
+func dotSSE2(a, b []int16) int32
 
 //go:noescape
 func interleave2AVX2(dst, a, b []int16)
