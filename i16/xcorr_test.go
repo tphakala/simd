@@ -204,6 +204,42 @@ func TestXCorr_UnalignedOperands(t *testing.T) {
 	}
 }
 
+// TestXCorrGo_DegenerateDirect exercises the reference and its lag count with
+// unguarded inputs, which the public API never delivers: XCorr's own guard
+// rejects them first, so xcorrLags' len(x)==0 / len(y)<len(x) branch is
+// unreachable through XCorr and went untested (codecov flagged it at 66.7%).
+//
+// The branch is not dead code. xcorrGo and xcorrLags are called DIRECTLY by
+// the benchmarks, by xcorrOracle, and by the non-SIMD dispatch path, none of
+// which re-check. This pins that contract rather than leaving it to the guard
+// two layers up.
+func TestXCorrGo_DegenerateDirect(t *testing.T) {
+	const sentinel = int32(-5150)
+	cases := []struct {
+		name string
+		x, y []int16
+	}{
+		{"empty x", nil, genI16(8, 211)},
+		{"empty y", genI16(8, 211), nil},
+		{"y shorter than x", genI16(8, 211), genI16(7, 212)},
+		{"both empty", nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dst := []int32{sentinel, sentinel, sentinel}
+			if got := xcorrLags(dst, c.x, c.y); got != 0 {
+				t.Errorf("xcorrLags = %d, want 0", got)
+			}
+			xcorrGo(dst, c.x, c.y) // must not panic
+			for i, v := range dst {
+				if v != sentinel {
+					t.Errorf("xcorrGo wrote dst[%d] = %d, want untouched sentinel %d", i, v, sentinel)
+				}
+			}
+		})
+	}
+}
+
 // TestXCorr_KernelHonoursDstBounds forces the 4-lag kernel to run (m=8, two
 // full blocks, no remainder) while giving dst room past m, so a kernel that
 // wrote a fifth word per block would corrupt dst[8:].
