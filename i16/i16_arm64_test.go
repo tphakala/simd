@@ -231,10 +231,18 @@ func TestXCorr4NEON_ShortWindowIsBounded(t *testing.T) {
 	}
 }
 
-// TestXCorrDispatch_ReachesNEON asserts XCorr actually routes to the kernel.
-// As with the dot product this must be white-box: the kernel is bit-identical
-// to the Go reference by design, so a dead dispatcher would pass every parity
-// test above while the SIMD path sat unused.
+// TestXCorrDispatch_ReachesNEON pins the dispatch STATE that XCorr's SIMD path
+// depends on: the feature flag is wired to CPU detection, and the threshold is
+// not absurd.
+//
+// Be clear about its limit: it does NOT prove xcorrI16 calls a kernel. Nothing
+// can, from the outside. The kernel is bit-identical to the Go reference by
+// design, so deleting the SIMD branch outright leaves every parity test green
+// and this test green too. Catching that would need an observable seam (a
+// package-level kernel func var to spy on), which would reintroduce the
+// indirect call that forces caller allocations (see xcorrWindow's comment).
+// The classes this does catch are a flag left unwired and a threshold retuned
+// out of range, which are the realistic regressions.
 func TestXCorrDispatch_ReachesNEON(t *testing.T) {
 	if !cpu.ARM64.NEON {
 		t.Skip("NEON not available")
@@ -244,5 +252,28 @@ func TestXCorrDispatch_ReachesNEON(t *testing.T) {
 	}
 	if minNEONXCorr > 16 {
 		t.Fatalf("minNEONXCorr = %d: XCorr would not vectorize at the x lengths it was written for", minNEONXCorr)
+	}
+}
+
+// TestXCorr4NEON_LongWindowIsClamped covers the other half of the kernel's
+// n = min(len(x), len(y)-3) clamp. TestXCorr4NEON_ShortWindowIsBounded only
+// probes len(y)-3 < len(x); ParityWithGo passes len(y) == len(x)+3, where both
+// operands of the min are equal and a mutant that dropped the min entirely
+// would still agree. This is the case that pins it: a y far longer than the
+// contract must not make the kernel read x past its end.
+func TestXCorr4NEON_LongWindowIsClamped(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, xn := range []int{1, 8, 9, 16, 17, 32} {
+		x := genI16(xn, 207)
+		y := genI16(xn+40, 208) // len(y)-3 far exceeds len(x)
+		dst := make([]int32, xcorrLagBlock)
+		xcorr4NEON(dst, x, y)
+		for k := range xcorrLagBlock {
+			if got, want := dst[k], dotOracle(x, y[k:]); got != want {
+				t.Errorf("xcorr4NEON long window xn=%d: dst[%d] = %d, want %d", xn, k, got, want)
+			}
+		}
 	}
 }

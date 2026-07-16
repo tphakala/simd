@@ -20,7 +20,15 @@ package i16
 // therefore always identical to DotProduct(x, y[k:k+len(x)]), which is the
 // property the tests pin.
 //
-// x and y are read-only; the call allocates nothing.
+// x and y are read-only; the call allocates nothing, including for the caller
+// (the parameters do not escape).
+//
+// Note the operand order relative to [github.com/tphakala/simd/f32.ConvolveValid],
+// which computes the same thing for float32: that one takes the long slid
+// operand second and the short stationary operand third, where XCorr takes the
+// short one (x) second. Passing them in f32's order here binds x to the long
+// operand, trips the len(y) < len(x) guard, and returns having written nothing,
+// with no panic and no diagnostic.
 func XCorr(dst []int32, x, y []int16) {
 	if len(dst) == 0 || len(x) == 0 || len(y) < len(x) {
 		return

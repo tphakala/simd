@@ -50,14 +50,29 @@ func deinterleave2I16(a, b, src []int16) {
 
 // XCorr vectorizes once x is long enough that reusing each x load across four
 // lags pays for the kernel call. Below that the Go reference runs.
+//
+// Unlike minNEONDot above, this value is inherited rather than measured: it is
+// set to minNEONDot because the dot product is the per-lag work, and the 4-lag
+// amortisation can only move the break-even down from there, never up. It has
+// not been measured at the boundary, and the committed benchmarks start at
+// x=240, so they do not cover it either. Measure before lowering it.
 const minNEONXCorr = 8
 
 func xcorrI16(dst []int32, x, y []int16) {
-	if hasNEON && len(x) >= minNEONXCorr {
-		xcorrBlocked(dst, x, y, xcorr4NEON, dotNEON)
+	if !hasNEON || len(x) < minNEONXCorr {
+		xcorrGo(dst, x, y)
 		return
 	}
-	xcorrGo(dst, x, y)
+	m := xcorrLags(dst, x, y)
+	k := 0
+	for ; k+xcorrLagBlock <= m; k += xcorrLagBlock {
+		xcorr4NEON(dst[k:k+xcorrLagBlock], x, xcorrWindow(x, y, k))
+	}
+	// Remainder lags go through the dot dispatcher, not dotNEON directly, so
+	// they still honour minNEONDot if minNEONXCorr is ever lowered below it.
+	for ; k < m; k++ {
+		dst[k] = dotI16(x, y[k:k+len(x)])
+	}
 }
 
 func dotI16(a, b []int16) int32 {

@@ -44,13 +44,23 @@ const (
 )
 
 func xcorrI16(dst []int32, x, y []int16) {
+	m := xcorrLags(dst, x, y)
+	k := 0
 	switch {
 	case hasAVX2 && len(x) >= minAVX2XCorr:
-		xcorrBlocked(dst, x, y, xcorr4AVX2, dotI16)
+		for ; k+xcorrLagBlock <= m; k += xcorrLagBlock {
+			xcorr4AVX2(dst[k:k+xcorrLagBlock], x, xcorrWindow(x, y, k))
+		}
 	case hasSSE2 && len(x) >= minSSE2XCorr:
-		xcorrBlocked(dst, x, y, xcorr4SSE2, dotI16)
+		for ; k+xcorrLagBlock <= m; k += xcorrLagBlock {
+			xcorr4SSE2(dst[k:k+xcorrLagBlock], x, xcorrWindow(x, y, k))
+		}
 	default:
 		xcorrGo(dst, x, y)
+		return
+	}
+	for ; k < m; k++ {
+		dst[k] = dotI16(x, y[k:k+len(x)])
 	}
 }
 

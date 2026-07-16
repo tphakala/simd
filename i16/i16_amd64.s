@@ -382,8 +382,10 @@ dot_avx2_done:
 // across all four lags. y is reloaded per lag regardless.
 //
 // The four y loads are deliberately unaligned relative to one another, being
-// the same window stepped by 2 bytes, so MOVOU/VMOVDQU are load-bearing: an
-// aligned-load substitution would fault on three lags out of four.
+// the same window stepped by 2 bytes, so MOVOU/VMOVDQU are load-bearing: at
+// most one lag in four can be 16-byte aligned, so an aligned-load substitution
+// would fault on at least three lags out of four, and on all four whenever y's
+// own base is unaligned (which is the common case, since callers slide y).
 
 // func xcorr4SSE2(dst []int32, x, y []int16)
 // n = min(len(x), len(y)-3) is a safety net; the dispatcher passes a y window of

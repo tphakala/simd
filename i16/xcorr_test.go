@@ -22,6 +22,11 @@ import (
 // xcorrOracle computes each lag with the independent int64 oracle rather than
 // with dotGo, so a fault in the dot reference cannot hide by being consistent
 // with itself.
+//
+// It pins the per-lag ARITHMETIC only. It calls the production xcorrLags, so a
+// lag-count bug would propagate into the expectation rather than being caught.
+// The lag count is pinned separately by the tests that recompute it inline
+// (TestXCorr_MatchesDotProductAtEveryLag, TestXCorr_ClampLeavesTailUntouched).
 func xcorrOracle(dst []int32, x, y []int16) []int32 {
 	out := make([]int32, len(dst))
 	copy(out, dst)
@@ -33,6 +38,9 @@ func xcorrOracle(dst []int32, x, y []int16) []int32 {
 
 func equalI32(t *testing.T, what string, got, want []int32) {
 	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("%s: length got %d want %d", what, len(got), len(want))
+	}
 	for i := range got {
 		if got[i] != want[i] {
 			t.Fatalf("%s: dst[%d] = %d, want %d (len=%d)", what, i, got[i], want[i], len(got))
@@ -78,8 +86,10 @@ func TestXCorr_ParityWithReference(t *testing.T) {
 
 // TestXCorr_ClampLeavesTailUntouched pins the documented contract: only lags
 // with a full window are computed, and dst beyond that keeps its prior value.
-// The sentinel is what catches a kernel that wrote a partial window as if it
-// were a real result.
+//
+// Note this case has m=3, below xcorrLagBlock, so it exercises the remainder
+// path only and never calls the 4-lag kernel. TestXCorr_KernelHonoursDstBounds
+// is the one that pins the kernel's own dst writes.
 func TestXCorr_ClampLeavesTailUntouched(t *testing.T) {
 	const sentinel = int32(-999111)
 	x := genI16(16, 95)
@@ -194,11 +204,52 @@ func TestXCorr_UnalignedOperands(t *testing.T) {
 	}
 }
 
+// TestXCorr_KernelHonoursDstBounds forces the 4-lag kernel to run (m=8, two
+// full blocks, no remainder) while giving dst room past m, so a kernel that
+// wrote a fifth word per block would corrupt dst[8:].
+//
+// The sentinel tests above cannot catch that: each has m < xcorrLagBlock, so
+// the block loop never executes and only the scalar remainder path runs. Every
+// other test that does reach the kernel passes dst with len(dst) == m exactly,
+// which leaves no room for an over-write to land in. This is the only test
+// where a kernel dst over-write is observable.
+func TestXCorr_KernelHonoursDstBounds(t *testing.T) {
+	const sentinel = int32(-31337)
+	for _, xn := range []int{8, 16, 17, 32} {
+		x := genI16(xn, 205)
+		y := genI16(xn+7, 206) // m = 8: exactly two kernel blocks
+		dst := make([]int32, 12)
+		for i := range dst {
+			dst[i] = sentinel
+		}
+		XCorr(dst, x, y)
+		for k := range 8 {
+			if got, want := dst[k], dotOracle(x, y[k:]); got != want {
+				t.Errorf("xn=%d: dst[%d] = %d, want %d", xn, k, got, want)
+			}
+		}
+		for k := 8; k < len(dst); k++ {
+			if dst[k] != sentinel {
+				t.Errorf("xn=%d: dst[%d] = %d, want untouched sentinel %d (kernel wrote past its block)", xn, k, dst[k], sentinel)
+			}
+		}
+	}
+}
+
+// TestXCorr_AllocFree pins the zero-allocation contract from the CALLER's side.
+// The buffers are declared INSIDE the measured closure deliberately: hoisting
+// them out (the obvious way to write this) measures only XCorr's own
+// allocations and passes even when XCorr leaks its parameters, forcing every
+// caller to heap-allocate. That regression is exactly what a shared
+// higher-order dispatcher reintroduces, since escape analysis cannot see
+// through an indirect call.
 func TestXCorr_AllocFree(t *testing.T) {
-	x := genI16(240, 102)
-	y := genI16(600, 103)
-	dst := make([]int32, 64)
-	if n := testing.AllocsPerRun(50, func() { XCorr(dst, x, y) }); n != 0 {
-		t.Errorf("XCorr allocates %v times per run, want 0", n)
+	if n := testing.AllocsPerRun(50, func() {
+		var xa [240]int16
+		var ya [600]int16
+		var da [64]int32
+		XCorr(da[:], xa[:], ya[:])
+	}); n != 0 {
+		t.Errorf("XCorr forces %v caller allocations per run, want 0", n)
 	}
 }

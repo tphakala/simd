@@ -42,6 +42,14 @@ func dotGo(a, b []int16) int32 {
 // is the libopus xcorr_kernel shape: it is the point where each x load is
 // amortised across enough accumulators to hide the multiply-accumulate latency,
 // while still fitting the lag accumulators in registers.
+//
+// This is NOT a tunable. All three kernels hardcode four lags: their
+// accumulator count, their y load offsets (+0/+2/+4/+6 bytes), their
+// len(y)-3 clamp, and their four dst stores. Changing this constant compiles
+// cleanly and then breaks at runtime, in both directions: raising it leaves
+// the extra dst words unwritten, and lowering it makes the assembly store past
+// the end of the dst slice the dispatcher hands it, which is an out-of-bounds
+// write. Moving it means rewriting xcorr4NEON, xcorr4SSE2 and xcorr4AVX2.
 const xcorrLagBlock = 4
 
 // xcorrLags returns the number of lags whose full window fits in y, which is
@@ -64,25 +72,19 @@ func xcorrGo(dst []int32, x, y []int16) {
 	}
 }
 
-// xcorrBlocked drives a 4-lag SIMD kernel over as many full blocks of lags as
-// fit, then finishes the remaining one to three lags with the dot kernel. It is
-// shared by the amd64 and arm64 dispatchers, which differ only in the kernels
-// they pass.
+// xcorrWindow returns the y window the 4-lag kernel may read for the block at
+// lag k: lag k+3 reaches y[k+3+len(x)-1], so the block needs len(x)+3 elements
+// from y[k]. That is in bounds precisely when k+xcorrLagBlock <= m, which is
+// the loop condition every dispatcher uses, so the slice cannot panic.
 //
-// The y slice handed to kernel4 is exactly the window that block may read:
-// lag k+3 reaches y[k+3+len(x)-1], so the block needs len(x)+3 elements from
-// y[k]. That is in bounds precisely when k+xcorrLagBlock <= m, which is the
-// loop condition, so the slice expression cannot panic.
-func xcorrBlocked(dst []int32, x, y []int16,
-	kernel4 func(dst []int32, x, y []int16),
-	dot func(a, b []int16) int32,
-) {
-	m := xcorrLags(dst, x, y)
-	k := 0
-	for ; k+xcorrLagBlock <= m; k += xcorrLagBlock {
-		kernel4(dst[k:k+xcorrLagBlock], x, y[k:k+len(x)+xcorrLagBlock-1])
-	}
-	for ; k < m; k++ {
-		dst[k] = dot(x, y[k:k+len(x)])
-	}
+// The per-arch dispatchers each inline their own block loop rather than sharing
+// one driver parameterised by the kernel. That looks like needless duplication
+// and is not: passing the kernel as a func value makes the call indirect, and
+// escape analysis cannot see through an indirect call, so it must assume the
+// slices escape. That defeats the //go:noescape on the kernels and propagates
+// out to XCorr itself, forcing every CALLER to heap-allocate its dst, x and y.
+// Direct calls keep the whole path allocation-free. Do not "simplify" the
+// dispatchers back into a shared higher-order driver.
+func xcorrWindow(x, y []int16, k int) []int16 {
+	return y[k : k+len(x)+xcorrLagBlock-1]
 }

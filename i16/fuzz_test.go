@@ -134,13 +134,17 @@ func FuzzI16Dot(f *testing.F) {
 // every lag equals the dot product at that offset, which also catches a kernel
 // that drifted from DotProduct even if xcorrGo drifted with it.
 func FuzzI16XCorr(f *testing.F) {
+	// The body derives lags as lagsRaw%32+1, so a seed must pass lags-1 to run
+	// at the lag count it names. Passing lags directly shifts the whole set by
+	// one and makes lags==1 (the single-remainder-lag case, no kernel block)
+	// unreachable from any seed.
 	for _, xn := range []int{1, 4, 8, 9, 15, 16, 17, 32, 33} {
 		for _, lags := range []int{1, 3, 4, 5, 8, 9} {
 			raw := make([]byte, (xn+xn+lags)*2)
 			for i := range raw {
 				raw[i] = byte(i*29 + 7)
 			}
-			f.Add(raw, uint8(xn), uint8(lags))
+			f.Add(raw, uint8(xn), uint8(lags-1))
 		}
 	}
 	f.Fuzz(func(t *testing.T, raw []byte, xnRaw, lagsRaw uint8) {
