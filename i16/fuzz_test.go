@@ -126,3 +126,48 @@ func FuzzI16Dot(f *testing.F) {
 		}
 	})
 }
+
+// FuzzI16XCorr differentially fuzzes multi-lag correlation. The high-value bug
+// class is the lag blocking: the kernel evaluates 4 lags per call and the
+// dispatcher finishes the remainder with the dot kernel, so arbitrary lag
+// counts exercise that seam. It asserts the defining property directly, that
+// every lag equals the dot product at that offset, which also catches a kernel
+// that drifted from DotProduct even if xcorrGo drifted with it.
+func FuzzI16XCorr(f *testing.F) {
+	// The body derives lags as lagsRaw%32+1, so a seed must pass lags-1 to run
+	// at the lag count it names. Passing lags directly shifts the whole set by
+	// one and makes lags==1 (the single-remainder-lag case, no kernel block)
+	// unreachable from any seed.
+	for _, xn := range []int{1, 4, 8, 9, 15, 16, 17, 32, 33} {
+		for _, lags := range []int{1, 3, 4, 5, 8, 9} {
+			raw := make([]byte, (xn+xn+lags)*2)
+			for i := range raw {
+				raw[i] = byte(i*29 + 7)
+			}
+			f.Add(raw, uint8(xn), uint8(lags-1))
+		}
+	}
+	f.Fuzz(func(t *testing.T, raw []byte, xnRaw, lagsRaw uint8) {
+		v := i16sFromBits(raw)
+		xn := int(xnRaw) % 64
+		lags := int(lagsRaw)%32 + 1
+		if xn == 0 || len(v) < xn {
+			return
+		}
+		x := v[:xn]
+		y := v[xn:]
+		dst := make([]int32, lags)
+		ref := make([]int32, lags)
+		XCorr(dst, x, y)
+		xcorrGo(ref, x, y)
+		for k := range xcorrLags(dst, x, y) {
+			if dst[k] != ref[k] {
+				t.Fatalf("XCorr(xn=%d, lags=%d, len(y)=%d): dst[%d] = %d, want %d", xn, lags, len(y), k, dst[k], ref[k])
+			}
+			// The defining property: every lag is the dot product at that offset.
+			if want := DotProduct(x, y[k:k+xn]); dst[k] != want {
+				t.Fatalf("XCorr(xn=%d, lags=%d): dst[%d] = %d, want DotProduct = %d", xn, lags, k, dst[k], want)
+			}
+		}
+	})
+}

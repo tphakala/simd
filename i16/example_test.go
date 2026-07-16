@@ -35,3 +35,16 @@ func ExampleDotProduct() {
 	fmt.Println(i16.DotProduct(samples, coeffs))
 	// Output: -65536000
 }
+
+func ExampleXCorr() {
+	// Correlate a short pattern against a longer signal at every lag. The
+	// pattern occurs at lag 2, which is where the correlation peaks.
+	pattern := []int16{1000, -2000, 1000}
+	signal := []int16{0, 0, 1000, -2000, 1000, 0}
+
+	lags := make([]int32, len(signal)-len(pattern)+1)
+	i16.XCorr(lags, pattern, signal)
+
+	fmt.Println(lags)
+	// Output: [1000000 -4000000 6000000 -4000000]
+}

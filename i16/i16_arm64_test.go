@@ -187,3 +187,103 @@ func TestDotDispatch_ReachesNEON(t *testing.T) {
 		t.Fatalf("minNEONDot = %d exceeds two vector blocks: DotProduct would not vectorize at the short lengths it was written for", minNEONDot)
 	}
 }
+
+// TestXCorr4NEON_ParityWithGo drives the 4-lag kernel directly, over lengths
+// the dispatcher would never route to it, so a threshold change cannot quietly
+// reduce this to a test of the Go reference against itself.
+func TestXCorr4NEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, xn := range []int{1, 2, 7, 8, 9, 15, 16, 17, 23, 31, 32, 33, 64, 240} {
+		x := genI16(xn, 111)
+		y := genI16(xn+3, 112) // exactly the window the dispatcher passes
+		dst := make([]int32, xcorrLagBlock)
+		xcorr4NEON(dst, x, y)
+		for k := range xcorrLagBlock {
+			if got, want := dst[k], dotOracle(x, y[k:]); got != want {
+				t.Errorf("xcorr4NEON xn=%d: dst[%d] = %d, want %d", xn, k, got, want)
+			}
+		}
+	}
+}
+
+// TestXCorr4NEON_ShortWindowIsBounded feeds the kernel a y window shorter than
+// its contract (len(x)+3) and asserts it clamps instead of reading past the
+// end. The dispatcher never does this; the in-assembly clamp exists so that a
+// future wrapper bug is a wrong number rather than an out-of-bounds read, and
+// this is what proves the net is really there.
+func TestXCorr4NEON_ShortWindowIsBounded(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	x := genI16(32, 113)
+	for _, yn := range []int{0, 1, 2, 3, 4, 8, 16, 31, 34} {
+		y := genI16(yn, 114)
+		dst := make([]int32, xcorrLagBlock)
+		xcorr4NEON(dst, x, y) // must not fault or read past y
+		n := max(min(len(x), yn-3), 0)
+		for k := range xcorrLagBlock {
+			if got, want := dst[k], dotOracle(x[:n], y[min(k, yn):]); got != want {
+				t.Errorf("xcorr4NEON short window yn=%d: dst[%d] = %d, want %d", yn, k, got, want)
+			}
+		}
+	}
+}
+
+// TestXCorrDispatch_ReachesNEON pins the dispatch STATE that XCorr's SIMD path
+// depends on: the feature flag is wired to CPU detection, and the threshold is
+// not absurd.
+//
+// Be clear about its limit: it does NOT prove xcorrI16 calls a kernel. The
+// kernel is bit-identical to the Go reference by design, so deleting the SIMD
+// branch outright leaves every parity test green and this test green too. The
+// classes this does catch are a flag left unwired and a threshold retuned out
+// of range, which are the realistic regressions.
+//
+// That blind spot is closable and this test does not close it. A build-tagged
+// no-op hook in the dispatcher (a counter under a `simdspy` tag, an empty func
+// otherwise) would make routing observable while keeping the kernel call
+// direct, so it costs nothing in the default build. It is not done here only
+// because the gate judged the blind spot narrower than the change; do not read
+// this comment as evidence that it cannot be done.
+func TestXCorrDispatch_ReachesNEON(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	if !hasNEON {
+		t.Fatal("hasNEON is false though cpu.ARM64.NEON is true: XCorr silently runs the Go reference")
+	}
+	if minNEONXCorr > 16 {
+		t.Fatalf("minNEONXCorr = %d: XCorr would not vectorize at the x lengths it was written for", minNEONXCorr)
+	}
+}
+
+// TestXCorr4NEON_LongWindowIsClamped covers the other half of the kernel's
+// n = min(len(x), len(y)-3) clamp. TestXCorr4NEON_ShortWindowIsBounded only
+// probes len(y)-3 < len(x); ParityWithGo passes len(y) == len(x)+3, where both
+// operands of the min are equal and a mutant that dropped the min entirely
+// would still agree. This is the case that pins it: a y far longer than the
+// contract must not make the kernel read x past its end.
+func TestXCorr4NEON_LongWindowIsClamped(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, xn := range []int{1, 8, 9, 16, 17, 32} {
+		// x MUST be a prefix of a longer allocation: the mutant this test
+		// exists for reads past the end of x, and past a standalone slice that
+		// is zeroed memory, which multiplies to 0 and leaves the answer
+		// correct. Non-zero bytes past x are what make the over-read
+		// observable rather than a coin flip on heap layout.
+		backing := genI16(xn+200, 207)
+		x := backing[:xn]
+		y := genI16(xn+40, 208) // len(y)-3 far exceeds len(x)
+		dst := make([]int32, xcorrLagBlock)
+		xcorr4NEON(dst, x, y)
+		for k := range xcorrLagBlock {
+			if got, want := dst[k], dotOracle(x, y[k:]); got != want {
+				t.Errorf("xcorr4NEON long window xn=%d: dst[%d] = %d, want %d", xn, k, got, want)
+			}
+		}
+	}
+}

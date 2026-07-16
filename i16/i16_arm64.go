@@ -48,6 +48,44 @@ func deinterleave2I16(a, b, src []int16) {
 	deinterleave2Go(a, b, src)
 }
 
+// XCorr vectorizes once x is long enough that reusing each x load across four
+// lags pays for the kernel call. Below that the Go reference runs.
+//
+// This is set to minNEONDot because the dot product is the per-lag work and the
+// 4-lag amortisation should move the break-even down from there, not up. That
+// is a heuristic rather than an implication: the minNEONDot measurement put
+// both sides behind an indirect call so neither got a call-depth advantage,
+// whereas here the Go side inlines fully while the kernel cannot, so the two
+// break-evens are not directly comparable.
+//
+// Measured at the boundary (public XCorr against xcorrGo, 16 lags): at x=8 the
+// kernel is 3.5x ahead on Apple M (12.5 vs 43.8 ns) and 2.8x on Cortex-A76
+// (58.6 vs 164.3 ns), so 8 is safe and in fact conservative; the lag reuse
+// dominates well before the SIMD width does. The committed benchmarks start at
+// x=240 and do not cover this, so re-measure before moving it.
+const minNEONXCorr = 8
+
+// The block loop is inlined here rather than shared with amd64 through a driver
+// taking the kernel as a parameter: an indirect call defeats escape analysis
+// and forces every caller of XCorr to heap-allocate. See xcorrWindow in
+// i16_go.go. TestXCorr_AllocFree catches it if that refactor returns.
+func xcorrI16(dst []int32, x, y []int16) {
+	if !hasNEON || len(x) < minNEONXCorr {
+		xcorrGo(dst, x, y)
+		return
+	}
+	m := xcorrLags(dst, x, y)
+	k := 0
+	for ; k+xcorrLagBlock <= m; k += xcorrLagBlock {
+		xcorr4NEON(dst[k:k+xcorrLagBlock], x, xcorrWindow(x, y, k))
+	}
+	// Remainder lags go through the dot dispatcher, not dotNEON directly, so
+	// they still honour minNEONDot if minNEONXCorr is ever lowered below it.
+	for ; k < m; k++ {
+		dst[k] = dotI16(x, y[k:k+len(x)])
+	}
+}
+
 func dotI16(a, b []int16) int32 {
 	if hasNEON && min(len(a), len(b)) >= minNEONDot {
 		return dotNEON(a, b)
@@ -57,6 +95,9 @@ func dotI16(a, b []int16) int32 {
 
 //go:noescape
 func dotNEON(a, b []int16) int32
+
+//go:noescape
+func xcorr4NEON(dst []int32, x, y []int16)
 
 //go:noescape
 func interleave2NEON(dst, a, b []int16)

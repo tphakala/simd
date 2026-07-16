@@ -256,3 +256,122 @@ func TestDotDispatch_ReachesSIMD(t *testing.T) {
 			minSSE2Dot, minAVX2Dot)
 	}
 }
+
+// xcorr4Kernels mirrors dotKernels for the 4-lag cross-correlation tiers.
+type xcorr4Kernel struct {
+	name      string
+	available bool
+	fn        func(dst []int32, x, y []int16)
+}
+
+func xcorr4Kernels() []xcorr4Kernel {
+	return []xcorr4Kernel{
+		{"AVX2", cpu.X86.AVX2, xcorr4AVX2},
+		{"SSE2", cpu.X86.SSE2, xcorr4SSE2},
+	}
+}
+
+// TestXCorr4AMD64_ParityWithGo drives each 4-lag kernel directly, over lengths
+// the dispatcher would never route to it, so a threshold change cannot quietly
+// reduce this to a test of the Go reference against itself.
+func TestXCorr4AMD64_ParityWithGo(t *testing.T) {
+	for _, k := range xcorr4Kernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			for _, xn := range []int{1, 2, 7, 8, 9, 15, 16, 17, 23, 31, 32, 33, 64, 240} {
+				x := genI16(xn, 121)
+				y := genI16(xn+3, 122) // exactly the window the dispatcher passes
+				dst := make([]int32, xcorrLagBlock)
+				k.fn(dst, x, y)
+				for lag := range xcorrLagBlock {
+					if got, want := dst[lag], dotOracle(x, y[lag:]); got != want {
+						t.Errorf("xcorr4%s xn=%d: dst[%d] = %d, want %d", k.name, xn, lag, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestXCorr4AMD64_ShortWindowIsBounded feeds each kernel a y window shorter
+// than its contract and asserts it clamps rather than reading past the end.
+func TestXCorr4AMD64_ShortWindowIsBounded(t *testing.T) {
+	for _, k := range xcorr4Kernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			x := genI16(32, 123)
+			for _, yn := range []int{0, 1, 2, 3, 4, 8, 16, 31, 34} {
+				y := genI16(yn, 124)
+				dst := make([]int32, xcorrLagBlock)
+				k.fn(dst, x, y) // must not fault or read past y
+				n := max(min(len(x), yn-3), 0)
+				for lag := range xcorrLagBlock {
+					if got, want := dst[lag], dotOracle(x[:n], y[min(lag, yn):]); got != want {
+						t.Errorf("xcorr4%s short window yn=%d: dst[%d] = %d, want %d", k.name, yn, lag, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestXCorrDispatch_ReachesSIMD pins the dispatch STATE that XCorr's SIMD path
+// depends on. See the arm64 counterpart for what it does NOT prove (nothing
+// here establishes that xcorrI16 calls a kernel, because the kernel is
+// bit-identical to the Go reference and a dead dispatcher passes every test)
+// and for the build-tagged hook that would close that gap.
+func TestXCorrDispatch_ReachesSIMD(t *testing.T) {
+	if hasSSE2 != cpu.X86.SSE2 {
+		t.Fatalf("hasSSE2 = %v but cpu.X86.SSE2 = %v: dispatch flag is not wired to CPU detection", hasSSE2, cpu.X86.SSE2)
+	}
+	if hasAVX2 != cpu.X86.AVX2 {
+		t.Fatalf("hasAVX2 = %v but cpu.X86.AVX2 = %v: dispatch flag is not wired to CPU detection", hasAVX2, cpu.X86.AVX2)
+	}
+	if !hasSSE2 {
+		t.Fatal("hasSSE2 is false on amd64: PMADDWD is SSE2 baseline, so XCorr should never fall back to Go here")
+	}
+	// One vector block each, matching the kernel bodies. A bound of 2x the
+	// block would be a tautology against the real values (8 and 16).
+	if minSSE2XCorr > 8 || minAVX2XCorr > 16 {
+		t.Fatalf("XCorr thresholds too high (SSE2 %d, AVX2 %d): would not vectorize at the x lengths it was written for",
+			minSSE2XCorr, minAVX2XCorr)
+	}
+}
+
+// TestXCorr4AMD64_LongWindowIsClamped covers the other half of the kernel's
+// n = min(len(x), len(y)-3) clamp. ShortWindowIsBounded only probes
+// len(y)-3 < len(x); ParityWithGo passes len(y) == len(x)+3, where both
+// operands of the min are equal and a mutant that dropped the min entirely
+// would still agree.
+func TestXCorr4AMD64_LongWindowIsClamped(t *testing.T) {
+	for _, k := range xcorr4Kernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			for _, xn := range []int{1, 8, 9, 16, 17, 32} {
+				// x MUST be a prefix of a longer allocation: the mutant this
+				// test exists for reads past the end of x, and past a
+				// standalone slice that is zeroed memory, which multiplies to
+				// 0 and leaves the answer correct. Non-zero bytes past x are
+				// what make the over-read observable rather than a coin flip
+				// on heap layout. Without this, the test detects nothing on
+				// amd64 at any xn.
+				backing := genI16(xn+200, 209)
+				x := backing[:xn]
+				y := genI16(xn+40, 210) // len(y)-3 far exceeds len(x)
+				dst := make([]int32, xcorrLagBlock)
+				k.fn(dst, x, y)
+				for lag := range xcorrLagBlock {
+					if got, want := dst[lag], dotOracle(x, y[lag:]); got != want {
+						t.Errorf("xcorr4%s long window xn=%d: dst[%d] = %d, want %d", k.name, xn, lag, got, want)
+					}
+				}
+			}
+		})
+	}
+}

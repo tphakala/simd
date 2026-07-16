@@ -93,3 +93,56 @@ func BenchmarkDotProductGo_64(b *testing.B)   { benchmarkDot(b, 64, dotGo) }
 func BenchmarkDotProductGo_240(b *testing.B)  { benchmarkDot(b, 240, dotGo) }
 func BenchmarkDotProductGo_480(b *testing.B)  { benchmarkDot(b, 480, dotGo) }
 func BenchmarkDotProductGo_4096(b *testing.B) { benchmarkDot(b, 4096, dotGo) }
+
+// XCorr benchmarks use the shape pitch analysis calls at: a 240-element frame
+// correlated over a sweep of lags. SetBytes counts x once plus the y span the
+// lags cover.
+
+func benchmarkXCorr(b *testing.B, xn, lags int, fn func(dst []int32, x, y []int16)) {
+	b.Helper()
+	x := make([]int16, xn)
+	y := make([]int16, xn+lags-1)
+	for i := range x {
+		x[i] = int16(i*7 - 3000)
+	}
+	for i := range y {
+		y[i] = int16(i*-5 + 2000)
+	}
+	dst := make([]int32, lags)
+	b.SetBytes(int64(xn+len(y)) * 2)
+	for b.Loop() {
+		fn(dst, x, y)
+	}
+}
+
+func BenchmarkXCorr_240x4(b *testing.B)   { benchmarkXCorr(b, 240, 4, XCorr) }
+func BenchmarkXCorr_240x64(b *testing.B)  { benchmarkXCorr(b, 240, 64, XCorr) }
+func BenchmarkXCorr_240x288(b *testing.B) { benchmarkXCorr(b, 240, 288, XCorr) }
+
+// 480 is a 20 ms frame at 24 kHz, and covers a second x length through the
+// 16-wide AVX2 body.
+func BenchmarkXCorr_480x64(b *testing.B) { benchmarkXCorr(b, 480, 64, XCorr) }
+
+// The lengths above are all multiples of 16 and 4, which is precisely why they
+// hide things. 240 % 16 == 0 and 480 % 16 == 0, so the AVX2 kernel's scalar
+// tail never runs in any of them; 4, 64 and 288 are all multiples of
+// xcorrLagBlock, so the remainder-lag path never runs either. The cases below
+// exist to make both visible.
+//
+// x=25 currently shows the AVX2 tail costing more than SSE2 would (issue
+// filed): a remainder of 8-15 elements is served by a 4-lag scalar tail rather
+// than an 8-wide block. x=248 is the same shape at a realistic length, and
+// lags=61 is the pitch-analysis count from the motivating caller, which leaves
+// one remainder lag.
+func BenchmarkXCorr_25x64(b *testing.B)  { benchmarkXCorr(b, 25, 64, XCorr) }
+func BenchmarkXCorr_248x64(b *testing.B) { benchmarkXCorr(b, 248, 64, XCorr) }
+func BenchmarkXCorr_240x61(b *testing.B) { benchmarkXCorr(b, 240, 61, XCorr) }
+
+func BenchmarkXCorrGo_25x64(b *testing.B)  { benchmarkXCorr(b, 25, 64, xcorrGo) }
+func BenchmarkXCorrGo_248x64(b *testing.B) { benchmarkXCorr(b, 248, 64, xcorrGo) }
+func BenchmarkXCorrGo_240x61(b *testing.B) { benchmarkXCorr(b, 240, 61, xcorrGo) }
+
+func BenchmarkXCorrGo_240x4(b *testing.B)   { benchmarkXCorr(b, 240, 4, xcorrGo) }
+func BenchmarkXCorrGo_240x64(b *testing.B)  { benchmarkXCorr(b, 240, 64, xcorrGo) }
+func BenchmarkXCorrGo_240x288(b *testing.B) { benchmarkXCorr(b, 240, 288, xcorrGo) }
+func BenchmarkXCorrGo_480x64(b *testing.B)  { benchmarkXCorr(b, 480, 64, xcorrGo) }

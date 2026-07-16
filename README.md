@@ -569,6 +569,7 @@ The 16-bit integer counterpart to `i32`, serving two kinds of hot loop. First, r
 |                | `Deinterleave2(a, b, src)` | Split interleaved stereo into two channels | 16x (AVX2) / 8x (SSE2) / 8x (NEON) |
 | **Reduction**  | `DotProduct(a, b)`         | Widening dot product, wrapping int32       | 16x (AVX2) / 8x (SSE2) / 16x (NEON) |
 |                | `DotProductUnsafe(a, b)`   | As above, without the empty-slice guard    | 16x (AVX2) / 8x (SSE2) / 16x (NEON) |
+| **Correlation**| `XCorr(dst, x, y)`         | Dot product of x against y at every lag    | 4 lags/call, 16x (AVX2) / 8x (SSE2/NEON) |
 
 ```go
 import "github.com/tphakala/simd/i16"
@@ -581,11 +582,20 @@ i16.Interleave2(stereo, left, right)   // [l0, r0, l1, r1, ...]
 i16.Deinterleave2(left, right, stereo) // inverse: split back to channels
 
 sum := i16.DotProduct(left, right)     // sum(left[i]*right[i]) widened into int32
+
+// Correlate a short pattern against a longer signal at every lag.
+pattern := make([]int16, 32)
+signal := make([]int16, 512)
+lags := make([]int32, len(signal)-len(pattern)+1)
+
+i16.XCorr(lags, pattern, signal)       // lags[k] = DotProduct(pattern, signal[k:])
 ```
 
 The interleave kernels are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plus a lane permute, NEON `ZIP`/`UZP` on `.8H`), so the bit pattern of each lane is irrelevant and every value round-trips exactly: negative values and the int16 extremes are preserved.
 
 `DotProduct` is the opposite case: the bit pattern is the whole point. It widens each product to int32 and accumulates with **two's-complement wraparound, never saturation**, and that is a guarantee callers may rely on. Wrapping addition is associative and commutative modulo 2^32, so any lane grouping and any horizontal reduction order is bit-identical to the scalar loop, including on operands engineered to overflow; a saturating accumulator is not associative and could not be vectorized without changing results. Fixed-point codecs (Opus/CELT, FLAC LPC) use integer arithmetic precisely because it is exactly reproducible, so this property is the feature. The kernels are `PMADDWD` (SSE2, hence always present on the `GOAMD64=v1` baseline) with an AVX2 tier at twice the width, and `SMLAL`/`SMLAL2` on NEON. All kernels are zero-allocation.
+
+`XCorr` is the same arithmetic evaluated at every lag, and `dst[k]` is defined to equal `DotProduct(x, y[k:k+len(x)])` exactly. The win over calling `DotProduct` in a loop is that it loads `x` once and multiply-accumulates it against four overlapping `y` windows at a time (the libopus `xcorr_kernel` shape), rather than re-reading `x` for every lag. Only lags whose full window fits in `y` are computed, and `dst` beyond that is left untouched rather than zeroed.
 
 ### `i8` - int8 Operations
 
@@ -876,7 +886,18 @@ a Raspberry Pi 5):
 | 480      | 14 ns vs 159 ns (**11.8x**) | 61 ns vs 434 ns (**7.1x**)    |
 | 4096     | 92 ns vs 1282 ns (**13.9x**) | 439 ns vs 3436 ns (**7.8x**)  |
 
-At n=8 the dispatch and call overhead is most of the work, so the win is small on AMD64 and slightly negative on the Pi 5; the kernels pull away from 64 elements up. All i16 kernels are zero-allocation and bit-exact against the pure-Go reference. The interleave kernels move whole 16-bit lanes, so the bit pattern of each sample is irrelevant to correctness; `DotProduct` is bit-exact for the opposite reason, because wrapping accumulation is associative, so lane grouping and reduction order cannot change the result even when the accumulator overflows (its tests plant `MinInt16` operands specifically to force that wrap).
+
+`DotProduct` at n=8 is dominated by dispatch and call overhead, so the win is small on AMD64 and slightly negative on the Pi 5; the kernels pull away from 64 elements up.
+
+`XCorr` at a 240-element frame, by lag count. The speedup is larger than `DotProduct`'s because the pure-Go baseline re-reads `x` once per lag, which is exactly the work the 4-lag blocking removes:
+
+| Lags | AMD64 (AVX2)                    | ARM64 (NEON, Pi 5)              |
+| ---- | ------------------------------- | ------------------------------- |
+| 4    | 17 ns vs 460 ns (**26.6x**)     | 122 ns vs 849 ns (**6.9x**)     |
+| 64   | 246 ns vs 7376 ns (**29.9x**)   | 1870 ns vs 13536 ns (**7.2x**)  |
+| 288  | 1058 ns vs 34642 ns (**32.7x**) | 8352 ns vs 60814 ns (**7.3x**)  |
+
+All i16 kernels are zero-allocation and bit-exact against the pure-Go reference. The interleave kernels move whole 16-bit lanes, so the bit pattern of each sample is irrelevant to correctness; `DotProduct` is bit-exact for the opposite reason, because wrapping accumulation is associative, so lane grouping and reduction order cannot change the result even when the accumulator overflows (its tests plant `MinInt16` operands specifically to force that wrap).
 
 All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The interleave kernels move whole 32-bit lanes, so the bit pattern of each sample is irrelevant to correctness. `Add` and `Sub` are element-wise integer-ALU ops with two's-complement wraparound, matching the scalar reference across the full int32 range. `MinMax` is exact by construction (signed min/max has no accumulation order or wrapping); its parity tests plant `MinInt32`/`MaxInt32` in both a mid-block lane and the scalar tail, in both orderings, to catch a dropped vector lane or a skipped tail.
 
