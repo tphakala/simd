@@ -183,8 +183,7 @@ func TestDotDispatch_ReachesNEON(t *testing.T) {
 	// The threshold is documented as one vector block. Anything much larger
 	// would leave the codec-length calls this primitive exists for running
 	// scalar, which no other test would report.
-	if minNEONDot > 2*minNEONElements {
-		t.Fatalf("minNEONDot = %d exceeds two vector blocks (%d): DotProduct would not vectorize at the short lengths it was written for",
-			minNEONDot, 2*minNEONElements)
+	if minNEONDot > 16 {
+		t.Fatalf("minNEONDot = %d exceeds two vector blocks: DotProduct would not vectorize at the short lengths it was written for", minNEONDot)
 	}
 }

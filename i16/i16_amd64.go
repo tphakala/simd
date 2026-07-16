@@ -22,15 +22,17 @@ var (
 	hasSSE2 = cpu.X86.SSE2
 )
 
-// Dot thresholds are named separately from the interleave block sizes they
-// currently equal, so retuning one op cannot silently retune the other. The
-// values are one vector block each: the dot kernels are correct at any n (they
-// fall through to a scalar tail), so these are performance cuts only, never a
-// safety requirement. Measured kernel against Go reference at n=8: SSE2 wins
-// 2.2x, so unlike NEON there is no break-even region to avoid here.
+// Dot dispatch thresholds: one vector block each. They are independent literals
+// rather than aliases of the interleave block sizes they happen to equal, so
+// retuning the interleave kernels cannot silently retune the dot dispatch.
+//
+// The dot kernels are correct at any n (each falls through to a scalar tail), so
+// these are performance cuts only, never a safety requirement. Measured kernel
+// against Go reference at n=8, SSE2 wins 2.2x, so unlike NEON there is no
+// break-even region to step around here.
 const (
-	minSSE2Dot = minSSE2Elements
-	minAVX2Dot = minAVX2Elements
+	minSSE2Dot = 8  // PMADDWL retires 8 int16 pairs per iteration
+	minAVX2Dot = 16 // VPMADDWD retires 16
 )
 
 func dotI16(a, b []int16) int32 {

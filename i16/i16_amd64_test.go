@@ -251,8 +251,8 @@ func TestDotDispatch_ReachesSIMD(t *testing.T) {
 	if !hasSSE2 {
 		t.Fatal("hasSSE2 is false on amd64: PMADDWD is SSE2 baseline, so DotProduct should never fall back to Go here")
 	}
-	if minSSE2Elements > 2*8 || minAVX2Elements > 2*16 {
+	if minSSE2Dot > 2*8 || minAVX2Dot > 2*16 {
 		t.Fatalf("dispatch thresholds too high (SSE2 %d, AVX2 %d): DotProduct would not vectorize at the short lengths it was written for",
-			minSSE2Elements, minAVX2Elements)
+			minSSE2Dot, minAVX2Dot)
 	}
 }

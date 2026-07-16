@@ -24,7 +24,11 @@ const minNEONElements = 8
 // dotGo called directly, so they charge dispatch overhead to the SIMD side only
 // and understate the kernel at small n. They measure what a caller sees, not
 // what this constant should be; reproduce the numbers above before moving it.
-const minNEONDot = minNEONElements
+//
+// This is an independent literal rather than an alias of minNEONElements, which
+// it happens to equal, so retuning the interleave kernels cannot silently move
+// the dot threshold.
+const minNEONDot = 8 // the kernel's 8-wide block, below its 16-wide body
 
 var hasNEON = cpu.ARM64.NEON
 

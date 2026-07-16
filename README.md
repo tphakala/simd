@@ -580,7 +580,7 @@ stereo := make([]int16, n*2)
 i16.Interleave2(stereo, left, right)   // [l0, r0, l1, r1, ...]
 i16.Deinterleave2(left, right, stereo) // inverse: split back to channels
 
-sum := i16.DotProduct(samples, coeffs) // sum(a[i]*b[i]) widened into int32
+sum := i16.DotProduct(left, right)     // sum(left[i]*right[i]) widened into int32
 ```
 
 The interleave kernels are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plus a lane permute, NEON `ZIP`/`UZP` on `.8H`), so the bit pattern of each lane is irrelevant and every value round-trips exactly: negative values and the int16 extremes are preserved.
