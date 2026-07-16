@@ -559,16 +559,16 @@ Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f3
 
 ### `i16` - int16 Operations
 
-The 16-bit integer counterpart to `i32`, for raw-PCM hot loops where the source samples are 16-bit and the cheapest place to vectorize is the channel (de)interleaving that happens before samples are widened to int32. Inter-channel decorrelation can exceed the source bit depth by one bit, so arithmetic is done after widening to `i32`; this package carries only the operations that provably help at 16-bit width:
+The 16-bit integer counterpart to `i32`, serving two kinds of hot loop. First, raw-PCM movement, where the source samples are 16-bit and the cheapest place to vectorize is the channel (de)interleaving that happens before samples are widened to int32. Second, fixed-point DSP, where int16 inputs are multiplied and accumulated into int32.
 
-**Scope:** `i16` is deliberately movement-only (interleave/deinterleave). There are
-no int16 arithmetic primitives on purpose: widen to `i32` and use its arithmetic
-surface, because 16-bit arithmetic overflows as soon as channels are decorrelated.
+**Scope:** element-wise int16 arithmetic still belongs in `i32`, because inter-channel decorrelation can exceed the source bit depth by one bit. What this package adds at 16-bit width is the *widening* direction: operations that read int16 and accumulate into int32, where the narrow input is the point.
 
 | Category       | Function                   | Description                                | SIMD Width                         |
 | -------------- | -------------------------- | ------------------------------------------ | ---------------------------------- |
 | **Interleave** | `Interleave2(dst, a, b)`   | Pack two channels into interleaved stereo  | 16x (AVX2) / 8x (SSE2) / 8x (NEON) |
 |                | `Deinterleave2(a, b, src)` | Split interleaved stereo into two channels | 16x (AVX2) / 8x (SSE2) / 8x (NEON) |
+| **Reduction**  | `DotProduct(a, b)`         | Widening dot product, wrapping int32       | 16x (AVX2) / 8x (SSE2) / 16x (NEON) |
+|                | `DotProductUnsafe(a, b)`   | As above, without the empty-slice guard    | 16x (AVX2) / 8x (SSE2) / 16x (NEON) |
 
 ```go
 import "github.com/tphakala/simd/i16"
@@ -579,9 +579,13 @@ stereo := make([]int16, n*2)
 
 i16.Interleave2(stereo, left, right)   // [l0, r0, l1, r1, ...]
 i16.Deinterleave2(left, right, stereo) // inverse: split back to channels
+
+sum := i16.DotProduct(left, right)     // sum(left[i]*right[i]) widened into int32
 ```
 
-Like the `i32` interleave kernels, these are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plus a lane permute, NEON `ZIP`/`UZP` on `.8H`), so the bit pattern of each lane is irrelevant and every value round-trips exactly: negative values and the int16 extremes are preserved. Both kernels are zero-allocation.
+The interleave kernels are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plus a lane permute, NEON `ZIP`/`UZP` on `.8H`), so the bit pattern of each lane is irrelevant and every value round-trips exactly: negative values and the int16 extremes are preserved.
+
+`DotProduct` is the opposite case: the bit pattern is the whole point. It widens each product to int32 and accumulates with **two's-complement wraparound, never saturation**, and that is a guarantee callers may rely on. Wrapping addition is associative and commutative modulo 2^32, so any lane grouping and any horizontal reduction order is bit-identical to the scalar loop, including on operands engineered to overflow; a saturating accumulator is not associative and could not be vectorized without changing results. Fixed-point codecs (Opus/CELT, FLAC LPC) use integer arithmetic precisely because it is exactly reproducible, so this property is the feature. The kernels are `PMADDWD` (SSE2, hence always present on the `GOAMD64=v1` baseline) with an AVX2 tier at twice the width, and `SMLAL`/`SMLAL2` on NEON. All kernels are zero-allocation.
 
 ### `i8` - int8 Operations
 
@@ -862,7 +866,17 @@ a Raspberry Pi 5):
 | Interleave2   | 53 ns vs 560 ns (**10.6x**) | 165 ns vs 2105 ns (**12.8x**) |
 | Deinterleave2 | 54 ns vs 607 ns (**11.3x**) | 165 ns vs 2120 ns (**12.9x**) |
 
-Both i16 kernels are zero-allocation and bit-exact against the pure-Go reference (verified with negative values and the int16 extremes); they move whole 16-bit lanes, so the bit pattern of each sample is irrelevant to correctness.
+`DotProduct` is benchmarked separately, because the lengths that matter for it are the ones fixed-point codecs call at (a CELT band can be a handful of coefficients; 240 and 480 are 20 ms frames at 12 and 24 kHz), not 1000:
+
+| Elements | AMD64 (AVX2)                | ARM64 (NEON, Pi 5)            |
+| -------- | --------------------------- | ----------------------------- |
+| 8        | 3.6 ns vs 5.5 ns (**1.5x**) | 11.2 ns vs 10.8 ns (**0.97x**) |
+| 64       | 5.2 ns vs 30 ns (**5.8x**)  | 17 ns vs 58 ns (**3.5x**)     |
+| 240      | 10 ns vs 86 ns (**8.5x**)   | 35 ns vs 205 ns (**5.8x**)    |
+| 480      | 14 ns vs 159 ns (**11.8x**) | 61 ns vs 434 ns (**7.1x**)    |
+| 4096     | 92 ns vs 1282 ns (**13.9x**) | 439 ns vs 3436 ns (**7.8x**)  |
+
+At n=8 the dispatch and call overhead is most of the work, so the win is small on AMD64 and slightly negative on the Pi 5; the kernels pull away from 64 elements up. All i16 kernels are zero-allocation and bit-exact against the pure-Go reference. The interleave kernels move whole 16-bit lanes, so the bit pattern of each sample is irrelevant to correctness; `DotProduct` is bit-exact for the opposite reason, because wrapping accumulation is associative, so lane grouping and reduction order cannot change the result even when the accumulator overflows (its tests plant `MinInt16` operands specifically to force that wrap).
 
 All int32 kernels are zero-allocation and bit-exact against the pure-Go reference (verified across the sign and high bits with negative values and the type extremes). The interleave kernels move whole 32-bit lanes, so the bit pattern of each sample is irrelevant to correctness. `Add` and `Sub` are element-wise integer-ALU ops with two's-complement wraparound, matching the scalar reference across the full int32 range. `MinMax` is exact by construction (signed min/max has no accumulation order or wrapping); its parity tests plant `MinInt32`/`MaxInt32` in both a mid-block lane and the scalar tail, in both orderings, to catch a dropped vector lane or a skipped tail.
 

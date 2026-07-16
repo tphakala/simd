@@ -107,3 +107,83 @@ func TestDeinterleave2NEON_NoOverwrite(t *testing.T) {
 		}
 	}
 }
+
+// TestDotNEON_ParityWithGo exercises the kernel directly rather than through
+// DotProduct, so a dispatch threshold change can never quietly turn this into a
+// test of the Go reference against itself.
+func TestDotNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range dotLengths {
+		a, b := genI16(n, 51), genI16(n, 52)
+		if got, want := dotNEON(a, b), dotGo(a, b); got != want {
+			t.Errorf("dotNEON n=%d: got %d, want %d", n, got, want)
+		}
+	}
+}
+
+// TestDotNEON_MinInt16 pins SMLAL's wrapping behaviour at the one overflowing
+// input, directly at the kernel.
+func TestDotNEON_MinInt16(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for n := 1; n <= 64; n++ {
+		a := make([]int16, n)
+		b := make([]int16, n)
+		for i := range a {
+			a[i], b[i] = math.MinInt16, math.MinInt16
+		}
+		if got, want := dotNEON(a, b), dotOracle(a, b); got != want {
+			t.Errorf("dotNEON all-MinInt16 n=%d: got %d, want %d", n, got, want)
+		}
+	}
+}
+
+// TestDotNEON_Clamp verifies the in-assembly min(len(a), len(b)): the kernel
+// must not read the longer operand past the shorter one's length.
+func TestDotNEON_Clamp(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range dotLengths {
+		if n == 0 {
+			continue
+		}
+		long, short := genI16(n+37, 53), genI16(n, 54)
+		if got, want := dotNEON(long, short), dotOracle(long, short); got != want {
+			t.Errorf("dotNEON clamp n=%d: got %d, want %d", n, got, want)
+		}
+		if got, want := dotNEON(short, long), dotOracle(short, long); got != want {
+			t.Errorf("dotNEON clamp (swapped) n=%d: got %d, want %d", n, got, want)
+		}
+	}
+}
+
+// TestDotDispatch_ReachesNEON asserts that DotProduct actually routes to the
+// NEON kernel on NEON hardware.
+//
+// This has to be a white-box check on the dispatch state, because no black-box
+// test can catch the failure. dotNEON is bit-identical to dotGo by design, so a
+// dispatcher that silently sent every call to the Go reference would satisfy
+// every parity assertion in this package while the SIMD path sat dead. The
+// parity tests above call dotNEON directly (deliberately, so a threshold change
+// cannot degrade them into dotGo-vs-dotGo), which means they cannot notice
+// either. Nothing else checks that the two ever meet.
+//
+// It must not call t.Parallel(): it reads package-level dispatch state.
+func TestDotDispatch_ReachesNEON(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	if !hasNEON {
+		t.Fatal("hasNEON is false though cpu.ARM64.NEON is true: DotProduct silently runs the Go reference on every call")
+	}
+	// The threshold is documented as one vector block. Anything much larger
+	// would leave the codec-length calls this primitive exists for running
+	// scalar, which no other test would report.
+	if minNEONDot > 16 {
+		t.Fatalf("minNEONDot = %d exceeds two vector blocks: DotProduct would not vectorize at the short lengths it was written for", minNEONDot)
+	}
+}

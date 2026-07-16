@@ -151,3 +151,108 @@ func TestDeinterleave2_NoOverwrite(t *testing.T) {
 		})
 	}
 }
+
+// dotKernel describes one amd64 SIMD tier so the dot parity checks run
+// identically against AVX2 and SSE2.
+type dotKernel struct {
+	name      string
+	available bool
+	fn        func(a, b []int16) int32
+}
+
+func dotKernels() []dotKernel {
+	return []dotKernel{
+		{"AVX2", cpu.X86.AVX2, dotAVX2},
+		{"SSE2", cpu.X86.SSE2, dotSSE2},
+	}
+}
+
+// TestDotAMD64_ParityWithGo exercises each kernel directly rather than through
+// DotProduct, so a dispatch threshold change can never quietly turn this into a
+// test of the Go reference against itself.
+func TestDotAMD64_ParityWithGo(t *testing.T) {
+	for _, k := range dotKernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			for _, n := range dotLengths {
+				a, b := genI16(n, 61), genI16(n, 62)
+				if got, want := k.fn(a, b), dotGo(a, b); got != want {
+					t.Errorf("dot%s n=%d: got %d, want %d", k.name, n, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestDotAMD64_MinInt16 pins the PMADDWD overflow case: a pair of
+// (-32768 * -32768) sums to 2^31 inside one instruction and must wrap to
+// MinInt32, matching the scalar reference, rather than saturate.
+func TestDotAMD64_MinInt16(t *testing.T) {
+	for _, k := range dotKernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			for n := 1; n <= 64; n++ {
+				a := make([]int16, n)
+				b := make([]int16, n)
+				for i := range a {
+					a[i], b[i] = math.MinInt16, math.MinInt16
+				}
+				if got, want := k.fn(a, b), dotOracle(a, b); got != want {
+					t.Errorf("dot%s all-MinInt16 n=%d: got %d, want %d", k.name, n, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestDotAMD64_Clamp verifies the in-assembly min(len(a), len(b)): the kernel
+// must not read the longer operand past the shorter one's length.
+func TestDotAMD64_Clamp(t *testing.T) {
+	for _, k := range dotKernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			for _, n := range dotLengths {
+				if n == 0 {
+					continue
+				}
+				long, short := genI16(n+37, 63), genI16(n, 64)
+				if got, want := k.fn(long, short), dotOracle(long, short); got != want {
+					t.Errorf("dot%s clamp n=%d: got %d, want %d", k.name, n, got, want)
+				}
+				if got, want := k.fn(short, long), dotOracle(short, long); got != want {
+					t.Errorf("dot%s clamp (swapped) n=%d: got %d, want %d", k.name, n, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestDotDispatch_ReachesSIMD asserts that DotProduct actually routes to a SIMD
+// kernel rather than silently falling back to the Go reference. See the arm64
+// counterpart for why this must be a white-box check: the kernels are
+// bit-identical to dotGo, so a dead dispatcher passes every parity test.
+//
+// It must not call t.Parallel(): it reads package-level dispatch state.
+func TestDotDispatch_ReachesSIMD(t *testing.T) {
+	if hasSSE2 != cpu.X86.SSE2 {
+		t.Fatalf("hasSSE2 = %v but cpu.X86.SSE2 = %v: dispatch flag is not wired to CPU detection", hasSSE2, cpu.X86.SSE2)
+	}
+	if hasAVX2 != cpu.X86.AVX2 {
+		t.Fatalf("hasAVX2 = %v but cpu.X86.AVX2 = %v: dispatch flag is not wired to CPU detection", hasAVX2, cpu.X86.AVX2)
+	}
+	// SSE2 is in the GOAMD64=v1 baseline, so on amd64 the dot product must
+	// always have a SIMD path: a false hasSSE2 means every call runs scalar.
+	if !hasSSE2 {
+		t.Fatal("hasSSE2 is false on amd64: PMADDWD is SSE2 baseline, so DotProduct should never fall back to Go here")
+	}
+	if minSSE2Dot > 2*8 || minAVX2Dot > 2*16 {
+		t.Fatalf("dispatch thresholds too high (SSE2 %d, AVX2 %d): DotProduct would not vectorize at the short lengths it was written for",
+			minSSE2Dot, minAVX2Dot)
+	}
+}

@@ -91,3 +91,77 @@ deinterleave2_neon_loop1:
 
 deinterleave2_neon_done:
     RET
+
+// func dotNEON(a, b []int16) int32
+// Handles mismatched slice lengths: uses min(len(a), len(b)).
+//
+// Widening int16 dot product. SMLAL/SMLAL2 each multiply four int16 pairs into
+// int32 and accumulate, so one iteration retires 16 products into four
+// independent accumulators; the four chains keep the multiply-accumulate
+// latency off the critical path. VADD folds them, ADDV reduces, and an 8-wide
+// block plus a scalar tail finish n mod 16 (short CELT bands are common, so the
+// 8-wide block earns its keep).
+//
+// Accumulation wraps in int32, matching dotGo bit-for-bit: SMLAL wraps per lane
+// and wrapping addition is associative, so the lane split and the ADDV
+// reduction cannot change the result.
+//
+// The Go assembler has no mnemonic for any integer vector multiply (SMLAL and
+// friends are all "unrecognized instruction"), so these are hand-encoded as
+// WORD; the trailing comment is the decoded form and asmcheck_test.go
+// cross-checks it against arm64asm.
+TEXT ·dotNEON(SB), NOSPLIT, $0-52
+    MOVD a_base+0(FP), R0      // a pointer
+    MOVD a_len+8(FP), R2
+    MOVD b_len+32(FP), R3
+    CMP  R3, R2
+    CSEL LT, R2, R3, R2        // R2 = n = min(len(a), len(b))
+    MOVD b_base+24(FP), R1     // b pointer
+
+    VEOR V16.B16, V16.B16, V16.B16
+    VEOR V17.B16, V17.B16, V17.B16
+    VEOR V18.B16, V18.B16, V18.B16
+    VEOR V19.B16, V19.B16, V19.B16
+
+    LSR  $4, R2, R4            // R4 = n / 16
+    CBZ  R4, dot_neon_block8
+
+dot_neon_loop16:
+    VLD1.P 32(R0), [V0.H8, V1.H8]
+    VLD1.P 32(R1), [V2.H8, V3.H8]
+    WORD $0x0E628010           // SMLAL V16.4S, V0.4H, V2.4H
+    WORD $0x4E628011           // SMLAL2 V17.4S, V0.8H, V2.8H
+    WORD $0x0E638032           // SMLAL V18.4S, V1.4H, V3.4H
+    WORD $0x4E638033           // SMLAL2 V19.4S, V1.8H, V3.8H
+    SUB  $1, R4
+    CBNZ R4, dot_neon_loop16
+
+dot_neon_block8:
+    AND  $15, R2, R3           // R3 = n mod 16
+    TBZ  $3, R3, dot_neon_fold // bit 3 clear => fewer than 8 left
+    VLD1.P 16(R0), [V0.H8]
+    VLD1.P 16(R1), [V2.H8]
+    WORD $0x0E628010           // SMLAL V16.4S, V0.4H, V2.4H
+    WORD $0x4E628011           // SMLAL2 V17.4S, V0.8H, V2.8H
+
+dot_neon_fold:
+    VADD V17.S4, V16.S4, V16.S4
+    VADD V19.S4, V18.S4, V18.S4
+    VADD V18.S4, V16.S4, V16.S4
+    VADDV V16.S4, V16          // ADDV S16, V16.4S
+    FMOVS F16, R5              // R5 = vector partial sum
+
+    AND  $7, R2, R3            // R3 = n mod 8
+    CBZ  R3, dot_neon_done
+
+dot_neon_scalar:
+    MOVH.P 2(R0), R6           // sign-extending 16-bit load
+    MOVH.P 2(R1), R7
+    MUL  R7, R6, R6
+    ADDW R6, R5, R5            // 32-bit add: wraps like dotGo
+    SUB  $1, R3
+    CBNZ R3, dot_neon_scalar
+
+dot_neon_done:
+    MOVW R5, ret+48(FP)
+    RET

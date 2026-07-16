@@ -69,3 +69,60 @@ func FuzzI16Interleave(f *testing.F) {
 		equalI16(t, "Deinterleave2.b", db, dbRef)
 	})
 }
+
+// addDotLenSeeds seeds raw buffers for FuzzI16Dot, which splits the decoded
+// int16s into two operands. The per-operand length is therefore raw/4 bytes,
+// not raw/2, so addLenSeeds cannot be reused: halving its buffers a second time
+// lands the operands on a sparse set that misses 9 and 17, the one-past-the-
+// block tails for the 8-wide and 16-wide bodies, and leaves most seeds below
+// every dispatch threshold where the assertion degrades to dotGo against
+// itself. These sizes make the operand length itself sweep 0..40.
+func addDotLenSeeds(f *testing.F) {
+	f.Helper()
+	sizes := make([]int, 0, 46)
+	for n := range 41 {
+		sizes = append(sizes, n)
+	}
+	sizes = append(sizes, 47, 48, 63, 64, 65, 128)
+	for _, n := range sizes {
+		raw := make([]byte, n*4)
+		for i := range raw {
+			raw[i] = byte(i*37 + 11)
+		}
+		f.Add(raw)
+	}
+}
+
+// FuzzI16Dot differentially fuzzes the widening dot product against the pure-Go
+// reference. Unlike the interleave targets, the interesting bug class here is
+// arithmetic as much as tail handling: the raw bytes reach MinInt16 freely, so
+// the fuzzer readily builds inputs whose int32 accumulator overflows, which is
+// exactly where a saturating or mis-reassociated kernel would diverge. It also
+// checks dotOracle, so a fault in the reference itself cannot hide by agreeing
+// with the kernels.
+func FuzzI16Dot(f *testing.F) {
+	addDotLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := i16sFromBits(raw)
+		h := len(v) / 2
+		a, b := v[:h], v[h:2*h]
+		got := DotProduct(a, b)
+		if want := dotGo(a, b); got != want {
+			t.Fatalf("DotProduct(len=%d) = %d, want %d (reference)", h, got, want)
+		}
+		if want := dotOracle(a, b); got != want {
+			t.Fatalf("DotProduct(len=%d) = %d, want %d (int64 oracle)", h, got, want)
+		}
+		// Mismatched lengths must clamp, not read out of bounds. Both orders:
+		// the kernels take min(len(a), len(b)) from two separate slice headers,
+		// so shortening a and shortening b are distinct paths.
+		if h > 1 {
+			if got, want := DotProduct(a, b[:h-1]), dotOracle(a, b[:h-1]); got != want {
+				t.Fatalf("DotProduct(len=%d, len=%d) = %d, want %d", h, h-1, got, want)
+			}
+			if got, want := DotProduct(a[:h-1], b), dotOracle(a[:h-1], b); got != want {
+				t.Fatalf("DotProduct(len=%d, len=%d) = %d, want %d", h-1, h, got, want)
+			}
+		}
+	})
+}

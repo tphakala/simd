@@ -63,3 +63,33 @@ func BenchmarkDeinterleave2Go_1000(b *testing.B) {
 		deinterleave2Go(a, c, src)
 	}
 }
+
+// Dot benchmarks sweep the lengths fixed-point codecs actually call at: n=8 is
+// a short CELT band (where call overhead is the concern), n=240 a 20 ms frame
+// at 12 kHz, n=480 one at 24 kHz. SetBytes counts both operands: 2*n int16.
+
+func benchmarkDot(b *testing.B, n int, fn func(a, c []int16) int32) {
+	b.Helper()
+	a := make([]int16, n)
+	c := make([]int16, n)
+	for i := range a {
+		a[i] = int16(i*7 - 3000)
+		c[i] = int16(i*-5 + 2000)
+	}
+	b.SetBytes(int64(n) * 2 * 2)
+	for b.Loop() {
+		_ = fn(a, c)
+	}
+}
+
+func BenchmarkDotProduct_8(b *testing.B)    { benchmarkDot(b, 8, DotProduct) }
+func BenchmarkDotProduct_64(b *testing.B)   { benchmarkDot(b, 64, DotProduct) }
+func BenchmarkDotProduct_240(b *testing.B)  { benchmarkDot(b, 240, DotProduct) }
+func BenchmarkDotProduct_480(b *testing.B)  { benchmarkDot(b, 480, DotProduct) }
+func BenchmarkDotProduct_4096(b *testing.B) { benchmarkDot(b, 4096, DotProduct) }
+
+func BenchmarkDotProductGo_8(b *testing.B)    { benchmarkDot(b, 8, dotGo) }
+func BenchmarkDotProductGo_64(b *testing.B)   { benchmarkDot(b, 64, dotGo) }
+func BenchmarkDotProductGo_240(b *testing.B)  { benchmarkDot(b, 240, dotGo) }
+func BenchmarkDotProductGo_480(b *testing.B)  { benchmarkDot(b, 480, dotGo) }
+func BenchmarkDotProductGo_4096(b *testing.B) { benchmarkDot(b, 4096, dotGo) }
