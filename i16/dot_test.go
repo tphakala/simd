@@ -43,10 +43,11 @@ func dotOracle(a, b []int16) int32 {
 //
 // The exhaustive low range is deliberate rather than lazy. Both wide kernels
 // (dotNEON, and dotAVX2 now that it has one too) run an 8-wide block when
-// n mod 16 >= 8 and follow it with an (n mod 8) scalar tail. A hand-picked list
-// of block boundaries and their immediate neighbours yields only residues
-// {0, 1, 7, 8, 9, 15} mod 16, so it never runs that block together with a tail
-// of 2 to 6 elements (residues 10 to 14).
+// n mod 16 >= 8 and follow it with an (n mod 8) scalar tail. Sweeping 0 to 64
+// reaches every residue mod 16, and that is the point of doing it that way: the
+// tempting shortcut, a hand-picked list of block boundaries and their immediate
+// neighbours, would yield only residues {0, 1, 7, 8, 9, 15}, so it would never
+// run that block together with a tail of 2 to 6 elements (residues 10 to 14).
 //
 // The all-MinInt16 sweep in TestDotProduct_MinInt16 does visit every length, but
 // it cannot stand in for this list on either count. Its operands are
