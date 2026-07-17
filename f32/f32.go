@@ -448,6 +448,13 @@ func Reciprocal(dst, a []float32) {
 
 // MinIdx returns the index of the minimum value in the slice.
 // Returns -1 for empty slices.
+//
+// Ties resolve to the lowest index: the first occurrence of the minimum
+// wins. Comparison is strict (<), so NaN values never displace the
+// incumbent; if a[0] is NaN it is never displaced either, and a slice
+// whose values are all NaN returns 0. These properties are contractual
+// and hold on every dispatch path; a future vectorized implementation
+// must preserve them.
 func MinIdx(a []float32) int {
 	if len(a) == 0 {
 		return -1
@@ -457,6 +464,13 @@ func MinIdx(a []float32) int {
 
 // MaxIdx returns the index of the maximum value in the slice.
 // Returns -1 for empty slices.
+//
+// Ties resolve to the lowest index: the first occurrence of the maximum
+// wins. Comparison is strict (>), so NaN values never displace the
+// incumbent; if a[0] is NaN it is never displaced either, and a slice
+// whose values are all NaN returns 0. These properties are contractual
+// and hold on every dispatch path; a future vectorized implementation
+// must preserve them.
 func MaxIdx(a []float32) int {
 	if len(a) == 0 {
 		return -1
