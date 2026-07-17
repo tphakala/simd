@@ -7287,3 +7287,152 @@ DATA log32_powclamp_lo<>+0x14(SB)/4, $0xc2d00000
 DATA log32_powclamp_lo<>+0x18(SB)/4, $0xc2d00000
 DATA log32_powclamp_lo<>+0x1c(SB)/4, $0xc2d00000
 GLOBL log32_powclamp_lo<>(SB), RODATA|NOPTR, $32
+
+// minidxones is dup(int32 1): the curIdx increment for VPADDD. The 8-wide kernel
+// loads all 32 bytes (Y7); the 4-wide kernel loads the low 16 bytes (X7).
+DATA minidxones<>+0x00(SB)/4, $0x00000001
+DATA minidxones<>+0x04(SB)/4, $0x00000001
+DATA minidxones<>+0x08(SB)/4, $0x00000001
+DATA minidxones<>+0x0c(SB)/4, $0x00000001
+DATA minidxones<>+0x10(SB)/4, $0x00000001
+DATA minidxones<>+0x14(SB)/4, $0x00000001
+DATA minidxones<>+0x18(SB)/4, $0x00000001
+DATA minidxones<>+0x1c(SB)/4, $0x00000001
+GLOBL minidxones<>(SB), RODATA|NOPTR, $32
+
+// minidxrev8 is the VPERMPS control {7,6,5,4,3,2,1,0}: it reverses the eight
+// lanes of a YMM in one cross-lane shuffle for the rev == 1 (descending-slide)
+// store, so out-lane l = in-lane 7-l.
+DATA minidxrev8<>+0x00(SB)/4, $7
+DATA minidxrev8<>+0x04(SB)/4, $6
+DATA minidxrev8<>+0x08(SB)/4, $5
+DATA minidxrev8<>+0x0c(SB)/4, $4
+DATA minidxrev8<>+0x10(SB)/4, $3
+DATA minidxrev8<>+0x14(SB)/4, $2
+DATA minidxrev8<>+0x18(SB)/4, $1
+DATA minidxrev8<>+0x1c(SB)/4, $0
+GLOBL minidxrev8<>(SB), RODATA|NOPTR, $32
+
+// func minIdxOfSumRows8AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
+// Lane-per-row argmin-of-sum for a block of eight rows (one per YMM lane). Each
+// lane replays the scalar loop exactly: candidate i (i in [0, n), n = len(a))
+// broadcasts a[i], adds it to the eight rows' k values with a single VADDPS (one
+// rounding, never fused), and updates (bestVal, bestIdx) only on a strict VCMPPS
+// LT_OQ (cand < best). Strict compare keeps first-index-wins on ties, and LT_OQ
+// yields false for any NaN operand, so a NaN candidate never displaces the
+// incumbent and a NaN incumbent is never beaten; a +Inf pad never beats a finite
+// value. The bits match the Go reference lane for lane.
+//
+// The k pointer is pre-sliced by the dispatcher so k[0] is the first address the
+// kernel reads. Both slide signs load k[i:i+8] ascending (the window slides by
+// one element per candidate, so k advances 4 bytes, not 32). For slide == +1 the
+// dispatcher passes row r's window start, lane l reads k[i+l] = row (r+l)'s
+// candidate i, and the union over i in [0,n), l in [0,8) is k indices
+// [off, off+n+6] = exactly rows r..r+7's windows, all range-checked by the
+// wrapper. For slide == -1 it passes row (r+7)'s window start (off-7 >= 0 because
+// the wrapper validated row r+7); the ascending load lands row r+7 in lane 0 and
+// row r in lane 7, so rev == 1 reverses both result vectors once at store
+// (VPERMPS) to restore lane l == row r+l. Either way every read stays inside the
+// union of the eight rows' validated windows, so there is no over-read.
+TEXT ·minIdxOfSumRows8AVX2(SB), NOSPLIT, $0-104
+    MOVQ vals_base+0(FP), AX
+    MOVQ idxs_base+24(FP), BX
+    MOVQ a_base+48(FP), SI
+    MOVQ a_len+56(FP), CX          // CX = n (dispatcher guarantees n >= 1)
+    MOVQ k_base+72(FP), DI
+    MOVQ rev+96(FP), DX
+
+    // Candidate 0: seed bestVal = a[0] + k[0:8], bestIdx = 0, curIdx = 0.
+    VBROADCASTSS (SI), Y3          // dup(a[0])
+    VMOVUPS (DI), Y2               // k[0:8] (explicit unaligned load)
+    VADDPS Y2, Y3, Y0              // bestVal = a[0] + k[0:8]
+    VPXOR Y1, Y1, Y1               // bestIdx = 0
+    VPXOR Y6, Y6, Y6               // curIdx = 0
+    VMOVUPS minidxones<>(SB), Y7   // Y7 = dup(1), the curIdx increment
+
+    ADDQ $4, SI                    // a[1]
+    ADDQ $4, DI                    // k[1:9]
+    MOVQ CX, R9
+    DECQ R9                        // R9 = n-1 remaining candidates
+    JZ   minidxofsumrows8_avx2_store
+
+minidxofsumrows8_avx2_loop:
+    VBROADCASTSS (SI), Y3          // dup(a[i])
+    VMOVUPS (DI), Y2               // k[i:i+8]
+    VADDPS Y2, Y3, Y4              // cand = a[i] + k[i:i+8]
+    VPADDD Y7, Y6, Y6              // curIdx++ (before the selects read it)
+    VCMPPS $0x11, Y0, Y4, Y5       // Y5 = mask (cand LT_OQ best)
+    VBLENDVPS Y5, Y4, Y0, Y0       // bestVal = mask ? cand : bestVal
+    VBLENDVPS Y5, Y6, Y1, Y1       // bestIdx = mask ? curIdx : bestIdx
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ R9
+    JNZ  minidxofsumrows8_avx2_loop
+
+minidxofsumrows8_avx2_store:
+    TESTQ DX, DX
+    JZ    minidxofsumrows8_avx2_write
+    // rev == 1: reverse all eight lanes of both results in one shuffle each.
+    VMOVUPS minidxrev8<>(SB), Y8   // control {7,6,5,4,3,2,1,0}
+    VPERMPS Y0, Y8, Y0             // bestVal lanes reversed
+    VPERMPS Y1, Y8, Y1             // bestIdx lanes reversed
+
+minidxofsumrows8_avx2_write:
+    VMOVUPS Y0, (AX)               // vals[0:8]
+    VMOVUPS Y1, (BX)               // idxs[0:8]
+    VZEROUPPER
+    RET
+
+// func minIdxOfSumRows4AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
+// The 4-wide (XMM) sibling of minIdxOfSumRows8AVX2: same lane-per-row argmin-of-
+// sum, four rows per block, used for the 4-row sub-block a row count leaves after
+// the 8-wide blocks (rows 11-17 decompose as 8+3 and 8+4+2, hence this kernel).
+// The k union is n+3 wide; rev == 1 reverses the four lanes with VPERMILPS imm
+// [3,2,1,0]. This kernel is VEX.128-only (no YMM touched), so VZEROUPPER is not
+// required before RET.
+TEXT ·minIdxOfSumRows4AVX2(SB), NOSPLIT, $0-104
+    MOVQ vals_base+0(FP), AX
+    MOVQ idxs_base+24(FP), BX
+    MOVQ a_base+48(FP), SI
+    MOVQ a_len+56(FP), CX          // CX = n (dispatcher guarantees n >= 1)
+    MOVQ k_base+72(FP), DI
+    MOVQ rev+96(FP), DX
+
+    // Candidate 0: seed bestVal = a[0] + k[0:4], bestIdx = 0, curIdx = 0.
+    VBROADCASTSS (SI), X3          // dup(a[0])
+    VMOVUPS (DI), X2               // k[0:4] (explicit unaligned load)
+    VADDPS X2, X3, X0              // bestVal = a[0] + k[0:4]
+    VPXOR X1, X1, X1               // bestIdx = 0
+    VPXOR X6, X6, X6               // curIdx = 0
+    VMOVUPS minidxones<>(SB), X7   // X7 = dup(1) (low 16 bytes), the increment
+
+    ADDQ $4, SI                    // a[1]
+    ADDQ $4, DI                    // k[1:5]
+    MOVQ CX, R9
+    DECQ R9                        // R9 = n-1 remaining candidates
+    JZ   minidxofsumrows4_avx2_store
+
+minidxofsumrows4_avx2_loop:
+    VBROADCASTSS (SI), X3          // dup(a[i])
+    VMOVUPS (DI), X2               // k[i:i+4]
+    VADDPS X2, X3, X4              // cand = a[i] + k[i:i+4]
+    VPADDD X7, X6, X6              // curIdx++ (before the selects read it)
+    VCMPPS $0x11, X0, X4, X5       // X5 = mask (cand LT_OQ best)
+    VBLENDVPS X5, X4, X0, X0       // bestVal = mask ? cand : bestVal
+    VBLENDVPS X5, X6, X1, X1       // bestIdx = mask ? curIdx : bestIdx
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ R9
+    JNZ  minidxofsumrows4_avx2_loop
+
+minidxofsumrows4_avx2_store:
+    TESTQ DX, DX
+    JZ    minidxofsumrows4_avx2_write
+    // rev == 1: reverse the four lanes of both results, [3,2,1,0].
+    VPERMILPS $0x1B, X0, X0        // bestVal lanes reversed
+    VPERMILPS $0x1B, X1, X1        // bestIdx lanes reversed
+
+minidxofsumrows4_avx2_write:
+    VMOVUPS X0, (AX)               // vals[0:4]
+    VMOVUPS X1, (BX)               // idxs[0:4]
+    RET

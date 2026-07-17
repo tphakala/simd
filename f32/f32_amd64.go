@@ -320,10 +320,47 @@ func maxIdx32(a []float32) int {
 	return maxIdxImpl(a)
 }
 
-// SIMD kernel wired in a follow-up commit; Go route keeps the contract authoritative.
+// minIdxOfSumRows32 routes the sliding-window shapes (slide +1 and -1) through
+// the AVX2 block kernels, eight then four rows per lane-per-row block, and
+// composes any remainder rows with the scalar path. Non-unit slides and a
+// missing AVX2 stay on the Go reference. All paths are bit-identical (see
+// minIdxOfSumRows8AVX2). SSE2-only hosts take the Go path deliberately.
 func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
+	if cpu.X86.AVX2 && (slide == 1 || slide == -1) {
+		r := 0
+		for ; r+8 <= len(vals); r += 8 {
+			off := base + r*slide
+			if slide == 1 {
+				minIdxOfSumRows8AVX2(vals[r:r+8], idxs[r:r+8], a, k[off:], 0)
+			} else {
+				minIdxOfSumRows8AVX2(vals[r:r+8], idxs[r:r+8], a, k[off-7:], 1)
+			}
+		}
+		if r+4 <= len(vals) {
+			off := base + r*slide
+			if slide == 1 {
+				minIdxOfSumRows4AVX2(vals[r:r+4], idxs[r:r+4], a, k[off:], 0)
+			} else {
+				minIdxOfSumRows4AVX2(vals[r:r+4], idxs[r:r+4], a, k[off-3:], 1)
+			}
+			r += 4
+		}
+		for ; r < len(vals); r++ {
+			off := base + r*slide
+			i, v := minIdxOfSumGo(a, k[off:off+len(a)])
+			vals[r] = v
+			idxs[r] = int32(i)
+		}
+		return
+	}
 	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
 }
+
+//go:noescape
+func minIdxOfSumRows8AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
+
+//go:noescape
+func minIdxOfSumRows4AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
 
 func addScaled32(dst []float32, alpha float32, s []float32) {
 	addScaledImpl(dst, alpha, s)
