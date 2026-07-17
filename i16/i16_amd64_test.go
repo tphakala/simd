@@ -380,6 +380,175 @@ func TestXCorrDispatch_ReachesSIMD(t *testing.T) {
 	}
 }
 
+// TestMulQ15AVX2_ParityWithGo drives the kernel directly, over lengths the
+// dispatcher would never route to it, so a threshold change cannot quietly
+// reduce this to a test of the Go reference against itself.
+func TestMulQ15AVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range tier3Lengths {
+		a, b := genI16(n, 141), genI16(n, 142)
+		got := make([]int16, n)
+		want := make([]int16, n)
+		mulQ15AVX2(got, a, b)
+		mulQ15Go(want, a, b)
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("mulQ15AVX2 n=%d: dst[%d] = %d, want %d", n, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// TestMulQ15AVX2_MinInt16 pins VPMULHRSW's wrap at the one product outside
+// int16 range: (-32768)^2 rounds to +32768 and must land as -32768 in the
+// vector lanes and in the scalar tail. This is the load-bearing runtime check
+// for the instruction's non-saturating behavior; a saturating substitute
+// would return 32767 in every position.
+func TestMulQ15AVX2_MinInt16(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for n := 1; n <= 48; n++ {
+		a := make([]int16, n)
+		for i := range a {
+			a[i] = math.MinInt16
+		}
+		got := make([]int16, n)
+		mulQ15AVX2(got, a, a)
+		for i := range got {
+			if got[i] != math.MinInt16 {
+				t.Fatalf("mulQ15AVX2 all-MinInt16 n=%d: dst[%d] = %d, want %d", n, i, got[i], math.MinInt16)
+			}
+		}
+	}
+}
+
+// TestAbsAVX2_ParityWithGo drives the kernel directly across the full sweep;
+// the wrap input MinInt16 rides at index 0 of every non-empty case.
+func TestAbsAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range tier3Lengths {
+		a := genI16(n, 143)
+		if n > 0 {
+			a[0] = math.MinInt16
+		}
+		got := make([]int16, n)
+		want := make([]int16, n)
+		absAVX2(got, a)
+		absGo(want, a)
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("absAVX2 n=%d: dst[%d] = %d, want %d", n, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// TestMaxAbsAVX2_ParityWithGo drives the kernel directly across the sweep,
+// then pins the widened extreme: a planted -32768 must come back as 32768
+// from every lane position and from the scalar tail.
+func TestMaxAbsAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range tier3Lengths {
+		a := genI16(n, 144)
+		if got, want := maxAbsAVX2(a), maxAbsGo(a); got != want {
+			t.Errorf("maxAbsAVX2 n=%d: got %d, want %d", n, got, want)
+		}
+	}
+	for _, n := range []int{16, 17, 24, 32, 33} {
+		for pos := range n {
+			a := make([]int16, n)
+			a[pos] = math.MinInt16
+			if got := maxAbsAVX2(a); got != 32768 {
+				t.Fatalf("maxAbsAVX2 n=%d pos=%d: got %d, want 32768", n, pos, got)
+			}
+		}
+	}
+}
+
+// TestMaxAbsAVX2_NoOverRead is the kernel-direct over-read check: the operand
+// is a prefix of a longer allocation whose every element past the prefix is
+// -32768. Zeroed past-slice memory is the identity element of this reduction,
+// so only the planted extreme makes an over-read observable.
+func TestMaxAbsAVX2_NoOverRead(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	backing := make([]int16, 64+16)
+	for i := range backing {
+		backing[i] = math.MinInt16
+	}
+	for _, n := range []int{1, 7, 15, 16, 17, 24, 31, 32, 33, 64} {
+		a := backing[:n]
+		for i := range a {
+			a[i] = int16(i%50 - 25)
+		}
+		if got, want := maxAbsAVX2(a), maxAbsGo(a); got != want {
+			t.Fatalf("maxAbsAVX2 n=%d: got %d, want %d (read past the operand?)", n, got, want)
+		}
+		for i := range a {
+			backing[i] = math.MinInt16
+		}
+	}
+}
+
+// TestTier3Dispatch_ReachesSIMD pins the dispatch state the tier-3 SIMD paths
+// depend on. It has to be a white-box check: the kernels are bit-identical to
+// the Go references by design, so a dispatcher that silently routed every
+// call to Go would pass every parity test in this package, and the
+// kernel-direct tests above are threshold-independent by construction, so
+// they cannot notice either. Unlike the dot ops there is no SSE2 leg here:
+// below AVX2 the Go reference is the intended path. It must not call
+// t.Parallel(): it reads package-level dispatch state.
+//
+// Scope, so the next reader does not over-trust it: this pins the INPUTS the
+// dispatcher reads (the feature flag, and thresholds low enough to vectorize),
+// not that the dispatcher consults them. It kills a mis-wired flag and an
+// out-of-range threshold; it does not kill a dispatch branch deleted outright,
+// which leaves the kernel dead while every test here still passes. Closing
+// that needs the call to be observable, e.g. a counter behind a build tag.
+func TestTier3Dispatch_ReachesSIMD(t *testing.T) {
+	if hasAVX2 != cpu.X86.AVX2 {
+		t.Fatalf("hasAVX2 = %v but cpu.X86.AVX2 = %v: dispatch flag is not wired to CPU detection", hasAVX2, cpu.X86.AVX2)
+	}
+	if minAVX2MulQ15 > 32 || minAVX2Abs > 32 || minAVX2MaxAbs > 32 {
+		t.Fatalf("tier-3 AVX2 thresholds exceed two vector blocks (MulQ15 %d, Abs %d, MaxAbs %d): the ops would not vectorize at the frame lengths they were written for",
+			minAVX2MulQ15, minAVX2Abs, minAVX2MaxAbs)
+	}
+}
+
+// TestTier3AVX2Kernels_AllocFree enforces the zero-allocation contract
+// directly at the kernel boundary (the public-API alloc tests cover the
+// dispatch, these cover the kernels).
+func TestTier3AVX2Kernels_AllocFree(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	const n = 1024
+	a := make([]int16, n)
+	b := make([]int16, n)
+	dst := make([]int16, n)
+	checks := []struct {
+		name string
+		fn   func()
+	}{
+		{"mulQ15AVX2", func() { mulQ15AVX2(dst, a, b) }},
+		{"absAVX2", func() { absAVX2(dst, a) }},
+		{"maxAbsAVX2", func() { _ = maxAbsAVX2(a) }},
+	}
+	for _, c := range checks {
+		if got := testing.AllocsPerRun(100, c.fn); got != 0 {
+			t.Errorf("%s allocated %v times per run, want 0", c.name, got)
+		}
+	}
+}
+
 // TestXCorr4AMD64_LongWindowIsClamped covers the other half of the kernel's
 // n = min(len(x), len(y)-3) clamp. ShortWindowIsBounded only probes
 // len(y)-3 < len(x); ParityWithGo passes len(y) == len(x)+3, where both

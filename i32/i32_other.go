@@ -7,5 +7,7 @@ func deinterleave2I32(a, b, src []int32) { deinterleave2Go(a, b, src) }
 
 func addI32(dst, a, b []int32) { addGo(dst, a, b) }
 func subI32(dst, a, b []int32) { subGo(dst, a, b) }
+func absI32(dst, a []int32)    { absGo(dst, a) }
+func sumI32(a []int32) int32   { return sumGo(a) }
 
 func minMaxI32(res []int32) (minVal, maxVal int32) { return minMaxGo(res) }

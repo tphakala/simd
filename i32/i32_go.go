@@ -32,6 +32,31 @@ func subGo(dst, a, b []int32) {
 	}
 }
 
+// sumGo accumulates a into int32 with two's-complement wraparound. Wrapping
+// addition is associative and commutative modulo 2^32, so the SIMD lane split
+// and horizontal reduction are bit-identical to this sequential loop for every
+// input; it is the source of truth the Sum kernels are validated against.
+func sumGo(a []int32) int32 {
+	var s int32
+	for _, v := range a {
+		s += v
+	}
+	return s
+}
+
+// absGo writes the wrapping absolute value: int32 negation wraps in Go, so
+// abs(MinInt32) stays MinInt32, exactly what a 32-bit ABS/VPABSD lane
+// computes.
+func absGo(dst, a []int32) {
+	for i := range dst {
+		if a[i] < 0 {
+			dst[i] = -a[i]
+		} else {
+			dst[i] = a[i]
+		}
+	}
+}
+
 // minMaxGo returns the smallest and largest int32 in res via a single signed
 // scan. res must be non-empty (the public MinMax guards the empty case); it is
 // the bit-exact source of truth the SIMD MinMax kernels are validated against.

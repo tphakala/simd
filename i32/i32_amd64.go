@@ -65,6 +65,38 @@ func addAVX2(dst, a, b []int32)
 //go:noescape
 func subAVX2(dst, a, b []int32)
 
+// Tier-3 thresholds: one 8-wide (256-bit) vector block each, independent
+// literals rather than aliases of minAVXElements, which they happen to equal,
+// so retuning the interleave kernels cannot silently move these. Both kernels
+// gate on AVX2 (VPADDD/VPABSD are 256-bit integer ops) and are correct at any
+// length (each falls through to a scalar tail), so these are performance cuts
+// only, never a safety requirement.
+const (
+	minAVX2Sum = 8
+	minAVX2Abs = 8
+)
+
+func sumI32(a []int32) int32 {
+	if hasAVX2 && len(a) >= minAVX2Sum {
+		return sumAVX2(a)
+	}
+	return sumGo(a)
+}
+
+func absI32(dst, a []int32) {
+	if hasAVX2 && len(dst) >= minAVX2Abs {
+		absAVX2(dst, a)
+		return
+	}
+	absGo(dst, a)
+}
+
+//go:noescape
+func sumAVX2(a []int32) int32
+
+//go:noescape
+func absAVX2(dst, a []int32)
+
 // minMaxI32 dispatches the signed int32 min/max reduction. The AVX2 kernel does
 // the reduction in 8-wide VPMINSD/VPMAXSD lanes with a scalar tail, so it gates
 // on AVX2 and at least one full 8-element block; shorter slices use the pure-Go

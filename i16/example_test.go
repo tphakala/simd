@@ -36,6 +36,40 @@ func ExampleDotProduct() {
 	// Output: -65536000
 }
 
+func ExampleMulQ15() {
+	// Apply a Q15 gain of 0.5 (16384/32768) to a frame of samples. The
+	// product rounds to nearest: 1 * 16384 rounds up to 1 where a
+	// truncating Q15 multiply would give 0.
+	samples := []int16{1000, -1000, 32767, -32768, 1}
+	gain := []int16{16384, 16384, 16384, 16384, 16384}
+	out := make([]int16, len(samples))
+
+	i16.MulQ15(out, samples, gain)
+	fmt.Println(out)
+	// Output: [500 -500 16384 -16384 1]
+}
+
+func ExampleAbs() {
+	// Rectify a frame for an envelope follower. The negation wraps rather
+	// than saturating, so -32768 maps to itself: |-32768| = 32768 does not
+	// fit int16. This is the opposite of i8.Abs, which saturates by design.
+	samples := []int16{-1000, 3000, -32768, 0}
+	out := make([]int16, len(samples))
+
+	i16.Abs(out, samples)
+	fmt.Println(out)
+	// Output: [1000 3000 -32768 0]
+}
+
+func ExampleMaxAbs() {
+	// Headroom probe before applying gain: |-32768| = 32768 does not fit
+	// int16, which is why the result is an int.
+	frame := []int16{100, -32768, 3000, 15}
+
+	fmt.Println(i16.MaxAbs(frame))
+	// Output: 32768
+}
+
 func ExampleXCorr() {
 	// Correlate a short pattern against a longer signal at every lag. The
 	// pattern occurs at lag 2, which is where the correlation peaks.

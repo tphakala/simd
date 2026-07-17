@@ -128,11 +128,112 @@ func TestAVX2Kernels_AllocFree(t *testing.T) {
 		{"addAVX2", func() { addAVX2(dst, a, b) }},
 		{"subAVX2", func() { subAVX2(dst, a, b) }},
 		{"minMaxAVX2", func() { _, _ = minMaxAVX2(a) }},
+		{"sumAVX2", func() { _ = sumAVX2(a) }},
+		{"absAVX2", func() { absAVX2(dst, a) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(100, c.fn); got != 0 {
 			t.Errorf("%s allocated %v times per run, want 0", c.name, got)
 		}
+	}
+}
+
+// TestSumAVX2_ParityWithGo drives the kernel directly, over lengths the
+// dispatcher would never route to it, so a threshold change cannot quietly
+// reduce this to a test of the Go reference against itself. The forced
+// overflow leg wraps the accumulator in the lanes and in the tail.
+func TestSumAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range tier3Lengths {
+		a := genI32(n, 61)
+		if got, want := sumAVX2(a), sumGo(a); got != want {
+			t.Errorf("sumAVX2 n=%d: got %d, want %d", n, got, want)
+		}
+	}
+	for n := 1; n <= 24; n++ {
+		a := make([]int32, n)
+		for i := range a {
+			a[i] = math.MaxInt32 - int32(i%2)
+		}
+		if got, want := sumAVX2(a), sumGo(a); got != want {
+			t.Errorf("sumAVX2 overflow n=%d: got %d, want %d", n, got, want)
+		}
+	}
+}
+
+// TestSumAVX2_NoOverRead is the kernel-direct over-read check: the operand is
+// a prefix of a longer allocation whose every element past the prefix is
+// poisoned. Zeroed past-slice memory is the identity element of this
+// reduction, so only the poison makes an over-read observable. The poison is
+// deliberately not an extreme; see sumOverReadPoison for why MinInt32 would
+// hide a whole-block over-read here.
+func TestSumAVX2_NoOverRead(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	backing := make([]int32, 64+8)
+	for i := range backing {
+		backing[i] = sumOverReadPoison
+	}
+	for _, n := range []int{1, 3, 7, 8, 9, 11, 16, 17, 33, 64} {
+		a := backing[:n]
+		for i := range a {
+			a[i] = int32(i - 5)
+		}
+		if got, want := sumAVX2(a), sumGo(a); got != want {
+			t.Fatalf("sumAVX2 n=%d: got %d, want %d (read past the operand?)", n, got, want)
+		}
+		for i := range a {
+			backing[i] = sumOverReadPoison
+		}
+	}
+}
+
+// TestAbsAVX2_ParityWithGo drives the kernel directly across the full sweep;
+// the wrap input MinInt32 rides at index 0 of every non-empty case.
+func TestAbsAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range tier3Lengths {
+		a := genI32(n, 62)
+		if n > 0 {
+			a[0] = math.MinInt32
+		}
+		got := make([]int32, n)
+		want := make([]int32, n)
+		absAVX2(got, a)
+		absGo(want, a)
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("absAVX2 n=%d: dst[%d] = %d, want %d", n, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// TestTier3Dispatch_ReachesSIMD pins the dispatch state Sum and Abs depend
+// on. It has to be a white-box check: the kernels are bit-identical to the Go
+// references by design, so a dispatcher that silently routed every call to Go
+// would pass every parity test in this package. Below AVX2 the Go reference
+// is the intended path. It must not call t.Parallel(): it reads
+// package-level dispatch state.
+//
+// Scope, so the next reader does not over-trust it: this pins the INPUTS the
+// dispatcher reads (the feature flag, and thresholds low enough to vectorize),
+// not that the dispatcher consults them. It kills a mis-wired flag and an
+// out-of-range threshold; it does not kill a dispatch branch deleted outright,
+// which leaves the kernel dead while every test here still passes. Closing
+// that needs the call to be observable, e.g. a counter behind a build tag.
+func TestTier3Dispatch_ReachesSIMD(t *testing.T) {
+	if hasAVX2 != cpu.X86.AVX2 {
+		t.Fatalf("hasAVX2 = %v but cpu.X86.AVX2 = %v: dispatch flag is not wired to CPU detection", hasAVX2, cpu.X86.AVX2)
+	}
+	if minAVX2Sum > 16 || minAVX2Abs > 16 {
+		t.Fatalf("tier-3 AVX2 thresholds exceed two vector blocks (Sum %d, Abs %d): the ops would not vectorize at the lengths they were written for",
+			minAVX2Sum, minAVX2Abs)
 	}
 }
 

@@ -84,6 +84,30 @@ func FuzzI32MinMax(f *testing.F) {
 	})
 }
 
+// FuzzI32SumAbs differentially fuzzes the wrapping Sum reduction and the
+// wrapping Abs map. Sum is checked against the reference and an int64 oracle
+// so a fault in sumGo itself cannot hide by agreeing with the kernels; Abs is
+// checked for parity, which includes the MinInt32 wrap whenever the raw bytes
+// produce it.
+func FuzzI32SumAbs(f *testing.F) {
+	addLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		a := i32sFromBits(raw)
+		got := Sum(a)
+		if want := sumGo(a); got != want {
+			t.Fatalf("Sum = %d, want %d (reference, len=%d)", got, want, len(a))
+		}
+		if want := sumOracle(a); got != want {
+			t.Fatalf("Sum = %d, want %d (int64 oracle, len=%d)", got, want, len(a))
+		}
+		dst := make([]int32, len(a))
+		ref := make([]int32, len(a))
+		Abs(dst, a)
+		absGo(ref, a)
+		equalI32(t, "Abs", dst, ref)
+	})
+}
+
 func FuzzI32Interleave(f *testing.F) {
 	addLenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {

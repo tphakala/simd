@@ -93,6 +93,49 @@ func dotI16(a, b []int16) int32 {
 	return dotGo(a, b)
 }
 
+// Tier-3 thresholds: one 8-wide (.8H) vector block each. Like minNEONDot they
+// are independent literals rather than aliases of minNEONElements, so retuning
+// one op can never silently move another's cut. All three kernels are correct
+// at any length (each falls through to a scalar tail), so these are
+// performance cuts only, never a safety requirement.
+const (
+	minNEONMulQ15 = 8
+	minNEONAbs    = 8
+	minNEONMaxAbs = 8
+)
+
+func mulQ15I16(dst, a, b []int16) {
+	if hasNEON && len(dst) >= minNEONMulQ15 {
+		mulQ15NEON(dst, a, b)
+		return
+	}
+	mulQ15Go(dst, a, b)
+}
+
+func absI16(dst, a []int16) {
+	if hasNEON && len(dst) >= minNEONAbs {
+		absNEON(dst, a)
+		return
+	}
+	absGo(dst, a)
+}
+
+func maxAbsI16(a []int16) int {
+	if hasNEON && len(a) >= minNEONMaxAbs {
+		return maxAbsNEON(a)
+	}
+	return maxAbsGo(a)
+}
+
+//go:noescape
+func mulQ15NEON(dst, a, b []int16)
+
+//go:noescape
+func absNEON(dst, a []int16)
+
+//go:noescape
+func maxAbsNEON(a []int16) int
+
 //go:noescape
 func dotNEON(a, b []int16) int32
 

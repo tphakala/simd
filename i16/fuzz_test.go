@@ -127,6 +127,93 @@ func FuzzI16Dot(f *testing.F) {
 	})
 }
 
+// FuzzI16MulQ15 differentially fuzzes the rounding Q15 multiply against the
+// pure-Go reference and the int64 oracle. The raw bytes reach MinInt16
+// freely, so the fuzzer readily lands on the one wrapping product; the
+// shortened-operand probes cover every clamp order.
+func FuzzI16MulQ15(f *testing.F) {
+	addLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := i16sFromBits(raw)
+		h := len(v) / 2
+		a, b := v[:h], v[h:2*h]
+		dst := make([]int16, h)
+		ref := make([]int16, h)
+		MulQ15(dst, a, b)
+		mulQ15Go(ref, a, b)
+		equalI16(t, "MulQ15", dst, ref)
+		for i := range dst {
+			if want := mulQ15Oracle(a[i], b[i]); dst[i] != want {
+				t.Fatalf("MulQ15(%d, %d) = %d, want %d (oracle)", a[i], b[i], dst[i], want)
+			}
+		}
+		// Mismatched lengths must clamp, not read or write out of bounds; each
+		// operand is the short one in turn.
+		if h > 1 {
+			short := make([]int16, h-1)
+			MulQ15(short, a, b)
+			for i := range short {
+				if want := mulQ15Oracle(a[i], b[i]); short[i] != want {
+					t.Fatalf("MulQ15 short-dst [%d] = %d, want %d", i, short[i], want)
+				}
+			}
+			// A short a or b clamps n to h-1, so the final dst element must
+			// survive untouched. Assert that: without a sentinel these calls
+			// would only prove the absence of a panic.
+			const sentinel = int16(-21846)
+			for _, shortA := range []bool{true, false} {
+				for i := range dst {
+					dst[i] = sentinel
+				}
+				if shortA {
+					MulQ15(dst, a[:h-1], b)
+				} else {
+					MulQ15(dst, a, b[:h-1])
+				}
+				for i := range dst[:h-1] {
+					if want := mulQ15Oracle(a[i], b[i]); dst[i] != want {
+						t.Fatalf("MulQ15 shortA=%v [%d] = %d, want %d", shortA, i, dst[i], want)
+					}
+				}
+				if dst[h-1] != sentinel {
+					t.Fatalf("MulQ15 shortA=%v wrote dst[%d] = %d past the clamp, want the sentinel %d", shortA, h-1, dst[h-1], sentinel)
+				}
+			}
+		}
+	})
+}
+
+// FuzzI16AbsMaxAbs differentially fuzzes Abs and MaxAbs together and asserts
+// the relation between them: MaxAbs equals the int-widened maximum over
+// Abs's output, where the only element Abs leaves negative (-32768, the
+// wrap) contributes its true magnitude 32768.
+func FuzzI16AbsMaxAbs(f *testing.F) {
+	addLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		a := i16sFromBits(raw)
+		dst := make([]int16, len(a))
+		ref := make([]int16, len(a))
+		Abs(dst, a)
+		absGo(ref, a)
+		equalI16(t, "Abs", dst, ref)
+		got := MaxAbs(a)
+		if want := maxAbsGo(a); got != want {
+			t.Fatalf("MaxAbs = %d, want %d (len=%d)", got, want, len(a))
+		}
+		want := 0
+		for i := range dst {
+			av := int(dst[i])
+			if av < 0 { // only the -32768 wrap survives Abs negative
+				av = 32768
+			}
+			want = max(want, av)
+		}
+		if got != want {
+			t.Fatalf("MaxAbs = %d inconsistent with Abs-derived max %d (len=%d)", got, want, len(a))
+		}
+	})
+}
+
 // FuzzI16XCorr differentially fuzzes multi-lag correlation. The high-value bug
 // class is the lag blocking: the kernel evaluates 4 lags per call and the
 // dispatcher finishes the remainder with the dot kernel, so arbitrary lag

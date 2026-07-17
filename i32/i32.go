@@ -1,9 +1,10 @@
 // Package i32 provides SIMD-accelerated operations on int32 slices.
 //
 // It is the integer counterpart to the f32/f64 packages, covering the
-// element-wise integer arithmetic, signed min/max reduction, and channel
-// (de)interleaving that integer-domain DSP hot loops need where the per-sample
-// work is integer arithmetic rather than floating-point math.
+// element-wise integer arithmetic, the signed min/max and wrapping-sum
+// reductions, and the channel (de)interleaving that integer-domain DSP hot
+// loops need where the per-sample work is integer arithmetic rather than
+// floating-point math.
 //
 // All functions automatically select the optimal implementation based on
 // runtime CPU feature detection and fall back to a pure-Go implementation on

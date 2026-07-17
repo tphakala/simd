@@ -92,16 +92,18 @@ deinterleave2_neon_loop1:
 deinterleave2_neon_done:
     RET
 
-// Arithmetic, decorrelation and fixed-predictor kernels (NEON / ASIMD).
+// Arithmetic and reduction kernels (NEON / ASIMD).
 //
-// These do integer ALU work on .4S vectors (4 int32/iter): ADD/SUB/SSHR/SHL and
-// the AND/ORR/MOVI used for the mid/side parity bit. The Go assembler has no
-// mnemonics for these vector ops, so they are hand-encoded as WORD with the
-// decoded GNU form in the trailing comment (cross-checked by asmcheck_test.go).
-// Each vector lane is 32 bits, so the SIMD path wraps exactly like the int32 Go
-// reference; the scalar tails use the W-register (32-bit) ALU forms (ADDW/SUBW/
-// ASRW/...) so they wrap identically. Dispatched from i32_arm64.go gated on the
-// NEON CPU feature, with the pure-Go reference as the fallback.
+// These do integer ALU work on .4S vectors (4 int32/iter). Each vector lane is
+// 32 bits, so the SIMD path wraps exactly like the int32 Go reference; the
+// scalar tails use the W-register (32-bit) ALU forms (ADDW/SUBW/...) so they
+// wrap identically. SMIN/SMAX/SMINV/SMAXV and vector ABS have no Go assembler
+// mnemonics and are hand-encoded as WORD with the decoded GNU form in the
+// trailing comment (cross-checked by asmcheck_test.go). The ADD/SUB vector
+// WORDs below are hand-encoded too even though the assembler does accept the
+// native VADD/VSUB spellings on .S4 operands (sumNEON uses one); they stay as
+// verified WORD encodings rather than churn. Dispatched from i32_arm64.go
+// gated on the NEON CPU feature, with the pure-Go reference as the fallback.
 
 // func addNEON(dst, a, b []int32)
 TEXT ·addNEON(SB), NOSPLIT, $0-72
@@ -220,4 +222,79 @@ mm_neon_tail:
 mm_neon_done:
     MOVW R5, minVal+24(FP)
     MOVW R6, maxVal+28(FP)
+    RET
+
+// func sumNEON(a []int32) int32
+// Wrapping int32 sum: VADD folds 4-lane blocks into a vector accumulator,
+// ADDV reduces it to a scalar, and a 32-bit scalar tail adds the (n mod 4)
+// remainder. Every add wraps in a 32-bit lane, and wrapping addition is
+// associative, so the lane split and reduction order are bit-identical to
+// sumGo for every input, including forced overflow. The slice arrives
+// pre-clamped from the public Sum, so a_len is the trusted element count.
+TEXT ·sumNEON(SB), NOSPLIT, $0-28
+    MOVD a_base+0(FP), R1
+    MOVD a_len+8(FP), R3
+
+    VEOR V0.B16, V0.B16, V0.B16
+    LSR  $2, R3, R4            // R4 = n / 4
+    CBZ  R4, sum_neon_reduce
+
+sum_neon_loop4:
+    VLD1.P 16(R1), [V1.S4]
+    VADD V1.S4, V0.S4, V0.S4   // accumulate (wrapping)
+    SUB  $1, R4
+    CBNZ R4, sum_neon_loop4
+
+sum_neon_reduce:
+    VADDV V0.S4, V0            // ADDV S0, V0.4S
+    FMOVS F0, R5               // vector partial sum (low 32 = int32)
+
+    AND  $3, R3
+    CBZ  R3, sum_neon_done
+
+sum_neon_scalar:
+    MOVW.P 4(R1), R6
+    ADDW R6, R5, R5            // 32-bit add: wraps like sumGo
+    SUB  $1, R3
+    CBNZ R3, sum_neon_scalar
+
+sum_neon_done:
+    MOVW R5, ret+24(FP)
+    RET
+
+// func absNEON(dst, a []int32)
+// Wrapping absolute value, 4 lanes per iteration: vector ABS wraps at the
+// type minimum (abs(MinInt32) = MinInt32 in a 32-bit lane), which is absGo's
+// contract. The scalar tail computes |v| in a 64-bit GPR, where -(MinInt32)
+// is +2^31, and the MOVW store keeps the low 32 bits, wrapping it back to
+// MinInt32 identically.
+TEXT ·absNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+
+    LSR  $2, R3, R4            // R4 = n / 4
+    CBZ  R4, abs_neon_remainder
+
+abs_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]
+    WORD $0x4EA0B801           // ABS V1.4S, V0.4S
+    VST1.P [V1.S4], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, abs_neon_loop4
+
+abs_neon_remainder:
+    AND  $3, R3
+    CBZ  R3, abs_neon_done
+
+abs_neon_scalar:
+    MOVW.P 4(R1), R5           // v, sign-extended
+    NEG  R5, R6                // -v
+    CMP  $0, R5
+    CSEL LT, R6, R5, R5        // |v| = v < 0 ? -v : v   (can be 2^31)
+    MOVW.P R5, 4(R0)           // low 32 bits: 2^31 wraps to MinInt32
+    SUB  $1, R3
+    CBNZ R3, abs_neon_scalar
+
+abs_neon_done:
     RET
