@@ -89,6 +89,8 @@
 //
 // Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
 //
+// Sliding-window argmin (f32): MinIdxOfSum, MinIdxOfSumRows (batched sliding-window argmin of a[i]+k[base+r*slide+i], first-index-wins ties, bit-exact across all paths)
+//
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames) - fused real-input short-time Fourier transform with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //
 // Integer DSP (i16): Interleave2, Deinterleave2, DotProduct, DotProductUnsafe, XCorr (widening int16 x int16 -> wrapping int32; ARM64 SMLAL/SMLAL2, amd64 PMADDWD/VPMADDWD; XCorr evaluates 4 correlation lags per kernel call), Abs, MaxAbs, MulQ15 (wrapping 16-bit absolute value, widened abs-max, rounding Q15 multiply)

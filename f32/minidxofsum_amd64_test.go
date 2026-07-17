@@ -3,6 +3,7 @@
 package f32
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
@@ -195,4 +196,43 @@ func TestMinIdxOfSumRowsDispatch_ReachesAVX2(t *testing.T) {
 			}
 		}
 	}
+}
+
+// runMinIdxOfSumRowsKernelBench drives an AVX2 row kernel of the given width
+// directly at the dispatcher's exact slicing for a slide +1 block (rev 0,
+// base 0): k is the n+(width-1) union of the block's row windows, matching
+// what minIdxOfSumRows32 in f32_amd64.go passes for r == 0.
+func runMinIdxOfSumRowsKernelBench(b *testing.B, width int, kernel func([]float32, []int32, []float32, []float32, int)) {
+	b.Helper()
+	for _, n := range []int{11, 14, 17} {
+		a := make([]float32, n)
+		kUnion := make([]float32, n+width-1)
+		for i := range a {
+			a[i] = float32(i%100) + 0.5
+		}
+		for i := range kUnion {
+			kUnion[i] = float32((i+37)%100) + 0.5
+		}
+		vals := make([]float32, width)
+		idxs := make([]int32, width)
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				kernel(vals, idxs, a, kUnion, 0)
+			}
+		})
+	}
+}
+
+func BenchmarkMinIdxOfSumRows8AVX2_N(b *testing.B) {
+	if !cpu.X86.AVX2 {
+		b.Skip("AVX2 not available; minIdxOfSumRows8AVX2 requires AVX2")
+	}
+	runMinIdxOfSumRowsKernelBench(b, 8, minIdxOfSumRows8AVX2)
+}
+
+func BenchmarkMinIdxOfSumRows4AVX2_N(b *testing.B) {
+	if !cpu.X86.AVX2 {
+		b.Skip("AVX2 not available; minIdxOfSumRows4AVX2 requires AVX2")
+	}
+	runMinIdxOfSumRowsKernelBench(b, 4, minIdxOfSumRows4AVX2)
 }

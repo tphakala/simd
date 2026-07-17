@@ -3,6 +3,7 @@
 package f32
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
@@ -210,5 +211,32 @@ func TestMinIdxOfSumRows_NEONSignedZero(t *testing.T) {
 	if idxs[0] != 0 || math.Float32bits(vals[0]) != negZeroBits {
 		t.Errorf("signed-zero row 0 = (%d, %#x), want (0, %#x)",
 			idxs[0], math.Float32bits(vals[0]), negZeroBits)
+	}
+}
+
+// BenchmarkMinIdxOfSumRows4NEON_N drives the minIdxOfSumRows4NEON kernel
+// directly at the dispatcher's exact slicing for a slide +1, four-row block
+// (rev 0, base 0): k is the n+3 union of the four rows' windows, matching
+// what minIdxOfSumRows32 in f32_arm64.go passes for r == 0.
+func BenchmarkMinIdxOfSumRows4NEON_N(b *testing.B) {
+	if !hasNEON {
+		b.Skip("NEON not available")
+	}
+	for _, n := range []int{11, 14, 17} {
+		a := make([]float32, n)
+		kUnion := make([]float32, n+3)
+		for i := range a {
+			a[i] = float32(i%100) + 0.5
+		}
+		for i := range kUnion {
+			kUnion[i] = float32((i+37)%100) + 0.5
+		}
+		vals := make([]float32, 4)
+		idxs := make([]int32, 4)
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				minIdxOfSumRows4NEON(vals, idxs, a, kUnion, 0)
+			}
+		})
 	}
 }

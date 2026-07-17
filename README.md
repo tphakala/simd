@@ -333,6 +333,15 @@ Results are identical to the per-row path either way.
 | **Utility**| `Reverse(dst, src)`                   | Reverse slice order                | 8x / 4x          |
 |            | `AddSub(sum, diff, a, b)`             | Fused sum and difference           | 8x / 4x          |
 
+**Sliding-window argmin** (batched slide-window minimum search, f32-specific; no f64 equivalent):
+
+| Function | Description | SIMD Width |
+| --- | --- | --- |
+| `MinIdxOfSum(a, b) (int, float32)` | Pairwise argmin of `a[i]+b[i]`, ties resolve to the lowest index | Pure Go |
+| `MinIdxOfSumRows(vals, idxs, a, k, base, slide)` | Batched sliding-window argmin: row `r` scores `a[i]+k[base+r*slide+i]` for every `i`, writing the winning value and index per row | 8x/4x (AVX2) / 4x (NEON) |
+
+`MinIdxOfSum` stays scalar on every path by design: at the motivating sizes (n around 11 to 17) dispatch overhead eats a pairwise kernel, so `MinIdxOfSumRows` exists to batch many argmin rows into one call. `MinIdxOfSumRows` routes slide +1 and slide -1 (the sliding-window shapes) through SIMD, eight-then-four rows per block on AMD64 AVX2 and four rows per block on ARM64 NEON, composing any remainder rows with the scalar path; non-unit slides and hosts without the SIMD tier take the pure-Go reference. Every path, including the remainder rows and the fallback, is bit-exact: each candidate is a single float32 addition (never fused), ties resolve to the lowest index, and NaN candidates never displace the incumbent.
+
 ### `f16` - float16 (Half-Precision) Operations
 
 IEEE 754 half-precision floating-point operations, optimized for ML inference, audio DSP, and memory-bandwidth-bound workloads.
