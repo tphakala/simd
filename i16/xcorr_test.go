@@ -165,8 +165,15 @@ func TestXCorr_ExactWindow(t *testing.T) {
 // Note all-MinInt16 operands are sign-symmetric, so this catches a miscounted
 // element but NOT a sign or lane error; TestXCorr_MatchesDotProductAtEveryLag
 // with genI16 data is what covers those.
+//
+// The lengths must keep reaching every kernel path that reorders the sum, since
+// wrapping is the property that makes reordering legal at all. 24 and 25 are
+// here for that: XCorr routes len(x) >= 16 to AVX2, so the residues mod 16 must
+// include some >= 8 or the amd64 8-wide block (which sums the remainder BEFORE
+// the 16-wide body) never runs under forced overflow. {8,9,16,17,33} alone left
+// AVX2 seeing only residues {0,1,1}.
 func TestXCorr_MinInt16(t *testing.T) {
-	for _, xn := range []int{8, 9, 16, 17, 33} {
+	for _, xn := range []int{8, 9, 16, 17, 24, 25, 33} {
 		for _, lags := range []int{1, 4, 5, 8, 9} {
 			x := make([]int16, xn)
 			y := make([]int16, xn+lags-1)

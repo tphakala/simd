@@ -488,8 +488,44 @@ xcorr4_sse2_store:
     RET
 
 // func xcorr4AVX2(dst []int32, x, y []int16)
-// As xcorr4SSE2 at twice the width; VPMADDWD's three-operand form also spares
-// the reload-into-destination dance.
+// As xcorr4SSE2 at twice the width, plus an 8-wide tier SSE2 has no need for;
+// VPMADDWD's three-operand form also spares the reload-into-destination dance.
+//
+// An 8-wide XMM block runs BEFORE the 16-wide loop, so a remainder of 8-15
+// elements costs one vector block plus at most 7 scalar iterations rather than
+// 8-15 scalar iterations across four lags. Without it AVX2 lost to SSE2 across
+// half the len(x) domain, which is exactly where the dispatcher prefers it; see
+// #145 for the measurements. A narrow tier below the wide body is the usual
+// shape here (f32/f32_amd64.s dot32_loop8_check, f64/f64_amd64.s var_avx_loop4),
+// but both of those put it after the body, and get it for free from their
+// unroll: at float32 a YMM holds 8, so the 8-wide tier IS one register. At int16
+// a YMM holds 16, so the tier below the body has to be written by hand, and it
+// goes before the body for the reason below.
+//
+// Accumulating into X4-X7 with VEX.128 writes is what forces that order, not
+// taste. A VEX.128 write zeroes bits 255:128 of its destination (the hazard the
+// f32 kernels flag as "VEX scalar ops zero upper YMM"), so a block running AFTER
+// the 16-wide loop would silently discard that loop's upper-lane sums. Running
+// it FIRST, while Y4-Y7 are still freshly VPXOR'd, means the zeroing writes zero
+// over zero; the loop then accumulates on top with VEX.256, which preserves the
+// low lane, and the fold needs no extra instructions. Mixing VEX.128 and VEX.256
+// costs nothing: the transition penalty is a legacy-SSE-encoding problem, not a
+// VEX one. (A block that LOADED VEX.128 but COMPUTED VEX.256 could sit after the
+// body instead, since the zeroed upper lanes would contribute zero. That shape
+// would not need the reordering, nor the argument below. This one does.)
+//
+// Summing the remainder before the body is bit-exact only because the
+// accumulation wraps: wrapping int32 addition is associative and commutative, so
+// regrouping the terms cannot change the result. The regrouping is real, not
+// just a lane permutation: these 8 elements used to go through the scalar tail
+// one product at a time, and now go through VPMADDWD, which adds each adjacent
+// pair before accumulating. XCorr's doc comment guarantees to callers the
+// wrapping this rests on. VPMADDWD itself is safe for the same reason: a pair of
+// 0x8000*0x8000 products sums to 0x80000000 and it WRAPS there, it does not
+// saturate. A saturating accumulator could not be reordered like this at all.
+//
+// At len(x)%16 == 0 the block is branched over and the kernel pays only the
+// TESTQ and its predicted-taken JZ.
 TEXT ·xcorr4AVX2(SB), NOSPLIT, $0-72
     MOVQ dst_base+0(FP), DI
     MOVQ x_base+24(FP), SI
@@ -512,8 +548,31 @@ xcorr4_avx2_empty:
     XORQ CX, CX
 
 xcorr4_avx2_blocks:
+    TESTQ $8, CX               // n % 16 >= 8? one XMM block absorbs the 8
+    JZ   xcorr4_avx2_blocks16
+
+    VMOVDQU (SI), X0           // x[0..8), reused by all four lags
+    VMOVDQU (BX), X1           // lag 0
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X4, X4          // VEX-128 zeroes Y4[255:128]; it is still zero
+    VMOVDQU 2(BX), X1          // lag 1
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X5, X5
+    VMOVDQU 4(BX), X1          // lag 2
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X6, X6
+    VMOVDQU 6(BX), X1          // lag 3
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X7, X7
+    ADDQ $16, SI               // 8 int16 consumed from x
+    ADDQ $16, BX               // y slides by the same 8, lag offsets unchanged
+
+    // The block count is computed AFTER the 8-wide block, not before, so SHRQ's
+    // own ZF still drives the branch below; computing it first would need a
+    // separate TESTQ AX, AX.
+xcorr4_avx2_blocks16:
     MOVQ CX, AX
-    SHRQ $4, AX                // AX = n / 16
+    SHRQ $4, AX                // AX = n / 16, the 16-wide block count
     JZ   xcorr4_avx2_fold
 
 xcorr4_avx2_loop16:
@@ -565,7 +624,7 @@ xcorr4_avx2_fold:
     VPADDD X0, X7, X7
     MOVQ X7, R11               // lag 3
 
-    ANDQ $15, CX
+    ANDQ $7, CX                // not $15: the 8-wide block above took that bit
     JZ   xcorr4_avx2_store
 
 xcorr4_avx2_scalar:
