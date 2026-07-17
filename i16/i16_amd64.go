@@ -36,8 +36,13 @@ const (
 )
 
 // XCorr vectorizes once x is long enough that reusing each x load across four
-// lags pays for the kernel call. The AVX2 body needs 16 elements; below that
-// SSE2's 8 still wins, and below 8 the Go reference runs.
+// lags pays for the kernel call, and below 8 the Go reference runs.
+//
+// Both kernels vectorize from 8 (see xcorr4AVX2's 8-wide block), so the cut at
+// 16 is not about AVX2 needing 16 elements to vectorize. It is that AVX2's fold
+// pays four extra VEXTRACTI128 plus VZEROUPPER, a flat cost only the 16-wide
+// body amortizes: measured at len(x) 8-15 AVX2 is 5-13% slower than SSE2, and at
+// len(x) >= 16 it is never slower.
 const (
 	minSSE2XCorr = 8
 	minAVX2XCorr = 16
