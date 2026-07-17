@@ -110,6 +110,9 @@ func TestMinIdxOfSum_Contract(t *testing.T) {
 
 		{"neg_inf_wins", z4, []float32{1, 2, ninf, 3}, 2, ninf},
 		{"pos_inf_never_wins", z4, []float32{5, pinf, 1, pinf}, 2, 1},
+		// Pins the documented promise: candidates all +Inf yield (0, +Inf)
+		// (ties, first wins; nothing ever compares strictly less).
+		{"all_pos_inf", z4, []float32{pinf, pinf, pinf, pinf}, 0, pinf},
 
 		{"empty_nil_nil", nil, nil, -1, 0},
 		{"empty_nil_nonempty", nil, []float32{1, 2, 3}, -1, 0},

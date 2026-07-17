@@ -566,12 +566,9 @@ func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide
 				minIdxOfSumRows4NEON(vals[r:r+4], idxs[r:r+4], a, k[off-3:], 1)
 			}
 		}
-		for ; r < len(vals); r++ {
-			off := base + r*slide
-			i, v := minIdxOfSumGo(a, k[off:off+len(a)])
-			vals[r] = v
-			idxs[r] = int32(i)
-		}
+		// Leftover rows (fewer than a 4-wide block) compose with the scalar
+		// reference, keeping the tie-break/NaN/rounding contract in one place.
+		minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
 		return
 	}
 	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)

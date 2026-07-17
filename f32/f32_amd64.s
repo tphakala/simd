@@ -7386,7 +7386,8 @@ minidxofsumrows8_avx2_write:
 // func minIdxOfSumRows4AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
 // The 4-wide (XMM) sibling of minIdxOfSumRows8AVX2: same lane-per-row argmin-of-
 // sum, four rows per block, used for the 4-row sub-block a row count leaves after
-// the 8-wide blocks (rows 11-17 decompose as 8+3 and 8+4+2, hence this kernel).
+// the 8-wide blocks (a count near 11 to 17 can leave a 4-or-more remainder,
+// e.g. 12 -> 8+4, 14 -> 8+4+2, hence this kernel).
 // The k union is n+3 wide; rev == 1 reverses the four lanes with VPERMILPS imm
 // [3,2,1,0]. This kernel is VEX.128-only (no YMM touched), so VZEROUPPER is not
 // required before RET.

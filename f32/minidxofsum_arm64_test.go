@@ -83,9 +83,11 @@ func TestMinIdxOfSumRows4NEON_ParityWithGo(t *testing.T) {
 
 // TestMinIdxOfSumRows4NEON_LengthExact allocates every buffer with len == cap ==
 // exactly the span the kernel may touch (vals/idxs are 4; k is n+3, the union of
-// the four rows' windows). Run under -race in the normal suite, any read past
-// the slice is likely to fault or trip the race detector on adjacent
-// allocations. Both rev values.
+// the four rows' windows), exercising the kernel at the tight window with no
+// trailing slack. This checks correctness at the exact span; a deliberate tail
+// over-read is caught by TestMinIdxOfSumRows4NEON_OverReadPoison (a small heap
+// over-read alone neither faults nor trips -race on hand-written asm loads, so
+// exact length is a parity check, not an over-read detector). Both rev values.
 func TestMinIdxOfSumRows4NEON_LengthExact(t *testing.T) {
 	if !hasNEON {
 		t.Skip("NEON not available")
@@ -117,6 +119,63 @@ func TestMinIdxOfSumRows4NEON_LengthExact(t *testing.T) {
 			for l := range 4 {
 				if idxs[l] != refIdxs[l] || !bitsEqF32(vals[l], refVals[l]) {
 					t.Fatalf("n=%d rev=%d lane=%d: kernel (%d,%#x) ref (%d,%#x)",
+						n, rev, l, idxs[l], math.Float32bits(vals[l]),
+						refIdxs[l], math.Float32bits(refVals[l]))
+				}
+			}
+		}
+	}
+}
+
+// TestMinIdxOfSumRows4NEON_OverReadPoison plants a min-winning poison (-Inf) in a
+// full lane-width block immediately past the kernel's valid k window (both rev
+// values read k[0:n+3] ascending) and asserts the result is unchanged. a and the
+// valid window are finite, so every real candidate is finite and a[i] + (-Inf) =
+// -Inf strictly wins the less-than min: if a future edit over-reads the k tail by
+// even one element, the poison flips that lane's (idx, val) and the test fails
+// loudly. This is the detector the +Inf-padded parity and LengthExact tests
+// cannot be: +Inf is the min-reduction identity (an over-read into it never wins,
+// so it stays invisible), and a small heap over-read does not fault.
+func TestMinIdxOfSumRows4NEON_OverReadPoison(t *testing.T) {
+	if !hasNEON {
+		t.Skip("NEON not available")
+	}
+	const width = 4
+	neginf := float32(math.Inf(-1))
+
+	for n := 1; n <= 40; n++ {
+		for _, rev := range []int{0, 1} {
+			valid := n + width - 1 // the exact k span the kernel reads
+			k := make([]float32, valid+width)
+			for i := range valid {
+				k[i] = float32((i*7)%23)*0.5 - 3.0 // finite, controlled
+			}
+			for i := valid; i < len(k); i++ {
+				k[i] = neginf // a full width-block of min-winning poison
+			}
+			// One finite guard element behind a: a buggy kernel's extra
+			// candidate also broadcasts a[n], and 0 + (-Inf) = -Inf still
+			// wins, so detection never depends on uncontrolled heap bits.
+			aBack := make([]float32, n+1)
+			for i := range n {
+				aBack[i] = float32((i*5)%17)*0.25 + 0.5 // finite
+			}
+			a := aBack[:n]
+
+			vals := make([]float32, width)
+			idxs := make([]int32, width)
+			minIdxOfSumRows4NEON(vals, idxs, a, k, rev)
+
+			// Reference over ONLY the valid window (poison sliced off) is what a
+			// non-over-reading kernel must reproduce.
+			refVals := make([]float32, width)
+			refIdxs := make([]int32, width)
+			base, slide := refBaseSlideForRev(rev)
+			minIdxOfSumRowsGo(refVals, refIdxs, a, k[:valid], base, slide)
+
+			for l := range width {
+				if idxs[l] != refIdxs[l] || !bitsEqF32(vals[l], refVals[l]) {
+					t.Fatalf("n=%d rev=%d lane=%d: kernel (%d,%#x) ref (%d,%#x): over-read into -Inf poison?",
 						n, rev, l, idxs[l], math.Float32bits(vals[l]),
 						refIdxs[l], math.Float32bits(refVals[l]))
 				}

@@ -513,15 +513,7 @@ func FuzzF32MinIdxOfSumRows(f *testing.F) {
 		rows := 1 + int(raw[1])%8
 		slide := int(raw[2]%3) - 1 // -1, 0, +1
 
-		// windowLayout keeps min offset at 0 and covers the max offset.
-		minMul, maxMul := 0, 0
-		if slide >= 0 {
-			maxMul = slide * (rows - 1)
-		} else {
-			minMul = slide * (rows - 1)
-		}
-		base := -minMul
-		klen := base + maxMul + n + 3
+		base, klen := windowLayout(rows, n, slide)
 
 		pool := f32sUnit(raw[3:])
 		if len(pool) < n+klen {

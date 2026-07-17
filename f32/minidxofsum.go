@@ -10,8 +10,9 @@ import "math"
 // candidates are all NaN returns index 0. Returns (-1, 0) for empty input.
 //
 // MinIdxOfSum is scalar on every path by design: at the motivating sizes
-// (n around 11 to 17) dispatch overhead eats a pairwise kernel. Use
-// MinIdxOfSumRows to batch many argmin rows into one call.
+// (n around 11 to 17) a pairwise kernel projects to cap near 1.5x, not
+// enough to justify a separate assembly path. Use MinIdxOfSumRows to
+// batch many argmin rows into one call.
 // a and b are read-only; the call allocates nothing.
 func MinIdxOfSum(a, b []float32) (int, float32) {
 	return minIdxOfSumGo(a, b)
@@ -58,12 +59,12 @@ func MinIdxOfSumRows(vals []float32, idxs []int32, a, k []float32, base, slide i
 	// Walk the row offsets incrementally instead of computing the extreme
 	// row as base+(m-1)*slide: the multiplication can wrap for adversarial
 	// slide values and bypass the bound. Incremental addition cannot: off
-	// is confirmed within [0, lim] before each step, so a single wrapping
-	// add always lands negative and the next check catches it. O(m) is
-	// noise next to the O(m*n) the operation itself performs.
+	// is confirmed within [0, lim] before each step, so a single oversized
+	// step lands either above lim or (on wrap) negative, and the next check
+	// catches it. O(m) is noise next to the O(m*n) the operation performs.
 	lim := len(k) - len(a)
 	off := base
-	for r := 0; r < m; r++ {
+	for range m {
 		if off < 0 || off > lim {
 			panic("f32.MinIdxOfSumRows: k window out of range")
 		}
