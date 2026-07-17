@@ -202,9 +202,16 @@ func TestMaxAbs_MinInt16(t *testing.T) {
 // possible magnitude. Past a standalone slice lies zeroed memory and |0| is
 // the identity element of this reduction, so an over-reading kernel would
 // pass every other test in this file; the planted extreme is what makes one
-// visible.
+// visible. Unlike the wrapping sum, max is idempotent, so no repeat count of
+// the extreme can cancel it and any over-read shows up.
+//
+// The slack past the longest case must cover a whole vector block of the
+// widest kernel this can dispatch to, which is AVX2 at 16 int16. With less,
+// a full-block over-read runs off the end of the backing array itself and
+// reads unpoisoned memory, so the test stops reliably failing on the defect
+// it exists to catch.
 func TestMaxAbs_NoOverRead(t *testing.T) {
-	backing := make([]int16, 128+8)
+	backing := make([]int16, 128+16)
 	for i := range backing {
 		backing[i] = math.MinInt16
 	}
