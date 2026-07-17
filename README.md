@@ -4,15 +4,15 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/simd)](https://goreportcard.com/report/github.com/tphakala/simd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, int32, int16, complex128, and complex64 slices.
+A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, int32, int16, int8, complex128, and complex64 slices.
 
 ## Features
 
 - **Pure Go assembly** - Native Go assembler, simple cross-compilation
 - **Runtime CPU detection** - Automatically selects optimal implementation (AVX-512, AVX+FMA, AVX without FMA, SSE2, NEON, NEON+FP16, or pure Go); the minimum amd64 SIMD tier is per-package (see [Architecture Support](#architecture-support))
 - **Zero allocations** - All operations work on pre-allocated slices
-- **80+ operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, and complex number operations
-- **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/SSE2, c64 needs SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
+- **150+ operations** - Arithmetic, reduction, statistical, vector, signal processing, activation functions, integer DSP, and complex number operations
+- **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/AVX/SSE2, c64 needs SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
 - **Half-precision support** - Native FP16 SIMD on ARM64 with FP16 extension (Apple Silicon, Cortex-A55+); F16C-accelerated conversions on AMD64
 - **Tunable dispatch** - `SIMD_DISABLE` env var masks feature tiers at startup (avoid AVX-512 downclocking, exercise lower tiers, benchmark tier-vs-tier)
 - **Thread-safe** - All functions are safe for concurrent use
@@ -843,8 +843,8 @@ a Raspberry Pi 5):
 
 | Package  | Average Speedup | Best         | Operations   |
 | -------- | --------------- | ------------ | ------------ |
-| **f32**  | **6.6x**        | 22.6x (Sum)        | 62 functions |
-| **f64**  | **4.1x**        | 16.5x (DotProduct) | 51 functions |
+| **f32**  | **6.6x**        | 22.6x (Sum)        | 77 functions |
+| **f64**  | **4.1x**        | 16.5x (DotProduct) | 61 functions |
 | **c128** | **2.8x**        | 3.4x (Abs)         | 11 functions |
 | **c64**  | **6.0x**        | 22.0x (Scale)      | 11 functions |
 
