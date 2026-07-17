@@ -534,7 +534,9 @@ SIMD-accelerated integer-domain operations for integer-DSP hot loops, where the 
 |                | `Deinterleave2(a, b, src)` | Split interleaved stereo into two channels             | 8x (AVX) / 4x (NEON)  |
 | **Arithmetic** | `Add(dst, a, b)`           | Element-wise add `dst = a + b`                         | 8x (AVX2) / 4x (NEON) |
 |                | `Sub(dst, a, b)`           | Element-wise subtract `dst = a - b`                    | 8x (AVX2) / 4x (NEON) |
+|                | `Abs(dst, a)`              | Wrapping absolute value (`abs(MinInt32) = MinInt32`)   | 8x (AVX2) / 4x (NEON) |
 | **Reduction**  | `MinMax(res) (min, max)`   | Signed int32 per-slice minimum and maximum in one pass | 8x (AVX2) / 4x (NEON) |
+|                | `Sum(a) int32`             | Wrapping int32 total of a slice                        | 8x (AVX2) / 4x (NEON) |
 
 ```go
 import "github.com/tphakala/simd/i32"
@@ -549,11 +551,13 @@ i32.Deinterleave2(left, right, stereo) // inverse: split back to channels
 dst := make([]int32, n)
 i32.Add(dst, left, right) // element-wise dst = left + right
 i32.Sub(dst, left, right) // element-wise dst = left - right
+i32.Abs(dst, left)        // element-wise |left|, wrapping at MinInt32
 
 mn, mx := i32.MinMax(left) // smallest and largest value in one signed pass
+total := i32.Sum(left)     // wrapping int32 total
 ```
 
-Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. `Add` and `Sub` do element-wise integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes with two's-complement wraparound, so they are bit-identical to the pure-Go reference across the full int32 range. `MinMax` returns the smallest and largest int32 in one signed pass (`VPMINSD`/`VPMAXSD` on AVX2, `SMIN`/`SMAX` with single-instruction `SMINV`/`SMAXV` folds on NEON); since min/max of int32 has no accumulation order, the SIMD paths are bit-identical to the pure-Go reference by construction (~10x AVX2, ~5x NEON). All zero-allocation.
+Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. `Add`, `Sub` and `Abs` do element-wise integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes with two's-complement wraparound, so they are bit-identical to the pure-Go reference across the full int32 range; `Abs` wraps the one out-of-range magnitude (`abs(MinInt32) = MinInt32`) rather than saturating. `Sum` accumulates in int32 with the same wraparound, and because wrapping addition is associative its lane split and horizontal reduction are bit-identical to the sequential loop even on overflowing inputs. `MinMax` returns the smallest and largest int32 in one signed pass (`VPMINSD`/`VPMAXSD` on AVX2, `SMIN`/`SMAX` with single-instruction `SMINV`/`SMAXV` folds on NEON); since min/max of int32 has no accumulation order, the SIMD paths are bit-identical to the pure-Go reference by construction (~10x AVX2, ~5x NEON). All zero-allocation.
 
 > The FLAC-specific integer kernels (fixed predictors, quantized-LPC residual/restore, mid/side decorrelation, and the Rice cost search) that previously lived here now live in the codec that owns them ([go-flac](https://github.com/tphakala/go-flac)); this package keeps only the generic integer ops above.
 
@@ -561,7 +565,7 @@ Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f3
 
 The 16-bit integer counterpart to `i32`, serving two kinds of hot loop. First, raw-PCM movement, where the source samples are 16-bit and the cheapest place to vectorize is the channel (de)interleaving that happens before samples are widened to int32. Second, fixed-point DSP, where int16 inputs are multiplied and accumulated into int32.
 
-**Scope:** element-wise int16 arithmetic still belongs in `i32`, because inter-channel decorrelation can exceed the source bit depth by one bit. What this package adds at 16-bit width is the *widening* direction: operations that read int16 and accumulate into int32, where the narrow input is the point.
+**Scope:** element-wise int16 add/sub still belongs in `i32`, because inter-channel decorrelation can exceed the source bit depth by one bit. What lives here is the *widening* direction (operations that read int16 and accumulate into int32, where the narrow input is the point) plus the element-wise operations that are well-defined at 16-bit width: the wrapping absolute value (`Abs`, with the `MaxAbs` reduction) and the rounding Q15 fixed-point multiply (`MulQ15`).
 
 | Category       | Function                   | Description                                | SIMD Width                         |
 | -------------- | -------------------------- | ------------------------------------------ | ---------------------------------- |
@@ -569,7 +573,10 @@ The 16-bit integer counterpart to `i32`, serving two kinds of hot loop. First, r
 |                | `Deinterleave2(a, b, src)` | Split interleaved stereo into two channels | 16x (AVX2) / 8x (SSE2) / 8x (NEON) |
 | **Reduction**  | `DotProduct(a, b)`         | Widening dot product, wrapping int32       | 16x (AVX2) / 8x (SSE2) / 16x (NEON) |
 |                | `DotProductUnsafe(a, b)`   | As above, without the empty-slice guard    | 16x (AVX2) / 8x (SSE2) / 16x (NEON) |
+|                | `MaxAbs(a) int`            | Abs-max headroom probe, range `[0, 32768]` | 16x (AVX2) / 8x (NEON) |
 | **Correlation**| `XCorr(dst, x, y)`         | Dot product of x against y at every lag    | 4 lags/call, 16x (AVX2) / 8x (SSE2/NEON) |
+| **Element-wise**| `Abs(dst, a)`             | Wrapping absolute value (`abs(-32768) = -32768`) | 16x (AVX2) / 8x (NEON) |
+|                | `MulQ15(dst, a, b)`        | Rounding Q15 multiply (libopus `MULT16_16_P15`) | 16x (AVX2) / 8x (NEON) |
 
 ```go
 import "github.com/tphakala/simd/i16"
@@ -582,6 +589,11 @@ i16.Interleave2(stereo, left, right)   // [l0, r0, l1, r1, ...]
 i16.Deinterleave2(left, right, stereo) // inverse: split back to channels
 
 sum := i16.DotProduct(left, right)     // sum(left[i]*right[i]) widened into int32
+
+peak := i16.MaxAbs(left)               // headroom probe: |-32768| reports 32768
+gain := make([]int16, n)               // Q15 gains, e.g. 16384 = 0.5
+i16.MulQ15(left, left, gain)           // rounding Q15 multiply, in place
+i16.Abs(left, left)                    // wrapping |x|, in place
 
 // Correlate a short pattern against a longer signal at every lag.
 pattern := make([]int16, 32)
@@ -596,6 +608,8 @@ The interleave kernels are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plu
 `DotProduct` is the opposite case: the bit pattern is the whole point. It widens each product to int32 and accumulates with **two's-complement wraparound, never saturation**, and that is a guarantee callers may rely on. Wrapping addition is associative and commutative modulo 2^32, so any lane grouping and any horizontal reduction order is bit-identical to the scalar loop, including on operands engineered to overflow; a saturating accumulator is not associative and could not be vectorized without changing results. Fixed-point codecs (Opus/CELT, FLAC LPC) use integer arithmetic precisely because it is exactly reproducible, so this property is the feature. The kernels are `PMADDWD` (SSE2, hence always present on the `GOAMD64=v1` baseline) with an AVX2 tier at twice the width, and `SMLAL`/`SMLAL2` on NEON. All kernels are zero-allocation.
 
 `XCorr` is the same arithmetic evaluated at every lag, and `dst[k]` is defined to equal `DotProduct(x, y[k:k+len(x)])` exactly. The win over calling `DotProduct` in a loop is that it loads `x` once and multiply-accumulates it against four overlapping `y` windows at a time (the libopus `xcorr_kernel` shape), rather than re-reading `x` for every lag. Only lags whose full window fits in `y` are computed, and `dst` beyond that is left untouched rather than zeroed.
+
+`Abs`, `MaxAbs` and `MulQ15` are the fixed-point envelope/gain trio. `Abs` wraps rather than saturates (`abs(-32768) = -32768`, the opposite of `i8.Abs`), `MaxAbs` returns an `int` because `|-32768| = 32768` does not fit int16 (libopus `celt_maxabs16`), and `MulQ15` is the *rounding* Q15 multiply (`MULT16_16_P15`): `dst[i] = int16((a[i]*b[i] + 1<<14) >> 15)` with the single out-of-range product `(-32768)^2` wrapping to `-32768`. All three are bit-exact against their pure-Go references for every input. On amd64 these three are AVX2-or-Go (no SSE2 tier, matching `i8` and the `i32` arithmetic); on ARM64 they run NEON (`MulQ15` via `SMULL`/`SRSHR`/`XTN`, since the single-instruction `SQRDMULH` saturates the `(-32768)^2` case and would break the wrap guarantee).
 
 ### `i8` - int8 Operations
 
@@ -951,14 +965,16 @@ each package's `*_amd64.go` dispatch):
 | `f64`   | SSE2                    | AVX (no FMA), AVX+FMA, AVX-512 | pure Go (baseline guarantees SSE2) |
 | `c128`  | SSE2                    | AVX (no FMA), AVX+FMA, AVX-512 | pure Go (baseline guarantees SSE2) |
 | `c64`   | SSE4.1 (BLENDPS)        | AVX+FMA, AVX-512        | pure Go |
-| `i16`   | SSE2                    | AVX2                    | pure Go (baseline guarantees SSE2) |
+| `i16`   | SSE2 (interleave, dot, xcorr); AVX2 (Abs, MulQ15, MaxAbs) | AVX2 | pure Go (baseline guarantees SSE2 for the SSE2-tier ops) |
 | `i32`   | AVX (interleave), AVX2 (arithmetic) | -           | pure Go |
 | `i8`    | AVX2                    | -                       | pure Go |
 | `f16`   | F16C (slice conversions only) | -                 | pure Go (all f16 compute is pure Go on amd64) |
 | `crc`   | PCLMULQDQ               | -                       | scalar slice-by-16 |
 
-SSE2 is part of the amd64 baseline, so `f32`/`f64`/`c128`/`i16` always run SIMD on
-amd64 (their pure-Go path is effectively a non-amd64 safety net). AVX-512 uses the
+SSE2 is part of the amd64 baseline, so `f32`/`f64`/`c128` always run SIMD on amd64
+(their pure-Go path is effectively a non-amd64 safety net), and so do `i16`'s
+interleave/dot/xcorr kernels; `i16`'s element-wise `Abs`/`MulQ15` and its `MaxAbs`
+reduction are AVX2-or-Go, like `i8` and the `i32` arithmetic. AVX-512 uses the
 `AVX512F && AVX512VL` gate. `cpu.Info()` reports the host-wide tier (AVX-512 /
 AVX+FMA / AVX / SSE2 / scalar); a package whose minimum is above that tier (e.g.
 `i32` on an SSE-only host) runs pure Go even though `Info()` shows SSE2.

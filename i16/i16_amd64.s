@@ -653,3 +653,162 @@ xcorr4_avx2_store:
     MOVL R11, 12(DI)
     VZEROUPPER
     RET
+
+// Tier-3 element-wise and reduction kernels (AVX2).
+//
+// All three receive pre-clamped slices from the public API, so unlike the dot
+// kernels there is no in-assembly length clamp anywhere below: dst_len (or
+// a_len) is the trusted element count. These ops are AVX2-or-Go by dispatch
+// (see i16_amd64.go); no SSE2 tier exists for them.
+
+// func mulQ15AVX2(dst, a, b []int16)
+// Rounding Q15 multiply, 16 lanes per iteration. VPMULHRSW computes
+// ((a*b >> 14) + 1) >> 1, bit-identical to the rounding form
+// (a*b + 2^14) >> 15 for every int16 pair, and it WRAPS the one product
+// outside int16 range: (-32768)^2 -> 0x8000 = -32768, matching mulQ15Go.
+// NEON's SQRDMULH saturates that pair and can never be used for this op; see
+// mulq15.go. The scalar tail does the widen/round/narrow in 32-bit GPR math;
+// the MOVW store keeps the low 16 bits, wrapping identically.
+TEXT ·mulQ15AVX2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    MOVQ b_base+48(FP), DI
+
+    MOVQ CX, AX
+    SHRQ $4, AX                // AX = n / 16
+    JZ   mulq15_avx2_tail
+
+mulq15_avx2_loop16:
+    VMOVDQU (SI), Y0
+    VMOVDQU (DI), Y1
+    VPMULHRSW Y1, Y0, Y2       // 16 rounded Q15 products
+    VMOVDQU Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  mulq15_avx2_loop16
+
+mulq15_avx2_tail:
+    ANDQ $15, CX
+    JZ   mulq15_avx2_done
+
+mulq15_avx2_scalar:
+    MOVWLSX (SI), AX           // a[i], sign-extended
+    MOVWLSX (DI), BX           // b[i], sign-extended
+    IMULL BX, AX               // product, |p| <= 2^30
+    ADDL $16384, AX            // + q15Round
+    SARL $15, AX               // rounding shift
+    MOVW AX, (DX)              // low 16 bits: 32768 wraps to -32768
+    ADDQ $2, SI
+    ADDQ $2, DI
+    ADDQ $2, DX
+    DECQ CX
+    JNZ  mulq15_avx2_scalar
+
+mulq15_avx2_done:
+    VZEROUPPER
+    RET
+
+// func absAVX2(dst, a []int16)
+// Wrapping absolute value, 16 lanes per iteration: VPABSW wraps at the type
+// minimum (abs(-32768) = -32768 in a 16-bit lane), which is absGo's contract.
+// The scalar tail negates only the negative elements in 32-bit GPR math,
+// where -(-32768) is +32768, and the MOVW store keeps the low 16 bits,
+// wrapping it back to -32768 identically.
+TEXT ·absAVX2(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $4, AX                // AX = n / 16
+    JZ   abs_avx2_tail
+
+abs_avx2_loop16:
+    VPABSW (SI), Y0
+    VMOVDQU Y0, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  abs_avx2_loop16
+
+abs_avx2_tail:
+    ANDQ $15, CX
+    JZ   abs_avx2_done
+
+abs_avx2_scalar:
+    MOVWLSX (SI), AX           // v, sign-extended
+    TESTL AX, AX
+    JGE  abs_avx2_store
+    NEGL AX                    // |v|; -(-32768) = 32768
+abs_avx2_store:
+    MOVW AX, (DX)              // low 16 bits: 32768 wraps to -32768
+    ADDQ $2, SI
+    ADDQ $2, DX
+    DECQ CX
+    JNZ  abs_avx2_scalar
+
+abs_avx2_done:
+    VZEROUPPER
+    RET
+
+// func maxAbsAVX2(a []int16) int
+// Per-frame abs-max (the headroom probe): VPABSW maps each lane to its
+// magnitude (abs(-32768) -> 0x8000, i.e. 32768 read unsigned), VPMAXUW folds
+// 16-lane blocks into an unsigned-max accumulator, a VPMAXUW/VPSRLDQ cascade
+// reduces a 128-bit lane to one word, and a scalar tail folds the (n mod 16)
+// remainder. The word is read zero-extended, so the result lands in
+// [0, 32768], and the tail compare can stay signed because both sides fit
+// that range.
+TEXT ·maxAbsAVX2(SB), NOSPLIT, $0-32
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    VPXOR Y0, Y0, Y0           // unsigned-max accumulator = 0
+
+    MOVQ CX, AX
+    SHRQ $4, AX                // AX = n / 16
+    JZ   maxabs_avx2_reduce
+
+maxabs_avx2_loop16:
+    VPABSW (SI), Y1            // |a| as unsigned words
+    VPMAXUW Y1, Y0, Y0         // unsigned max accumulate
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  maxabs_avx2_loop16
+
+maxabs_avx2_reduce:
+    VEXTRACTI128 $1, Y0, X1
+    VPMAXUW X1, X0, X0         // fold 16 -> 8 words
+    VPSRLDQ $8, X0, X1
+    VPMAXUW X1, X0, X0         // 4 words
+    VPSRLDQ $4, X0, X1
+    VPMAXUW X1, X0, X0         // 2 words
+    VPSRLDQ $2, X0, X1
+    VPMAXUW X1, X0, X0         // 1 word
+    MOVQ X0, AX
+    ANDQ $0xFFFF, AX           // running abs-max (unsigned word) in [0, 32768]
+
+    ANDQ $15, CX
+    JZ   maxabs_avx2_done
+
+maxabs_avx2_scalar:
+    MOVWLSX (SI), BX           // v, sign-extended
+    TESTL BX, BX
+    JGE  maxabs_avx2_cmp
+    NEGL BX                    // |v|; -(-32768) = 32768
+maxabs_avx2_cmp:
+    CMPL BX, AX                // both in [0, 32768], signed compare is safe
+    JLE  maxabs_avx2_next
+    MOVL BX, AX                // new running max
+maxabs_avx2_next:
+    ADDQ $2, SI
+    DECQ CX
+    JNZ  maxabs_avx2_scalar
+
+maxabs_avx2_done:
+    MOVQ AX, ret+24(FP)
+    VZEROUPPER
+    RET

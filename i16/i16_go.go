@@ -72,6 +72,53 @@ func xcorrGo(dst []int32, x, y []int16) {
 	}
 }
 
+// Q15 fixed-point rounding constants: the Q15 product of a and b is
+// (a*b + q15Round) >> q15Shift. q15Round is half the divisor, so the shift
+// rounds to nearest instead of truncating toward negative infinity; this is
+// the libopus MULT16_16_P15 form, not the truncating MULT16_16_Q15.
+const (
+	q15Round = 1 << 14
+	q15Shift = 15
+)
+
+// mulQ15Go is the bit-exact source of truth for the MulQ15 kernels. The int16
+// conversion keeps the low 16 bits, so the one product outside int16 range,
+// (-32768 * -32768) -> +32768, wraps to -32768 rather than saturating; both
+// SIMD paths reproduce that wrap exactly (SMULL/SRSHR/XTN on NEON, VPMULHRSW
+// on AVX2).
+func mulQ15Go(dst, a, b []int16) {
+	for i := range dst {
+		dst[i] = int16((int32(a[i])*int32(b[i]) + q15Round) >> q15Shift)
+	}
+}
+
+// absGo writes the wrapping absolute value: int16 negation wraps in Go, so
+// abs(-32768) stays -32768, exactly what a 16-bit ABS/VPABSW lane computes.
+func absGo(dst, a []int16) {
+	for i := range dst {
+		if a[i] < 0 {
+			dst[i] = -a[i]
+		} else {
+			dst[i] = a[i]
+		}
+	}
+}
+
+// maxAbsGo returns max_i |a[i]| as int. |-32768| = 32768 does not fit int16,
+// hence the int accumulator and return. It is the bit-exact source of truth
+// for the MaxAbs kernels.
+func maxAbsGo(a []int16) int {
+	m := 0
+	for _, v := range a {
+		av := int(v)
+		if av < 0 {
+			av = -av
+		}
+		m = max(m, av)
+	}
+	return m
+}
+
 // xcorrWindow returns the y window the 4-lag kernel may read for the block at
 // lag k: lag k+3 reaches y[k+3+len(x)-1], so the block needs len(x)+3 elements
 // from y[k]. That is in bounds precisely when k+xcorrLagBlock <= m, which is

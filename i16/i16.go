@@ -15,10 +15,15 @@
 // results. Fixed-point codecs (Opus/CELT, FLAC LPC) depend on that
 // reproducibility, which is the whole reason they use integer arithmetic.
 //
-// Element-wise int16 arithmetic still belongs in the i32 package, because
+// Element-wise int16 add/sub still belongs in the i32 package, because
 // inter-channel decorrelation can exceed the source bit depth by one bit. What
-// this package adds at 16-bit width is the widening direction, where the narrow
-// input is the point.
+// lives here is the widening direction (DotProduct, XCorr), where the narrow
+// input is the point, plus the element-wise operations that are well-defined
+// at 16-bit width: the wrapping absolute value (Abs) and the rounding Q15
+// fixed-point multiply (MulQ15). Those two produce a result that fits int16
+// for every input except the single wrapping case each documents. The MaxAbs reduction is the
+// deliberate exception: it widens to int, because |-32768| = 32768 is the
+// headroom value callers need and it does not fit the element type.
 //
 // All functions automatically select the optimal implementation based on
 // runtime CPU feature detection and fall back to a pure-Go implementation on

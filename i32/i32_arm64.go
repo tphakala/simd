@@ -53,6 +53,37 @@ func addNEON(dst, a, b []int32)
 //go:noescape
 func subNEON(dst, a, b []int32)
 
+// Tier-3 thresholds: one 4-wide (.4S) vector block each, independent literals
+// rather than aliases of minNEONElements, which they happen to equal, so
+// retuning the interleave kernels cannot silently move these. Both kernels are
+// correct at any length (each falls through to a scalar tail), so these are
+// performance cuts only, never a safety requirement.
+const (
+	minNEONSum = 4
+	minNEONAbs = 4
+)
+
+func sumI32(a []int32) int32 {
+	if hasNEON && len(a) >= minNEONSum {
+		return sumNEON(a)
+	}
+	return sumGo(a)
+}
+
+func absI32(dst, a []int32) {
+	if hasNEON && len(dst) >= minNEONAbs {
+		absNEON(dst, a)
+		return
+	}
+	absGo(dst, a)
+}
+
+//go:noescape
+func sumNEON(a []int32) int32
+
+//go:noescape
+func absNEON(dst, a []int32)
+
 // minMaxI32 dispatches the signed int32 min/max reduction. The NEON kernel does
 // the reduction in 4-wide SMIN/SMAX lanes with a single-instruction SMINV/SMAXV
 // across-vector fold and a scalar tail, so it gates on NEON and at least one full

@@ -21,11 +21,14 @@
 // (each package only ships the kernels its workload needs):
 //
 //   - AMD64: AVX-512 (8x float64, 16x float32) > AVX+FMA (4x float64, 8x float32) >
-//     AVX (no FMA, f64/c128) > SSE2 (f32/f64/c128/i16) or SSE4.1 (c64) > pure Go.
+//     AVX (no FMA, f64/c128) > SSE2 (f32/f64/c128, i16 interleave/dot/xcorr)
+//     or SSE4.1 (c64) > pure Go.
 //     i32 needs AVX/AVX2, i8 needs AVX2, crc needs PCLMULQDQ, and f16 uses F16C
 //     for its slice conversions only (every other f16 op is pure Go on amd64).
-//     SSE2 is part of the amd64 baseline, so f32/f64/c128/i16 always get SIMD on
-//     amd64.
+//     SSE2 is part of the amd64 baseline, so f32/f64/c128 always get SIMD on
+//     amd64, as do i16's interleave/dot/xcorr kernels; i16's element-wise ops
+//     (Abs, MulQ15) and its MaxAbs reduction are AVX2-or-Go, like i8 and the
+//     i32 arithmetic.
 //   - ARM64: NEON/ASIMD throughout (2x float64, 4x float32), with an FP16
 //     (FEAT_FP16) fast path in the f16 package and an SDOT (FEAT_DotProd) fast
 //     path for i8.DotProduct, and SMLAL/SMLAL2 widening multiply-accumulate
@@ -88,9 +91,9 @@
 //
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames) - fused real-input short-time Fourier transform with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //
-// Integer DSP (i16): Interleave2, Deinterleave2, DotProduct, DotProductUnsafe, XCorr (widening int16 x int16 -> wrapping int32; ARM64 SMLAL/SMLAL2, amd64 PMADDWD/VPMADDWD; XCorr evaluates 4 correlation lags per kernel call)
+// Integer DSP (i16): Interleave2, Deinterleave2, DotProduct, DotProductUnsafe, XCorr (widening int16 x int16 -> wrapping int32; ARM64 SMLAL/SMLAL2, amd64 PMADDWD/VPMADDWD; XCorr evaluates 4 correlation lags per kernel call), Abs, MaxAbs, MulQ15 (wrapping 16-bit absolute value, widened abs-max, rounding Q15 multiply)
 //
-// Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, MinMax
+// Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, Abs, Sum, MinMax
 //
 // Integer DSP (i8): AddSaturate, SubSaturate, AddScalarSaturate, SubScalarSaturate, Min, Max, Clamp, Abs, Neg, AbsDiff, MaxAbs, SumAbs, SAD, ToInt16, ToInt32, Sum, MinMax, DotProduct (int32-accumulated; ARM64 SDOT / amd64 VPMADDWD)
 //

@@ -146,3 +146,89 @@ func BenchmarkXCorrGo_240x4(b *testing.B)   { benchmarkXCorr(b, 240, 4, xcorrGo)
 func BenchmarkXCorrGo_240x64(b *testing.B)  { benchmarkXCorr(b, 240, 64, xcorrGo) }
 func BenchmarkXCorrGo_240x288(b *testing.B) { benchmarkXCorr(b, 240, 288, xcorrGo) }
 func BenchmarkXCorrGo_480x64(b *testing.B)  { benchmarkXCorr(b, 480, 64, xcorrGo) }
+
+// Tier-3 benchmarks. These ops are store-bound (far cheaper per element than
+// dot), so the SIMD-vs-Go crossover at small n is what the 8 case exists to
+// measure: 8 is one NEON block and half an AVX2 one, so it sits exactly at the
+// NEON dispatch cut and below the AVX2 one.
+//
+// 240 is a multiple of both vector widths; 8 is a multiple of the NEON width
+// only, which is the previous paragraph's point. 25 and 1003 are deliberate
+// non-multiples of 8 and 16, so the scalar tails are always on the clock (the
+// original XCorr lengths were all multiples of 16 and structurally hid a
+// tail-cost defect; see BenchmarkXCorr_25x64 above). 1000 is a multiple of the
+// NEON width but not the AVX2 one (1000 mod 16 = 8), so it also charges an
+// AVX2 tail.
+//
+// MulQ15 SetBytes counts a + b read and dst written; Abs counts a + dst;
+// MaxAbs counts a.
+
+func benchmarkMulQ15(b *testing.B, n int, fn func(dst, a, c []int16)) {
+	b.Helper()
+	a := make([]int16, n)
+	c := make([]int16, n)
+	dst := make([]int16, n)
+	for i := range a {
+		a[i] = int16(i*7 - 3000)
+		c[i] = int16(i*-5 + 2000)
+	}
+	b.SetBytes(int64(n) * 2 * 3)
+	for b.Loop() {
+		fn(dst, a, c)
+	}
+}
+
+func BenchmarkMulQ15_8(b *testing.B)    { benchmarkMulQ15(b, 8, MulQ15) }
+func BenchmarkMulQ15_25(b *testing.B)   { benchmarkMulQ15(b, 25, MulQ15) }
+func BenchmarkMulQ15_240(b *testing.B)  { benchmarkMulQ15(b, 240, MulQ15) }
+func BenchmarkMulQ15_1003(b *testing.B) { benchmarkMulQ15(b, 1003, MulQ15) }
+
+func BenchmarkMulQ15Go_8(b *testing.B)    { benchmarkMulQ15(b, 8, mulQ15Go) }
+func BenchmarkMulQ15Go_25(b *testing.B)   { benchmarkMulQ15(b, 25, mulQ15Go) }
+func BenchmarkMulQ15Go_240(b *testing.B)  { benchmarkMulQ15(b, 240, mulQ15Go) }
+func BenchmarkMulQ15Go_1003(b *testing.B) { benchmarkMulQ15(b, 1003, mulQ15Go) }
+
+func benchmarkAbs(b *testing.B, n int, fn func(dst, a []int16)) {
+	b.Helper()
+	a := make([]int16, n)
+	dst := make([]int16, n)
+	for i := range a {
+		a[i] = int16(i*7 - 3000)
+	}
+	b.SetBytes(int64(n) * 2 * 2)
+	for b.Loop() {
+		fn(dst, a)
+	}
+}
+
+func BenchmarkAbs_8(b *testing.B)    { benchmarkAbs(b, 8, Abs) }
+func BenchmarkAbs_25(b *testing.B)   { benchmarkAbs(b, 25, Abs) }
+func BenchmarkAbs_1000(b *testing.B) { benchmarkAbs(b, 1000, Abs) }
+func BenchmarkAbs_1003(b *testing.B) { benchmarkAbs(b, 1003, Abs) }
+
+func BenchmarkAbsGo_8(b *testing.B)    { benchmarkAbs(b, 8, absGo) }
+func BenchmarkAbsGo_25(b *testing.B)   { benchmarkAbs(b, 25, absGo) }
+func BenchmarkAbsGo_1000(b *testing.B) { benchmarkAbs(b, 1000, absGo) }
+func BenchmarkAbsGo_1003(b *testing.B) { benchmarkAbs(b, 1003, absGo) }
+
+func benchmarkMaxAbs(b *testing.B, n int, fn func(a []int16) int) {
+	b.Helper()
+	a := make([]int16, n)
+	for i := range a {
+		a[i] = int16(i*7 - 3000)
+	}
+	b.SetBytes(int64(n) * 2)
+	for b.Loop() {
+		_ = fn(a)
+	}
+}
+
+func BenchmarkMaxAbs_8(b *testing.B)    { benchmarkMaxAbs(b, 8, MaxAbs) }
+func BenchmarkMaxAbs_25(b *testing.B)   { benchmarkMaxAbs(b, 25, MaxAbs) }
+func BenchmarkMaxAbs_1000(b *testing.B) { benchmarkMaxAbs(b, 1000, MaxAbs) }
+func BenchmarkMaxAbs_1003(b *testing.B) { benchmarkMaxAbs(b, 1003, MaxAbs) }
+
+func BenchmarkMaxAbsGo_8(b *testing.B)    { benchmarkMaxAbs(b, 8, maxAbsGo) }
+func BenchmarkMaxAbsGo_25(b *testing.B)   { benchmarkMaxAbs(b, 25, maxAbsGo) }
+func BenchmarkMaxAbsGo_1000(b *testing.B) { benchmarkMaxAbs(b, 1000, maxAbsGo) }
+func BenchmarkMaxAbsGo_1003(b *testing.B) { benchmarkMaxAbs(b, 1003, maxAbsGo) }

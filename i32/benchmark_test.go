@@ -120,3 +120,49 @@ func BenchmarkMinMaxGo_1000(b *testing.B) {
 		minMaxGo(res)
 	}
 }
+
+// Tier-3 benchmarks. 1000 is a multiple of both vector widths; 25 and 1003
+// are deliberate non-multiples of 4 and 8, so the scalar tails are always on
+// the clock rather than structurally idle. Sum SetBytes counts a; Abs counts
+// a read and dst written.
+
+func benchmarkSum(b *testing.B, n int, fn func(a []int32) int32) {
+	b.Helper()
+	a := make([]int32, n)
+	for i := range a {
+		a[i] = int32(i*7 - 3000)
+	}
+	b.SetBytes(int64(n) * 4)
+	for b.Loop() {
+		_ = fn(a)
+	}
+}
+
+func BenchmarkSum_25(b *testing.B)   { benchmarkSum(b, 25, Sum) }
+func BenchmarkSum_1000(b *testing.B) { benchmarkSum(b, 1000, Sum) }
+func BenchmarkSum_1003(b *testing.B) { benchmarkSum(b, 1003, Sum) }
+
+func BenchmarkSumGo_25(b *testing.B)   { benchmarkSum(b, 25, sumGo) }
+func BenchmarkSumGo_1000(b *testing.B) { benchmarkSum(b, 1000, sumGo) }
+func BenchmarkSumGo_1003(b *testing.B) { benchmarkSum(b, 1003, sumGo) }
+
+func benchmarkAbs(b *testing.B, n int, fn func(dst, a []int32)) {
+	b.Helper()
+	a := make([]int32, n)
+	dst := make([]int32, n)
+	for i := range a {
+		a[i] = int32(i*7 - 3000)
+	}
+	b.SetBytes(int64(n) * 4 * 2)
+	for b.Loop() {
+		fn(dst, a)
+	}
+}
+
+func BenchmarkAbs_25(b *testing.B)   { benchmarkAbs(b, 25, Abs) }
+func BenchmarkAbs_1000(b *testing.B) { benchmarkAbs(b, 1000, Abs) }
+func BenchmarkAbs_1003(b *testing.B) { benchmarkAbs(b, 1003, Abs) }
+
+func BenchmarkAbsGo_25(b *testing.B)   { benchmarkAbs(b, 25, absGo) }
+func BenchmarkAbsGo_1000(b *testing.B) { benchmarkAbs(b, 1000, absGo) }
+func BenchmarkAbsGo_1003(b *testing.B) { benchmarkAbs(b, 1003, absGo) }

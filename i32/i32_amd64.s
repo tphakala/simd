@@ -290,3 +290,97 @@ mm_done:
     MOVL DX, maxVal+28(FP)
     VZEROUPPER
     RET
+
+// Tier-3 reduction and element-wise kernels (AVX2).
+//
+// Both receive pre-clamped slices from the public API, so a_len (or dst_len)
+// is the trusted element count and no in-assembly clamp exists.
+
+// func sumAVX2(a []int32) int32
+// Wrapping int32 sum: VPADDD folds 8-lane blocks into a vector accumulator, a
+// horizontal add reduces it, and a 32-bit scalar tail adds the (n mod 8)
+// remainder. Every add wraps in a 32-bit lane, and wrapping addition is
+// associative, so the lane split and reduction order are bit-identical to
+// sumGo for every input, including forced overflow.
+TEXT ·sumAVX2(SB), NOSPLIT, $0-28
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    VPXOR Y0, Y0, Y0           // int32 accumulator = 0
+
+    MOVQ CX, AX
+    SHRQ $3, AX                // AX = n / 8
+    JZ   sum_avx2_reduce
+
+sum_avx2_loop8:
+    VMOVDQU (SI), Y1
+    VPADDD Y1, Y0, Y0          // accumulate (wrapping)
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  sum_avx2_loop8
+
+sum_avx2_reduce:
+    VEXTRACTI128 $1, Y0, X1
+    VPADDD X1, X0, X0          // fold 8 -> 4 int32
+    VPSHUFD $0x4E, X0, X1      // swap 64-bit halves
+    VPADDD X1, X0, X0
+    VPSHUFD $0xB1, X0, X1      // swap 32-bit within pairs
+    VPADDD X1, X0, X0
+    MOVQ X0, AX                // low int32 = vector total (in EAX)
+
+    ANDQ $7, CX
+    JZ   sum_avx2_done
+
+sum_avx2_scalar:
+    MOVL (SI), BX
+    ADDL BX, AX                // 32-bit add: wraps like sumGo
+    ADDQ $4, SI
+    DECQ CX
+    JNZ  sum_avx2_scalar
+
+sum_avx2_done:
+    MOVL AX, ret+24(FP)
+    VZEROUPPER
+    RET
+
+// func absAVX2(dst, a []int32)
+// Wrapping absolute value, 8 lanes per iteration: VPABSD wraps at the type
+// minimum (abs(MinInt32) = MinInt32 in a 32-bit lane), which is absGo's
+// contract. The scalar tail negates only the negative elements; NEGL of
+// 0x80000000 wraps to itself in 32-bit, so the tail needs no special case.
+TEXT ·absAVX2(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+
+    MOVQ CX, AX
+    SHRQ $3, AX                // AX = n / 8
+    JZ   abs_avx2_tail
+
+abs_avx2_loop8:
+    VPABSD (SI), Y0
+    VMOVDQU Y0, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  abs_avx2_loop8
+
+abs_avx2_tail:
+    ANDQ $7, CX
+    JZ   abs_avx2_done
+
+abs_avx2_scalar:
+    MOVL (SI), AX
+    TESTL AX, AX
+    JGE  abs_avx2_store
+    NEGL AX                    // |v|; NEGL of MinInt32 wraps to itself
+abs_avx2_store:
+    MOVL AX, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  abs_avx2_scalar
+
+abs_avx2_done:
+    VZEROUPPER
+    RET

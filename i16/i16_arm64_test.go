@@ -259,6 +259,175 @@ func TestXCorrDispatch_ReachesNEON(t *testing.T) {
 	}
 }
 
+// TestMulQ15NEON_ParityWithGo drives the kernel directly, over lengths the
+// dispatcher would never route to it, so a threshold change cannot quietly
+// reduce this to a test of the Go reference against itself.
+func TestMulQ15NEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range tier3Lengths {
+		a, b := genI16(n, 131), genI16(n, 132)
+		got := make([]int16, n)
+		want := make([]int16, n)
+		mulQ15NEON(got, a, b)
+		mulQ15Go(want, a, b)
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("mulQ15NEON n=%d: dst[%d] = %d, want %d", n, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// TestMulQ15NEON_MinInt16 pins the SRSHR+XTN wrap at the kernel: (-32768)^2
+// must narrow to -32768 in the vector lanes and in the scalar tail. A
+// saturating substitute (SQRDMULH) would return 32767 in every position.
+func TestMulQ15NEON_MinInt16(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for n := 1; n <= 32; n++ {
+		a := make([]int16, n)
+		for i := range a {
+			a[i] = math.MinInt16
+		}
+		got := make([]int16, n)
+		mulQ15NEON(got, a, a)
+		for i := range got {
+			if got[i] != math.MinInt16 {
+				t.Fatalf("mulQ15NEON all-MinInt16 n=%d: dst[%d] = %d, want %d", n, i, got[i], math.MinInt16)
+			}
+		}
+	}
+}
+
+// TestAbsNEON_ParityWithGo drives the kernel directly across the full sweep;
+// the wrap input MinInt16 rides at index 0 of every non-empty case.
+func TestAbsNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range tier3Lengths {
+		a := genI16(n, 133)
+		if n > 0 {
+			a[0] = math.MinInt16
+		}
+		got := make([]int16, n)
+		want := make([]int16, n)
+		absNEON(got, a)
+		absGo(want, a)
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("absNEON n=%d: dst[%d] = %d, want %d", n, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// TestMaxAbsNEON_ParityWithGo drives the kernel directly across the sweep,
+// then pins the widened extreme: a planted -32768 must come back as 32768
+// from every lane position and from the scalar tail.
+func TestMaxAbsNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range tier3Lengths {
+		a := genI16(n, 134)
+		if got, want := maxAbsNEON(a), maxAbsGo(a); got != want {
+			t.Errorf("maxAbsNEON n=%d: got %d, want %d", n, got, want)
+		}
+	}
+	for _, n := range []int{8, 9, 16, 17, 24} {
+		for pos := range n {
+			a := make([]int16, n)
+			a[pos] = math.MinInt16
+			if got := maxAbsNEON(a); got != 32768 {
+				t.Fatalf("maxAbsNEON n=%d pos=%d: got %d, want 32768", n, pos, got)
+			}
+		}
+	}
+}
+
+// TestMaxAbsNEON_NoOverRead is the kernel-direct over-read check: the operand
+// is a prefix of a longer allocation whose every element past the prefix is
+// -32768. Zeroed past-slice memory is the identity element of this reduction,
+// so only the planted extreme makes an over-read observable.
+func TestMaxAbsNEON_NoOverRead(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	backing := make([]int16, 64+8)
+	for i := range backing {
+		backing[i] = math.MinInt16
+	}
+	for _, n := range []int{1, 7, 8, 9, 15, 16, 17, 24, 33, 64} {
+		a := backing[:n]
+		for i := range a {
+			a[i] = int16(i%50 - 25)
+		}
+		if got, want := maxAbsNEON(a), maxAbsGo(a); got != want {
+			t.Fatalf("maxAbsNEON n=%d: got %d, want %d (read past the operand?)", n, got, want)
+		}
+		for i := range a {
+			backing[i] = math.MinInt16
+		}
+	}
+}
+
+// TestTier3Dispatch_ReachesNEON pins the dispatch state the tier-3 SIMD paths
+// depend on. It has to be a white-box check: the kernels are bit-identical to
+// the Go references by design, so a dispatcher that silently routed every
+// call to Go would pass every parity test in this package, and the
+// kernel-direct tests above are threshold-independent by construction, so
+// they cannot notice either. It must not call t.Parallel(): it reads
+// package-level dispatch state.
+//
+// Scope, so the next reader does not over-trust it: this pins the INPUTS the
+// dispatcher reads (the feature flag, and thresholds low enough to vectorize),
+// not that the dispatcher consults them. It kills a mis-wired flag and an
+// out-of-range threshold; it does not kill a dispatch branch deleted outright,
+// which leaves the kernel dead while every test here still passes. Closing
+// that needs the call to be observable, e.g. a counter behind a build tag.
+func TestTier3Dispatch_ReachesNEON(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	if !hasNEON {
+		t.Fatal("hasNEON is false though cpu.ARM64.NEON is true: the tier-3 ops silently run the Go reference on every call")
+	}
+	if minNEONMulQ15 > 16 || minNEONAbs > 16 || minNEONMaxAbs > 16 {
+		t.Fatalf("tier-3 NEON thresholds exceed two vector blocks (MulQ15 %d, Abs %d, MaxAbs %d): the ops would not vectorize at the frame lengths they were written for",
+			minNEONMulQ15, minNEONAbs, minNEONMaxAbs)
+	}
+}
+
+// TestTier3NEONKernels_AllocFree enforces the zero-allocation contract
+// directly at the kernel boundary (the public-API alloc tests cover the
+// dispatch, these cover the kernels).
+func TestTier3NEONKernels_AllocFree(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	const n = 1024
+	a := make([]int16, n)
+	b := make([]int16, n)
+	dst := make([]int16, n)
+	checks := []struct {
+		name string
+		fn   func()
+	}{
+		{"mulQ15NEON", func() { mulQ15NEON(dst, a, b) }},
+		{"absNEON", func() { absNEON(dst, a) }},
+		{"maxAbsNEON", func() { _ = maxAbsNEON(a) }},
+	}
+	for _, c := range checks {
+		if got := testing.AllocsPerRun(100, c.fn); got != 0 {
+			t.Errorf("%s allocated %v times per run, want 0", c.name, got)
+		}
+	}
+}
+
 // TestXCorr4NEON_LongWindowIsClamped covers the other half of the kernel's
 // n = min(len(x), len(y)-3) clamp. TestXCorr4NEON_ShortWindowIsBounded only
 // probes len(y)-3 < len(x); ParityWithGo passes len(y) == len(x)+3, where both

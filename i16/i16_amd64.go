@@ -15,8 +15,13 @@ const (
 
 // Dispatch priority mirrors f32/f64: AVX2 > SSE2 > Go. The kernels gate on the
 // CPU feature explicitly (rather than relying on length alone) so the package is
-// correct on every amd64 baseline. SSE2 is part of the amd64 baseline, so the
-// pure-Go fallback below is effectively a non-amd64 safety net here.
+// correct on every amd64 baseline.
+//
+// SSE2 is part of the amd64 baseline, so for the ops that ship an SSE2 tier
+// (interleave, dot, xcorr) the pure-Go fallback is effectively a non-amd64
+// safety net. That is not true package-wide: the tier-3 ops below (MulQ15, Abs,
+// MaxAbs) are AVX2-or-Go, so on a pre-AVX2 amd64 host their Go reference is a
+// live, reachable path rather than a formality.
 var (
 	hasAVX2 = cpu.X86.AVX2
 	hasSSE2 = cpu.X86.SSE2
@@ -107,6 +112,54 @@ func deinterleave2I16(a, b, src []int16) {
 		deinterleave2Go(a, b, src)
 	}
 }
+
+// Tier-3 thresholds: one 16-wide (256-bit) vector block each, independent
+// literals per the dot precedent above. These ops are AVX2-or-Go: unlike
+// dot/xcorr/interleave they ship no SSE2 tier, matching i8 and the i32
+// arithmetic, because cheap store-bound element work does not earn a third
+// tier's maintenance. Below AVX2 the Go reference runs.
+//
+// The kernels are correct at any length (each falls through to a scalar tail),
+// so these are performance cuts only, never a safety requirement. Nothing here
+// keeps a kernel in bounds: the tier-3 kernels carry no in-assembly clamp, and
+// the public wrappers are what reconcile the operand lengths.
+const (
+	minAVX2MulQ15 = 16
+	minAVX2Abs    = 16
+	minAVX2MaxAbs = 16
+)
+
+func mulQ15I16(dst, a, b []int16) {
+	if hasAVX2 && len(dst) >= minAVX2MulQ15 {
+		mulQ15AVX2(dst, a, b)
+		return
+	}
+	mulQ15Go(dst, a, b)
+}
+
+func absI16(dst, a []int16) {
+	if hasAVX2 && len(dst) >= minAVX2Abs {
+		absAVX2(dst, a)
+		return
+	}
+	absGo(dst, a)
+}
+
+func maxAbsI16(a []int16) int {
+	if hasAVX2 && len(a) >= minAVX2MaxAbs {
+		return maxAbsAVX2(a)
+	}
+	return maxAbsGo(a)
+}
+
+//go:noescape
+func mulQ15AVX2(dst, a, b []int16)
+
+//go:noescape
+func absAVX2(dst, a []int16)
+
+//go:noescape
+func maxAbsAVX2(a []int16) int
 
 //go:noescape
 func xcorr4AVX2(dst []int32, x, y []int16)

@@ -280,3 +280,143 @@ xcorr4_neon_store:
     MOVW R9, 8(R0)
     MOVW R10, 12(R0)
     RET
+
+// Tier-3 element-wise and reduction kernels (NEON / ASIMD).
+//
+// All three receive pre-clamped slices from the public API, so unlike
+// dotNEON there is no in-assembly length clamp anywhere below: dst_len (or
+// a_len) is the trusted element count. SMULL/SRSHR/XTN/ABS/UMAXV have no Go
+// assembler mnemonics and are hand-encoded as WORD with the decoded form in
+// the trailing comment (cross-checked by asmcheck_test.go); VUMAX does have a
+// mnemonic and uses it.
+
+// func mulQ15NEON(dst, a, b []int16)
+// Rounding Q15 multiply, 8 lanes per iteration: SMULL/SMULL2 widen the int16
+// products to int32, SRSHR #15 is the rounding shift ((p + 2^14) >> 15,
+// computed on a wider intermediate, and |p| <= 2^30 anyway, so the rounding
+// add cannot overflow), and XTN/XTN2 narrow back to int16 by truncation,
+// which is the wrap: the one product outside int16 range, (-32768)^2 ->
+// +32768, lands as -32768, matching mulQ15Go.
+//
+// SQRDMULH would do all of this in one instruction and must never be used:
+// it saturates exactly that pair to 32767 (see mulq15.go). The scalar tail
+// does the same widen/round/narrow in a 64-bit GPR; the MOVH store keeps the
+// low 16 bits, wrapping identically.
+TEXT ·mulQ15NEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVD b_base+48(FP), R2
+
+    LSR  $3, R3, R4            // R4 = n / 8
+    CBZ  R4, mulq15_neon_remainder
+
+mulq15_neon_loop8:
+    VLD1.P 16(R1), [V0.H8]
+    VLD1.P 16(R2), [V1.H8]
+    WORD $0x0E61C002           // SMULL V2.4S, V0.4H, V1.4H
+    WORD $0x4E61C003           // SMULL2 V3.4S, V0.8H, V1.8H
+    WORD $0x4F312442           // SRSHR V2.4S, V2.4S, #15
+    WORD $0x4F312463           // SRSHR V3.4S, V3.4S, #15
+    WORD $0x0E612844           // XTN V4.4H, V2.4S
+    WORD $0x4E612864           // XTN2 V4.8H, V3.4S
+    VST1.P [V4.H8], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, mulq15_neon_loop8
+
+mulq15_neon_remainder:
+    AND  $7, R3
+    CBZ  R3, mulq15_neon_done
+
+mulq15_neon_scalar:
+    MOVH.P 2(R1), R5           // a[i], sign-extended
+    MOVH.P 2(R2), R6           // b[i], sign-extended
+    MUL  R6, R5, R5            // 64-bit product, |p| <= 2^30
+    ADD  $16384, R5            // + q15Round
+    ASR  $15, R5               // rounding shift
+    MOVH.P R5, 2(R0)           // low 16 bits: 32768 wraps to -32768
+    SUB  $1, R3
+    CBNZ R3, mulq15_neon_scalar
+
+mulq15_neon_done:
+    RET
+
+// func absNEON(dst, a []int16)
+// Wrapping absolute value, 8 lanes per iteration: vector ABS wraps at the
+// type minimum (abs(-32768) = -32768 in a 16-bit lane), which is absGo's
+// contract. The scalar tail computes |v| in a 64-bit GPR, where -(-32768) is
+// +32768, and the MOVH store keeps the low 16 bits, wrapping it back to
+// -32768 identically.
+TEXT ·absNEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+
+    LSR  $3, R3, R4            // R4 = n / 8
+    CBZ  R4, abs_neon_remainder
+
+abs_neon_loop8:
+    VLD1.P 16(R1), [V0.H8]
+    WORD $0x4E60B800           // ABS V0.8H, V0.8H
+    VST1.P [V0.H8], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, abs_neon_loop8
+
+abs_neon_remainder:
+    AND  $7, R3
+    CBZ  R3, abs_neon_done
+
+abs_neon_scalar:
+    MOVH.P 2(R1), R5           // v, sign-extended
+    NEG  R5, R6                // -v
+    CMP  $0, R5
+    CSEL LT, R6, R5, R5        // |v| = v < 0 ? -v : v   (can be 32768)
+    MOVH.P R5, 2(R0)           // low 16 bits: 32768 wraps to -32768
+    SUB  $1, R3
+    CBNZ R3, abs_neon_scalar
+
+abs_neon_done:
+    RET
+
+// func maxAbsNEON(a []int16) int
+// Per-frame abs-max (the headroom probe): ABS maps each lane to its magnitude
+// (abs(-32768) -> 0x8000, i.e. 32768 read unsigned), VUMAX folds 8-lane
+// blocks into an unsigned-max accumulator, UMAXV reduces it to one halfword,
+// and a scalar tail folds the (n mod 8) remainder. FMOVS reads the S view of
+// the H result with the upper 16 bits zero, which is why 0x8000 compares
+// correctly as unsigned 32768; the result lands in [0, 32768].
+TEXT ·maxAbsNEON(SB), NOSPLIT, $0-32
+    MOVD a_base+0(FP), R1
+    MOVD a_len+8(FP), R3
+
+    VEOR V2.B16, V2.B16, V2.B16   // unsigned-max accumulator = 0
+    LSR  $3, R3, R4               // R4 = n / 8
+    CBZ  R4, maxabs_neon_reduce
+
+maxabs_neon_loop8:
+    VLD1.P 16(R1), [V0.H8]
+    WORD $0x4E60B800             // ABS V0.8H, V0.8H
+    VUMAX V0.H8, V2.H8, V2.H8    // unsigned max accumulate
+    SUB  $1, R4
+    CBNZ R4, maxabs_neon_loop8
+
+maxabs_neon_reduce:
+    WORD $0x6E70A841             // UMAXV H1, V2.8H
+    FMOVS F1, R5                  // abs-max halfword, zero-extended
+
+    AND  $7, R3
+    CBZ  R3, maxabs_neon_done
+
+maxabs_neon_scalar:
+    MOVH.P 2(R1), R6              // v, sign-extended
+    NEG  R6, R7                   // -v
+    CMP  $0, R6
+    CSEL LT, R7, R6, R6           // |v| = v < 0 ? -v : v   (can be 32768)
+    CMP  R5, R6
+    CSEL HI, R6, R5, R5           // unsigned: |v| > max ? |v| : max
+    SUB  $1, R3
+    CBNZ R3, maxabs_neon_scalar
+
+maxabs_neon_done:
+    MOVD R5, ret+24(FP)
+    RET

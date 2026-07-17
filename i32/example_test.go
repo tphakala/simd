@@ -2,6 +2,7 @@ package i32_test
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/tphakala/simd/i32"
 )
@@ -35,6 +36,25 @@ func ExampleSub() {
 	i32.Sub(dst, a, b)
 	fmt.Println(dst)
 	// Output: [9 18 27]
+}
+
+// ExampleSum shows the wrapping int32 total of a slice.
+func ExampleSum() {
+	a := []int32{5, -3, 10, 2}
+
+	fmt.Println(i32.Sum(a))
+	// Output: 14
+}
+
+// ExampleAbs shows the wrapping absolute value: |MinInt32| does not fit
+// int32, so that one input wraps in place.
+func ExampleAbs() {
+	a := []int32{-5, 3, math.MinInt32}
+	dst := make([]int32, len(a))
+
+	i32.Abs(dst, a)
+	fmt.Println(dst)
+	// Output: [5 3 -2147483648]
 }
 
 // ExampleMinMax shows the signed min/max reduction over a slice.
