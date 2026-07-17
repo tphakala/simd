@@ -271,6 +271,24 @@ func xcorr4Kernels() []xcorr4Kernel {
 	}
 }
 
+// xcorr4Lengths sweeps every length 1..80 rather than a hand-picked list.
+// xcorr4AVX2 has three paths whose boundaries interact (16-wide loop, 8-wide
+// block, scalar tail), so covering each residue mod 16 at several block counts
+// is what pins the transitions; a sampled list is how the #145 sawtooth stayed
+// invisible in the first place. 240 is retained as the aligned long case the
+// motivating fixed-point caller actually uses.
+//
+// The data must stay non-uniform across the sweep: a sign-symmetric operand set
+// cannot catch a lane or sign error, which is how a UMLAL-for-SMLAL mutant
+// survived the whole suite in #143.
+func xcorr4Lengths() []int {
+	lengths := make([]int, 0, 81)
+	for xn := 1; xn <= 80; xn++ {
+		lengths = append(lengths, xn)
+	}
+	return append(lengths, 240)
+}
+
 // TestXCorr4AMD64_ParityWithGo drives each 4-lag kernel directly, over lengths
 // the dispatcher would never route to it, so a threshold change cannot quietly
 // reduce this to a test of the Go reference against itself.
@@ -280,7 +298,7 @@ func TestXCorr4AMD64_ParityWithGo(t *testing.T) {
 			if !k.available {
 				t.Skipf("%s not available", k.name)
 			}
-			for _, xn := range []int{1, 2, 7, 8, 9, 15, 16, 17, 23, 31, 32, 33, 64, 240} {
+			for _, xn := range xcorr4Lengths() {
 				x := genI16(xn, 121)
 				y := genI16(xn+3, 122) // exactly the window the dispatcher passes
 				dst := make([]int32, xcorrLagBlock)
@@ -347,13 +365,23 @@ func TestXCorrDispatch_ReachesSIMD(t *testing.T) {
 // len(y)-3 < len(x); ParityWithGo passes len(y) == len(x)+3, where both
 // operands of the min are equal and a mutant that dropped the min entirely
 // would still agree.
+//
+// This is also the ONLY over-read detector in the xcorr4 set, which is why it
+// sweeps densely rather than sampling. ParityWithGo cannot do that job at any
+// length: its operands are standalone slices, so a kernel reading past x lands
+// in zeroed memory that multiplies to 0 and leaves every lag correct. A mutant
+// that consumed the 8-wide block but kept the old ANDQ $15 tail (that is, one
+// that reads 8 elements past x) was verified to pass ParityWithGo across the
+// whole 1..80 sweep and to fail HERE. Since the 8-wide block makes which
+// residues over-read depend on len(x) % 16, sampling lengths would leave most
+// of that domain unchecked.
 func TestXCorr4AMD64_LongWindowIsClamped(t *testing.T) {
 	for _, k := range xcorr4Kernels() {
 		t.Run(k.name, func(t *testing.T) {
 			if !k.available {
 				t.Skipf("%s not available", k.name)
 			}
-			for _, xn := range []int{1, 8, 9, 16, 17, 32} {
+			for _, xn := range xcorr4Lengths() {
 				// x MUST be a prefix of a longer allocation: the mutant this
 				// test exists for reads past the end of x, and past a
 				// standalone slice that is zeroed memory, which multiplies to

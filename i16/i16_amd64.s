@@ -490,6 +490,38 @@ xcorr4_sse2_store:
 // func xcorr4AVX2(dst []int32, x, y []int16)
 // As xcorr4SSE2 at twice the width; VPMADDWD's three-operand form also spares
 // the reload-into-destination dance.
+//
+// An 8-wide XMM block runs BEFORE the 16-wide loop, so a remainder of 8-15
+// elements costs one vector block plus at most 7 scalar iterations rather than
+// 8-15 scalar iterations across four lags. Without it AVX2 was up to 1.75x
+// SLOWER than SSE2 for half the len(x) domain, which is exactly where the
+// dispatcher prefers it (issue #145). This is the epilogue-vectorization shape
+// LLVM emits for the same reason, except placed before the body rather than
+// after; see below for why that direction is available here.
+//
+// The ordering is the whole trick, and it is not stylistic. A VEX.128 write
+// zeroes bits 255:128 of the destination (Intel SDM Vol 2, 14.1), so
+// accumulating an XMM block into X4-X7 AFTER the 16-wide loop would silently
+// discard that loop's upper-lane sums. Running it FIRST, while Y4-Y7 are still
+// freshly VPXOR'd, means the zeroing writes zero over zero; the 16-wide loop
+// then accumulates on top with VEX.256, which preserves the low lane, and the
+// fold is untouched. Mixing VEX.128 and VEX.256 costs nothing: the transition
+// penalty applies to legacy-SSE encodings, not to VEX at either width.
+//
+// Reordering the input this way is legal only because the accumulation wraps:
+// wrapping int32 addition is associative and commutative, so summing the
+// remainder before the body is bit-identical to summing it after. This is the
+// same property XCorr's doc comment guarantees to callers. A saturating
+// accumulator could not be reordered like this.
+//
+// Cost at len(x)%16 == 0, measured with perf on an i7-1260P (retired
+// instructions, which unlike wall time are immune to this part's wandering
+// clock and to the code-layout shift the inserted block causes): +2.017
+// instructions per kernel call against a 360-instruction baseline, i.e. exactly
+// the TESTQ and its predicted-taken JZ, for +0.7% cycles. The obvious
+// alternative, accumulating the block into separate X8-X11 and folding them in
+// afterwards, needs four extra unconditional fold VPADDDs; #145 measured that
+// shape at 3-4% on the aligned lengths the motivating fixed-point caller uses.
 TEXT ·xcorr4AVX2(SB), NOSPLIT, $0-72
     MOVQ dst_base+0(FP), DI
     MOVQ x_base+24(FP), SI
@@ -512,8 +544,32 @@ xcorr4_avx2_empty:
     XORQ CX, CX
 
 xcorr4_avx2_blocks:
+    TESTQ $8, CX               // n % 16 >= 8? one XMM block absorbs the 8
+    JZ   xcorr4_avx2_blocks16
+
+    VMOVDQU (SI), X0           // x[0..8), reused by all four lags
+    VMOVDQU (BX), X1           // lag 0
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X4, X4          // VEX-128 zeroes Y4[255:128]; it is still zero
+    VMOVDQU 2(BX), X1          // lag 1
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X5, X5
+    VMOVDQU 4(BX), X1          // lag 2
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X6, X6
+    VMOVDQU 6(BX), X1          // lag 3
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X7, X7
+    ADDQ $16, SI               // 8 int16 consumed from x
+    ADDQ $16, BX               // y slides by the same 8, lag offsets unchanged
+
+    // The block count is computed AFTER the 8-wide block, not before, so SHRQ's
+    // own ZF still drives the branch below. Computing it first would cost a
+    // separate TESTQ AX, AX; perf puts the aligned-length overhead at exactly 2
+    // extra instructions per call this way versus 3.
+xcorr4_avx2_blocks16:
     MOVQ CX, AX
-    SHRQ $4, AX                // AX = n / 16
+    SHRQ $4, AX                // AX = n / 16, the 16-wide block count
     JZ   xcorr4_avx2_fold
 
 xcorr4_avx2_loop16:
@@ -565,7 +621,7 @@ xcorr4_avx2_fold:
     VPADDD X0, X7, X7
     MOVQ X7, R11               // lag 3
 
-    ANDQ $15, CX
+    ANDQ $7, CX                // not $15: the 8-wide block above took that bit
     JZ   xcorr4_avx2_store
 
 xcorr4_avx2_scalar:
