@@ -14,7 +14,7 @@ import "math"
 // enough to justify a separate assembly path. Use MinIdxOfSumRows to
 // batch many argmin rows into one call.
 // a and b are read-only; the call allocates nothing.
-func MinIdxOfSum(a, b []float32) (int, float32) {
+func MinIdxOfSum(a, b []float32) (idx int, val float32) {
 	return minIdxOfSumGo(a, b)
 }
 

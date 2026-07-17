@@ -910,21 +910,20 @@ func addSub32Go(sumDst, diffDst, a, b []float32) {
 // NaN candidate never displaces the incumbent (c < m is false when c is NaN,
 // and if the first candidate is NaN nothing later can beat it). Returns (-1, 0)
 // for empty input. This is the authority the SIMD kernels must match.
-func minIdxOfSumGo(a, b []float32) (int, float32) {
+func minIdxOfSumGo(a, b []float32) (idx int, val float32) {
 	n := min(len(a), len(b))
 	if n == 0 {
 		return -1, 0
 	}
-	idx := 0
-	m := a[0] + b[0]
+	val = a[0] + b[0]
 	for i := 1; i < n; i++ {
 		c := a[i] + b[i]
-		if c < m {
-			m = c
+		if c < val {
+			val = c
 			idx = i
 		}
 	}
-	return idx, m
+	return idx, val
 }
 
 // minIdxOfSumRowsGo is the batched sliding-window reference: row r slides the k

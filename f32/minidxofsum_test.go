@@ -12,7 +12,7 @@ import (
 // Same contract (single-rounded add, ties to the lowest index, NaN never wins),
 // different code shape, so a shared bug in the production reference does not hide
 // in the oracle too.
-func oracleMinIdxOfSum(a, b []float32) (int, float32) {
+func oracleMinIdxOfSum(a, b []float32) (idx int, val float32) {
 	n := min(len(a), len(b))
 	if n == 0 {
 		return -1, 0
@@ -21,7 +21,6 @@ func oracleMinIdxOfSum(a, b []float32) (int, float32) {
 	for i := range c {
 		c[i] = a[i] + b[i]
 	}
-	idx := 0
 	for i := 1; i < n; i++ {
 		if c[i] < c[idx] {
 			idx = i
