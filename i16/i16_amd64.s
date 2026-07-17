@@ -319,6 +319,30 @@ dot_sse2_done:
 
 // func dotAVX2(a, b []int16) int32
 // Handles mismatched slice lengths: uses min(len(a), len(b)).
+//
+// An 8-wide XMM block runs BEFORE the 16-wide loop, so a remainder of 8-15
+// elements costs one vector block plus at most 7 scalar iterations rather than
+// 8-15 iterations of a serial ADDL chain. Without it AVX2 lost to SSE2 wherever
+// n mod 16 was 8-15, which is exactly where dotI16 prefers AVX2; see #149 for
+// the measurements. dotNEON carries the same 8-wide tier (dot_neon_block8 in
+// i16_arm64.s), though it sits after the body, in the one slot the hazard below
+// closes off here; NEON has no upper-lane hazard to keep it out. dotSSE2 needs
+// no such tier at all: its 8-wide loop already is that width.
+//
+// The placement is constrained, though not down to one slot as in xcorr4AVX2
+// below. Accumulating into X0 with a VEX.128 write zeroes bits 255:128 of Y0,
+// so a block between the 16-wide loop and the VEXTRACTI128 fold would silently
+// discard the loop's upper-lane sums. Two slots survive that: before the body,
+// while Y0 is still freshly VPXOR'd so the zeroing writes zero over zero, or
+// after the fold, once the upper lane is dead (xcorr4AVX2 folds too late to
+// have the second option). This kernel takes the first, so that this file
+// carries one block shape rather than two.
+//
+// Summing the remainder before the body is bit-exact only because the
+// accumulation wraps: wrapping int32 addition is associative and commutative,
+// so regrouping the terms cannot change the result. That is the property the
+// lane split already rests on and that DotProduct's doc guarantees to callers.
+// It would not hold in a saturating kernel.
 TEXT ·dotAVX2(SB), NOSPLIT, $0-52
     MOVQ a_base+0(FP), SI
     MOVQ a_len+8(FP), CX
@@ -329,6 +353,21 @@ TEXT ·dotAVX2(SB), NOSPLIT, $0-52
 
     VPXOR Y0, Y0, Y0           // int32 accumulator
 
+    TESTQ $8, CX               // n % 16 >= 8? one XMM block absorbs the 8
+    JZ   dot_avx2_blocks16
+
+    VMOVDQU (SI), X1
+    VMOVDQU (DI), X2
+    VPMADDWD X2, X1, X1        // 8 int16 pairs -> 4 int32
+    VPADDD X1, X0, X0          // VEX-128 zeroes Y0[255:128]; it is still zero
+    ADDQ $16, SI
+    ADDQ $16, DI
+
+    // The block count is computed AFTER the 8-wide block, not before, so SHRQ's
+    // own ZF still drives the branch below; computing it first would need a
+    // separate TESTQ BX, BX. CX keeps the full n either way: the 8 elements the
+    // block consumed are exactly the ones n/16 already excludes.
+dot_avx2_blocks16:
     MOVQ CX, BX
     SHRQ $4, BX                // BX = n / 16
     JZ   dot_avx2_reduce
@@ -352,7 +391,7 @@ dot_avx2_reduce:
     VPADDD X1, X0, X0
     MOVQ X0, AX                // low int32 = vector total (in EAX)
 
-    ANDQ $15, CX
+    ANDQ $7, CX                // the 8-wide block above took n % 16 down to n % 8
     JZ   dot_avx2_done
 
 dot_avx2_scalar:

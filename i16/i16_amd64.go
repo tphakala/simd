@@ -27,17 +27,23 @@ var (
 	hasSSE2 = cpu.X86.SSE2
 )
 
-// Dot dispatch thresholds: one vector block each. They are independent literals
-// rather than aliases of the interleave block sizes they happen to equal, so
-// retuning the interleave kernels cannot silently retune the dot dispatch.
+// Dot dispatch thresholds. They are independent literals rather than aliases of
+// the interleave block sizes they happen to equal, so retuning the interleave
+// kernels cannot silently retune the dot dispatch.
 //
 // The dot kernels are correct at any n (each falls through to a scalar tail), so
 // these are performance cuts only, never a safety requirement. Measured kernel
 // against Go reference at n=8, SSE2 wins 2.2x, so unlike NEON there is no
 // break-even region to step around here.
+//
+// Both kernels vectorize from 8 (see dotAVX2's 8-wide block), so the AVX2 cut at
+// 16 is not about AVX2 needing 16 elements to vectorize. It is that AVX2's fold
+// pays a VEXTRACTI128 and a VZEROUPPER that SSE2's identical one-XMM block does
+// not, a flat cost only the 16-wide body amortizes: measured kernel-direct, at
+// n=8-15 AVX2 is 7-20% slower than SSE2, and at n >= 16 it is never slower.
 const (
 	minSSE2Dot = 8  // PMADDWL retires 8 int16 pairs per iteration
-	minAVX2Dot = 16 // VPMADDWD retires 16
+	minAVX2Dot = 16 // below this AVX2's fold overhead outweighs its width
 )
 
 // XCorr vectorizes once x is long enough that reusing each x load across four
