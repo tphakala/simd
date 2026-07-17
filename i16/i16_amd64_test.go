@@ -211,6 +211,19 @@ func TestDotAMD64_MinInt16(t *testing.T) {
 
 // TestDotAMD64_Clamp verifies the in-assembly min(len(a), len(b)): the kernel
 // must not read the longer operand past the shorter one's length.
+//
+// short MUST be a prefix of a longer allocation. A kernel that consumes past
+// the clamped n reads the memory following short, and past a standalone slice
+// that is zeroed, which multiplies to 0 and leaves every sum correct. Non-zero
+// bytes after short are what make over-consumption observable rather than a
+// coin flip on heap layout, and the slack has to cover a whole block of the
+// widest kernel here (16 elements, dotAVX2's body). Same reasoning as
+// TestXCorr4AMD64_LongWindowIsClamped; without it this test detects nothing on
+// amd64 at any n.
+//
+// This is the only dot test that watches the kernels directly with non-zero
+// memory past an operand. TestDotProduct_UnalignedOperands does it through the
+// dispatcher, so it cannot reach the kernels below their thresholds.
 func TestDotAMD64_Clamp(t *testing.T) {
 	for _, k := range dotKernels() {
 		t.Run(k.name, func(t *testing.T) {
@@ -221,7 +234,7 @@ func TestDotAMD64_Clamp(t *testing.T) {
 				if n == 0 {
 					continue
 				}
-				long, short := genI16(n+37, 63), genI16(n, 64)
+				long, short := genI16(n+37, 63), genI16(n+64, 64)[:n]
 				if got, want := k.fn(long, short), dotOracle(long, short); got != want {
 					t.Errorf("dot%s clamp n=%d: got %d, want %d", k.name, n, got, want)
 				}

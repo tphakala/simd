@@ -41,14 +41,21 @@ func dotOracle(a, b []int16) int32 {
 
 // dotLengths sweeps EVERY length from 0 to 64, then a spread of larger ones.
 //
-// The exhaustive low range is deliberate rather than lazy. The arm64 kernel
-// runs an 8-wide block when n mod 16 >= 8 and follows it with an (n mod 8)
-// scalar tail, so reaching that block with a short tail needs n mod 16 in
-// {10, 11, 13, 14}. A hand-picked list of block boundaries and their immediate
-// neighbours never produces those combinations. The all-MinInt16 sweep in
-// TestDotProduct_MinInt16 does visit every length, but its operands are
-// sign-symmetric ((-32768)*(-32768) == 32768*32768), so it can only catch a
-// miscounted element, never a sign, lane, or index error. This list is what the
+// The exhaustive low range is deliberate rather than lazy. Both wide kernels
+// (dotNEON, and dotAVX2 now that it has one too) run an 8-wide block when
+// n mod 16 >= 8 and follow it with an (n mod 8) scalar tail. Sweeping 0 to 64
+// reaches every residue mod 16, and that is the point of doing it that way: the
+// tempting shortcut, a hand-picked list of block boundaries and their immediate
+// neighbours, would yield only residues {0, 1, 7, 8, 9, 15}, so it would never
+// run that block together with a tail of 2 to 6 elements (residues 10 to 14).
+//
+// The all-MinInt16 sweep in TestDotProduct_MinInt16 does visit every length, but
+// it cannot stand in for this list on either count. Its operands are
+// sign-symmetric ((-32768)*(-32768) == 32768*32768), so it cannot catch a sign,
+// lane, or index error. Nor can it reliably catch a miscount: every product is
+// 2^30, so any four of them sum to 2^32 and vanish from the wrapping
+// accumulator, which leaves a miscount of any multiple of four elements (the
+// 8-wide block itself included) invisible to it. This list is what the
 // non-uniform tests sweep, so it has to be the exhaustive one.
 var dotLengths = func() []int {
 	lens := make([]int, 0, 75)

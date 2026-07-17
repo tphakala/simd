@@ -67,6 +67,13 @@ func BenchmarkDeinterleave2Go_1000(b *testing.B) {
 // Dot benchmarks sweep the lengths fixed-point codecs actually call at: n=8 is
 // a short CELT band (where call overhead is the concern), n=240 a 20 ms frame
 // at 12 kHz, n=480 one at 24 kHz. SetBytes counts both operands: 2*n int16.
+//
+// 24 and 248 are the regression guard for the 8-wide AVX2 block, and they are
+// here because every other length above is a multiple of 16 (8 aside), which is
+// exactly how #149's sawtooth stayed invisible: a parity test cannot see a
+// performance defect, so only a benchmark at a length the block serves can. 24
+// is the worst case #149 measured (AVX2 was 1.41x slower than SSE2 there) and
+// 248 is the same residue at a high block count.
 
 func benchmarkDot(b *testing.B, n int, fn func(a, c []int16) int32) {
 	b.Helper()
@@ -83,14 +90,18 @@ func benchmarkDot(b *testing.B, n int, fn func(a, c []int16) int32) {
 }
 
 func BenchmarkDotProduct_8(b *testing.B)    { benchmarkDot(b, 8, DotProduct) }
+func BenchmarkDotProduct_24(b *testing.B)   { benchmarkDot(b, 24, DotProduct) }
 func BenchmarkDotProduct_64(b *testing.B)   { benchmarkDot(b, 64, DotProduct) }
 func BenchmarkDotProduct_240(b *testing.B)  { benchmarkDot(b, 240, DotProduct) }
+func BenchmarkDotProduct_248(b *testing.B)  { benchmarkDot(b, 248, DotProduct) }
 func BenchmarkDotProduct_480(b *testing.B)  { benchmarkDot(b, 480, DotProduct) }
 func BenchmarkDotProduct_4096(b *testing.B) { benchmarkDot(b, 4096, DotProduct) }
 
 func BenchmarkDotProductGo_8(b *testing.B)    { benchmarkDot(b, 8, dotGo) }
+func BenchmarkDotProductGo_24(b *testing.B)   { benchmarkDot(b, 24, dotGo) }
 func BenchmarkDotProductGo_64(b *testing.B)   { benchmarkDot(b, 64, dotGo) }
 func BenchmarkDotProductGo_240(b *testing.B)  { benchmarkDot(b, 240, dotGo) }
+func BenchmarkDotProductGo_248(b *testing.B)  { benchmarkDot(b, 248, dotGo) }
 func BenchmarkDotProductGo_480(b *testing.B)  { benchmarkDot(b, 480, dotGo) }
 func BenchmarkDotProductGo_4096(b *testing.B) { benchmarkDot(b, 4096, dotGo) }
 
@@ -129,18 +140,24 @@ func BenchmarkXCorr_480x64(b *testing.B) { benchmarkXCorr(b, 480, 64, XCorr) }
 // xcorrLagBlock, so the remainder-lag path never runs either. The cases below
 // exist to make both visible.
 //
-// x=25 currently shows the AVX2 tail costing more than SSE2 would (issue
-// filed): a remainder of 8-15 elements is served by a 4-lag scalar tail rather
-// than an 8-wide block. x=248 is the same shape at a realistic length, and
-// lags=61 is the pitch-analysis count from the motivating caller, which leaves
-// one remainder lag.
+// x=25 and x=248 leave len(x) % 16 in 8..15, the remainder #151 gave xcorr4AVX2
+// an 8-wide block to absorb; AVX2 had been up to 1.75x slower than SSE2 there.
+// x=248 is that shape at a realistic length.
+//
+// lags=61 is the pitch-analysis count from the motivating caller, and it is not
+// a multiple of xcorrLagBlock, so it leaves one remainder lag. That lag runs
+// through dotI16 rather than xcorr4, which makes 248x61 the only case here that
+// reaches dotAVX2's own 8-wide block (#149): 240x61 takes the same remainder-lag
+// path but hands dotI16 a residue of 0, so the block never runs.
 func BenchmarkXCorr_25x64(b *testing.B)  { benchmarkXCorr(b, 25, 64, XCorr) }
 func BenchmarkXCorr_248x64(b *testing.B) { benchmarkXCorr(b, 248, 64, XCorr) }
 func BenchmarkXCorr_240x61(b *testing.B) { benchmarkXCorr(b, 240, 61, XCorr) }
+func BenchmarkXCorr_248x61(b *testing.B) { benchmarkXCorr(b, 248, 61, XCorr) }
 
 func BenchmarkXCorrGo_25x64(b *testing.B)  { benchmarkXCorr(b, 25, 64, xcorrGo) }
 func BenchmarkXCorrGo_248x64(b *testing.B) { benchmarkXCorr(b, 248, 64, xcorrGo) }
 func BenchmarkXCorrGo_240x61(b *testing.B) { benchmarkXCorr(b, 240, 61, xcorrGo) }
+func BenchmarkXCorrGo_248x61(b *testing.B) { benchmarkXCorr(b, 248, 61, xcorrGo) }
 
 func BenchmarkXCorrGo_240x4(b *testing.B)   { benchmarkXCorr(b, 240, 4, xcorrGo) }
 func BenchmarkXCorrGo_240x64(b *testing.B)  { benchmarkXCorr(b, 240, 64, xcorrGo) }
