@@ -551,6 +551,11 @@ func maxIdx32(a []float32) int {
 	return maxIdxGo(a)
 }
 
+// SIMD kernel wired in a follow-up commit; Go route keeps the contract authoritative.
+func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
+	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
+}
+
 func addScaled32(dst []float32, alpha float32, s []float32) {
 	if hasNEON && len(dst) >= 4 {
 		addScaledNEON(dst, alpha, s)

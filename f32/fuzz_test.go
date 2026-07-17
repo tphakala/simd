@@ -494,3 +494,84 @@ func FuzzF32Pow(f *testing.F) {
 		}
 	})
 }
+
+// FuzzF32MinIdxOfSumRows differentially fuzzes the dispatched MinIdxOfSumRows
+// against its pure-Go reference, and cross-checks the defining property that a
+// batched row equals the standalone MinIdxOfSum over that window. The shape
+// (rows, window width, slide in {-1, 0, +1}) is decoded from the leading bytes;
+// the remaining bytes seed the operands. Values are quantized to a coarse grid
+// to force dense ties, with NaN and +Inf sprinkled in so the never-displace and
+// padding rules are exercised. base and len(k) are chosen so every window is in
+// range, keeping the target on the write path (panics are covered by unit tests).
+func FuzzF32MinIdxOfSumRows(f *testing.F) {
+	addByteLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if len(raw) < 4 {
+			return
+		}
+		n := 1 + int(raw[0])%16
+		rows := 1 + int(raw[1])%8
+		slide := int(raw[2]%3) - 1 // -1, 0, +1
+
+		// windowLayout keeps min offset at 0 and covers the max offset.
+		minMul, maxMul := 0, 0
+		if slide >= 0 {
+			maxMul = slide * (rows - 1)
+		} else {
+			minMul = slide * (rows - 1)
+		}
+		base := -minMul
+		klen := base + maxMul + n + 3
+
+		pool := f32sUnit(raw[3:])
+		if len(pool) < n+klen {
+			return
+		}
+		nan := float32(math.NaN())
+		pinf := float32(math.Inf(1))
+
+		// Quantize to 0.25 steps to force ties; specials keyed off the raw bytes.
+		quant := func(x float32) float32 {
+			return float32(math.Round(float64(x)*4)) / 4
+		}
+		a := make([]float32, n)
+		for i := range a {
+			a[i] = quant(pool[i])
+		}
+		k := make([]float32, klen)
+		for i := range k {
+			v := quant(pool[n+i])
+			switch raw[(i+int(raw[3]))%len(raw)] % 7 {
+			case 0:
+				v = pinf
+			case 1:
+				v = nan
+			}
+			k[i] = v
+		}
+
+		vals := make([]float32, rows)
+		idxs := make([]int32, rows)
+		MinIdxOfSumRows(vals, idxs, a, k, base, slide)
+
+		refVals := make([]float32, rows)
+		refIdxs := make([]int32, rows)
+		minIdxOfSumRowsGo(refVals, refIdxs, a, k, base, slide)
+
+		for r := range rows {
+			if idxs[r] != refIdxs[r] || !bitsEqF32(vals[r], refVals[r]) {
+				t.Fatalf("row %d: got (%d,%#x) ref (%d,%#x) rows=%d n=%d slide=%d",
+					r, idxs[r], math.Float32bits(vals[r]), refIdxs[r], math.Float32bits(refVals[r]), rows, n, slide)
+			}
+		}
+
+		// Defining property on one derived row.
+		r := int(raw[3]) % rows
+		off := base + r*slide
+		wi, wv := MinIdxOfSum(a, k[off:off+n])
+		if int(idxs[r]) != wi || !bitsEqF32(vals[r], wv) {
+			t.Fatalf("pairwise row %d: rows got (%d,%#x) MinIdxOfSum (%d,%#x)",
+				r, idxs[r], math.Float32bits(vals[r]), wi, math.Float32bits(wv))
+		}
+	})
+}
