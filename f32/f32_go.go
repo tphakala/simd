@@ -903,3 +903,38 @@ func addSub32Go(sumDst, diffDst, a, b []float32) {
 		diffDst[i] = a[i] - b[i]
 	}
 }
+
+// minIdxOfSumGo is the bit-exact reference for the pairwise argmin-of-sum. Each
+// candidate a[i]+b[i] is a single float32 addition (one rounding, never fused).
+// The comparison is strict less-than, so ties resolve to the lowest index and a
+// NaN candidate never displaces the incumbent (c < m is false when c is NaN,
+// and if the first candidate is NaN nothing later can beat it). Returns (-1, 0)
+// for empty input. This is the authority the SIMD kernels must match.
+func minIdxOfSumGo(a, b []float32) (idx int, val float32) {
+	n := min(len(a), len(b))
+	if n == 0 {
+		return -1, 0
+	}
+	val = a[0] + b[0]
+	for i := 1; i < n; i++ {
+		c := a[i] + b[i]
+		if c < val {
+			val = c
+			idx = i
+		}
+	}
+	return idx, val
+}
+
+// minIdxOfSumRowsGo is the batched sliding-window reference: row r slides the k
+// window to base+r*slide and runs minIdxOfSumGo over it. The caller
+// (MinIdxOfSumRows) validates that every reached window is in range before this
+// runs. It is the bit-exact authority for the SIMD row kernels.
+func minIdxOfSumRowsGo(vals []float32, idxs []int32, a, k []float32, base, slide int) {
+	for r := range vals {
+		off := base + r*slide
+		i, v := minIdxOfSumGo(a, k[off:off+len(a)])
+		vals[r] = v
+		idxs[r] = int32(i)
+	}
+}

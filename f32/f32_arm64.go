@@ -551,6 +551,32 @@ func maxIdx32(a []float32) int {
 	return maxIdxGo(a)
 }
 
+// minIdxOfSumRows32 routes the sliding-window shapes (slide +1 and -1) through
+// the NEON block kernel, four rows per lane-per-row block, and composes any
+// remainder rows with the scalar path. Non-unit slides and a missing NEON stay
+// on the Go reference. All paths are bit-identical (see minIdxOfSumRows4NEON).
+func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
+	if hasNEON && (slide == 1 || slide == -1) {
+		r := 0
+		for ; r+4 <= len(vals); r += 4 {
+			off := base + r*slide
+			if slide == 1 {
+				minIdxOfSumRows4NEON(vals[r:r+4], idxs[r:r+4], a, k[off:], 0)
+			} else {
+				minIdxOfSumRows4NEON(vals[r:r+4], idxs[r:r+4], a, k[off-3:], 1)
+			}
+		}
+		// Leftover rows (fewer than a 4-wide block) compose with the scalar
+		// reference, keeping the tie-break/NaN/rounding contract in one place.
+		minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+		return
+	}
+	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
+}
+
+//go:noescape
+func minIdxOfSumRows4NEON(vals []float32, idxs []int32, a, k []float32, rev int)
+
 func addScaled32(dst []float32, alpha float32, s []float32) {
 	if hasNEON && len(dst) >= 4 {
 		addScaledNEON(dst, alpha, s)

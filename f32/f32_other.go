@@ -93,3 +93,6 @@ func log2_32(dst, src []float32)            { log2Go(dst, src) }
 func log10_32(dst, src []float32)           { log10Go(dst, src) }
 func pow32(dst, src []float32, exp float32) { powGo(dst, src, exp) }
 func powElem32(dst, base, exp []float32)    { powElemGo(dst, base, exp) }
+func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
+	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
+}

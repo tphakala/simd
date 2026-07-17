@@ -19,6 +19,7 @@
 // FMLA Vd.4S, Vn.4S, Vm.4S: 0x4E20CC00 | (Vm << 16) | (Vn << 5) | Vd
 // FADDP Vd.4S, Vn.4S, Vm.4S: 0x6E20D400 | (Vm << 16) | (Vn << 5) | Vd
 // FADDP Sd, Vn.2S:          0x7E30D800 | (Vn << 5) | Vd
+// FCMGT Vd.4S, Vn.4S, Vm.4S: 0x6EA0E400 | (Vm << 16) | (Vn << 5) | Vd  (lane mask Vn > Vm; NaN operand yields 0)
 
 // func dotProductNEON(a, b []float32) float32
 // Handles mismatched slice lengths: uses min(len(a), len(b)).
@@ -4097,4 +4098,74 @@ powelem32_neon_scalar_normal:
     CBNZ R3, powelem32_neon_scalar_loop
 
 powelem32_neon_done:
+    RET
+
+// func minIdxOfSumRows4NEON(vals []float32, idxs []int32, a, k []float32, rev int)
+// Lane-per-row argmin-of-sum for a block of four rows. Each of the four NEON
+// lanes owns one output row and replays the scalar loop exactly: candidate i
+// (i in [0, n), n = len(a)) broadcasts a[i], adds it to the four rows' k values
+// with a single FADD (one rounding, never fused), and updates (bestVal, bestIdx)
+// only on a strict FCMGT (bestVal > c). Strict compare keeps first-index-wins on
+// ties, leaves the incumbent on a NaN candidate (FCMGT yields 0 for any NaN
+// operand), and never lets a +Inf pad beat a finite value; the bits match the Go
+// reference lane for lane.
+//
+// The k pointer is pre-sliced by the dispatcher so k[0] is the first address the
+// kernel reads. Both slide signs load k[i:i+4] ascending (the window slides by
+// one element per candidate, so k advances 4 bytes, not 16). For slide == +1 the
+// dispatcher passes row r's window start, lane l reads k[i+l] = row (r+l)'s
+// candidate i, and the union over i in [0,n), l in [0,4) is k indices
+// [off, off+n+2] = exactly rows r..r+3's windows, all range-checked by the
+// wrapper. For slide == -1 it passes row (r+3)'s window start (off-3 >= 0 because
+// the wrapper validated row r+3); the ascending load lands row r+3 in lane 0 and
+// row r in lane 3, so rev == 1 reverses the two result vectors once at store
+// (REV64 + EXT) to restore lane l == row r+l. Either way every read stays inside
+// the union of the four rows' validated windows, so there is no over-read.
+TEXT ·minIdxOfSumRows4NEON(SB), NOSPLIT, $0-104
+    MOVD vals_base+0(FP), R0
+    MOVD idxs_base+24(FP), R1
+    MOVD a_base+48(FP), R2
+    MOVD a_len+56(FP), R3          // R3 = n (dispatcher guarantees n >= 1)
+    MOVD k_base+72(FP), R4
+    MOVD rev+96(FP), R5
+
+    // Candidate 0: seed bestVal = a[0] + k[0:4], bestIdx = 0, curIdx = 0.
+    FMOVS (R2), F3                 // a[0]
+    VDUP V3.S[0], V3.S4            // broadcast a[0] across the four lanes
+    VLD1 (R4), [V2.S4]             // k[0:4] (unaligned)
+    ADD $4, R4                     // advance k by one element
+    WORD $0x4E22D460              // FADD V0.4S, V3.4S, V2.4S   bestVal = a[0]+kv
+    VEOR V1.B16, V1.B16, V1.B16    // bestIdx = 0
+    VEOR V6.B16, V6.B16, V6.B16    // curIdx = 0
+    MOVW $1, R7
+    VDUP R7, V7.S4                 // V7 = dup(1), the curIdx increment
+
+    SUB $1, R3, R6                 // R6 = n - 1 remaining candidates
+    CBZ R6, minidxrows4_store      // n == 1: nothing to compare
+
+minidxrows4_loop:
+    ADD $4, R2                     // a[i]
+    FMOVS (R2), F3
+    VDUP V3.S[0], V3.S4            // broadcast a[i]
+    VLD1 (R4), [V2.S4]             // k[i:i+4]
+    ADD $4, R4
+    WORD $0x4E22D462              // FADD V2.4S, V3.4S, V2.4S   c = a[i]+kv
+    VADD V7.S4, V6.S4, V6.S4       // curIdx++ (before the selects read it)
+    WORD $0x6EA2E404              // FCMGT V4.4S, V0.4S, V2.4S  mask = bestVal > c
+    WORD $0x6EA41C40              // BIT V0.16B, V2.16B, V4.16B  bestVal = mask ? c : bestVal
+    WORD $0x6EA41CC1              // BIT V1.16B, V6.16B, V4.16B  bestIdx = mask ? curIdx : bestIdx
+    SUB $1, R6
+    CBNZ R6, minidxrows4_loop
+
+minidxrows4_store:
+    CBZ R5, minidxrows4_write      // rev == 0: lanes already in row order
+    // rev == 1: full lane reversal [0,1,2,3] -> [3,2,1,0] on both results.
+    WORD $0x4EA00800              // REV64 V0.4S, V0.4S            [1,0,3,2]
+    WORD $0x6E004000              // EXT V0.16B, V0.16B, V0.16B, #8  [3,2,1,0]
+    WORD $0x4EA00821              // REV64 V1.4S, V1.4S
+    WORD $0x6E014021              // EXT V1.16B, V1.16B, V1.16B, #8
+
+minidxrows4_write:
+    VST1 [V0.S4], (R0)             // vals[0:4]
+    VST1 [V1.S4], (R1)             // idxs[0:4]
     RET

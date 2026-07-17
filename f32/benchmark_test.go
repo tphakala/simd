@@ -49,6 +49,7 @@ var benchSizes = []int{128, 512, 1024, 4096, 16384, 65536}
 var (
 	sink32   float32
 	sinkBool bool
+	sinkInt  int
 )
 
 // =============================================================================
@@ -698,5 +699,120 @@ func BenchmarkFloat32ToInt16Scale(b *testing.B) {
 		benchScalePair(b, size, 6,
 			func() { Float32ToInt16Scale(dst, src, scale) },
 			func() { float32ToInt16ScaleGo(dst, src, scale) })
+	}
+}
+
+// =============================================================================
+// MinIdxOfSum / MinIdxOfSumRows Benchmarks
+// =============================================================================
+
+// minIdxOfSumRowsBenchShapes lists the (rows, n) shapes benchmarked for
+// MinIdxOfSumRows. 11x11 through 17x17 track the motivating workload, where
+// rows and n both run 11 to 17 with slide -1; 8x14 straddles the NEON 4-row /
+// AVX2 8-row block seam, and 32x32, 96x17, 96x96 exercise larger row counts.
+var minIdxOfSumRowsBenchShapes = [][2]int{
+	{8, 14},
+	{11, 11},
+	{11, 14},
+	{14, 14},
+	{14, 17},
+	{17, 17},
+	{32, 32},
+	{96, 17},
+	{96, 96},
+}
+
+// makeMinIdxOfSumRowsBenchData builds the a and k inputs for a rows x n
+// MinIdxOfSumRows benchmark at slide -1, with base = rows-1 so the lowest
+// row offset (row rows-1) lands at k[0], and k sized so every row's window
+// fits (see windowLayout in minidxofsum_test.go).
+func makeMinIdxOfSumRowsBenchData(rows, n int) (a, k []float32, base int) {
+	base, klen := windowLayout(rows, n, -1)
+	a = make([]float32, n)
+	k = make([]float32, klen)
+	for i := range a {
+		a[i] = float32(i%100) + 0.5
+	}
+	for i := range k {
+		k[i] = float32((i+37)%100) + 0.5
+	}
+	return a, k, base
+}
+
+func BenchmarkMinIdxOfSumRows_RxN(b *testing.B) {
+	for _, shape := range minIdxOfSumRowsBenchShapes {
+		rows, n := shape[0], shape[1]
+		a, k, base := makeMinIdxOfSumRowsBenchData(rows, n)
+		vals := make([]float32, rows)
+		idxs := make([]int32, rows)
+		b.Run(fmt.Sprintf("%dx%d", rows, n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				MinIdxOfSumRows(vals, idxs, a, k, base, -1)
+			}
+			reportThroughput32(b, rows*n)
+		})
+	}
+}
+
+func BenchmarkMinIdxOfSumRowsGo_RxN(b *testing.B) {
+	for _, shape := range minIdxOfSumRowsBenchShapes {
+		rows, n := shape[0], shape[1]
+		a, k, base := makeMinIdxOfSumRowsBenchData(rows, n)
+		vals := make([]float32, rows)
+		idxs := make([]int32, rows)
+		b.Run(fmt.Sprintf("%dx%d", rows, n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				minIdxOfSumRowsGo(vals, idxs, a, k, base, -1)
+			}
+			reportThroughput32(b, rows*n)
+		})
+	}
+}
+
+// BenchmarkMinIdxOfSumRows_Slide compares slide +1 against slide -1 at a
+// single 14x14 shape, to confirm the store-time-reversal design (see
+// minIdxOfSumRows32 in f32_arm64.go / f32_amd64.go) keeps the two directions
+// equal in cost.
+func BenchmarkMinIdxOfSumRows_Slide(b *testing.B) {
+	const rows, n = 14, 14
+	vals := make([]float32, rows)
+	idxs := make([]int32, rows)
+
+	b.Run("plus1", func(b *testing.B) {
+		base, klen := windowLayout(rows, n, 1)
+		a := make([]float32, n)
+		k := make([]float32, klen)
+		for i := range a {
+			a[i] = float32(i%100) + 0.5
+		}
+		for i := range k {
+			k[i] = float32((i+37)%100) + 0.5
+		}
+		for i := 0; i < b.N; i++ {
+			MinIdxOfSumRows(vals, idxs, a, k, base, 1)
+		}
+		reportThroughput32(b, rows*n)
+	})
+	b.Run("minus1", func(b *testing.B) {
+		a, k, base := makeMinIdxOfSumRowsBenchData(rows, n)
+		for i := 0; i < b.N; i++ {
+			MinIdxOfSumRows(vals, idxs, a, k, base, -1)
+		}
+		reportThroughput32(b, rows*n)
+	})
+}
+
+// BenchmarkMinIdxOfSum_N benchmarks the pairwise scalar MinIdxOfSum at the
+// same n range as the batched MinIdxOfSumRows shapes, plus a larger n, to
+// document its per-call cost next to the batched form.
+func BenchmarkMinIdxOfSum_N(b *testing.B) {
+	for _, n := range []int{11, 14, 17, 96} {
+		a, bb, _, _ := makeBenchData32(n)
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sinkInt, sink32 = MinIdxOfSum(a, bb)
+			}
+			reportThroughput32(b, n*2)
+		})
 	}
 }
