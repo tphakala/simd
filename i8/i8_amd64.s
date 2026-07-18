@@ -26,6 +26,31 @@ TEXT ·addSatAVX2(SB), NOSPLIT, $0-72
     MOVQ a_base+24(FP), SI
     MOVQ b_base+48(FP), DI
 
+    // A 16-wide then an 8-wide XMM block absorb up to 24 of the 0-31 remainder
+    // bytes before the 32-wide loop, shrinking the branchy scalar tail from up to
+    // 31 elements to at most 7. FORWARD blocks (not overlapping): each input byte
+    // is read then its output written exactly once, so in-place dst==a (or dst==b)
+    // stays correct for this non-idempotent op. Both input pointers advance.
+    TESTQ $16, CX
+    JZ   addsat_block8
+    VMOVDQU (SI), X0
+    VMOVDQU (DI), X1
+    VPADDSB X1, X0, X2         // saturating(a + b)
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DI
+    ADDQ $16, DX
+addsat_block8:
+    TESTQ $8, CX
+    JZ   addsat_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VMOVQ (DI), X1
+    VPADDSB X1, X0, X2         // low 8 = a+b; upper 8 = 0+0 = 0, never stored
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DI
+    ADDQ $8, DX
+addsat_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX                // AX = n / 32
     JZ   addsat_remainder
@@ -42,7 +67,7 @@ addsat_loop32:
     JNZ  addsat_loop32
 
 addsat_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   addsat_done
 
 addsat_scalar:
@@ -75,6 +100,29 @@ TEXT ·subSatAVX2(SB), NOSPLIT, $0-72
     MOVQ a_base+24(FP), SI
     MOVQ b_base+48(FP), DI
 
+    // 16-wide then 8-wide forward XMM pre-block; shrinks the branchy scalar tail
+    // from up to 31 elements to at most 7. Each input byte is read then written
+    // once, so in-place dst==a/dst==b stays correct. Both input pointers advance.
+    TESTQ $16, CX
+    JZ   subsat_block8
+    VMOVDQU (SI), X0
+    VMOVDQU (DI), X1
+    VPSUBSB X1, X0, X2         // saturating(a - b)
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DI
+    ADDQ $16, DX
+subsat_block8:
+    TESTQ $8, CX
+    JZ   subsat_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VMOVQ (DI), X1
+    VPSUBSB X1, X0, X2         // low 8 = a-b; upper 8 = 0-0 = 0, never stored
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DI
+    ADDQ $8, DX
+subsat_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   subsat_remainder
@@ -91,7 +139,7 @@ subsat_loop32:
     JNZ  subsat_loop32
 
 subsat_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   subsat_done
 
 subsat_scalar:
@@ -398,6 +446,29 @@ TEXT ·minAVX2(SB), NOSPLIT, $0-72
     MOVQ a_base+24(FP), SI
     MOVQ b_base+48(FP), DI
 
+    // 16-wide then 8-wide forward XMM pre-block; shrinks the branchy scalar tail
+    // from up to 31 elements to at most 7. Each input byte is read then written
+    // once, so in-place dst==a/dst==b stays correct. Both input pointers advance.
+    TESTQ $16, CX
+    JZ   min_block8
+    VMOVDQU (SI), X0
+    VMOVDQU (DI), X1
+    VPMINSB X1, X0, X2         // min(a, b)
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DI
+    ADDQ $16, DX
+min_block8:
+    TESTQ $8, CX
+    JZ   min_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VMOVQ (DI), X1
+    VPMINSB X1, X0, X2         // low 8 = min(a,b); upper 8 = min(0,0) = 0, unstored
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DI
+    ADDQ $8, DX
+min_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX                // AX = n / 32
     JZ   min_remainder
@@ -414,7 +485,7 @@ min_loop32:
     JNZ  min_loop32
 
 min_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   min_done
 
 min_scalar:
@@ -444,6 +515,29 @@ TEXT ·maxAVX2(SB), NOSPLIT, $0-72
     MOVQ a_base+24(FP), SI
     MOVQ b_base+48(FP), DI
 
+    // 16-wide then 8-wide forward XMM pre-block; shrinks the branchy scalar tail
+    // from up to 31 elements to at most 7. Each input byte is read then written
+    // once, so in-place dst==a/dst==b stays correct. Both input pointers advance.
+    TESTQ $16, CX
+    JZ   max_block8
+    VMOVDQU (SI), X0
+    VMOVDQU (DI), X1
+    VPMAXSB X1, X0, X2         // max(a, b)
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DI
+    ADDQ $16, DX
+max_block8:
+    TESTQ $8, CX
+    JZ   max_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VMOVQ (DI), X1
+    VPMAXSB X1, X0, X2         // low 8 = max(a,b); upper 8 = max(0,0) = 0, unstored
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DI
+    ADDQ $8, DX
+max_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   max_remainder
@@ -460,7 +554,7 @@ max_loop32:
     JNZ  max_loop32
 
 max_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   max_done
 
 max_scalar:
@@ -492,6 +586,28 @@ TEXT ·clampAVX2(SB), NOSPLIT, $0-50
     VPBROADCASTB lo+48(FP), Y3 // loVec: lo in all 32 lanes
     VPBROADCASTB hi+49(FP), Y4 // hiVec
 
+    // 16-wide then 8-wide forward XMM pre-block; shrinks the branchy scalar tail
+    // from up to 31 elements to at most 7. Each src byte is read then written
+    // once, so in-place dst==src stays correct. loVec/hiVec are read-only, so the
+    // pre-block reuses their X-halves (X3, X4).
+    TESTQ $16, CX
+    JZ   clamp_block8
+    VMOVDQU (SI), X0
+    VPMAXSB X3, X0, X0         // max(src, lo)
+    VPMINSB X4, X0, X2         // min(., hi)
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+clamp_block8:
+    TESTQ $8, CX
+    JZ   clamp_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VPMAXSB X3, X0, X0         // upper 8 = clamp(0) garbage, never stored
+    VPMINSB X4, X0, X2
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DX
+clamp_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   clamp_remainder
@@ -507,7 +623,7 @@ clamp_loop32:
     JNZ  clamp_loop32
 
 clamp_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   clamp_done
     MOVBLSX lo+48(FP), DI      // lo (sign-extended)
     MOVBLSX hi+49(FP), R8      // hi
@@ -543,6 +659,30 @@ TEXT ·absAVX2(SB), NOSPLIT, $0-48
 
     VPXOR Y3, Y3, Y3           // zero
 
+    // A 16-wide then an 8-wide XMM block absorb up to 24 of the 0-31 remainder
+    // bytes before the 32-wide loop, shrinking the branchy scalar tail from up to
+    // 31 elements to at most 7. FORWARD blocks (not overlapping): each byte is
+    // read then written exactly once, so in-place dst==a stays correct. The
+    // scalar tail's sign branch mispredicts on random data (~3.6 cyc/element), so
+    // moving 24 of those onto branchless SIMD is the win.
+    TESTQ $16, CX
+    JZ   abs_block8
+    VMOVDQU (SI), X0
+    VPSUBSB X0, X3, X1
+    VPMAXSB X1, X0, X2
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+abs_block8:
+    TESTQ $8, CX
+    JZ   abs_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VPSUBSB X0, X3, X1
+    VPMAXSB X1, X0, X2         // |a| for the low 8; upper 8 are |0|=0
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DX
+abs_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   abs_remainder
@@ -558,7 +698,7 @@ abs_loop32:
     JNZ  abs_loop32
 
 abs_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   abs_done
 
 abs_scalar:
@@ -592,6 +732,27 @@ TEXT ·negAVX2(SB), NOSPLIT, $0-48
 
     VPXOR Y3, Y3, Y3           // zero
 
+    // A 16-wide then an 8-wide XMM block absorb up to 24 of the 0-31 remainder
+    // bytes before the 32-wide loop, shrinking the branchy scalar tail from up to
+    // 31 elements to at most 7. FORWARD blocks (not overlapping): each byte is
+    // read then written exactly once, so in-place dst==a stays correct even for
+    // this non-idempotent op. Same template as absAVX2.
+    TESTQ $16, CX
+    JZ   neg_block8
+    VMOVDQU (SI), X0
+    VPSUBSB X0, X3, X2         // saturating(0 - a)
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+neg_block8:
+    TESTQ $8, CX
+    JZ   neg_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VPSUBSB X0, X3, X2         // low 8 = -a; upper 8 = -0 = 0, never stored
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DX
+neg_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   neg_remainder
@@ -606,7 +767,7 @@ neg_loop32:
     JNZ  neg_loop32
 
 neg_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   neg_done
 
 neg_scalar:
@@ -692,6 +853,33 @@ TEXT ·absDiffAVX2(SB), NOSPLIT, $0-72
     MOVQ a_base+24(FP), SI
     MOVQ b_base+48(FP), DI
 
+    // 16-wide then 8-wide forward XMM pre-block; shrinks the branchy scalar tail
+    // from up to 31 elements to at most 7. Each input byte is read then written
+    // once, so in-place dst==a/dst==b stays correct. Both input pointers advance.
+    TESTQ $16, CX
+    JZ   absdiff_block8
+    VMOVDQU (SI), X0           // a
+    VMOVDQU (DI), X1           // b
+    VPSUBSB X1, X0, X2         // saturating(a - b)
+    VPSUBSB X0, X1, X3         // saturating(b - a)
+    VPMAXSB X3, X2, X4         // |a - b| clamped to [0, 127]
+    VMOVDQU X4, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DI
+    ADDQ $16, DX
+absdiff_block8:
+    TESTQ $8, CX
+    JZ   absdiff_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VMOVQ (DI), X1
+    VPSUBSB X1, X0, X2         // low 8 = a-b; upper 8 = 0-0 = 0
+    VPSUBSB X0, X1, X3         // upper 8 = 0
+    VPMAXSB X3, X2, X4         // upper 8 = |0| = 0, never stored
+    VMOVQ X4, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DI
+    ADDQ $8, DX
+absdiff_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   absdiff_remainder
@@ -710,7 +898,7 @@ absdiff_loop32:
     JNZ  absdiff_loop32
 
 absdiff_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   absdiff_done
 
 absdiff_scalar:
@@ -745,6 +933,26 @@ TEXT ·addScalarSatAVX2(SB), NOSPLIT, $0-49
     MOVQ a_base+24(FP), SI
     VPBROADCASTB s+48(FP), Y1  // s in all 32 lanes
 
+    // 16-wide then 8-wide forward XMM pre-block; shrinks the branchy scalar tail
+    // from up to 31 elements to at most 7. Each input byte is read then written
+    // once, so in-place dst==a stays correct. sVec is read-only, so the pre-block
+    // reuses its X-half (X1).
+    TESTQ $16, CX
+    JZ   addscalar_block8
+    VMOVDQU (SI), X0
+    VPADDSB X1, X0, X2         // saturating(a + s)
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+addscalar_block8:
+    TESTQ $8, CX
+    JZ   addscalar_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VPADDSB X1, X0, X2         // upper 8 = 0+s garbage, never stored
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DX
+addscalar_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   addscalar_remainder
@@ -759,7 +967,7 @@ addscalar_loop32:
     JNZ  addscalar_loop32
 
 addscalar_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   addscalar_done
     MOVBLSX s+48(FP), DI       // s (sign-extended)
 
@@ -793,6 +1001,26 @@ TEXT ·subScalarSatAVX2(SB), NOSPLIT, $0-49
     MOVQ a_base+24(FP), SI
     VPBROADCASTB s+48(FP), Y1  // s in all 32 lanes
 
+    // 16-wide then 8-wide forward XMM pre-block; shrinks the branchy scalar tail
+    // from up to 31 elements to at most 7. Each input byte is read then written
+    // once, so in-place dst==a stays correct. sVec is read-only, so the pre-block
+    // reuses its X-half (X1).
+    TESTQ $16, CX
+    JZ   subscalar_block8
+    VMOVDQU (SI), X0
+    VPSUBSB X1, X0, X2         // saturating(a - s)
+    VMOVDQU X2, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+subscalar_block8:
+    TESTQ $8, CX
+    JZ   subscalar_blocks32
+    VMOVQ (SI), X0             // 8 bytes (upper zeroed)
+    VPSUBSB X1, X0, X2         // upper 8 = 0-s garbage, never stored
+    VMOVQ X2, (DX)             // store 8 bytes
+    ADDQ $8, SI
+    ADDQ $8, DX
+subscalar_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   subscalar_remainder
@@ -807,7 +1035,7 @@ subscalar_loop32:
     JNZ  subscalar_loop32
 
 subscalar_remainder:
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   subscalar_done
     MOVBLSX s+48(FP), DI       // s (sign-extended)
 
