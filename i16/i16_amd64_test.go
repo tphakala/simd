@@ -98,23 +98,27 @@ func TestDeinterleave2_ParityWithGo(t *testing.T) {
 // TestInterleave2_NoOverwrite guards the scalar tail: the kernel must not write
 // past n*2 output elements even when n is not a multiple of the block.
 func TestInterleave2_NoOverwrite(t *testing.T) {
-	const n = 23 // one AVX2 block (16) + 7 tail; one SSE2 block (8) leaves a 7 tail too
+	// Sweep tails on both tiers: 25 and 31 set n&8, so they exercise the 8-wide
+	// AVX2 block plus a scalar tail (#149); 23 is the block-skipped path (one
+	// AVX2 body + 7 tail; two SSE2 bodies + 7 tail).
 	for _, k := range interleaveKernels() {
 		t.Run(k.name, func(t *testing.T) {
 			if !k.available {
 				t.Skipf("%s not available", k.name)
 			}
-			a := make([]int16, n)
-			b := make([]int16, n)
-			fillPattern(a, b)
-			dst := make([]int16, n*2+8)
-			for i := range dst {
-				dst[i] = math.MaxInt16 // sentinel
-			}
-			k.fn(dst[:n*2], a, b)
-			for i := n * 2; i < len(dst); i++ {
-				if dst[i] != math.MaxInt16 {
-					t.Errorf("interleave2%s wrote past end at dst[%d] = %d", k.name, i, dst[i])
+			for _, n := range []int{23, 25, 31} {
+				a := make([]int16, n)
+				b := make([]int16, n)
+				fillPattern(a, b)
+				dst := make([]int16, n*2+8)
+				for i := range dst {
+					dst[i] = math.MaxInt16 // sentinel
+				}
+				k.fn(dst[:n*2], a, b)
+				for i := n * 2; i < len(dst); i++ {
+					if dst[i] != math.MaxInt16 {
+						t.Errorf("interleave2%s n=%d wrote past end at dst[%d] = %d", k.name, n, i, dst[i])
+					}
 				}
 			}
 		})
@@ -123,29 +127,31 @@ func TestInterleave2_NoOverwrite(t *testing.T) {
 
 // TestDeinterleave2_NoOverwrite guards both output buffers' scalar tails.
 func TestDeinterleave2_NoOverwrite(t *testing.T) {
-	const n = 23
+	// 25 and 31 set n&8 (the 8-wide AVX2 block path, #149); 23 skips the block.
 	for _, k := range deinterleaveKernels() {
 		t.Run(k.name, func(t *testing.T) {
 			if !k.available {
 				t.Skipf("%s not available", k.name)
 			}
-			src := make([]int16, n*2)
-			for i := range src {
-				src[i] = int16(i) ^ math.MinInt16
-			}
-			a := make([]int16, n+8)
-			b := make([]int16, n+8)
-			for i := range a {
-				a[i] = math.MaxInt16
-				b[i] = math.MaxInt16
-			}
-			k.fn(a[:n], b[:n], src)
-			for i := n; i < len(a); i++ {
-				if a[i] != math.MaxInt16 {
-					t.Errorf("deinterleave2%s wrote past end of a at [%d] = %d", k.name, i, a[i])
+			for _, n := range []int{23, 25, 31} {
+				src := make([]int16, n*2)
+				for i := range src {
+					src[i] = int16(i) ^ math.MinInt16
 				}
-				if b[i] != math.MaxInt16 {
-					t.Errorf("deinterleave2%s wrote past end of b at [%d] = %d", k.name, i, b[i])
+				a := make([]int16, n+8)
+				b := make([]int16, n+8)
+				for i := range a {
+					a[i] = math.MaxInt16
+					b[i] = math.MaxInt16
+				}
+				k.fn(a[:n], b[:n], src)
+				for i := n; i < len(a); i++ {
+					if a[i] != math.MaxInt16 {
+						t.Errorf("deinterleave2%s n=%d wrote past end of a at [%d] = %d", k.name, n, i, a[i])
+					}
+					if b[i] != math.MaxInt16 {
+						t.Errorf("deinterleave2%s n=%d wrote past end of b at [%d] = %d", k.name, n, i, b[i])
+					}
 				}
 			}
 		})

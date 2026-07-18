@@ -31,13 +31,39 @@ GLOBL deinterleave2Mask<>(SB), RODATA|NOPTR, $32
 
 // func interleave2AVX2(dst, a, b []int16)
 // Interleaves two slices: dst[0]=a[0], dst[1]=b[0], dst[2]=a[1], dst[3]=b[1], ...
+//
+// An 8-wide VEX.128 block runs BEFORE the 16-wide loop, so a remainder of 8-15
+// pairs costs one vector block plus at most 7 scalar MOVW iterations rather than
+// 8-15. Without it AVX2 lost to SSE2 wherever len(a) mod 16 was 8-15, which is
+// exactly where interleave2I16 prefers AVX2; measured on the i7-1260P, n=24 went
+// from 1.55x slower than SSE2 to faster. See #149.
+//
+// Unlike dotAVX2 there is no accumulator, so no upper-lane hazard and no ordering
+// constraint: each block independently loads, shuffles and stores, and the
+// VEX.128 writes carry nothing across the body. The block still uses VEX forms
+// (not the SSE2 kernel's legacy MOVOU/PUNPCK) to avoid the SSE/AVX transition
+// penalty against the 256-bit body.
 TEXT ·interleave2AVX2(SB), NOSPLIT, $0-72
     MOVQ dst_base+0(FP), DX    // dst pointer
     MOVQ a_base+24(FP), SI     // a pointer
     MOVQ a_len+32(FP), CX      // n = len(a)
     MOVQ b_base+48(FP), DI     // b pointer
 
-    // Process 16 pairs at a time (32 output elements)
+    TESTQ $8, CX               // n % 16 >= 8? one XMM block absorbs the 8
+    JZ   interleave2_avx2_blocks16
+    VMOVDQU (SI), X0           // [a0..a7]
+    VMOVDQU (DI), X1           // [b0..b7]
+    VPUNPCKLWD X1, X0, X2      // [a0,b0,a1,b1,a2,b2,a3,b3]
+    VPUNPCKHWD X1, X0, X3      // [a4,b4,a5,b5,a6,b6,a7,b7]
+    VMOVDQU X2, (DX)
+    VMOVDQU X3, 16(DX)
+    ADDQ $16, SI               // a += 8 * 2
+    ADDQ $16, DI               // b += 8 * 2
+    ADDQ $32, DX               // dst += 16 * 2
+
+    // Process 16 pairs at a time (32 output elements). The block count is taken
+    // from the full n; the 8 the block consumed are exactly the ones n/16 drops.
+interleave2_avx2_blocks16:
     MOVQ CX, AX
     SHRQ $4, AX                // AX = n / 16
     JZ   interleave2_avx2_remainder
@@ -64,7 +90,7 @@ interleave2_avx2_loop16:
     JNZ  interleave2_avx2_loop16
 
 interleave2_avx2_remainder:
-    ANDQ $15, CX
+    ANDQ $7, CX                // $7 not $15: the 8-wide block above took that bit
     JZ   interleave2_avx2_done
 
 interleave2_avx2_scalar:
@@ -88,6 +114,15 @@ interleave2_avx2_done:
 //    bytes of each 128-bit lane.
 // 2. VPUNPCKLQDQ/VPUNPCKHQDQ split the lanes into a-only and b-only registers.
 // 3. VPERMQ fixes the lane interleave the two 128-bit halves introduced.
+//
+// An 8-wide VEX.128 block runs BEFORE the 16-wide loop, absorbing a remainder of
+// 8-15 pairs in one vector block instead of 8-15 scalar MOVW iterations; without
+// it AVX2 lost to SSE2 wherever len(a) mod 16 was 8-15, which is where the
+// dispatcher prefers it (n=24 measured 1.5x slower on the i7-1260P). See #149.
+// The block needs no VPERMQ: within one 128-bit lane VPSHUFB already lands a's in
+// the low half and b's in the high, so a single VPUNPCKLQDQ/HQDQ pair splits them
+// in order. It reuses X7 (the low lane of the gather mask) and VEX forms, so it
+// carries nothing across the body and pays no SSE/AVX transition penalty.
 TEXT ·deinterleave2AVX2(SB), NOSPLIT, $0-72
     MOVQ a_base+0(FP), DX      // a pointer
     MOVQ a_len+8(FP), CX       // n = len(a)
@@ -96,7 +131,23 @@ TEXT ·deinterleave2AVX2(SB), NOSPLIT, $0-72
 
     VMOVDQU deinterleave2Mask<>(SB), Y7  // even/odd word gather mask
 
-    // Process 16 pairs at a time
+    TESTQ $8, CX               // n % 16 >= 8? one XMM block absorbs the 8
+    JZ   deinterleave2_avx2_blocks16
+    VMOVDQU (SI), X0           // [a0,b0,a1,b1,a2,b2,a3,b3]
+    VMOVDQU 16(SI), X1         // [a4,b4,a5,b5,a6,b6,a7,b7]
+    VPSHUFB X7, X0, X0         // [a0,a1,a2,a3,b0,b1,b2,b3]
+    VPSHUFB X7, X1, X1         // [a4,a5,a6,a7,b4,b5,b6,b7]
+    VPUNPCKLQDQ X1, X0, X2     // a = [a0..a3,a4..a7]
+    VPUNPCKHQDQ X1, X0, X3     // b = [b0..b3,b4..b7]
+    VMOVDQU X2, (DX)           // store a
+    VMOVDQU X3, (R8)           // store b
+    ADDQ $32, SI               // src += 16 * 2
+    ADDQ $16, DX               // a += 8 * 2
+    ADDQ $16, R8               // b += 8 * 2
+
+    // Process 16 pairs at a time. The block count is taken from the full n; the 8
+    // the block consumed are exactly the ones n/16 drops.
+deinterleave2_avx2_blocks16:
     MOVQ CX, AX
     SHRQ $4, AX
     JZ   deinterleave2_avx2_remainder
@@ -124,7 +175,7 @@ deinterleave2_avx2_loop16:
     JNZ  deinterleave2_avx2_loop16
 
 deinterleave2_avx2_remainder:
-    ANDQ $15, CX
+    ANDQ $7, CX                // $7 not $15: the 8-wide block above took that bit
     JZ   deinterleave2_avx2_done
 
 deinterleave2_avx2_scalar:

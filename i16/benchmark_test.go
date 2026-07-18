@@ -3,66 +3,57 @@ package i16
 import "testing"
 
 // Benchmarks pair the dispatched (SIMD) path with the pure-Go baseline so the
-// speedup is visible directly. SetBytes counts every byte moved: a and b (benchN
+// speedup is visible directly. SetBytes counts every byte moved: a and b (n
 // int16 each) plus the double-width interleaved buffer (dst for interleave, src
-// for deinterleave, 2*benchN int16), so 4*benchN int16 = 8*benchN bytes at 2
-// bytes per int16.
+// for deinterleave, 2*n int16), so 4*n int16 = 8*n bytes at 2 bytes per int16.
+//
+// n=24 is the regression guard for the interleave/deinterleave 8-wide AVX2 block
+// (#149): 24 % 16 = 8, the residue where the block runs, and it was AVX2's worst
+// case (up to 1.55x slower than SSE2 before the block, measured on the i7-1260P).
+// 1000 % 16 = 8 too but at a high block count, where the residue amortizes; a
+// parity test cannot see a performance defect, so only a benchmark at a length
+// the block serves can. n=1000 keeps the historical name for benchstat history.
 
-const benchN = 1000
-
-func BenchmarkInterleave2_1000(b *testing.B) {
-	a := make([]int16, benchN)
-	c := make([]int16, benchN)
-	dst := make([]int16, benchN*2)
+func benchmarkInterleave2(b *testing.B, n int, fn func(dst, a, c []int16)) {
+	b.Helper()
+	a := make([]int16, n)
+	c := make([]int16, n)
+	dst := make([]int16, n*2)
 	for i := range a {
 		a[i] = int16(i)
-		c[i] = int16(i + benchN)
+		c[i] = int16(i + n)
 	}
-	b.SetBytes(benchN * 2 * 4)
+	b.SetBytes(int64(n) * 2 * 4)
 	for b.Loop() {
-		Interleave2(dst, a, c)
+		fn(dst, a, c)
 	}
 }
 
-func BenchmarkInterleave2Go_1000(b *testing.B) {
-	a := make([]int16, benchN)
-	c := make([]int16, benchN)
-	dst := make([]int16, benchN*2)
-	for i := range a {
-		a[i] = int16(i)
-		c[i] = int16(i + benchN)
-	}
-	b.SetBytes(benchN * 2 * 4)
-	for b.Loop() {
-		interleave2Go(dst, a, c)
-	}
-}
+func BenchmarkInterleave2_24(b *testing.B)   { benchmarkInterleave2(b, 24, Interleave2) }
+func BenchmarkInterleave2_1000(b *testing.B) { benchmarkInterleave2(b, 1000, Interleave2) }
 
-func BenchmarkDeinterleave2_1000(b *testing.B) {
-	src := make([]int16, benchN*2)
-	a := make([]int16, benchN)
-	c := make([]int16, benchN)
+func BenchmarkInterleave2Go_24(b *testing.B)   { benchmarkInterleave2(b, 24, interleave2Go) }
+func BenchmarkInterleave2Go_1000(b *testing.B) { benchmarkInterleave2(b, 1000, interleave2Go) }
+
+func benchmarkDeinterleave2(b *testing.B, n int, fn func(a, c, src []int16)) {
+	b.Helper()
+	src := make([]int16, n*2)
+	a := make([]int16, n)
+	c := make([]int16, n)
 	for i := range src {
 		src[i] = int16(i)
 	}
-	b.SetBytes(benchN * 2 * 4)
+	b.SetBytes(int64(n) * 2 * 4)
 	for b.Loop() {
-		Deinterleave2(a, c, src)
+		fn(a, c, src)
 	}
 }
 
-func BenchmarkDeinterleave2Go_1000(b *testing.B) {
-	src := make([]int16, benchN*2)
-	a := make([]int16, benchN)
-	c := make([]int16, benchN)
-	for i := range src {
-		src[i] = int16(i)
-	}
-	b.SetBytes(benchN * 2 * 4)
-	for b.Loop() {
-		deinterleave2Go(a, c, src)
-	}
-}
+func BenchmarkDeinterleave2_24(b *testing.B)   { benchmarkDeinterleave2(b, 24, Deinterleave2) }
+func BenchmarkDeinterleave2_1000(b *testing.B) { benchmarkDeinterleave2(b, 1000, Deinterleave2) }
+
+func BenchmarkDeinterleave2Go_24(b *testing.B)   { benchmarkDeinterleave2(b, 24, deinterleave2Go) }
+func BenchmarkDeinterleave2Go_1000(b *testing.B) { benchmarkDeinterleave2(b, 1000, deinterleave2Go) }
 
 // Dot benchmarks sweep the lengths fixed-point codecs actually call at: n=8 is
 // a short CELT band (where call overhead is the concern), n=240 a 20 ms frame
