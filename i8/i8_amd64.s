@@ -184,17 +184,22 @@ toi16_loop16:
     DECQ AX
     JNZ  toi16_loop16
 
+    // Overlapping final 16-wide block absorbs the (n mod 16) tail instead of a
+    // scalar loop. toI16AVX2 is dispatched only for n >= 16, so src[n-16 .. n) is
+    // in bounds; re-writing the overlap with the same widened int16 values is
+    // idempotent, and src (int8) and dst (int16) are distinct slices that cannot
+    // alias. Guarded on a nonzero residue so aligned n pays nothing.
 toi16_remainder:
-    ANDQ $15, CX
+    TESTQ $15, CX
     JZ   toi16_done
-
-toi16_scalar:
-    MOVBLSX (SI), AX
-    MOVW AX, (DX)
-    INCQ SI
-    ADDQ $2, DX
-    DECQ CX
-    JNZ  toi16_scalar
+    MOVQ src_base+24(FP), SI   // reload src base (SI advanced past the last block)
+    ADDQ CX, SI
+    SUBQ $16, SI               // SI = &src[n-16]
+    VPMOVSXBW (SI), Y0         // src[n-16 .. n) -> 16 int16
+    MOVQ dst_base+0(FP), DX    // reload dst base
+    LEAQ (DX)(CX*2), DX        // DX = dst + 2*n
+    SUBQ $32, DX               // DX = &dst[n-16]
+    VMOVDQU Y0, (DX)
 
 toi16_done:
     VZEROUPPER
@@ -219,17 +224,21 @@ toi32_loop8:
     DECQ AX
     JNZ  toi32_loop8
 
+    // Overlapping final 8-wide block absorbs the (n mod 8) tail (same idempotent
+    // widening-overlap argument as toI16; dispatched only for n >= 8). A short
+    // non-branchy widening tail, so the win is modest, but it drops the scalar
+    // loop and keeps the kernel uniform with toI16.
 toi32_remainder:
-    ANDQ $7, CX
+    TESTQ $7, CX
     JZ   toi32_done
-
-toi32_scalar:
-    MOVBLSX (SI), AX
-    MOVL AX, (DX)
-    INCQ SI
-    ADDQ $4, DX
-    DECQ CX
-    JNZ  toi32_scalar
+    MOVQ src_base+24(FP), SI   // reload src base
+    ADDQ CX, SI
+    SUBQ $8, SI                // SI = &src[n-8]
+    VPMOVSXBD (SI), Y0         // src[n-8 .. n) -> 8 int32
+    MOVQ dst_base+0(FP), DX    // reload dst base
+    LEAQ (DX)(CX*4), DX        // DX = dst + 4*n
+    SUBQ $32, DX               // DX = &dst[n-8]
+    VMOVDQU Y0, (DX)
 
 toi32_done:
     VZEROUPPER
