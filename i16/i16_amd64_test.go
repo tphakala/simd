@@ -285,6 +285,7 @@ type xcorr4Kernel struct {
 
 func xcorr4Kernels() []xcorr4Kernel {
 	return []xcorr4Kernel{
+		{"AVXVNNI", cpu.X86.AVXVNNI, xcorr4AVXVNNI},
 		{"AVX2", cpu.X86.AVX2, xcorr4AVX2},
 		{"SSE2", cpu.X86.SSE2, xcorr4SSE2},
 	}
@@ -328,6 +329,42 @@ func TestXCorr4AMD64_ParityWithGo(t *testing.T) {
 				for lag := range xcorrLagBlock {
 					if got, want := dst[lag], dotOracle(x, y[lag:]); got != want {
 						t.Errorf("xcorr4%s xn=%d: dst[%d] = %d, want %d", k.name, xn, lag, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestXCorr4AMD64_MinInt16 pins the wrapping accumulation across all tiers,
+// which is the property that makes XCorr vectorizable and is exactly what the
+// AVX-VNNI kernel's VPDPWSSD must honor (VPDPWSSDS, the saturating sibling, is
+// forbidden here). With x and y all MinInt16, every 16-bit pair product is
+// (-32768)*(-32768) = 2^30, and a sum of them must wrap mod 2^32 to match the
+// scalar oracle rather than saturate. Swept 1..64 so the count is not always a
+// multiple of the block widths, per the miscount-blindness note on the
+// all-MinInt16 pattern; the pseudo-random ParityWithGo sweep is what catches a
+// dropped block, this catches a saturating substitute.
+func TestXCorr4AMD64_MinInt16(t *testing.T) {
+	for _, k := range xcorr4Kernels() {
+		t.Run(k.name, func(t *testing.T) {
+			if !k.available {
+				t.Skipf("%s not available", k.name)
+			}
+			for xn := 1; xn <= 64; xn++ {
+				x := make([]int16, xn)
+				y := make([]int16, xn+3)
+				for i := range x {
+					x[i] = math.MinInt16
+				}
+				for i := range y {
+					y[i] = math.MinInt16
+				}
+				dst := make([]int32, xcorrLagBlock)
+				k.fn(dst, x, y)
+				for lag := range xcorrLagBlock {
+					if got, want := dst[lag], dotOracle(x, y[lag:]); got != want {
+						t.Errorf("xcorr4%s all-MinInt16 xn=%d: dst[%d] = %d, want %d", k.name, xn, lag, got, want)
 					}
 				}
 			}
@@ -388,14 +425,23 @@ func TestXCorrDispatch_ReachesSIMD(t *testing.T) {
 	if hasAVX2 != cpu.X86.AVX2 {
 		t.Fatalf("hasAVX2 = %v but cpu.X86.AVX2 = %v: dispatch flag is not wired to CPU detection", hasAVX2, cpu.X86.AVX2)
 	}
+	if hasAVXVNNI != cpu.X86.AVXVNNI {
+		t.Fatalf("hasAVXVNNI = %v but cpu.X86.AVXVNNI = %v: dispatch flag is not wired to CPU detection", hasAVXVNNI, cpu.X86.AVXVNNI)
+	}
+	// AVX-VNNI sits above AVX2 in the switch, so it can never be selected while
+	// AVX2 is absent: the VEX form runs on YMM state that AVX2 detection gates on.
+	if hasAVXVNNI && !hasAVX2 {
+		t.Fatal("hasAVXVNNI is true but hasAVX2 is false: the AVX-VNNI tier would dispatch on a CPU its accumulators cannot run on")
+	}
 	if !hasSSE2 {
 		t.Fatal("hasSSE2 is false on amd64: PMADDWD is SSE2 baseline, so XCorr should never fall back to Go here")
 	}
 	// One vector block each, matching the kernel bodies. A bound of 2x the
-	// block would be a tautology against the real values (8 and 16).
-	if minSSE2XCorr > 8 || minAVX2XCorr > 16 {
-		t.Fatalf("XCorr thresholds too high (SSE2 %d, AVX2 %d): would not vectorize at the x lengths it was written for",
-			minSSE2XCorr, minAVX2XCorr)
+	// block would be a tautology against the real values (8 and 16). The VNNI
+	// tier shares the AVX2 body's 16-wide block, so it carries the same cut.
+	if minSSE2XCorr > 8 || minAVX2XCorr > 16 || minAVXVNNIXCorr > 16 {
+		t.Fatalf("XCorr thresholds too high (SSE2 %d, AVX2 %d, AVXVNNI %d): would not vectorize at the x lengths it was written for",
+			minSSE2XCorr, minAVX2XCorr, minAVXVNNIXCorr)
 	}
 }
 
@@ -613,4 +659,58 @@ func TestXCorr4AMD64_LongWindowIsClamped(t *testing.T) {
 			}
 		})
 	}
+}
+
+// benchmarkXCorr4Kernel drives one 4-lag kernel directly, a single block of 4
+// lags, so the AVX-VNNI body can be A/B'd against the AVX2 body with nothing
+// else on the clock: no dispatcher, no remainder-lag loop, and the same call
+// site for both tiers. xn sets len(x); y is len(x)+3, the exact window the
+// dispatcher passes. Compare BenchmarkXCorr4AVX2_N against
+// BenchmarkXCorr4AVXVNNI_N at the same N through benchstat. The VNNI win is on
+// the 16-wide loop (VPDPWSSD halves its vector-ALU ops), so it grows with N; at
+// N=16 the fold and call overhead dominate and the two run close.
+//
+// Kernel-direct comparison is deliberate: it holds the surrounding layout fixed,
+// which is the confound #159 records for aligned lengths. It is not a substitute
+// for the SIMD_DISABLE=avxvnni A/B on the public XCorr benchmarks, which is what
+// measures what a caller actually sees.
+func benchmarkXCorr4Kernel(b *testing.B, xn int, avail bool, fn func(dst []int32, x, y []int16)) {
+	b.Helper()
+	if !avail {
+		b.Skip("kernel not available")
+	}
+	x := make([]int16, xn)
+	y := make([]int16, xn+3)
+	for i := range x {
+		x[i] = int16(i*7 - 3000)
+	}
+	for i := range y {
+		y[i] = int16(i*-5 + 2000)
+	}
+	dst := make([]int32, xcorrLagBlock)
+	b.SetBytes(int64(xn+len(y)) * 2)
+	for b.Loop() {
+		fn(dst, x, y)
+	}
+}
+
+func BenchmarkXCorr4AVX2_16(b *testing.B)  { benchmarkXCorr4Kernel(b, 16, cpu.X86.AVX2, xcorr4AVX2) }
+func BenchmarkXCorr4AVX2_240(b *testing.B) { benchmarkXCorr4Kernel(b, 240, cpu.X86.AVX2, xcorr4AVX2) }
+func BenchmarkXCorr4AVX2_480(b *testing.B) { benchmarkXCorr4Kernel(b, 480, cpu.X86.AVX2, xcorr4AVX2) }
+func BenchmarkXCorr4AVX2_247(b *testing.B) { benchmarkXCorr4Kernel(b, 247, cpu.X86.AVX2, xcorr4AVX2) }
+
+func BenchmarkXCorr4AVXVNNI_16(b *testing.B) {
+	benchmarkXCorr4Kernel(b, 16, cpu.X86.AVXVNNI, xcorr4AVXVNNI)
+}
+
+func BenchmarkXCorr4AVXVNNI_240(b *testing.B) {
+	benchmarkXCorr4Kernel(b, 240, cpu.X86.AVXVNNI, xcorr4AVXVNNI)
+}
+
+func BenchmarkXCorr4AVXVNNI_480(b *testing.B) {
+	benchmarkXCorr4Kernel(b, 480, cpu.X86.AVXVNNI, xcorr4AVXVNNI)
+}
+
+func BenchmarkXCorr4AVXVNNI_247(b *testing.B) {
+	benchmarkXCorr4Kernel(b, 247, cpu.X86.AVXVNNI, xcorr4AVXVNNI)
 }

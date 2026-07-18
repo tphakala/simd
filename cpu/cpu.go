@@ -14,6 +14,7 @@ type Features struct {
 	SSE42     bool
 	AVX       bool
 	AVX2      bool
+	AVXVNNI   bool // AVX-VNNI (VEX-encoded VPDPWSSD/VPDPBUSD); Alder Lake+ and Zen 4+
 	AVX512F   bool
 	AVX512VL  bool
 	FMA       bool
@@ -43,6 +44,14 @@ func HasAVX() bool { return X86.AVX }
 
 // HasAVX2 returns true if AVX2 is available.
 func HasAVX2() bool { return X86.AVX2 }
+
+// HasAVXVNNI returns true if the VEX-encoded AVX-VNNI instructions
+// (VPDPWSSD / VPDPBUSD and their saturating variants) are available. They fuse
+// the widen-multiply-accumulate that int16/int8 dot products otherwise spell as
+// a VPMADDWD/VPMADDUBSW plus a separate VPADDD. Shipped on Intel Alder Lake and
+// later and on AMD Zen 4 and later, in VEX form so both hybrid core types carry
+// it. Detection gates on AVX2 (the VEX form runs on YMM state).
+func HasAVXVNNI() bool { return X86.AVXVNNI }
 
 // HasFMA returns true if FMA is available.
 func HasFMA() bool { return X86.FMA }
@@ -89,8 +98,9 @@ func Info() string {
 // Recognized tokens:
 //
 //	avx512     AVX512F, AVX512VL
-//	avx2       AVX2 and the avx512 set
-//	avx        AVX, FMA and the avx2 set
+//	avxvnni    AVXVNNI only
+//	avx2       AVX2, AVXVNNI and the avx512 set
+//	avx        AVX, FMA, F16C and the avx2 set
 //	fma        FMA only
 //	sse42      SSE42 and the avx set
 //	sse41      SSE41 and the sse42 set
@@ -113,6 +123,8 @@ func applyDisable(f *Features, spec string) {
 			// Empty token (e.g. trailing comma): ignore.
 		case "avx512":
 			clearAVX512(f)
+		case "avxvnni":
+			f.AVXVNNI = false
 		case "avx2":
 			clearAVX2(f)
 		case "avx":
@@ -158,6 +170,9 @@ func clearAVX512(f *Features) {
 
 func clearAVX2(f *Features) {
 	f.AVX2 = false
+	// AVX-VNNI (VEX form) runs on YMM state and its dispatch tier sits above
+	// AVX2, so dropping AVX2 must drop it too, like the avx512 set below.
+	f.AVXVNNI = false
 	clearAVX512(f)
 }
 

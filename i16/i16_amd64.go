@@ -13,9 +13,10 @@ const (
 	minSSE2Elements = 8
 )
 
-// Dispatch priority mirrors f32/f64: AVX2 > SSE2 > Go. The kernels gate on the
-// CPU feature explicitly (rather than relying on length alone) so the package is
-// correct on every amd64 baseline.
+// Dispatch priority mirrors f32/f64: AVX2 > SSE2 > Go, with XCorr adding an
+// AVX-VNNI tier above AVX2 (see xcorrI16). The kernels gate on the CPU feature
+// explicitly (rather than relying on length alone) so the package is correct on
+// every amd64 baseline.
 //
 // SSE2 is part of the amd64 baseline, so for the ops that ship an SSE2 tier
 // (interleave, dot, xcorr) the pure-Go fallback is effectively a non-amd64
@@ -23,8 +24,9 @@ const (
 // MaxAbs) are AVX2-or-Go, so on a pre-AVX2 amd64 host their Go reference is a
 // live, reachable path rather than a formality.
 var (
-	hasAVX2 = cpu.X86.AVX2
-	hasSSE2 = cpu.X86.SSE2
+	hasAVXVNNI = cpu.X86.AVXVNNI
+	hasAVX2    = cpu.X86.AVX2
+	hasSSE2    = cpu.X86.SSE2
 )
 
 // Dot dispatch thresholds. They are independent literals rather than aliases of
@@ -57,6 +59,11 @@ const (
 const (
 	minSSE2XCorr = 8
 	minAVX2XCorr = 16
+	// The AVX-VNNI kernel shares xcorr4AVX2's structure below the 16-wide loop
+	// (identical 8- and 4-wide blocks, identical fold), so it carries the same
+	// fold overhead and the same break-even against SSE2: its cut is 16 too, an
+	// independent literal per the dot precedent above rather than an alias.
+	minAVXVNNIXCorr = 16
 )
 
 // The two block loops below are identical except for the kernel they call, and
@@ -68,6 +75,10 @@ func xcorrI16(dst []int32, x, y []int16) {
 	m := xcorrLags(dst, x, y)
 	k := 0
 	switch {
+	case hasAVXVNNI && len(x) >= minAVXVNNIXCorr:
+		for ; k+xcorrLagBlock <= m; k += xcorrLagBlock {
+			xcorr4AVXVNNI(dst[k:k+xcorrLagBlock], x, xcorrWindow(x, y, k))
+		}
 	case hasAVX2 && len(x) >= minAVX2XCorr:
 		for ; k+xcorrLagBlock <= m; k += xcorrLagBlock {
 			xcorr4AVX2(dst[k:k+xcorrLagBlock], x, xcorrWindow(x, y, k))
@@ -166,6 +177,9 @@ func absAVX2(dst, a []int16)
 
 //go:noescape
 func maxAbsAVX2(a []int16) int
+
+//go:noescape
+func xcorr4AVXVNNI(dst []int32, x, y []int16)
 
 //go:noescape
 func xcorr4AVX2(dst []int32, x, y []int16)

@@ -19,6 +19,12 @@ func TestHasAVX2(_ *testing.T) {
 	_ = got
 }
 
+// TestHasAVXVNNI tests the HasAVXVNNI function
+func TestHasAVXVNNI(_ *testing.T) {
+	got := HasAVXVNNI()
+	_ = got
+}
+
 // TestHasFMA tests the HasFMA function
 func TestHasFMA(_ *testing.T) {
 	got := HasFMA()
@@ -92,6 +98,7 @@ func TestFeatures(_ *testing.T) {
 	_ = X86.SSE42
 	_ = X86.AVX
 	_ = X86.AVX2
+	_ = X86.AVXVNNI
 	_ = X86.AVX512F
 	_ = X86.AVX512VL
 	_ = X86.FMA
