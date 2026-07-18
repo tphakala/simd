@@ -581,10 +581,12 @@ xcorr4_sse2_store:
 // As xcorr4SSE2 at twice the width, plus an 8-wide tier SSE2 has no need for;
 // VPMADDWD's three-operand form also spares the reload-into-destination dance.
 //
-// An 8-wide XMM block runs BEFORE the 16-wide loop, so a remainder of 8-15
-// elements costs one vector block plus at most 7 scalar iterations rather than
-// 8-15 scalar iterations across four lags. Without it AVX2 lost to SSE2 across
-// half the len(x) domain, which is exactly where the dispatcher prefers it; see
+// An 8-wide XMM block, then a 4-wide one (#150), run BEFORE the 16-wide loop, so
+// a remainder of 8-15 elements costs one or two vector blocks plus at most 3
+// scalar iterations rather than 8-15 scalar iterations across four lags (the
+// 4-wide block is detailed at its own site below). Without the 8-wide block AVX2
+// lost to SSE2 across half the len(x) domain, which is exactly where the
+// dispatcher prefers it; see
 // #145 for the measurements. A narrow tier below the wide body is the usual
 // shape here (f32/f32_amd64.s dot32_loop8_check, f64/f64_amd64.s var_avx_loop4),
 // but both of those put it after the body, and get it for free from their
@@ -639,7 +641,7 @@ xcorr4_avx2_empty:
 
 xcorr4_avx2_blocks:
     TESTQ $8, CX               // n % 16 >= 8? one XMM block absorbs the 8
-    JZ   xcorr4_avx2_blocks16
+    JZ   xcorr4_avx2_block4    // skip the 8-wide block but still try the 4-wide one
 
     VMOVDQU (SI), X0           // x[0..8), reused by all four lags
     VMOVDQU (BX), X1           // lag 0
@@ -657,9 +659,40 @@ xcorr4_avx2_blocks:
     ADDQ $16, SI               // 8 int16 consumed from x
     ADDQ $16, BX               // y slides by the same 8, lag offsets unchanged
 
-    // The block count is computed AFTER the 8-wide block, not before, so SHRQ's
-    // own ZF still drives the branch below; computing it first would need a
-    // separate TESTQ AX, AX.
+    // A 4-wide XMM block below the 8-wide one, absorbing another 4 of the 0-7
+    // scalar-tail elements. The scalar tail costs ~2.7 cyc/element versus ~0.19
+    // for a vectorized one (#150), so a 4-wide block is worth its ~1.5 cycles.
+    // It uses 64-bit VMOVQ loads: x[0..4) and each lag's y[0..4) land in the low
+    // half of the register with the upper half zeroed, so VPMADDWD yields two
+    // int32 partial sums (and two zero lanes) that VPADDD folds into the low lane
+    // of each accumulator. Like the 8-wide block it must run BEFORE any 256-bit
+    // accumulation: its VEX.128 VPADDD writes zero the upper lane, which is still
+    // zero here, and the 16-wide loop then accumulates on top with VEX.256. The
+    // reordering is bit-exact only because the wrapping int32 add is associative
+    // (the property XCorr's doc guarantees), the same basis as the 8-wide block.
+xcorr4_avx2_block4:
+    TESTQ $4, CX               // n % 8 >= 4? one 4-wide XMM block absorbs the 4
+    JZ   xcorr4_avx2_blocks16
+    VMOVQ (SI), X0             // x[0..4) in the low 64 bits (upper zeroed)
+    VMOVQ (BX), X1             // lag 0: y[0..4)
+    VPMADDWD X0, X1, X1        // 2 int32 partial sums (+ 2 zero lanes)
+    VPADDD X1, X4, X4          // VEX-128 zeroes Y4[255:128]; it is still zero
+    VMOVQ 2(BX), X1            // lag 1
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X5, X5
+    VMOVQ 4(BX), X1            // lag 2
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X6, X6
+    VMOVQ 6(BX), X1            // lag 3
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X7, X7
+    ADDQ $8, SI                // 4 int16 consumed from x
+    ADDQ $8, BX                // y slides by the same 4, lag offsets unchanged
+
+    // The block count is computed AFTER the 8- and 4-wide blocks, not before, so
+    // SHRQ's own ZF still drives the branch below; computing it first would need
+    // a separate TESTQ AX, AX. CX keeps the full n: the 8 and 4 the blocks
+    // consumed are exactly the ones n/16 already excludes.
 xcorr4_avx2_blocks16:
     MOVQ CX, AX
     SHRQ $4, AX                // AX = n / 16, the 16-wide block count
@@ -714,7 +747,7 @@ xcorr4_avx2_fold:
     VPADDD X0, X7, X7
     MOVQ X7, R11               // lag 3
 
-    ANDQ $7, CX                // not $15: the 8-wide block above took that bit
+    ANDQ $3, CX                // $3 not $7: the 8- and 4-wide blocks took those bits
     JZ   xcorr4_avx2_store
 
 xcorr4_avx2_scalar:

@@ -52,7 +52,11 @@ func equalI32(t *testing.T, what string, got, want []int32) {
 // counts deliberately straddle the 4-lag block boundary in both directions, and
 // the x lengths straddle the 8- and 16-wide kernel bodies plus their tails.
 func TestXCorr_MatchesDotProductAtEveryLag(t *testing.T) {
-	for _, xn := range []int{1, 2, 3, 7, 8, 9, 11, 15, 16, 17, 23, 24, 31, 32, 33, 64, 240} {
+	// 12/13/14 run BOTH the 8- and 4-wide AVX2 blocks (n%16 in 12..15) with a
+	// 0/1/2-element scalar tail; 20/21/22 run the 4-wide block only (n%8 in 4..6)
+	// plus a 16-wide iteration. Together with 7/15/23/31 (residue 7) they cover
+	// every 4-wide-block residue combination (#150).
+	for _, xn := range []int{1, 2, 3, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24, 31, 32, 33, 64, 240} {
 		for _, lags := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 16, 17, 61} {
 			x := genI16(xn, 91)
 			y := genI16(xn+lags-1, 92)

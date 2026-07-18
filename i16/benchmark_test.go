@@ -145,10 +145,17 @@ func BenchmarkXCorr_248x64(b *testing.B) { benchmarkXCorr(b, 248, 64, XCorr) }
 func BenchmarkXCorr_240x61(b *testing.B) { benchmarkXCorr(b, 240, 61, XCorr) }
 func BenchmarkXCorr_248x61(b *testing.B) { benchmarkXCorr(b, 248, 61, XCorr) }
 
+// x=247 leaves len(x) % 8 == 7: the 4-wide AVX2 block (#150) absorbs 4 of those
+// 7 tail elements, leaving 3 scalar. It is the regression guard for that block;
+// 248 above is the aligned control, and before the block x=247 carried a
+// period-8 sawtooth (n=255 vs n=256 measured 1.40x on the i7-1260P).
+func BenchmarkXCorr_247x64(b *testing.B) { benchmarkXCorr(b, 247, 64, XCorr) }
+
 func BenchmarkXCorrGo_25x64(b *testing.B)  { benchmarkXCorr(b, 25, 64, xcorrGo) }
 func BenchmarkXCorrGo_248x64(b *testing.B) { benchmarkXCorr(b, 248, 64, xcorrGo) }
 func BenchmarkXCorrGo_240x61(b *testing.B) { benchmarkXCorr(b, 240, 61, xcorrGo) }
 func BenchmarkXCorrGo_248x61(b *testing.B) { benchmarkXCorr(b, 248, 61, xcorrGo) }
+func BenchmarkXCorrGo_247x64(b *testing.B) { benchmarkXCorr(b, 247, 64, xcorrGo) }
 
 func BenchmarkXCorrGo_240x4(b *testing.B)   { benchmarkXCorr(b, 240, 4, xcorrGo) }
 func BenchmarkXCorrGo_240x64(b *testing.B)  { benchmarkXCorr(b, 240, 64, xcorrGo) }
