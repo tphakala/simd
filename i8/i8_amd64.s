@@ -200,6 +200,19 @@ TEXT ·sumAVX2(SB), NOSPLIT, $0-28
     VPXOR Y5, Y5, Y5
     VPSUBW Y4, Y5, Y3          // Y3 = 0 - (-1) = +1 per int16 lane
 
+    // An 8-wide XMM block absorbs 8 of the 0-15 remainder bytes before the
+    // 16-wide loop, into the still-zero accumulator, so the VEX.128 write that
+    // zeroes Y2[255:128] is harmless. Legal to reorder because the int32 sum
+    // wraps (associative). Without it a residue of 8-15 falls entirely to the
+    // serial scalar tail. Same shape as i16 dotAVX2 (#160).
+    TESTQ $8, CX               // n % 16 >= 8?
+    JZ   sum_blocks16
+    VPMOVSXBW (SI), X0         // 8 int16
+    VPMADDWD X3, X0, X1        // pairwise (x*1 + x*1) -> 4 int32
+    VPADDD X1, X2, X2          // Y2[255:128] still zero after this
+    ADDQ $8, SI
+
+sum_blocks16:
     MOVQ CX, AX
     SHRQ $4, AX                // AX = n / 16
     JZ   sum_reduce
@@ -221,7 +234,7 @@ sum_reduce:
     VPADDD X3, X2, X2
     MOVQ X2, AX                // low int32 = vector total (in EAX)
 
-    ANDQ $15, CX
+    ANDQ $7, CX                // the 8-wide block took n % 16 down to n % 8
     JZ   sum_done
 
 sum_scalar:
@@ -239,7 +252,9 @@ sum_done:
 // func dotAVX2(a, b []int8) int32
 // Widens 16 bytes/iter of each operand to int16 (VPMOVSXBW) and reduces the
 // products to int32 with VPMADDWD, accumulating in Y2; a horizontal add folds
-// the lanes and a scalar tail adds the remaining products.
+// the lanes and a scalar tail adds the remaining products. An 8-wide XMM block
+// before the loop absorbs 8 of the 0-15 remainder bytes so a residue of 8-15
+// does not fall entirely to the serial scalar tail (see i16 dotAVX2, #160).
 TEXT ·dotAVX2(SB), NOSPLIT, $0-52
     MOVQ a_base+0(FP), SI
     MOVQ a_len+8(FP), CX
@@ -247,6 +262,19 @@ TEXT ·dotAVX2(SB), NOSPLIT, $0-52
 
     VPXOR Y2, Y2, Y2           // int32 accumulator = 0
 
+    // 8-wide XMM block into the still-zero accumulator (the VEX.128 write that
+    // zeroes Y2[255:128] is harmless). Legal to reorder because the int32
+    // accumulation wraps (associative).
+    TESTQ $8, CX               // n % 16 >= 8?
+    JZ   dot_blocks16
+    VPMOVSXBW (SI), X0         // a -> 8 int16
+    VPMOVSXBW (DI), X1         // b -> 8 int16
+    VPMADDWD X1, X0, X4        // 4 int32 products
+    VPADDD X4, X2, X2          // Y2[255:128] still zero after this
+    ADDQ $8, SI
+    ADDQ $8, DI
+
+dot_blocks16:
     MOVQ CX, AX
     SHRQ $4, AX                // AX = n / 16
     JZ   dot_reduce
@@ -270,7 +298,7 @@ dot_reduce:
     VPADDD X3, X2, X2
     MOVQ X2, AX                // EAX = vector total
 
-    ANDQ $15, CX
+    ANDQ $7, CX                // the 8-wide block took n % 16 down to n % 8
     JZ   dot_done
 
 dot_scalar:
