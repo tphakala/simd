@@ -292,3 +292,110 @@ func TestNoGoroutineRegisterClobber(t *testing.T) {
 			len(violations), strings.Join(violations, "\n  "))
 	}
 }
+
+// singleRoundingKernel names a kernel whose scalar reference computes
+// float32(a*b)+c as two separate roundings (the product rounds to float32 before
+// the add). Its body must emit a distinct multiply and add, never a fused
+// multiply-add: a consumer that reproduces the reference bit-for-bit (go-aac's
+// quantize path, #155) depends on the intermediate rounding. See the f32 package
+// doc and #156.
+type singleRoundingKernel struct {
+	file, fn string
+	mul, add string // the two separate mnemonics that must both appear
+}
+
+var singleRoundingKernels = []singleRoundingKernel{
+	{"f32/f32_amd64.s", "float32ToInt32ScaleClampAVX", "VMULPS", "VADDPS"},
+	{"f32/f32_arm64.s", "float32ToInt32ScaleClampNEON", "FMUL", "FADD"},
+}
+
+// asmFuncBody returns the lines of the TEXT ·fn(...) block, from its TEXT line to
+// the next TEXT line (or EOF). The header doc comment sits above the TEXT line
+// and is deliberately excluded, so a comment mentioning "VFMADD" or "FMLA" (as
+// the no-FMA kernels' own comments do) is not scanned.
+func asmFuncBody(src, fn string) ([]string, bool) {
+	lines := strings.Split(src, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "TEXT ·"+fn+"(") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return nil, false
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "TEXT ·") {
+			end = i
+			break
+		}
+	}
+	return lines[start:end], true
+}
+
+// TestNoFMAContract enforces the f32 single-rounding contract (#156): the
+// listed kernels must contain a separate multiply and add and no fused
+// multiply-add. amd64 instructions are read as mnemonics; arm64 vector-float
+// ops are WORD-encoded, so each WORD is decoded through arm64asm and the decoded
+// mnemonic is checked (a WORD-encoded FMLA is caught even though the source text
+// is a hex literal).
+func TestNoFMAContract(t *testing.T) {
+	// VFMADD/VFNMADD/VFMSUB/VFNMSUB (amd64); FMADD/FMSUB/FNMADD/FNMSUB and the
+	// FMLA/FMLS vector forms (arm64). Deliberately excludes FMUL/FADD/FMAX/FMIN.
+	fmaRe := regexp.MustCompile(`^(VFN?M(ADD|SUB)|FN?M(ADD|SUB)|FML[AS])`)
+
+	for _, k := range singleRoundingKernels {
+		src, err := os.ReadFile(k.file)
+		if err != nil {
+			t.Fatalf("%s: %v", k.file, err)
+		}
+		body, ok := asmFuncBody(string(src), k.fn)
+		if !ok {
+			t.Fatalf("%s: TEXT ·%s not found (renamed? update singleRoundingKernels)", k.file, k.fn)
+		}
+
+		var mulSeen, addSeen bool
+		for _, line := range body {
+			// Resolve the effective mnemonic: the decoded op for a WORD directive,
+			// otherwise the first token of the (comment-stripped) instruction.
+			var mnem string
+			if hex, _, isWord := asmcheck.ParseWordLine(line); isWord {
+				dec, derr := asmcheck.Decode(hex)
+				if derr != nil {
+					continue // undecodable words are TestArm64WordEncodings' job
+				}
+				if f := strings.Fields(dec); len(f) > 0 {
+					mnem = strings.ToUpper(f[0])
+				}
+			} else {
+				code := line
+				if idx := strings.Index(code, "//"); idx >= 0 {
+					code = code[:idx]
+				}
+				if f := strings.Fields(code); len(f) > 0 {
+					mnem = strings.ToUpper(f[0])
+				}
+			}
+			if mnem == "" {
+				continue
+			}
+			if fmaRe.MatchString(mnem) {
+				t.Errorf("%s ·%s: forbidden fused %s in a single-rounding kernel; emit a "+
+					"separate %s then %s so the product rounds to float32 first (see #156)",
+					k.file, k.fn, mnem, k.mul, k.add)
+			}
+			switch mnem {
+			case k.mul:
+				mulSeen = true
+			case k.add:
+				addSeen = true
+			}
+		}
+		if !mulSeen || !addSeen {
+			t.Errorf("%s ·%s: the two-rounding multiply+add must be present and unfused, "+
+				"but got %s=%v %s=%v (see #156)", k.file, k.fn, k.mul, mulSeen, k.add, addSeen)
+		}
+	}
+}
