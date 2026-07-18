@@ -1,6 +1,9 @@
 package i8
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 const benchN = 4096
 
@@ -59,6 +62,38 @@ func BenchmarkDotProduct(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_ = DotProduct(a, c)
+	}
+}
+
+// BenchmarkSum_N and BenchmarkDotProduct_N guard the 8-wide AVX2 tail block
+// (#149): n%16 in 8..15 exercises the block, aligned n (16, 32) does not. The
+// fixed 4096-byte benchmarks above are all n%16==0 and cannot see the tail
+// sawtooth, so residue lengths (24, 40, 248) must be measured explicitly; n=16
+// is the aligned sentinel where the block never runs.
+func BenchmarkSum_N(b *testing.B) {
+	// 16 is the aligned sentinel (block skipped); 24/40/248 are residue 8 (block,
+	// empty scalar tail); 31 is residue 15 (block plus the full 7-element scalar
+	// tail), so the guard times the block in isolation and alongside a tail.
+	for _, n := range []int{16, 24, 31, 40, 248} {
+		a := genI8(n, 1)
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			b.SetBytes(int64(n))
+			for b.Loop() {
+				_ = Sum(a)
+			}
+		})
+	}
+}
+
+func BenchmarkDotProduct_N(b *testing.B) {
+	for _, n := range []int{16, 24, 31, 40, 248} {
+		a, c := genI8(n, 1), genI8(n, 2)
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			b.SetBytes(int64(n))
+			for b.Loop() {
+				_ = DotProduct(a, c)
+			}
+		})
 	}
 }
 
