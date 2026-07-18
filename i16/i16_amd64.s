@@ -423,6 +423,15 @@ dot_avx2_blocks16:
     SHRQ $4, BX                // BX = n / 16
     JZ   dot_avx2_reduce
 
+    // Pin the 29-byte 16-wide loop into a single 64-byte fetch line. Without this,
+    // whether the loop straddles a line boundary is a coin flip decided by the
+    // linker's placement of dotAVX2 (Go aligns amd64 funcs to 32, not 64), and a
+    // straddling loop measured 15-27% slower at aligned lengths (240/480/4096) on
+    // Alder Lake, with retired instructions unchanged (pure fetch/DSB effect). The
+    // ~23 NOP bytes on the n>=16 entry path are neutral even at n=16/24. Unlike the
+    // larger xcorr4 loop (uop-cache served, PCALIGN not warranted per #150), this
+    // small loop is fetch-sensitive. See #159.
+    PCALIGN $32
 dot_avx2_loop16:
     VMOVDQU (SI), Y1
     VMOVDQU (DI), Y2
