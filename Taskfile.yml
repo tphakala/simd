@@ -26,12 +26,12 @@ tasks:
   test:f32:
     desc: Run float32 tests
     cmds:
-      - go test -v ./pkg/simd/f32/
+      - go test -v ./f32/
 
   test:f64:
     desc: Run float64 tests
     cmds:
-      - go test -v ./pkg/simd/f64/
+      - go test -v ./f64/
 
   test:race:
     desc: Run tests with race detector
@@ -40,26 +40,24 @@ tasks:
 
   # Benchmarks
   bench:
-    desc: Run all benchmarks
+    desc: Run all benchmarks across every package
     cmds:
-      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f32/
-      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f64/
+      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} -run='^$' ./...
 
   bench:f32:
     desc: Run float32 benchmarks
     cmds:
-      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f32/
+      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} -run='^$' ./f32/
 
   bench:f64:
     desc: Run float64 benchmarks
     cmds:
-      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f64/
+      - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} -run='^$' ./f64/
 
   bench:dot:
-    desc: Run DotProduct benchmarks only
+    desc: Run DotProduct benchmarks across every package that has them
     cmds:
-      - go test -bench=BenchmarkDotProduct -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f32/
-      - go test -bench=BenchmarkDotProduct -benchmem -benchtime={{.BENCH_TIME}} ./pkg/simd/f64/
+      - go test -bench=BenchmarkDotProduct -benchmem -benchtime={{.BENCH_TIME}} -run='^$' ./...
 
   bench:compare:
     desc: Run SIMD vs Pure Go comparison benchmark
