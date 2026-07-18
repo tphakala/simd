@@ -325,29 +325,62 @@ func maxIdx32(a []float32) int {
 // composes any remainder rows with the scalar path. Non-unit slides and a
 // missing AVX2 stay on the Go reference. All paths are bit-identical (see
 // minIdxOfSumRows8AVX2). SSE2-only hosts take the Go path deliberately.
+// Row-block widths for the MinIdxOfSumRows AVX2 dispatcher: minIdxOfSumRows8AVX2
+// covers 8 rows per call, minIdxOfSumRows4AVX2 covers 4. The dispatcher blocks by
+// these widths and covers any remainder with one overlapping block of the same
+// width, so they double as the minimum m each block can serve.
+const (
+	minIdxRows8 = 8
+	minIdxRows4 = 4
+)
+
 func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
 	if cpu.X86.AVX2 && (slide == 1 || slide == -1) {
 		r := 0
-		for ; r+8 <= len(vals); r += 8 {
+		for ; r+minIdxRows8 <= len(vals); r += minIdxRows8 {
 			off := base + r*slide
 			if slide == 1 {
-				minIdxOfSumRows8AVX2(vals[r:r+8], idxs[r:r+8], a, k[off:], 0)
+				minIdxOfSumRows8AVX2(vals[r:r+minIdxRows8], idxs[r:r+minIdxRows8], a, k[off:], 0)
 			} else {
-				minIdxOfSumRows8AVX2(vals[r:r+8], idxs[r:r+8], a, k[off-7:], 1)
+				minIdxOfSumRows8AVX2(vals[r:r+minIdxRows8], idxs[r:r+minIdxRows8], a, k[off-7:], 1)
 			}
 		}
-		if r+4 <= len(vals) {
+		if r+minIdxRows4 <= len(vals) {
 			off := base + r*slide
 			if slide == 1 {
-				minIdxOfSumRows4AVX2(vals[r:r+4], idxs[r:r+4], a, k[off:], 0)
+				minIdxOfSumRows4AVX2(vals[r:r+minIdxRows4], idxs[r:r+minIdxRows4], a, k[off:], 0)
 			} else {
-				minIdxOfSumRows4AVX2(vals[r:r+4], idxs[r:r+4], a, k[off-3:], 1)
+				minIdxOfSumRows4AVX2(vals[r:r+minIdxRows4], idxs[r:r+minIdxRows4], a, k[off-3:], 1)
 			}
-			r += 4
+			r += minIdxRows4
 		}
-		// Leftover rows (fewer than a 4-wide block) compose with the scalar
-		// reference, keeping the tie-break/NaN/rounding contract in one place.
-		minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+		// The 0-3 leftover rows (leftover == m mod 4 after the 8- and 4-wide
+		// blocks) go through SIMD via one overlapping 4-wide block ONLY when there
+		// are at least 2 of them. The 4-wide block's cost is dominated by its fixed
+		// column loop and per-row argmin reduction, not by how many rows it
+		// recomputes, so it costs about one scalar row regardless; it therefore
+		// only pays off when it replaces 2 or 3 scalar rows. A single leftover row
+		// is cheaper computed scalar: #161 measured a +10% regression at 17x17
+		// (= 2*8+1, so exactly 1 leftover row) when a lone remainder row was
+		// covered by a full block, and narrowing the block from 8- to 4-wide did
+		// not move it. Recomputing is bit-identical (each row is independent and
+		// the kernel is pure) and the wrapper already range-validated every row's
+		// window, so the overlap reads stay in bounds. A single leftover row, or
+		// m<4 (no wide-enough block), stays scalar; a leftover of 0 leaves r == m
+		// and skips this block entirely. Same rule as the NEON dispatcher.
+		if r < len(vals) {
+			m := len(vals)
+			if m >= minIdxRows4 && m-r >= 2 {
+				off := base + (m-minIdxRows4)*slide
+				if slide == 1 {
+					minIdxOfSumRows4AVX2(vals[m-minIdxRows4:], idxs[m-minIdxRows4:], a, k[off:], 0)
+				} else {
+					minIdxOfSumRows4AVX2(vals[m-minIdxRows4:], idxs[m-minIdxRows4:], a, k[off-3:], 1)
+				}
+			} else {
+				minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+			}
+		}
 		return
 	}
 	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
