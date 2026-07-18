@@ -9,7 +9,7 @@ import "testing"
 //
 //	40  -> residue  8  (0b01000): 8-wide block only, empty scalar tail
 //	48  -> residue 16  (0b10000): 16-wide block only, empty scalar tail
-//	55  -> residue 23  (0b10111): 16-wide + 8-wide blocks + 7-element scalar tail
+//	55  -> residue 23  (0b10111): 16-wide block only (bit3=0), 7-element scalar tail
 //	63  -> residue 31  (0b11111): 16-wide + 8-wide blocks + 7-element scalar tail
 //
 // n=48 in particular is the only case that runs the 16-wide block with the
@@ -81,28 +81,31 @@ func TestElementwiseResiduePreBlocks(t *testing.T) {
 // the pre-blocks read each input byte then write its output before advancing, so
 // dst==a aliasing must produce the same result as the out-of-place call even for
 // the non-idempotent ops. An overlapping/backward block would double-transform
-// bytes it re-read from dst; a forward block does not. n=55 is ragged (residue
-// 23), so both the 16-wide and 8-wide in-place blocks run.
+// bytes it re-read from dst; a forward block does not. n=55 (residue 23) runs the
+// 16-wide block in place; n=63 (residue 31) runs both the 16-wide and 8-wide
+// blocks (plus a 7-element scalar tail) in place, so the two lengths together
+// cover both forward pre-blocks with aliased dst.
 func TestElementwiseInPlaceForwardBlocks(t *testing.T) {
-	const n = 55
-	a := genI8(n, 1)
-	b := genI8(n, 2)
+	for _, n := range []int{55, 63} {
+		a := genI8(n, 1)
+		b := genI8(n, 2)
 
-	// Abs in place: dst == a.
-	{
-		want := make([]int8, n)
-		Abs(want, a) // out-of-place reference
-		inplace := append([]int8(nil), a...)
-		Abs(inplace, inplace)
-		assertI8Eq(t, "Abs in-place", n, inplace, want)
-	}
+		// Abs in place: dst == a.
+		{
+			want := make([]int8, n)
+			Abs(want, a) // out-of-place reference
+			inplace := append([]int8(nil), a...)
+			Abs(inplace, inplace)
+			assertI8Eq(t, "Abs in-place", n, inplace, want)
+		}
 
-	// AddSaturate in place: dst == a (first input aliases output).
-	{
-		want := make([]int8, n)
-		AddSaturate(want, a, b)
-		inplace := append([]int8(nil), a...)
-		AddSaturate(inplace, inplace, b)
-		assertI8Eq(t, "AddSaturate in-place", n, inplace, want)
+		// AddSaturate in place: dst == a (first input aliases output).
+		{
+			want := make([]int8, n)
+			AddSaturate(want, a, b)
+			inplace := append([]int8(nil), a...)
+			AddSaturate(inplace, inplace, b)
+			assertI8Eq(t, "AddSaturate in-place", n, inplace, want)
+		}
 	}
 }
