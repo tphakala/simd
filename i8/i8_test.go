@@ -22,7 +22,10 @@ func genI8(n int, seed uint32) []int8 {
 // dispatch threshold (16) with n%16 == 8 and 9, exercising the 8-wide AVX2 tail
 // block in Sum/DotProduct with a zero and a one-element scalar remainder (#149);
 // 31/63/255 give it a full 7-element scalar remainder, 1000 a zero one.
-var lengths = []int{0, 1, 2, 3, 7, 8, 15, 16, 17, 24, 25, 31, 32, 33, 63, 64, 65, 100, 255, 256, 257, 1000, 1024, 1031}
+// 48 and 55 have n%32 == 16 and 23, isolating the 16-wide-only tail block (8-wide
+// skipped) in the 32-wide SumAbs/SAD reductions, with a zero and a full 7-element
+// scalar remainder respectively (#149); 63/95/255 drive both blocks together.
+var lengths = []int{0, 1, 2, 3, 7, 8, 15, 16, 17, 24, 25, 31, 32, 33, 48, 55, 63, 64, 65, 100, 255, 256, 257, 1000, 1024, 1031}
 
 func TestAddSaturate(t *testing.T) {
 	// Literal saturation cases validate the reference independently of the SIMD path.

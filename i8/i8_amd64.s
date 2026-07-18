@@ -858,6 +858,29 @@ TEXT ·sumAbsAVX2(SB), NOSPLIT, $0-28
     VPXOR Y0, Y0, Y0           // zero (PSADBW reference)
     VPXOR Y2, Y2, Y2           // u64 accumulator
 
+    // A 16-wide then an 8-wide XMM block absorb up to 24 of the 0-31 remainder
+    // bytes before the 32-wide loop, into the still-zero u64 accumulator, so the
+    // VEX.128 writes that zero Y2[255:128] are harmless (it is already zero).
+    // Legal to reorder because the sum wraps and PSADBW's u64 partials add
+    // associatively. Same shape as sumAVX2's 8-wide block (#173), scaled to the
+    // 32-wide body. Reduces the serial scalar tail from up to 31 to at most 7.
+    TESTQ $16, CX              // n % 32 >= 16?
+    JZ   sumabs_block8
+    VPABSB (SI), X1            // 16 |bytes|
+    VPSADBW X0, X1, X3         // -> 2 u64 lanes (low 128)
+    VPADDQ X3, X2, X2          // Y2[255:128] still zero after this
+    ADDQ $16, SI
+
+sumabs_block8:
+    TESTQ $8, CX               // n % 16 >= 8?
+    JZ   sumabs_blocks32
+    VMOVQ (SI), X1             // 8 bytes in low qword (upper zeroed)
+    VPABSB X1, X1
+    VPSADBW X0, X1, X3         // upper 8 bytes are 0, |0|=0 -> 1 u64 lane
+    VPADDQ X3, X2, X2
+    ADDQ $8, SI
+
+sumabs_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX                // AX = n / 32
     JZ   sumabs_reduce
@@ -877,7 +900,7 @@ sumabs_reduce:
     VPADDQ X3, X2, X2          // -> total in low qword
     MOVQ X2, AX                // u64 running total
 
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   sumabs_done
 
 sumabs_scalar:
@@ -911,6 +934,35 @@ TEXT ·sadAVX2(SB), NOSPLIT, $0-52
     VPSLLW $7, Y4, Y4          // 0x0101<<7 = 0x8080 per word -> 0x80 per byte
     VPXOR Y2, Y2, Y2           // u64 accumulator
 
+    // A 16-wide then an 8-wide XMM block absorb up to 24 of the 0-31 remainder
+    // bytes before the 32-wide loop, into the still-zero u64 accumulator, so the
+    // VEX.128 writes that zero Y2[255:128] are harmless (it is already zero).
+    // Legal to reorder because the sum wraps and PSADBW's u64 partials add
+    // associatively. Reduces the serial scalar tail from up to 31 to at most 7.
+    TESTQ $16, CX
+    JZ   sad_block8
+    VMOVDQU (SI), X0
+    VMOVDQU (DI), X1
+    VPXOR X4, X0, X0           // a+128 (X4 low 128 = 0x80 bytes)
+    VPXOR X4, X1, X1           // b+128
+    VPSADBW X1, X0, X3         // sum|a-b| over 16 bytes -> 2 u64 lanes
+    VPADDQ X3, X2, X2          // Y2[255:128] still zero after this
+    ADDQ $16, SI
+    ADDQ $16, DI
+
+sad_block8:
+    TESTQ $8, CX
+    JZ   sad_blocks32
+    VMOVQ (SI), X0             // 8 bytes, upper zeroed
+    VMOVQ (DI), X1
+    VPXOR X4, X0, X0           // upper 8 bytes become 0x80 for BOTH a and b
+    VPXOR X4, X1, X1
+    VPSADBW X1, X0, X3         // upper 8: |0x80-0x80| = 0 -> contributes 0
+    VPADDQ X3, X2, X2
+    ADDQ $8, SI
+    ADDQ $8, DI
+
+sad_blocks32:
     MOVQ CX, AX
     SHRQ $5, AX
     JZ   sad_reduce
@@ -934,7 +986,7 @@ sad_reduce:
     VPADDQ X3, X2, X2
     MOVQ X2, AX                // u64 running total
 
-    ANDQ $31, CX
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 to n % 8
     JZ   sad_done
 
 sad_scalar:
