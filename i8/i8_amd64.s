@@ -319,7 +319,8 @@ dot_done:
 // func minMaxAVX2(a []int8) (minVal, maxVal int8)
 // Signed byte min and max in one pass: VPMINSB/VPMAXSB fold 32-byte blocks into
 // running accumulators, a per-lane cascade reduces a 128-bit lane to a single
-// byte, and a scalar tail folds the (n mod 32) remainder. The dispatch gates
+// byte, and an overlapping final 32-byte block folds the (n mod 32) remainder
+// (idempotent, so reprocessing the overlap is exact). The dispatch gates
 // n >= 32, so at least one full block exists.
 TEXT ·minMaxAVX2(SB), NOSPLIT, $0-26
     MOVQ a_base+0(FP), SI
@@ -629,7 +630,8 @@ neg_done:
 // Per-tensor abs-max for dynamic quantization: VPABSB maps each byte to its
 // magnitude (abs(-128) -> 0x80, i.e. 128 read unsigned), VPMAXUB folds 32-byte
 // blocks into an unsigned-max accumulator, a VPMAXUB/VPSRLDQ cascade reduces a
-// 128-bit lane to one byte, and a scalar tail folds the (n mod 32) remainder.
+// 128-bit lane to one byte, and an overlapping final 32-byte block folds the
+// (n mod 32) remainder (idempotent, so reprocessing the overlap is exact).
 // The result is read zero-extended, so it lands in [0, 128].
 TEXT ·maxAbsAVX2(SB), NOSPLIT, $0-32
     MOVQ a_base+0(FP), SI
