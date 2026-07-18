@@ -6,6 +6,20 @@
 //
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
+//
+// Rounding and fusion: each floating-point operation is a single IEEE-754
+// rounded instruction. The elementwise scale, offset, clamp and float-to-fixed
+// conversion primitives (for example [Scale], [AddScalar], [ClampScale],
+// [Float32ToInt32ScaleClamp] and the Int*ToFloat32Scale family) never contract a
+// multiply and a following add into a fused multiply-add: a consumer that
+// reproduces a scalar reference bit-for-bit depends on the product rounding to
+// float32 before the add. Where fusion is wanted, use [FMA] or the AXPY
+// [AddScaled], whose names say so. Reductions and math functions such as
+// [DotProduct] and the exp/log family do use FMA, where a single fused rounding
+// is correct and no such reference exists. The no-fuse contract is
+// asmcheck-enforced for the primitives that actually perform a multiply followed
+// by an add (see TestNoFMAContract in the module root); a future optimization
+// that fuses one of them fails that test rather than silently changing bits.
 package f32
 
 import "math"
