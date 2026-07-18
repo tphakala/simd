@@ -330,7 +330,7 @@ TEXT ·minMaxAVX2(SB), NOSPLIT, $0-26
     MOVQ CX, AX
     SHRQ $5, AX                // AX = full 32-byte blocks (>=1)
     DECQ AX                    // blocks remaining after block 0
-    JZ   mm_reduce
+    JZ   mm_overlap
     LEAQ 32(SI), DI            // working ptr at block 1
 
 mm_loop:
@@ -340,6 +340,20 @@ mm_loop:
     ADDQ $32, DI
     DECQ AX
     JNZ  mm_loop
+
+mm_overlap:
+    // Absorb the (n mod 32) tail with an overlapping final 32-wide block instead
+    // of a serial scalar tail. minMaxAVX2 is dispatched only for n >= 32, so
+    // a+n-32 is in bounds; signed min/max are idempotent, so reprocessing the
+    // overlap with the last full block is bit-exact. Guarded on a nonzero residue
+    // so aligned n pays nothing.
+    TESTQ $31, CX
+    JZ   mm_reduce
+    MOVQ SI, DI                // SI is still a_base (never advanced)
+    ADDQ CX, DI                // DI = a + n
+    VMOVDQU -32(DI), Y2        // a[n-32 .. n)
+    VPMINSB Y2, Y0, Y0
+    VPMAXSB Y2, Y1, Y1
 
 mm_reduce:
     // Fold the 256-bit min accumulator to one byte.
@@ -367,31 +381,6 @@ mm_reduce:
     VPSRLDQ $1, X1, X3
     VPMAXSB X3, X1, X1
     MOVD X1, DX                // DL = running max
-
-    // scalar tail: (n mod 32) residuals at &a[fullBlocks*32]. Legacy GPRs only:
-    // DI = tail ptr (SI free after), SI = loaded byte, CX = sign-extend temp.
-    MOVQ CX, BX
-    ANDQ $31, BX
-    JZ   mm_done
-    MOVQ CX, DI
-    ANDQ $-32, DI              // fullBlocks*32 bytes
-    ADDQ SI, DI               // tail ptr
-
-mm_tail:
-    MOVBLSX (DI), SI           // r (sign-extended)
-    MOVBLSX AX, CX             // current min (sign-extend AL)
-    CMPL SI, CX
-    JGE  mm_tail_max
-    MOVB SI, AX               // r < min -> new min (low byte)
-mm_tail_max:
-    MOVBLSX DX, CX             // current max (sign-extend DL)
-    CMPL SI, CX
-    JLE  mm_tail_next
-    MOVB SI, DX               // r > max -> new max
-mm_tail_next:
-    INCQ DI
-    DECQ BX
-    JNZ  mm_tail
 
 mm_done:
     MOVB AX, minVal+24(FP)
@@ -659,6 +648,18 @@ maxabs_loop32:
     DECQ AX
     JNZ  maxabs_loop32
 
+    // Absorb the (n mod 32) tail with an overlapping final 32-wide block instead
+    // of a serial scalar tail. maxAbsAVX2 is dispatched only for n >= 32, so
+    // a+n-32 is in bounds; unsigned max is idempotent, so reprocessing the
+    // overlap with the last full block is bit-exact. Guarded on a nonzero residue
+    // so aligned n pays nothing.
+    TESTQ $31, CX
+    JZ   maxabs_reduce
+    MOVQ a_base+0(FP), DI      // reload base (SI has advanced past the last block)
+    ADDQ CX, DI                // DI = a + n
+    VPABSB -32(DI), Y1         // |a[n-32 .. n)|
+    VPMAXUB Y1, Y0, Y0
+
 maxabs_reduce:
     VEXTRACTI128 $1, Y0, X1
     VPMAXUB X1, X0, X0         // fold 32 -> 16 bytes
@@ -672,23 +673,6 @@ maxabs_reduce:
     VPMAXUB X1, X0, X0         // 1 byte
     MOVD X0, AX
     ANDQ $0xFF, AX             // running abs-max (unsigned byte) in [0, 128]
-
-    ANDQ $31, CX
-    JZ   maxabs_done
-
-maxabs_scalar:
-    MOVBLSX (SI), BX           // v (sign-extended)
-    TESTL BX, BX
-    JGE  maxabs_cmp
-    NEGL BX                    // |v|; -(-128) = 128
-maxabs_cmp:
-    CMPL BX, AX                // both in [0, 128], unsigned == signed here
-    JLE  maxabs_next
-    MOVL BX, AX                // new running max
-maxabs_next:
-    INCQ SI
-    DECQ CX
-    JNZ  maxabs_scalar
 
 maxabs_done:
     MOVQ AX, ret+24(FP)
