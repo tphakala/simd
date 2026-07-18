@@ -780,6 +780,17 @@ func float32ToInt16Scale(dst []int16, src []float32, scale float32) {
 //go:noescape
 func float32ToInt16ScaleNEON(dst []int16, src []float32, scale float32)
 
+func float32ToInt32ScaleClamp(dst []int32, src []float32, scale, offset, minV, maxV float32) {
+	if hasNEON && len(dst) >= 4 {
+		float32ToInt32ScaleClampNEON(dst, src, scale, offset, minV, maxV)
+		return
+	}
+	float32ToInt32ScaleClampGo(dst, src, scale, offset, minV, maxV)
+}
+
+//go:noescape
+func float32ToInt32ScaleClampNEON(dst []int32, src []float32, scale, offset, minV, maxV float32)
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

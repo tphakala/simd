@@ -750,6 +750,46 @@ func float32ToInt16ScaleGo(dst []int16, src []float32, scale float32) {
 	}
 }
 
+// float32ToInt32ScaleClampGo converts float32 to int32 in one pass:
+//
+//	v = src[i]*scale + offset, clamped to [minV, maxV], truncated toward zero.
+//
+// The multiply and the add are two SEPARATE float32 roundings, never contracted
+// into an FMA: the product rounds to float32 before offset is added. The SIMD
+// kernels emit VMULPS+VADDPS / FMUL+FADD (not VFMADD / FMLA) to match this
+// bit-for-bit, so output is identical across architectures and against this
+// reference. See #156 for the library-wide single-rounding contract.
+//
+// The float32(src[i]*scale) conversion is a mandatory rounding barrier: without
+// it the Go compiler legally fuses src*scale+offset into a single FMADDS on
+// arm64 (verified with go1.26 -gcflags=-S), which would round once and diverge
+// from both the SIMD kernels and this reference's own intent.
+//
+// NaN -> 0 (matching Float32ToInt16Scale). +Inf clamps to maxV, -Inf to minV.
+// Truncation toward zero matches Go's int32(v) and the hardware CVTTPS2DQ /
+// FCVTZS. Callers must keep minV and maxV non-NaN and within the float32-
+// representable int32 range: minV >= -2147483648.0 and maxV <= 2147483520.0
+// (the largest float32 <= MaxInt32; float32(math.MaxInt32) rounds up to 2^31 and
+// overflows). Outside that contract the conversion of an out-of-range value is
+// architecture-dependent.
+func float32ToInt32ScaleClampGo(dst []int32, src []float32, scale, offset, minV, maxV float32) {
+	for i := range src {
+		v := float32(src[i]*scale) + offset // two roundings; the conversion blocks FMA fusion
+		if v != v {                         // NaN -> 0, as on both kernels
+			dst[i] = 0
+			continue
+		}
+		// Clamp order mirrors the kernels' FMAX(minV) then FMIN(maxV).
+		if v < minV {
+			v = minV
+		}
+		if v > maxV {
+			v = maxV
+		}
+		dst[i] = int32(v) // truncate toward zero
+	}
+}
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS (Pure Go)
 // ============================================================================

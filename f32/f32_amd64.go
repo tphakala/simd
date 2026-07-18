@@ -1160,6 +1160,19 @@ func float32ToInt16Scale(dst []int16, src []float32, scale float32) {
 //go:noescape
 func float32ToInt16ScaleAVX(dst []int16, src []float32, scale float32)
 
+func float32ToInt32ScaleClamp(dst []int32, src []float32, scale, offset, minV, maxV float32) {
+	// Pure AVX (VEX.256 float ops + VCVTTPS2DQ); the int32 output needs no
+	// saturating pack, so unlike float32ToInt16Scale it does not require AVX2.
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
+		float32ToInt32ScaleClampAVX(dst, src, scale, offset, minV, maxV)
+		return
+	}
+	float32ToInt32ScaleClampGo(dst, src, scale, offset, minV, maxV)
+}
+
+//go:noescape
+func float32ToInt32ScaleClampAVX(dst []int32, src []float32, scale, offset, minV, maxV float32)
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

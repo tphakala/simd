@@ -284,8 +284,13 @@ streaming DSP. These are f32-specific and have no f64 equivalent by design.
 | `Int32ToFloat32Scale(dst, src, s)` | PCM int32 to normalized float | 8x (AVX2) / 4x (NEON) |
 | `Int16ToFloat32Scale(dst, src, s)` | PCM int16 to normalized float | 8x (AVX2) / 4x (NEON) |
 | `Float32ToInt16Scale(dst, src, s)` | Normalized float to PCM int16 | 8x (AVX2) / 4x (NEON) |
+| `Float32ToInt32ScaleClamp(dst, src, s, o, lo, hi)` | Affine float to clamped int32, truncating (`int32(clamp(src*s+o, lo, hi))`) | 8x (AVX2) / 4x (NEON) |
 
 Each has an `Unsafe` variant that skips bounds reconciliation.
+
+`Float32ToInt32ScaleClamp` keeps the multiply and add as two separate float32
+roundings (never fused into an FMA), so it reproduces a scalar `float32(x*s)+o`
+reference bit-for-bit.
 
 `InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
 a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
