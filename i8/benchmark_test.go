@@ -212,3 +212,36 @@ func BenchmarkSAD(b *testing.B) {
 		_ = SAD(a, c)
 	}
 }
+
+// BenchmarkSumAbs_N and BenchmarkSAD_N guard the 16- and 8-wide AVX2 tail blocks
+// (#149) on the 32-wide reduction bodies: a residue of 1..31 bytes was served by
+// a serial scalar accumulator chain, so a worst-case residue of 31 cost up to 31
+// dependent adds. The fixed 4096-byte benchmarks above are all n%32==0 and cannot
+// see the sawtooth, so residue lengths must be measured explicitly. 32 is the
+// aligned sentinel (both blocks skipped); 40 is residue 8 (only the 8-wide block);
+// 48 is residue 16 (only the 16-wide block); 63 is residue 31 (both blocks plus
+// the full 7-element scalar tail, the worst case); 95 is residue 31 with more
+// 32-wide blocks; 248 is a realistic length (residue 24, both blocks).
+func BenchmarkSumAbs_N(b *testing.B) {
+	for _, n := range []int{32, 40, 48, 63, 95, 248} {
+		a := genI8(n, 1)
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			b.SetBytes(int64(n))
+			for b.Loop() {
+				_ = SumAbs(a)
+			}
+		})
+	}
+}
+
+func BenchmarkSAD_N(b *testing.B) {
+	for _, n := range []int{32, 40, 48, 63, 95, 248} {
+		a, c := genI8(n, 1), genI8(n, 2)
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			b.SetBytes(int64(n))
+			for b.Loop() {
+				_ = SAD(a, c)
+			}
+		})
+	}
+}
