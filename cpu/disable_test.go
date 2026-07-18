@@ -45,16 +45,20 @@ func TestApplyDisable(t *testing.T) {
 	}{
 		{"", nil},
 		{"avx512", []string{"AVX512F", "AVX512VL"}},
-		{"avx2", []string{"AVX2", "AVX512F", "AVX512VL"}},
+		// AVXVNNI is VEX-encoded and its dispatch tier sits above AVX2, so clearing
+		// AVX2 (and every token that cascades through clearAVX2) must also clear it.
+		// The avxvnni token itself clears only AVXVNNI.
+		{"avxvnni", []string{"AVXVNNI"}},
+		{"avx2", []string{"AVX2", "AVX512F", "AVX512VL", "AVXVNNI"}},
 		// F16C is VEX-encoded and gated on AVX, so the avx cascade (and every SSE
 		// token that cascades through clearAVX) must also clear F16C. avx2/fma/avx512
 		// sit above AVX and correctly leave it set.
-		{"avx", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA"}},
+		{"avx", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "AVXVNNI", "F16C", "FMA"}},
 		{"fma", []string{"FMA"}},
-		{"sse42", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE42"}},
-		{"sse41", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE41", "SSE42"}},
-		{"ssse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE41", "SSE42", "SSSE3"}},
-		{"sse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "F16C", "FMA", "SSE3", "SSE41", "SSE42", "SSSE3"}},
+		{"sse42", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "AVXVNNI", "F16C", "FMA", "SSE42"}},
+		{"sse41", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "AVXVNNI", "F16C", "FMA", "SSE41", "SSE42"}},
+		{"ssse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "AVXVNNI", "F16C", "FMA", "SSE41", "SSE42", "SSSE3"}},
+		{"sse3", []string{"AVX", "AVX2", "AVX512F", "AVX512VL", "AVXVNNI", "F16C", "FMA", "SSE3", "SSE41", "SSE42", "SSSE3"}},
 		{"pclmulqdq", []string{"PCLMULQDQ"}},
 		{"neon", []string{"DOTPROD", "FP16", "NEON", "PMULL", "SVE", "SVE2"}},
 		{"fp16", []string{"FP16"}},
@@ -64,7 +68,7 @@ func TestApplyDisable(t *testing.T) {
 		// Case-insensitivity and surrounding whitespace.
 		{"AVX512", []string{"AVX512F", "AVX512VL"}},
 		{"  avx512  ", []string{"AVX512F", "AVX512VL"}},
-		{"Avx2", []string{"AVX2", "AVX512F", "AVX512VL"}},
+		{"Avx2", []string{"AVX2", "AVX512F", "AVX512VL", "AVXVNNI"}},
 		// Unknown tokens are ignored.
 		{"foobar", nil},
 		{"avx512,foobar", []string{"AVX512F", "AVX512VL"}},

@@ -7,7 +7,7 @@ import (
 )
 
 func ExampleInfo() {
-	// Returns a string like "AMD64 AVX2+FMA" or "ARM64 NEON"
+	// Returns a string like "AMD64 AVX+FMA" or "ARM64 NEON"
 	info := cpu.Info()
 	fmt.Printf("CPU supports: %s\n", info)
 }

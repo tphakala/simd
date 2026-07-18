@@ -777,6 +777,192 @@ xcorr4_avx2_store:
     VZEROUPPER
     RET
 
+// func xcorr4AVXVNNI(dst []int32, x, y []int16)
+// xcorr4AVX2 with the 16-wide loop's four VPMADDWD+VPADDD pairs (madd the 16-bit
+// lane pairs to int32, then accumulate) each fused into one VPDPWSSD (#150 item
+// 1). VPDPWSSD acc, a, b computes acc += VPMADDWD(a, b) with the same WRAPPING
+// dword accumulation, so it is bit-identical to the pair it replaces and
+// preserves the wrapping contract XCorr documents to callers. (VPDPWSSDS, the
+// saturating sibling, must never be used here.) Fusing the loop's 8 vector-ALU
+// ops to 4, all on p0/p1, drops the 16-wide body's port floor from 3 to 2
+// cyc/block. That floor is not realized: fusion moves the whole
+// multiply-accumulate onto each lag's loop-carried accumulator chain (in
+// xcorr4AVX2 the VPMADDWD fed VPADDD from loads, off the chain), so with one
+// accumulator per lag the 4-way ILP keeps the ports busy but cannot shorten any
+// single chain, and the realized loop rate is set by VPDPWSSD's accumulator
+// latency, ~2.5 cyc/block measured on the i7-1260P (Alder Lake), not the 2-cyc
+// floor. The net XCorr win is a modest ~2-7% per length (~2.3% geomean), with
+// the aligned-length tails muddied by the code-layout lottery of #159; see #150
+// for the port model. Requires AVX-VNNI in VEX form (cpu.X86.AVXVNNI), which the
+// dispatcher checks above AVX2.
+//
+// Only the 16-wide loop is fused. The 8- and 4-wide remainder blocks run at most
+// once per call, so VNNI would save them nothing measurable; they are the exact
+// VPMADDWD+VPADDD blocks xcorr4AVX2 carries, including the reason they run BEFORE
+// the 256-bit loop (their VEX.128 writes zero Y4-Y7's upper lanes while those are
+// still the freshly-VPXOR'd zero, so the VEX.256 loop then accumulates on top
+// preserving the low lane). The reordering is bit-exact only because the int32
+// accumulation wraps, hence is associative; the fold and scalar tail are
+// unchanged. See xcorr4AVX2 above for the full argument.
+//
+// VPDPWSSD is HAND-ENCODED below. The Go assembler (go1.26) knows only the EVEX
+// form of this mnemonic: avx_optabs.go lists AVPDPWSSD with evex128/256/512 and
+// no vex form, so `VPDPWSSD Y0, Y1, Y4` assembles to EVEX.256 (62-prefixed), the
+// AVX-512-VNNI encoding, which #UDs on AVX-VNNI-only parts such as Alder Lake
+// where AVX-512 is fused off (confirmed: it SIGILLs on the i7-1260P). The BYTE
+// directives emit the VEX form instead, VEX.256.66.0F38.W0 52 /r:
+//   C4 E2 75 52 modrm   x in Y0 (ModRM.rm=0), y in Y1 (VEX.vvvv=~1=1110), L=1
+//                       (256), pp=01 (66); modrm = 0xC0 | reg<<3, reg = dst YMM.
+// So Y4->0xE0, Y5->0xE8, Y6->0xF0, Y7->0xF8. This is the same hand-encoding
+// discipline the arm64 NEON kernels use (WORD there, BYTE here); asmcheck only
+// cross-checks arm64 words, so the encoding's runtime gate is the host
+// ParityWithGo test, which executes the kernel (a wrong byte SIGILLs or missums).
+TEXT ·xcorr4AVXVNNI(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DI
+    MOVQ x_base+24(FP), SI
+    MOVQ x_len+32(FP), CX
+    MOVQ y_base+48(FP), BX
+    MOVQ y_len+56(FP), DX
+
+    VPXOR Y4, Y4, Y4           // lag 0 accumulator
+    VPXOR Y5, Y5, Y5           // lag 1
+    VPXOR Y6, Y6, Y6           // lag 2
+    VPXOR Y7, Y7, Y7           // lag 3
+
+    SUBQ $3, DX                // DX = len(y) - 3
+    JLE  xcorrvnni_empty
+    CMPQ DX, CX
+    CMOVQLT DX, CX             // CX = n = min(len(x), len(y)-3)
+    JMP  xcorrvnni_blocks
+
+xcorrvnni_empty:
+    XORQ CX, CX
+
+xcorrvnni_blocks:
+    TESTQ $8, CX               // n % 16 >= 8? one XMM block absorbs the 8
+    JZ   xcorrvnni_block4
+
+    VMOVDQU (SI), X0           // x[0..8), reused by all four lags
+    VMOVDQU (BX), X1           // lag 0
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X4, X4          // VEX-128 zeroes Y4[255:128]; it is still zero
+    VMOVDQU 2(BX), X1          // lag 1
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X5, X5
+    VMOVDQU 4(BX), X1          // lag 2
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X6, X6
+    VMOVDQU 6(BX), X1          // lag 3
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X7, X7
+    ADDQ $16, SI               // 8 int16 consumed from x
+    ADDQ $16, BX               // y slides by the same 8, lag offsets unchanged
+
+    // A 4-wide XMM block below the 8-wide one, identical to xcorr4AVX2's. VMOVQ
+    // loads put x[0..4) and each lag's y[0..4) in the low 64 bits with the upper
+    // zeroed, so VPMADDWD yields two int32 partial sums (and two zero lanes) that
+    // VPADDD folds into the accumulator's low lane. Same pre-body ordering and
+    // wrapping-associativity basis as the 8-wide block. Left as plain AVX2: it
+    // runs at most once, so fusing it to VPDPWSSD would save nothing measurable.
+xcorrvnni_block4:
+    TESTQ $4, CX               // n % 8 >= 4? one 4-wide XMM block absorbs the 4
+    JZ   xcorrvnni_blocks16
+    VMOVQ (SI), X0             // x[0..4) in the low 64 bits (upper zeroed)
+    VMOVQ (BX), X1             // lag 0: y[0..4)
+    VPMADDWD X0, X1, X1        // 2 int32 partial sums (+ 2 zero lanes)
+    VPADDD X1, X4, X4          // VEX-128 zeroes Y4[255:128]; it is still zero
+    VMOVQ 2(BX), X1            // lag 1
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X5, X5
+    VMOVQ 4(BX), X1            // lag 2
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X6, X6
+    VMOVQ 6(BX), X1            // lag 3
+    VPMADDWD X0, X1, X1
+    VPADDD X1, X7, X7
+    ADDQ $8, SI                // 4 int16 consumed from x
+    ADDQ $8, BX                // y slides by the same 4, lag offsets unchanged
+
+xcorrvnni_blocks16:
+    MOVQ CX, AX
+    SHRQ $4, AX                // AX = n / 16, the 16-wide block count
+    JZ   xcorrvnni_fold
+
+xcorrvnni_loop16:
+    VMOVDQU (SI), Y0           // x[j..j+16), reused by all four lags
+    VMOVDQU (BX), Y1           // lag 0
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x75; BYTE $0x52; BYTE $0xE0  // VPDPWSSD Y0, Y1, Y4 (Y4 += madd(Y1, Y0))
+    VMOVDQU 2(BX), Y1          // lag 1
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x75; BYTE $0x52; BYTE $0xE8  // VPDPWSSD Y0, Y1, Y5
+    VMOVDQU 4(BX), Y1          // lag 2
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x75; BYTE $0x52; BYTE $0xF0  // VPDPWSSD Y0, Y1, Y6
+    VMOVDQU 6(BX), Y1          // lag 3
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x75; BYTE $0x52; BYTE $0xF8  // VPDPWSSD Y0, Y1, Y7
+    ADDQ $32, SI
+    ADDQ $32, BX
+    DECQ AX
+    JNZ  xcorrvnni_loop16
+
+xcorrvnni_fold:
+    VEXTRACTI128 $1, Y4, X0
+    VPADDD X0, X4, X4
+    VPSHUFD $0x4E, X4, X0
+    VPADDD X0, X4, X4
+    VPSHUFD $0xB1, X4, X0
+    VPADDD X0, X4, X4
+    MOVQ X4, R8                // lag 0 partial sum
+    VEXTRACTI128 $1, Y5, X0
+    VPADDD X0, X5, X5
+    VPSHUFD $0x4E, X5, X0
+    VPADDD X0, X5, X5
+    VPSHUFD $0xB1, X5, X0
+    VPADDD X0, X5, X5
+    MOVQ X5, R9                // lag 1
+    VEXTRACTI128 $1, Y6, X0
+    VPADDD X0, X6, X6
+    VPSHUFD $0x4E, X6, X0
+    VPADDD X0, X6, X6
+    VPSHUFD $0xB1, X6, X0
+    VPADDD X0, X6, X6
+    MOVQ X6, R10               // lag 2
+    VEXTRACTI128 $1, Y7, X0
+    VPADDD X0, X7, X7
+    VPSHUFD $0x4E, X7, X0
+    VPADDD X0, X7, X7
+    VPSHUFD $0xB1, X7, X0
+    VPADDD X0, X7, X7
+    MOVQ X7, R11               // lag 3
+
+    ANDQ $3, CX                // $3 not $7: the 8- and 4-wide blocks took those bits
+    JZ   xcorrvnni_store
+
+xcorrvnni_scalar:
+    MOVWLSX (SI), AX           // x[j], sign-extended
+    MOVWLSX (BX), DX
+    IMULL AX, DX
+    ADDL DX, R8
+    MOVWLSX 2(BX), DX
+    IMULL AX, DX
+    ADDL DX, R9
+    MOVWLSX 4(BX), DX
+    IMULL AX, DX
+    ADDL DX, R10
+    MOVWLSX 6(BX), DX
+    IMULL AX, DX
+    ADDL DX, R11
+    ADDQ $2, SI
+    ADDQ $2, BX
+    DECQ CX
+    JNZ  xcorrvnni_scalar
+
+xcorrvnni_store:
+    MOVL R8, 0(DI)
+    MOVL R9, 4(DI)
+    MOVL R10, 8(DI)
+    MOVL R11, 12(DI)
+    VZEROUPPER
+    RET
+
 // Tier-3 element-wise and reduction kernels (AVX2).
 //
 // All three receive pre-clamped slices from the public API, so unlike the dot

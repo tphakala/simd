@@ -32,13 +32,31 @@ func init() {
 	_, _, ecx, _ := cpuid(1, 0)
 	X86.F16C = X86.AVX && ecx&cpuidF16CBit != 0
 
+	// AVX-VNNI (VEX-encoded VPDPWSSD etc.) is not exposed by golang.org/x/sys/cpu
+	// either, so read it directly from CPUID leaf 7 sub-leaf 1, EAX bit 4. Gate on
+	// AVX2: the VEX form operates on YMM state, so it needs the same
+	// OSXSAVE/XGETBV OS support that AVX2 detection already establishes, and the
+	// kernel that consumes it is an AVX2 kernel.
+	eaxVNNI, _, _, _ := cpuid(cpuidExtdFeatureLeaf, cpuidExtdFeatureSubleaf1)
+	X86.AVXVNNI = X86.AVX2 && eaxVNNI&cpuidAVXVNNIBit != 0
+
 	// Honor SIMD_DISABLE last, so the env var can mask any detected feature
-	// (including F16C via the "all" token).
+	// (including F16C and AVXVNNI via the "all" token).
 	applyDisable(&X86, os.Getenv("SIMD_DISABLE"))
 }
 
 // cpuidF16CBit is CPUID leaf 1 ECX bit 29, set when F16C is supported.
 const cpuidF16CBit = 1 << 29
+
+// CPUID leaf 7 sub-leaf 1 addresses the structured extended feature flags whose
+// EAX reports AVX-VNNI; cpuidAVXVNNIBit is that EAX's bit 4, set when the
+// VEX-encoded AVX-VNNI instructions are supported. Named rather than inlined so
+// the leaf/sub-leaf selectors read as identifiers, not magic numbers.
+const (
+	cpuidExtdFeatureLeaf     = 7
+	cpuidExtdFeatureSubleaf1 = 1
+	cpuidAVXVNNIBit          = 1 << 4
+)
 
 // cpuid is the raw CPUID wrapper implemented in cpuid_amd64.s.
 //

@@ -100,7 +100,8 @@ program start. Each token clears its own flag plus everything that depends on it
 | Token       | Clears                                    |
 | ----------- | ----------------------------------------- |
 | `avx512`    | AVX512F, AVX512VL                         |
-| `avx2`      | AVX2 (and the `avx512` set)               |
+| `avxvnni`   | AVXVNNI only                              |
+| `avx2`      | AVX2, AVXVNNI (and the `avx512` set)      |
 | `avx`       | AVX, FMA, F16C (and the `avx2` set)       |
 | `fma`       | FMA only                                  |
 | `sse42`     | SSE42 (and the `avx` set)                 |
@@ -108,15 +109,20 @@ program start. Each token clears its own flag plus everything that depends on it
 | `ssse3`     | SSSE3 (and the `sse41` set)               |
 | `sse3`      | SSE3 (and the `ssse3` set)                |
 | `pclmulqdq` | PCLMULQDQ only                            |
-| `neon`      | NEON, FP16, SVE, SVE2, PMULL              |
+| `neon`      | NEON, FP16, SVE, SVE2, PMULL, DOTPROD     |
 | `fp16`      | FP16 only                                 |
 | `sve`       | SVE, SVE2                                 |
 | `pmull`     | PMULL only                                |
+| `dotprod`   | DOTPROD only                              |
 | `all`       | every flag (forces the pure-Go path)      |
 
 F16C is VEX-encoded and only detected alongside AVX, so it clears with the `avx`
 cascade (and therefore with every `sse*` token and `all`); `avx2`, `fma`, and
-`avx512` sit above AVX and leave F16C set.
+`avx512` sit above AVX and leave F16C set. AVX-VNNI (the VEX-encoded `VPDPWSSD`
+tier `i16.XCorr` uses) is detected only alongside AVX2 and its dispatch sits
+above it, so `avx2` and every token that cascades through it also clear AVXVNNI,
+while the `avxvnni` token clears only that tier (handy for A/B'ing the VNNI
+`XCorr` kernel against the plain AVX2 one on one machine).
 
 Unknown tokens are ignored (the library never panics or writes to stderr on env
 input). `cpu.Info()` reflects the cleared flags.
@@ -621,7 +627,7 @@ The interleave kernels are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plu
 
 `DotProduct` is the opposite case: the bit pattern is the whole point. It widens each product to int32 and accumulates with **two's-complement wraparound, never saturation**, and that is a guarantee callers may rely on. Wrapping addition is associative and commutative modulo 2^32, so any lane grouping and any horizontal reduction order is bit-identical to the scalar loop, including on operands engineered to overflow; a saturating accumulator is not associative and could not be vectorized without changing results. Fixed-point codecs (Opus/CELT, FLAC LPC) use integer arithmetic precisely because it is exactly reproducible, so this property is the feature. The kernels are `PMADDWD` (SSE2, hence always present on the `GOAMD64=v1` baseline) with an AVX2 tier at twice the width, and `SMLAL`/`SMLAL2` on NEON. All kernels are zero-allocation.
 
-`XCorr` is the same arithmetic evaluated at every lag, and `dst[k]` is defined to equal `DotProduct(x, y[k:k+len(x)])` exactly. The win over calling `DotProduct` in a loop is that it loads `x` once and multiply-accumulates it against four overlapping `y` windows at a time (the libopus `xcorr_kernel` shape), rather than re-reading `x` for every lag. Only lags whose full window fits in `y` are computed, and `dst` beyond that is left untouched rather than zeroed.
+`XCorr` is the same arithmetic evaluated at every lag, and `dst[k]` is defined to equal `DotProduct(x, y[k:k+len(x)])` exactly. The win over calling `DotProduct` in a loop is that it loads `x` once and multiply-accumulates it against four overlapping `y` windows at a time (the libopus `xcorr_kernel` shape), rather than re-reading `x` for every lag. Only lags whose full window fits in `y` are computed, and `dst` beyond that is left untouched rather than zeroed. On CPUs with AVX-VNNI (Intel Alder Lake and later, AMD Zen 4 and later) a fourth dispatch tier fuses each `VPMADDWD`+`VPADDD` in the 16-wide loop into one `VPDPWSSD`, which is bit-identical because it accumulates with the same wrapping dword add; it is selected above the plain AVX2 tier and can be masked back to AVX2 with `SIMD_DISABLE=avxvnni`.
 
 `Abs`, `MaxAbs` and `MulQ15` are the fixed-point envelope/gain trio. `Abs` wraps rather than saturates (`abs(-32768) = -32768`, the opposite of `i8.Abs`), `MaxAbs` returns an `int` because `|-32768| = 32768` does not fit int16 (libopus `celt_maxabs16`), and `MulQ15` is the *rounding* Q15 multiply (`MULT16_16_P15`): `dst[i] = int16((a[i]*b[i] + 1<<14) >> 15)` with the single out-of-range product `(-32768)^2` wrapping to `-32768`. All three are bit-exact against their pure-Go references for every input. On amd64 these three are AVX2-or-Go (no SSE2 tier, matching `i8` and the `i32` arithmetic); on ARM64 they run NEON (`MulQ15` via `SMULL`/`SRSHR`/`XTN`, since the single-instruction `SQRDMULH` saturates the `(-32768)^2` case and would break the wrap guarantee).
 
@@ -979,7 +985,7 @@ each package's `*_amd64.go` dispatch):
 | `f64`   | SSE2                    | AVX (no FMA), AVX+FMA, AVX-512 | pure Go (baseline guarantees SSE2) |
 | `c128`  | SSE2                    | AVX (no FMA), AVX+FMA, AVX-512 | pure Go (baseline guarantees SSE2) |
 | `c64`   | SSE4.1 (BLENDPS)        | AVX+FMA, AVX-512        | pure Go |
-| `i16`   | SSE2 (interleave, dot, xcorr); AVX2 (Abs, MulQ15, MaxAbs) | AVX2 | pure Go (baseline guarantees SSE2 for the SSE2-tier ops) |
+| `i16`   | SSE2 (interleave, dot, xcorr); AVX2 (Abs, MulQ15, MaxAbs) | AVX2; AVX-VNNI (xcorr) | pure Go (baseline guarantees SSE2 for the SSE2-tier ops) |
 | `i32`   | AVX (interleave), AVX2 (arithmetic) | -           | pure Go |
 | `i8`    | AVX2                    | -                       | pure Go |
 | `f16`   | F16C (slice conversions only) | -                 | pure Go (all f16 compute is pure Go on amd64) |
