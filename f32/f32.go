@@ -988,6 +988,55 @@ func Float32ToInt16ScaleUnsafe(dst []int16, src []float32, scale float32) {
 	float32ToInt16Scale(dst[:len(src)], src, scale)
 }
 
+// Float32ToInt32ScaleClamp converts float32 to int32 in one pass:
+//
+//	dst[i] = int32(clamp(src[i]*scale + offset, minV, maxV))   // truncated toward zero
+//
+// It is the int32 sibling of Float32ToInt16Scale for the float -> fixed-point
+// boundary, with caller-supplied bounds and an additive offset: the classic
+// scale, add-a-rounding-constant, clamp, then truncate idiom of fixed-point DSP
+// and affine quantization. Behavior is fully specified and identical on every
+// architecture:
+//   - the multiply and the add are two separate float32 roundings (the product
+//     rounds before offset is added); they are never contracted into an FMA;
+//   - truncation is toward zero (like a Go int32(v) cast, one LSB looser than
+//     round-to-nearest);
+//   - out-of-range values clamp to [minV, maxV] rather than wrapping;
+//   - +Inf -> maxV, -Inf -> minV, NaN -> 0.
+//
+// Callers must keep minV and maxV non-NaN and within the float32-representable
+// int32 range: minV >= -2147483648.0 and maxV <= 2147483520.0 (the largest
+// float32 not exceeding MaxInt32; float32(math.MaxInt32) rounds up to 2^31 and
+// is out of contract). Outside that range the conversion of an out-of-range
+// value is architecture-dependent (x86 yields the integer indefinite
+// 0x80000000; ARM64 saturates).
+//
+// Processes min(len(dst), len(src)) elements.
+//
+// Uses AVX on AMD64 (8x float32; the int32 output needs no saturating pack, so
+// AVX2 is not required), NEON on ARM64 (4x float32).
+func Float32ToInt32ScaleClamp(dst []int32, src []float32, scale, offset, minV, maxV float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	float32ToInt32ScaleClamp(dst[:n], src[:n], scale, offset, minV, maxV)
+}
+
+// Float32ToInt32ScaleClampUnsafe converts float32 to int32 without length
+// validation. This is a low-overhead variant for performance-critical code paths.
+//
+// PRECONDITIONS (caller must ensure):
+//   - len(dst) >= len(src)
+//   - len(src) > 0
+//
+// Violating these preconditions results in undefined behavior.
+// Use Float32ToInt32ScaleClamp for safe operation with automatic length handling.
+func Float32ToInt32ScaleClampUnsafe(dst []int32, src []float32, scale, offset, minV, maxV float32) {
+	// Slice dst to len(src) to ensure SIMD implementations don't write past dst
+	float32ToInt32ScaleClamp(dst[:len(src)], src, scale, offset, minV, maxV)
+}
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

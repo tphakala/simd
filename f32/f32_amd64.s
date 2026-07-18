@@ -4577,6 +4577,77 @@ f32toi16_done:
     VZEROUPPER
     RET
 
+// func float32ToInt32ScaleClampAVX(dst []int32, src []float32, scale, offset, minV, maxV float32)
+// dst[i] = int32(clamp(src[i]*scale + offset, minV, maxV)), truncated toward zero.
+//
+// VMULPS then VADDPS are deliberately SEPARATE (not VFMADD231PS): the product
+// rounds to float32 before offset is added, matching the two-rounding Go
+// reference bit-for-bit. Contracting them into an FMA would change the result
+// and is forbidden here (see #156). NaN -> 0: x86 MAXPS/MINPS return the bound
+// (SRC2) when the value (SRC1) is NaN, so a NaN lane would otherwise become
+// int32(minV); the self-compare mask (VCMPPS EQ, taken from v before the clamp)
+// is ANDed into the int32 result AFTER the convert to force NaN lanes to 0,
+// matching NEON's FCVTZS(NaN)=0. The clamp bounds +/-Inf to maxV/minV.
+// VCVTTPS2DQ (the truncating form) rounds toward zero to match Go's int32(v).
+// The int32 output needs no saturating pack, so this is plain AVX (no AVX2):
+// VANDPS is a bitwise AND that carries the mask across the float->int convert.
+// The 8-wide tail reprocesses the final full block with overlap, so no scalar
+// tail is needed.
+TEXT ·float32ToInt32ScaleClampAVX(SB), NOSPLIT, $0-64
+    MOVQ dst_base+0(FP), DX        // DX = dst pointer (int32 out)
+    MOVQ dst_len+8(FP), CX         // CX = length (len(dst) == len(src))
+    MOVQ src_base+24(FP), SI       // SI = src pointer (float32 in)
+
+    VBROADCASTSS scale+48(FP), Y3  // Y3 = scale  x8
+    VBROADCASTSS offset+52(FP), Y4 // Y4 = offset x8
+    VBROADCASTSS minV+56(FP), Y5   // Y5 = minV   x8
+    VBROADCASTSS maxV+60(FP), Y6   // Y6 = maxV   x8
+
+    MOVQ CX, AX
+    SHRQ $3, AX                    // len / 8
+    JZ   f32toi32_tail
+
+f32toi32_loop8:
+    VMOVUPS (SI), Y0               // 8 x float32
+    VMULPS Y3, Y0, Y0              // v = src * scale (rounds to float32)
+    VADDPS Y4, Y0, Y0             // v += offset (separate rounding; NOT an FMA)
+    VCMPPS $0, Y0, Y0, Y1        // Y1 = (v == v) ? ones : 0  (0 for NaN), from v pre-clamp
+    VMAXPS Y5, Y0, Y0           // clamp low  (>= minV; -Inf -> minV)
+    VMINPS Y6, Y0, Y0          // clamp high (<= maxV; +Inf -> maxV)
+    VCVTTPS2DQ Y0, Y0          // 8 x int32, truncate toward zero
+    VANDPS Y1, Y0, Y0         // NaN lanes -> 0 (bitwise AND on the int32 result)
+    VMOVDQU Y0, (DX)          // store 8 x int32 (32 bytes)
+    ADDQ $32, SI             // advance src by 8 x float32
+    ADDQ $32, DX            // advance dst by 8 x int32
+    DECQ AX
+    JNZ  f32toi32_loop8
+
+f32toi32_tail:
+    ANDQ $7, CX                    // remainder = len % 8
+    JZ   f32toi32_done
+
+    // Back up to the final aligned block of 8 and reprocess it (overlap). src and
+    // dst are both 4-byte elements, so both back up by (8 - rem) * 4 bytes.
+    MOVQ $8, BX
+    SUBQ CX, BX                    // BX = 8 - (len % 8)  (1..7)
+    SHLQ $2, BX                    // (8 - rem) * 4 bytes
+    SUBQ BX, SI
+    SUBQ BX, DX
+
+    VMOVUPS (SI), Y0               // final 8 x float32
+    VMULPS Y3, Y0, Y0
+    VADDPS Y4, Y0, Y0
+    VCMPPS $0, Y0, Y0, Y1
+    VMAXPS Y5, Y0, Y0
+    VMINPS Y6, Y0, Y0
+    VCVTTPS2DQ Y0, Y0
+    VANDPS Y1, Y0, Y0
+    VMOVDQU Y0, (DX)               // store final 8 x int32
+
+f32toi32_done:
+    VZEROUPPER
+    RET
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

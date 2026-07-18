@@ -2129,6 +2129,71 @@ f32toi16_neon_tail:
 f32toi16_neon_done:
     RET
 
+// func float32ToInt32ScaleClampNEON(dst []int32, src []float32, scale, offset, minV, maxV float32)
+// dst[i] = int32(clamp(src[i]*scale + offset, minV, maxV)), truncated toward zero.
+//
+// FMUL then FADD are deliberately SEPARATE (not FMLA): the product rounds to
+// float32 before offset is added, matching the two-rounding Go reference and the
+// AVX path bit-for-bit. NaN -> 0 falls out for free here: ARM FMAX/FMIN (not the
+// FMAXNM/FMINNM forms) PROPAGATE a NaN operand, so a NaN survives the clamp, and
+// FCVTZS maps NaN to 0. So no explicit NaN masking is needed (the AVX path needs
+// it only because x86 MINPS/MAXPS replace a NaN with the bound). The clamp bounds
+// +/-Inf to maxV/minV. FCVTZS truncates toward zero to match Go's int32(v). The
+// vector float ops (.4S) have no Go-assembler spelling, so FMUL, FADD, FMAX, FMIN
+// and FCVTZS are WORD-encoded (verified with clang -c -arch arm64 + objdump; see
+// docs/assembly-encoding.md); VDUP and VLD1/VST1 are native. The 4-wide tail
+// reprocesses the final full block with overlap.
+TEXT ·float32ToInt32ScaleClampNEON(SB), NOSPLIT, $0-64
+    MOVD dst_base+0(FP), R0        // R0 = dst pointer (int32 out)
+    MOVD dst_len+8(FP), R3         // R3 = length (len(dst) == len(src))
+    MOVD src_base+24(FP), R1       // R1 = src pointer (float32 in)
+    FMOVS scale+48(FP), F2         // F2 = scale
+    FMOVS offset+52(FP), F3        // F3 = offset
+    FMOVS minV+56(FP), F4          // F4 = minV
+    FMOVS maxV+60(FP), F5          // F5 = maxV
+
+    // Broadcast each scalar to all 4 lanes (DUP element form, native VDUP).
+    VDUP V2.S[0], V2.S4            // scale  x4
+    VDUP V3.S[0], V3.S4            // offset x4
+    VDUP V4.S[0], V4.S4            // minV   x4
+    VDUP V5.S[0], V5.S4            // maxV   x4
+
+    LSR $2, R3, R4                 // R4 = len / 4
+    CBZ R4, f32toi32_neon_tail
+
+f32toi32_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]         // V0 = 4 x float32
+    WORD $0x6E22DC00              // FMUL V0.4S, V0.4S, V2.4S   (v = src * scale)
+    WORD $0x4E23D400             // FADD V0.4S, V0.4S, V3.4S   (v += offset; separate, not FMLA)
+    WORD $0x4E24F400            // FMAX V0.4S, V0.4S, V4.4S   (>= minV; -Inf -> minV, NaN propagates)
+    WORD $0x4EA5F400           // FMIN V0.4S, V0.4S, V5.4S   (<= maxV; +Inf -> maxV, NaN propagates)
+    WORD $0x4EA1B800          // FCVTZS V0.4S, V0.4S        (truncate toward zero; NaN -> 0)
+    VST1.P [V0.S4], 16(R0)    // store 4 x int32 (16 bytes)
+    SUB $1, R4
+    CBNZ R4, f32toi32_neon_loop4
+
+f32toi32_neon_tail:
+    AND $3, R3, R5                 // R5 = len % 4
+    CBZ R5, f32toi32_neon_done
+
+    // Back up to the final aligned block of 4 and reprocess it (overlap). src and
+    // dst are both 4-byte elements, so both back up by (4 - rem) * 4 bytes.
+    MOVD $4, R6
+    SUB R5, R6, R6                 // R6 = 4 - (len % 4)  (1..3)
+    LSL $2, R6, R7                 // R7 = (4 - rem) * 4 bytes
+    SUB R7, R1, R1
+    SUB R7, R0, R0
+    VLD1 (R1), [V0.S4]             // final 4 x float32
+    WORD $0x6E22DC00               // FMUL V0.4S, V0.4S, V2.4S
+    WORD $0x4E23D400               // FADD V0.4S, V0.4S, V3.4S
+    WORD $0x4E24F400               // FMAX V0.4S, V0.4S, V4.4S
+    WORD $0x4EA5F400               // FMIN V0.4S, V0.4S, V5.4S
+    WORD $0x4EA1B800               // FCVTZS V0.4S, V0.4S
+    VST1 [V0.S4], (R0)             // store final 4 x int32
+
+f32toi32_neon_done:
+    RET
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

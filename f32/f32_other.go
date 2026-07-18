@@ -71,6 +71,10 @@ func int16ToFloat32Scale(dst []float32, src []int16, s float32) { int16ToFloat32
 
 func float32ToInt16Scale(dst []int16, src []float32, s float32) { float32ToInt16ScaleGo(dst, src, s) }
 
+func float32ToInt32ScaleClamp(dst []int32, src []float32, scale, offset, minV, maxV float32) {
+	float32ToInt32ScaleClampGo(dst, src, scale, offset, minV, maxV)
+}
+
 // Split-format complex operations
 func mulComplex32(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 	mulComplex32Go(dstRe, dstIm, aRe, aIm, bRe, bIm)
