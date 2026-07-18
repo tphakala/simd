@@ -206,6 +206,12 @@ Update `README.md` to include the new operation in the API table.
 - Use `VZEROUPPER` at the end of AVX functions (AMD64)
 - Test with various slice sizes to exercise all code paths
 
+Before hand-encoding a NEON instruction as a `WORD`, or reaching for an unfamiliar
+Plan 9 mnemonic, read [docs/assembly-encoding.md](docs/assembly-encoding.md): it
+lists which arm64 integer-multiply instructions the assembler rejects (so must be
+`WORD`-encoded), the amd64 spellings that differ from Intel (`PMADDWD` is
+`PMADDWL`), and how to verify a new encoding without aarch64 binutils.
+
 ## Pull Request Guidelines
 
 1. **Title**: Use a clear, descriptive title
