@@ -555,20 +555,44 @@ func maxIdx32(a []float32) int {
 // the NEON block kernel, four rows per lane-per-row block, and composes any
 // remainder rows with the scalar path. Non-unit slides and a missing NEON stay
 // on the Go reference. All paths are bit-identical (see minIdxOfSumRows4NEON).
+// minIdxRowsNEON is the row-block width of minIdxOfSumRows4NEON (4 rows per
+// call); it doubles as the minimum m the overlapping remainder block can serve.
+const minIdxRowsNEON = 4
+
 func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
 	if hasNEON && (slide == 1 || slide == -1) {
 		r := 0
-		for ; r+4 <= len(vals); r += 4 {
+		for ; r+minIdxRowsNEON <= len(vals); r += minIdxRowsNEON {
 			off := base + r*slide
 			if slide == 1 {
-				minIdxOfSumRows4NEON(vals[r:r+4], idxs[r:r+4], a, k[off:], 0)
+				minIdxOfSumRows4NEON(vals[r:r+minIdxRowsNEON], idxs[r:r+minIdxRowsNEON], a, k[off:], 0)
 			} else {
-				minIdxOfSumRows4NEON(vals[r:r+4], idxs[r:r+4], a, k[off-3:], 1)
+				minIdxOfSumRows4NEON(vals[r:r+minIdxRowsNEON], idxs[r:r+minIdxRowsNEON], a, k[off-3:], 1)
 			}
 		}
-		// Leftover rows (fewer than a 4-wide block) compose with the scalar
-		// reference, keeping the tie-break/NaN/rounding contract in one place.
-		minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+		// The 0-3 leftover rows go through SIMD via one overlapping 4-wide block
+		// ONLY when there are at least 2 of them. The block's cost is dominated by
+		// its fixed column loop and per-row argmin reduction, not the row count, so
+		// it only pays off replacing 2 or 3 scalar rows; a single leftover row is
+		// cheaper scalar (see the AVX2 dispatcher, where covering a lone remainder
+		// row with a block measured +10% at 17x17). Recomputing is bit-identical
+		// (each row is independent and the kernel is pure) and the wrapper already
+		// range-validated every row's window, so the overlap reads stay in bounds.
+		// A single leftover row, or m<4 (no wide-enough block), stays scalar; a
+		// leftover of 0 leaves r == m and skips this block entirely.
+		if r < len(vals) {
+			m := len(vals)
+			if m >= minIdxRowsNEON && m-r >= 2 {
+				off := base + (m-minIdxRowsNEON)*slide
+				if slide == 1 {
+					minIdxOfSumRows4NEON(vals[m-minIdxRowsNEON:], idxs[m-minIdxRowsNEON:], a, k[off:], 0)
+				} else {
+					minIdxOfSumRows4NEON(vals[m-minIdxRowsNEON:], idxs[m-minIdxRowsNEON:], a, k[off-3:], 1)
+				}
+			} else {
+				minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+			}
+		}
 		return
 	}
 	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
