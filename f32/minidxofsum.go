@@ -56,44 +56,48 @@ func MinIdxOfSumRows(vals []float32, idxs []int32, a, k []float32, base, slide i
 	if len(a) > math.MaxInt32 {
 		panic("f32.MinIdxOfSumRows: len(a) exceeds int32 index range")
 	}
-	// Confirm every processed row's window lands in [0, lim] before writing
-	// any output. The row offsets form the arithmetic sequence base + r*slide
-	// for r in [0, m). For the two slides that reach a kernel (+1 and -1) the
-	// sequence is monotonic, so checking its two extremes bounds every offset
-	// in between in O(1); any other slide keeps the incremental walk below.
+	// Confirm every processed row's window lands in [0, lim] before writing any
+	// output; panic before any write if not. lim < 0 means len(a) > len(k), so
+	// no window of width len(a) fits and every row (m >= 1) is out of range.
+	// Rejecting that up front also keeps lim >= 0 inside the switch, so the
+	// lim-(m-1) term below cannot underflow for any m. The row offsets form the
+	// arithmetic sequence base + r*slide for r in [0, m). For the two slides
+	// that reach a kernel (+1 and -1) the sequence is monotonic, so its two
+	// extremes decide the whole range in O(1); any other slide keeps the
+	// overflow-safe incremental walk (base+(m-1)*slide can wrap for adversarial
+	// slide values, incremental addition cannot).
 	lim := len(k) - len(a)
-	switch slide {
-	case 1:
-		// Offsets base .. base+(m-1), ascending. The high extreme is written
-		// as lim-(m-1) rather than base+(m-1) so the arithmetic cannot wrap:
-		// lim and m-1 are both bounded by real slice lengths. If m-1 > lim the
-		// right side goes negative and any base >= 0 is correctly rejected.
-		if base < 0 || base > lim-(m-1) {
-			panic("f32.MinIdxOfSumRows: k window out of range")
-		}
-	case -1:
-		// Offsets base .. base-(m-1), descending. base >= m-1 keeps the low
-		// extreme non-negative without forming base-(m-1); base <= lim keeps
-		// the high extreme in range.
-		if base < m-1 || base > lim {
-			panic("f32.MinIdxOfSumRows: k window out of range")
-		}
-	default:
-		// General slide (only +1 and -1 reach a kernel; everything else falls
-		// to the Go path). Walk the offsets incrementally instead of computing
-		// the extreme as base+(m-1)*slide: the multiplication can wrap for
-		// adversarial slide values and bypass the bound. Incremental addition
-		// cannot: off is confirmed within [0, lim] before each step, so a
-		// single oversized step lands either above lim or (on wrap) negative,
-		// and the next check catches it. O(m) is noise next to the O(m*n) the
-		// operation performs.
-		off := base
-		for range m {
-			if off < 0 || off > lim {
-				panic("f32.MinIdxOfSumRows: k window out of range")
+	ok := lim >= 0
+	if ok {
+		switch slide {
+		case 1:
+			// Ascending offsets base .. base+(m-1). The high bound is written
+			// as lim-(m-1) (safe: lim >= 0 and m >= 1) rather than base+(m-1),
+			// so an adversarial base never enters the arithmetic.
+			ok = base >= 0 && base <= lim-(m-1)
+		case -1:
+			// Descending offsets base .. base-(m-1). base >= m-1 keeps the low
+			// extreme non-negative; base <= lim keeps the high extreme in range.
+			ok = base >= m-1 && base <= lim
+		default:
+			// General slide (only +1 and -1 reach a kernel; everything else
+			// falls to the Go path). Walk the offsets incrementally rather than
+			// forming base+(m-1)*slide, whose multiplication can wrap for
+			// adversarial slide values and bypass the bound; incremental
+			// addition cannot, since off is confirmed within [0, lim] before
+			// each step. O(m) is noise next to the O(m*n) the operation does.
+			off := base
+			for range m {
+				if off < 0 || off > lim {
+					ok = false
+					break
+				}
+				off += slide
 			}
-			off += slide
 		}
+	}
+	if !ok {
+		panic("f32.MinIdxOfSumRows: k window out of range")
 	}
 	minIdxOfSumRows32(vals[:m], idxs[:m], a, k, base, slide)
 }
