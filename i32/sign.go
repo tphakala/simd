@@ -21,11 +21,12 @@ package i32
 // under a negative sign maps back to MinInt32. Every result is bit-identical to
 // the pure-Go reference on all backends.
 //
-// dst may alias mag (each lane is read before its own store), which lets the
-// magnitudes be conditionally negated in place. dst and sign have different
-// element types; if their byte ranges happen to overlap the kernel still reads
-// each sign lane before writing the matching dst lane, so an in-place overlay is
-// well defined lane by lane.
+// dst may alias mag exactly (element for element): each lane reads mag[i] before
+// its own dst[i] store and the forward iteration never revisits a written lane,
+// so the magnitudes can be conditionally negated in place. dst must not otherwise
+// overlap mag or sign. The SIMD kernels load a whole block of sign (and mag)
+// before storing the block of dst, so a shifted dst/sign or dst/mag overlay could
+// clobber input lanes a later iteration has not read yet.
 func NegWhereNeg(dst, mag []int32, sign []float32) {
 	n := min(len(dst), len(mag), len(sign))
 	if n == 0 {
