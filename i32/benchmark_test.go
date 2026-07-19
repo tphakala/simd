@@ -259,3 +259,24 @@ func BenchmarkButterfly_1003(b *testing.B) { benchmarkButterfly(b, 1003, Butterf
 func BenchmarkButterflyGo_25(b *testing.B)   { benchmarkButterfly(b, 25, butterflyGo) }
 func BenchmarkButterflyGo_1000(b *testing.B) { benchmarkButterfly(b, 1000, butterflyGo) }
 func BenchmarkButterflyGo_1003(b *testing.B) { benchmarkButterfly(b, 1003, butterflyGo) }
+
+// MaxAbs is a reduction reading a single slice, like Sum: SetBytes counts a.
+func benchmarkMaxAbs(b *testing.B, n int, fn func(a []int32) int32) {
+	b.Helper()
+	a := make([]int32, n)
+	for i := range a {
+		a[i] = int32(i*7 - 3000)
+	}
+	b.SetBytes(int64(n) * 4)
+	for b.Loop() {
+		_ = fn(a)
+	}
+}
+
+func BenchmarkMaxAbs_25(b *testing.B)   { benchmarkMaxAbs(b, 25, MaxAbs) }
+func BenchmarkMaxAbs_1000(b *testing.B) { benchmarkMaxAbs(b, 1000, MaxAbs) }
+func BenchmarkMaxAbs_1003(b *testing.B) { benchmarkMaxAbs(b, 1003, MaxAbs) }
+
+func BenchmarkMaxAbsGo_25(b *testing.B)   { benchmarkMaxAbs(b, 25, maxAbsGo) }
+func BenchmarkMaxAbsGo_1000(b *testing.B) { benchmarkMaxAbs(b, 1000, maxAbsGo) }
+func BenchmarkMaxAbsGo_1003(b *testing.B) { benchmarkMaxAbs(b, 1003, maxAbsGo) }

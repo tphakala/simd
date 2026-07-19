@@ -177,3 +177,21 @@ func minMaxI32(res []int32) (minVal, maxVal int32) {
 
 //go:noescape
 func minMaxAVX2(res []int32) (minVal, maxVal int32)
+
+// minAVX2MaxAbs is one 8-wide (256-bit) block, an independent literal like the
+// tier-3 thresholds above. The kernel does the signed min/max reduction in
+// 8-wide VPMINSD/VPMAXSD lanes with a scalar tail before combining to
+// max(maxVal, -minVal), so it gates on AVX2 and at least one full 8-element
+// block; shorter slices use the pure-Go reference. a is non-empty (the public
+// MaxAbs guards the empty case).
+const minAVX2MaxAbs = 8
+
+func maxAbsI32(a []int32) int32 {
+	if hasAVX2 && len(a) >= minAVX2MaxAbs {
+		return maxAbsAVX2(a)
+	}
+	return maxAbsGo(a)
+}
+
+//go:noescape
+func maxAbsAVX2(a []int32) int32

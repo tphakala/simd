@@ -493,3 +493,56 @@ butterfly_neon_loop1:
 
 butterfly_neon_done:
     RET
+
+// func maxAbsNEON(a []int32) int32
+// Peak magnitude with celtMaxabs32 semantics: the same signed int32 min/max
+// reduction as minMaxNEON (VLD1 block 0 into both accumulators, WORD-encoded
+// SMIN/SMAX fold, SMINV/SMAXV across-lane reduce into R5=min/R6=max via FMOVS,
+// CSEL scalar tail), then a combine to max(maxVal, -minVal). NEG forms -minVal
+// with the two's-complement wrap (-MinInt32 == MinInt32); the low 32 bits of the
+// negate are correct regardless of the accumulator's upper bits (FMOVS
+// zero-extends, the tail sign-extends), so the combine compares in 32-bit CMPW
+// and the MOVW store keeps the low 32 bits. The signed CSEL GE then picks the
+// larger of maxVal and -minVal. The SMIN/SMAX/SMINV/SMAXV WORDs are the
+// minMaxNEON encodings verbatim (cross-checked by asmcheck_test.go). The dispatch
+// gates len(a) >= 4, so at least one full 4-element block exists. Frame is one
+// slice header plus the int32 return: a+0, ret+24.
+TEXT ·maxAbsNEON(SB), NOSPLIT, $0-28
+    MOVD a_base+0(FP), R2
+    MOVD a_len+8(FP), R3
+    LSR  $2, R3, R4                  // R4 = full 4-element blocks (>=1)
+    VLD1 (R2), [V0.S4]               // V0 = block 0 (min acc), no advance
+    VLD1.P 16(R2), [V1.S4]           // V1 = block 0 (max acc), advance to block 1
+    SUB  $1, R4                      // blocks remaining after block 0
+    CBZ  R4, maxabs_neon_reduce      // single block: accumulators hold it; R2 at tail
+maxabs_neon_loop:
+    VLD1.P 16(R2), [V2.S4]           // load block + advance
+    WORD $0x4EA26C00                 // SMIN V0.4S, V0.4S, V2.4S
+    WORD $0x4EA26421                 // SMAX V1.4S, V1.4S, V2.4S
+    SUB  $1, R4
+    CBNZ R4, maxabs_neon_loop
+
+maxabs_neon_reduce:
+    WORD $0x4EB1A803                 // SMINV S3, V0.4S
+    WORD $0x4EB0A824                 // SMAXV S4, V1.4S
+    FMOVS F3, R5                     // R5 = running min (low 32 = int32)
+    FMOVS F4, R6                     // R6 = running max (low 32 = int32)
+
+    // scalar tail: (n mod 4) residuals (R2 already at &a[fullBlocks*4])
+    AND  $3, R3, R4
+    CBZ  R4, maxabs_neon_combine
+maxabs_neon_tail:
+    MOVW.P 4(R2), R7                 // r (sign-extended; low 32 = int32)
+    CMPW R5, R7                      // (R7 - R5), signed 32-bit
+    CSEL LT, R7, R5, R5             // R5 = min(r, R5)
+    CMPW R6, R7
+    CSEL GT, R7, R6, R6             // R6 = max(r, R6)
+    SUB  $1, R4
+    CBNZ R4, maxabs_neon_tail
+
+maxabs_neon_combine:
+    NEG  R5, R7                      // R7 = -min (low 32 = wrapping int32 negate)
+    CMPW R7, R6                      // (R6 - R7), signed 32-bit: max vs -min
+    CSEL GE, R6, R7, R0             // R0 = max(R6, R7) = max(maxVal, -minVal)
+    MOVW R0, ret+24(FP)
+    RET

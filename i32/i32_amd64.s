@@ -609,3 +609,81 @@ butterfly_scalar:
 butterfly_done:
     VZEROUPPER
     RET
+
+// func maxAbsAVX2(a []int32) int32
+// Peak magnitude with celtMaxabs32 semantics: the same signed int32 min/max
+// reduction as minMaxAVX2 (VMOVDQU block 0 into both accumulators, VPMINSD/
+// VPMAXSD fold, horizontal reduce to a scalar min in AX and max in DX, CMPL
+// scalar tail), then a combine to max(maxVal, -minVal). NEGL forms -minVal with
+// the two's-complement wrap (-MinInt32 == MinInt32), and the signed CMPL/JGE
+// picks the larger of maxVal and -minVal. The dispatch gates len(a) >= 8, so at
+// least one full 8-element block exists; every compare is signed, matching
+// maxAbsGo exactly. Frame is one slice header plus the int32 return: a+0, ret+24.
+TEXT ·maxAbsAVX2(SB), NOSPLIT, $0-28
+    MOVQ a_base+0(FP), R8
+    MOVQ a_len+8(FP), CX             // n (>=8)
+    MOVQ CX, R9
+    SHRQ $3, R9                      // R9 = full 8-element blocks (>=1)
+    VMOVDQU (R8), Y0                 // min acc = block 0
+    VMOVDQU (R8), Y1                 // max acc = block 0
+    MOVQ R9, AX                      // block counter
+    DECQ AX                          // blocks remaining after block 0
+    JZ   maxabs_reduce               // single block: accumulators already hold it
+    LEAQ 32(R8), SI                  // working ptr at block 1
+maxabs_loop:
+    VMOVDQU (SI), Y2
+    VPMINSD Y2, Y0, Y0               // Y0 = lanewise min(Y2, Y0)
+    VPMAXSD Y2, Y1, Y1               // Y1 = lanewise max(Y2, Y1)
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  maxabs_loop
+
+maxabs_reduce:
+
+    // horizontal min of Y0 -> AX (low 32 bits), max of Y1 -> DX (low 32 bits)
+    VEXTRACTI128 $1, Y0, X3
+    VPMINSD X3, X0, X0               // fold lanes 4..7 into 0..3
+    VPSHUFD $0x4E, X0, X3            // swap 64-bit halves
+    VPMINSD X3, X0, X0
+    VPSHUFD $0xB1, X0, X3            // swap 32-bit within pairs
+    VPMINSD X3, X0, X0               // lane0 = min over all 8 lanes
+    MOVQ X0, AX                      // EAX = running min
+
+    VEXTRACTI128 $1, Y1, X3
+    VPMAXSD X3, X1, X1
+    VPSHUFD $0x4E, X1, X3
+    VPMAXSD X3, X1, X1
+    VPSHUFD $0xB1, X1, X3
+    VPMAXSD X3, X1, X1
+    MOVQ X1, DX                      // EDX = running max
+
+    // scalar tail: (n mod 8) residuals at &a[fullBlocks*8]
+    MOVQ CX, BX
+    ANDQ $7, BX
+    JZ   maxabs_combine
+    MOVQ R9, R10
+    SHLQ $5, R10                     // fullBlocks * 32 bytes
+    ADDQ R8, R10                     // tail ptr
+maxabs_tail:
+    MOVL (R10), R11                  // r (32-bit)
+    CMPL R11, AX
+    JGE  maxabs_tail_max
+    MOVL R11, AX                     // r < min -> new min
+maxabs_tail_max:
+    CMPL R11, DX
+    JLE  maxabs_tail_next
+    MOVL R11, DX                     // r > max -> new max
+maxabs_tail_next:
+    ADDQ $4, R10
+    DECQ BX
+    JNZ  maxabs_tail
+
+maxabs_combine:
+    NEGL AX                          // AX = -min (wrapping; -MinInt32 == MinInt32)
+    CMPL DX, AX                      // signed max vs -min
+    JGE  maxabs_ret_max              // max >= -min: result = max (DX)
+    MOVL AX, DX                      // else result = -min
+maxabs_ret_max:
+    MOVL DX, ret+24(FP)
+    VZEROUPPER
+    RET
