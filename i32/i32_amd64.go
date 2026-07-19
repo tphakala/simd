@@ -195,3 +195,23 @@ func maxAbsI32(a []int32) int32 {
 
 //go:noescape
 func maxAbsAVX2(a []int32) int32
+
+// minAVX2FIR is one 8-wide (256-bit) output block: FIRValidQ15's AVX2 kernel
+// vectorizes over 8 outputs per iteration with a scalar-output tail, so it gates
+// on AVX2 and at least one full 8-output block; shorter outputs use the pure-Go
+// reference. The kernel is correct at any output length via the scalar-output
+// tail, so this is a performance cut only, never a safety requirement. It gates
+// on AVX2 because VPMULDQ/VPSRLQ/VPSLLQ/VPBLENDD/VPADDD are 256-bit integer ops.
+// len(dst) here is already the clamped output count n from the public FIRValidQ15.
+const minAVX2FIR = 8
+
+func firValidQ15I32(dst, x []int32, taps []int16) {
+	if hasAVX2 && len(dst) >= minAVX2FIR {
+		firValidQ15AVX2(dst, x, taps)
+		return
+	}
+	firValidQ15Go(dst, x, taps)
+}
+
+//go:noescape
+func firValidQ15AVX2(dst, x []int32, taps []int16)
