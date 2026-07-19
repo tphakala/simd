@@ -166,3 +166,26 @@ func BenchmarkAbs_1003(b *testing.B) { benchmarkAbs(b, 1003, Abs) }
 func BenchmarkAbsGo_25(b *testing.B)   { benchmarkAbs(b, 25, absGo) }
 func BenchmarkAbsGo_1000(b *testing.B) { benchmarkAbs(b, 1000, absGo) }
 func BenchmarkAbsGo_1003(b *testing.B) { benchmarkAbs(b, 1003, absGo) }
+
+func benchmarkNegWhereNeg(b *testing.B, n int, fn func(dst, mag []int32, sign []float32)) {
+	b.Helper()
+	mag := make([]int32, n)
+	sign := make([]float32, n)
+	dst := make([]int32, n)
+	for i := range mag {
+		mag[i] = int32(i*7 - 3000)
+		sign[i] = float32(i%3 - 1) // mix of -1, 0, 1 so both the negate and keep branches run
+	}
+	b.SetBytes(int64(n) * 4 * 3)
+	for b.Loop() {
+		fn(dst, mag, sign)
+	}
+}
+
+func BenchmarkNegWhereNeg_25(b *testing.B)   { benchmarkNegWhereNeg(b, 25, NegWhereNeg) }
+func BenchmarkNegWhereNeg_1000(b *testing.B) { benchmarkNegWhereNeg(b, 1000, NegWhereNeg) }
+func BenchmarkNegWhereNeg_1003(b *testing.B) { benchmarkNegWhereNeg(b, 1003, NegWhereNeg) }
+
+func BenchmarkNegWhereNegGo_25(b *testing.B)   { benchmarkNegWhereNeg(b, 25, negWhereNegGo) }
+func BenchmarkNegWhereNegGo_1000(b *testing.B) { benchmarkNegWhereNeg(b, 1000, negWhereNegGo) }
+func BenchmarkNegWhereNegGo_1003(b *testing.B) { benchmarkNegWhereNeg(b, 1003, negWhereNegGo) }

@@ -1,5 +1,12 @@
 package i32
 
+import "math"
+
+// float32SignBitPos is the IEEE-754 float32 sign bit position. An arithmetic
+// right shift of the raw bits by this amount broadcasts the sign bit across a
+// full int32 lane (all-ones when set, zero otherwise).
+const float32SignBitPos = 31
+
 // Pure-Go reference implementations.
 //
 // These are the source of truth for behavior: every SIMD kernel is validated
@@ -71,4 +78,25 @@ func minMaxGo(res []int32) (minVal, maxVal int32) {
 		}
 	}
 	return lo, hi
+}
+
+// negWhereNegGo writes the branchless conditional negate that is NegWhereNeg's
+// source of truth. For each lane it broadcasts sign[i]'s IEEE-754 sign bit into
+// a full-width int32 mask m via an arithmetic right shift (m = -1 when the sign
+// bit is set, including -0.0, -Inf and -NaN; m = 0 otherwise) and computes
+// (mag[i] ^ m) - m: that is -mag[i] when m = -1 and mag[i] when m = 0, with the
+// two's-complement wrap of int32 negation so a MinInt32 magnitude maps back to
+// MinInt32 (matching Abs). mag and sign are indexed in lockstep with dst, so
+// dst may alias mag. dst may be empty; the len-0 guard below protects the
+// len(dst)-1 BCE hints.
+func negWhereNegGo(dst, mag []int32, sign []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = mag[len(dst)-1]  // BCE hint: mag is indexed [0, len(dst))
+	_ = sign[len(dst)-1] // BCE hint: sign is indexed [0, len(dst))
+	for i := range dst {
+		m := int32(math.Float32bits(sign[i])) >> float32SignBitPos
+		dst[i] = (mag[i] ^ m) - m
+	}
 }

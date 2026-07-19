@@ -11,3 +11,5 @@ func absI32(dst, a []int32)    { absGo(dst, a) }
 func sumI32(a []int32) int32   { return sumGo(a) }
 
 func minMaxI32(res []int32) (minVal, maxVal int32) { return minMaxGo(res) }
+
+func negWhereNegI32(dst, mag []int32, sign []float32) { negWhereNegGo(dst, mag, sign) }

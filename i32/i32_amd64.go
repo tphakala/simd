@@ -97,6 +97,24 @@ func sumAVX2(a []int32) int32
 //go:noescape
 func absAVX2(dst, a []int32)
 
+// minAVX2NegWhereNeg is one 8-wide (256-bit) block, an independent literal like
+// the tier-3 thresholds above. The kernel is correct at any length (it falls
+// through to a scalar tail), so this is a performance cut only, never a safety
+// requirement. It gates on AVX2 because VPSRAD/VPXOR/VPSUBD are 256-bit integer
+// ops.
+const minAVX2NegWhereNeg = 8
+
+func negWhereNegI32(dst, mag []int32, sign []float32) {
+	if hasAVX2 && len(dst) >= minAVX2NegWhereNeg {
+		negWhereNegAVX2(dst, mag, sign)
+		return
+	}
+	negWhereNegGo(dst, mag, sign)
+}
+
+//go:noescape
+func negWhereNegAVX2(dst, mag []int32, sign []float32)
+
 // minMaxI32 dispatches the signed int32 min/max reduction. The AVX2 kernel does
 // the reduction in 8-wide VPMINSD/VPMAXSD lanes with a scalar tail, so it gates
 // on AVX2 and at least one full 8-element block; shorter slices use the pure-Go

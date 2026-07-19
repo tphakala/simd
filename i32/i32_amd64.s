@@ -384,3 +384,55 @@ abs_avx2_store:
 abs_avx2_done:
     VZEROUPPER
     RET
+
+// func negWhereNegAVX2(dst, mag []int32, sign []float32)
+// Branchless conditional negate, 8 lanes per iteration. VPSRAD $31 on the raw
+// float32 sign lanes broadcasts each sign bit to a full-width int32 mask m
+// (all-ones iff the sign bit is set, so -0.0/-Inf/-NaN negate); VPXOR then
+// VPSUBD apply (mag ^ m) - m, which is -mag when m = -1 (MinInt32 wraps to
+// itself) and mag when m = 0. Bit-identical to negWhereNegGo. The scalar tail
+// does the same on 32-bit GPRs with SARL/XORL/SUBL, where NEGL-equivalent wrap
+// of MinInt32 stays MinInt32. Frame is 3 slice headers: dst+0, mag+24, sign+48.
+TEXT ·negWhereNegAVX2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ mag_base+24(FP), SI
+    MOVQ sign_base+48(FP), DI
+
+    MOVQ CX, AX
+    SHRQ $3, AX                // AX = n / 8
+    JZ   negwhereneg_avx2_tail
+
+negwhereneg_avx2_loop8:
+    VMOVDQU (DI), Y1           // sign lanes (raw float32 bits)
+    VPSRAD  $31, Y1, Y1        // Y1 = sign >> 31 = mask m
+    VMOVDQU (SI), Y0           // mag
+    VPXOR   Y1, Y0, Y0         // mag ^ m
+    VPSUBD  Y1, Y0, Y0         // (mag ^ m) - m
+    VMOVDQU Y0, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  negwhereneg_avx2_loop8
+
+negwhereneg_avx2_tail:
+    ANDQ $7, CX
+    JZ   negwhereneg_avx2_done
+
+negwhereneg_avx2_scalar:
+    MOVL (DI), BX              // sign bits
+    SARL $31, BX               // BX = mask m
+    MOVL (SI), AX              // mag
+    XORL BX, AX                // mag ^ m
+    SUBL BX, AX                // (mag ^ m) - m
+    MOVL AX, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  negwhereneg_avx2_scalar
+
+negwhereneg_avx2_done:
+    VZEROUPPER
+    RET
