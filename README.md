@@ -544,6 +544,32 @@ c64.Mul(result, signalFFT, kernelFFT)     // Complex multiply
 c64.Abs(magnitude, signalFFT)              // Extract magnitude
 ```
 
+### `cint` - fixed-point complex Operations
+
+SIMD-accelerated fixed-point (integer) complex arithmetic for integer FFT butterflies, the integer analog of `c64`/`c128`. Complex data is int32 real/imaginary interleaved (`[r0, i0, r1, i1, ...]`); twiddle factors are int16 Q15, laid out the same interleaved way. This is what a fixed-point codec (a bit-exact integer Opus port, kissfft-style FFTs) needs, since float complex arithmetic would not reproduce the twiddle multiply's defined Q15 rounding bit-for-bit. On amd64 the SIMD floor is AVX2 (`VPMULDQ`).
+
+| Category       | Function              | Description                                                            | SIMD Width            |
+| -------------- | --------------------- | --------------------------------------------------------------------- | --------------------- |
+| **Arithmetic** | `Mul(dst, a, tw)`     | Complex multiply `C_MUL`, `dst = a * tw` (truncating Q15 per product)  | 4x (AVX2) / 4x (NEON) |
+|                | `MulConj(dst, a, tw)` | Multiply by conjugated twiddle                                        | 4x (AVX2) / 4x (NEON) |
+|                | `MulByScalar(a, s)`   | In-place scale every lane by an int16 Q15 scalar (`C_MULBYSCALAR`)     | 4x (AVX2) / 4x (NEON) |
+|                | `Add(dst, a, b)`      | Wrapping complex add (`C_ADD`)                                        | 4x (AVX2) / 4x (NEON) |
+|                | `Sub(dst, a, b)`      | Wrapping complex subtract (`C_SUB`)                                   | 4x (AVX2) / 4x (NEON) |
+
+```go
+import "github.com/tphakala/simd/cint"
+
+data := make([]int32, n*2)     // interleaved complex: [r0, i0, r1, i1, ...]
+twiddles := make([]int16, n*2) // Q15 twiddle factors, same interleaved layout
+dst := make([]int32, n*2)
+
+cint.Mul(dst, data, twiddles)  // C_MUL: dst = data * twiddle, truncating Q15 per product
+cint.MulByScalar(data, 16384)  // in-place Q15 scale, 16384 = 0.5 in Q15
+cint.Add(dst, dst, data)       // wrapping complex add: dst = dst + data
+```
+
+`S_MUL(x, c) = int32(int64(x)*int64(c) >> 15)` is a single truncating Q15 shift per product (no rounding constant, matching go-opus `MULT16_32_Q15`); adds and subtracts wrap in int32. The AVX2 `Mul` keeps the data interleaved and reuses the `ScaleQ15` `VPMULDQ` recombine (four even-lane half-products, `VPBLENDD` to re-interleave), while NEON deinterleaves with `LD2` and re-interleaves with `ST2`. Every op clamps to the minimum length and masks to whole complex pairs, `dst` may alias `a` in place, and all are zero-allocation and bit-exact across the amd64 AVX2, arm64 NEON and pure-Go backends.
+
 ### `i32` - int32 Operations
 
 SIMD-accelerated integer-domain operations for integer-DSP hot loops, where the per-sample work is integer arithmetic and channel (de)interleaving rather than floating-point math:
@@ -555,8 +581,14 @@ SIMD-accelerated integer-domain operations for integer-DSP hot loops, where the 
 | **Arithmetic** | `Add(dst, a, b)`           | Element-wise add `dst = a + b`                         | 8x (AVX2) / 4x (NEON) |
 |                | `Sub(dst, a, b)`           | Element-wise subtract `dst = a - b`                    | 8x (AVX2) / 4x (NEON) |
 |                | `Abs(dst, a)`              | Wrapping absolute value (`abs(MinInt32) = MinInt32`)   | 8x (AVX2) / 4x (NEON) |
+| **Sign**       | `NegWhereNeg(dst, mag, sign)` | Branchless conditional negate: `dst[i] = -mag[i]` where `sign[i]`'s float32 sign bit is set, else `mag[i]` | 8x (AVX2) / 4x (NEON) |
 | **Reduction**  | `MinMax(res) (min, max)`   | Signed int32 per-slice minimum and maximum in one pass | 8x (AVX2) / 4x (NEON) |
 |                | `Sum(a) int32`             | Wrapping int32 total of a slice                        | 8x (AVX2) / 4x (NEON) |
+|                | `MaxAbs(a) int32`          | Peak magnitude as `max(maxVal, -minVal)`, the libopus `celtMaxabs32` form (not per-lane abs) | 8x (AVX2) / 4x (NEON) |
+| **Fixed-point** | `ScaleQ31(dst, a, k)`      | Truncating Q31 scale-by-scalar, `dst[i] = int32(int64(a[i])*int64(k) >> 31)` (`MULT32_32_Q31`) | 8x (AVX2) / 4x (NEON) |
+|                 | `ScaleQ15(dst, a, k)`      | Truncating Q15 scale-by-scalar, `dst[i] = int32(int64(k)*int64(a[i]) >> 15)` (`MULT16_32_Q15`) | 8x (AVX2) / 4x (NEON) |
+|                 | `Butterfly(lo, hi)`        | In-place FWHT/Haar radix-2 step, `lo,hi = lo+hi, lo-hi` (wrapping) | 8x (AVX2) / 4x (NEON) |
+|                 | `FIRValidQ15(dst, x, taps)` | Valid convolution, int32 data x int16 Q15 taps, per-product truncation, wrapping accumulate | 8x (AVX2) / 4x (NEON) |
 
 ```go
 import "github.com/tphakala/simd/i32"
@@ -575,9 +607,13 @@ i32.Abs(dst, left)        // element-wise |left|, wrapping at MinInt32
 
 mn, mx := i32.MinMax(left) // smallest and largest value in one signed pass
 total := i32.Sum(left)     // wrapping int32 total
+peak := i32.MaxAbs(left)   // celtMaxabs32 peak magnitude = max(max, -min)
+
+i32.ScaleQ15(dst, left, 16384) // truncating Q15 scale, 16384 = 0.5 in Q15
+i32.Butterfly(left, right)     // in-place Haar step: left,right = left+right, left-right
 ```
 
-Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. `Add`, `Sub` and `Abs` do element-wise integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes with two's-complement wraparound, so they are bit-identical to the pure-Go reference across the full int32 range; `Abs` wraps the one out-of-range magnitude (`abs(MinInt32) = MinInt32`) rather than saturating. `Sum` accumulates in int32 with the same wraparound, and because wrapping addition is associative its lane split and horizontal reduction are bit-identical to the sequential loop even on overflowing inputs. `MinMax` returns the smallest and largest int32 in one signed pass (`VPMINSD`/`VPMAXSD` on AVX2, `SMIN`/`SMAX` with single-instruction `SMINV`/`SMAXV` folds on NEON); since min/max of int32 has no accumulation order, the SIMD paths are bit-identical to the pure-Go reference by construction (~10x AVX2, ~5x NEON). All zero-allocation.
+Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f32` shuffle/permute encodings (AVX `VUNPCKLPS`/`VPERM2F128`, NEON `ZIP`/`UZP` on `.4S`); the bit pattern of each lane is irrelevant, so negative values and the type extremes round-trip exactly. `Add`, `Sub` and `Abs` do element-wise integer-ALU work on 256-bit (AVX2) / 128-bit (NEON) lanes with two's-complement wraparound, so they are bit-identical to the pure-Go reference across the full int32 range; `Abs` wraps the one out-of-range magnitude (`abs(MinInt32) = MinInt32`) rather than saturating. `Sum` accumulates in int32 with the same wraparound, and because wrapping addition is associative its lane split and horizontal reduction are bit-identical to the sequential loop even on overflowing inputs. `MinMax` returns the smallest and largest int32 in one signed pass (`VPMINSD`/`VPMAXSD` on AVX2, `SMIN`/`SMAX` with single-instruction `SMINV`/`SMAXV` folds on NEON); since min/max of int32 has no accumulation order, the SIMD paths are bit-identical to the pure-Go reference by construction (~10x AVX2, ~5x NEON). All zero-allocation. The fixed-point building blocks `ScaleQ31` and `ScaleQ15` are truncating scale-by-scalar multiplies (the integer `MULT32_32_Q31` and `MULT16_32_Q15`: a 64-bit product arithmetically shifted back into int32 with no rounding constant), `Butterfly` is the Haar/FWHT radix-2 combine (`lo, hi = lo+hi, lo-hi`), and `FIRValidQ15` is the int32 valid convolution against int16 Q15 taps, quantized per product (not once at the end); all truncate rather than round and carry no rounding constant. `MaxAbs` is the `celtMaxabs32` peak magnitude (`max(maxVal, -minVal)`) built on the same signed `MinMax` scan, and `NegWhereNeg` is a branchless conditional negate driven by a parallel float32 sign stream. Every one wraps in int32 (no saturation), is bit-exact across amd64 AVX2, arm64 NEON and pure Go with no relaxed tier, and allocation-free: these are the integer-DSP and fixed-point-codec (integer Opus, FWHT) building blocks.
 
 > The FLAC-specific integer kernels (fixed predictors, quantized-LPC residual/restore, mid/side decorrelation, and the Rice cost search) that previously lived here now live in the codec that owns them ([go-flac](https://github.com/tphakala/go-flac)); this package keeps only the generic integer ops above.
 

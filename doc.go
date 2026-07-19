@@ -12,6 +12,7 @@
 //   - [github.com/tphakala/simd/i8] - int8 SIMD operations (saturating arithmetic, int32-accumulated reductions, quantized DSP)
 //   - [github.com/tphakala/simd/c64] - complex64 SIMD operations (FFT-pipeline helpers)
 //   - [github.com/tphakala/simd/c128] - complex128 SIMD operations (FFT-pipeline helpers)
+//   - [github.com/tphakala/simd/cint] - fixed-point complex SIMD operations (int32 data x int16 Q15 twiddle; integer FFT butterflies)
 //   - [github.com/tphakala/simd/crc] - CRC checksums (carry-less-multiply folding)
 //
 // # Architecture Support
@@ -23,7 +24,7 @@
 //   - AMD64: AVX-512 (8x float64, 16x float32) > AVX+FMA (4x float64, 8x float32) >
 //     AVX (no FMA, f64/c128) > SSE2 (f32/f64/c128, i16 interleave/dot/xcorr)
 //     or SSE4.1 (c64) > pure Go.
-//     i32 needs AVX/AVX2, i8 needs AVX2, crc needs PCLMULQDQ, and f16 uses F16C
+//     i32 needs AVX/AVX2, cint and i8 need AVX2, crc needs PCLMULQDQ, and f16 uses F16C
 //     for its slice conversions only (every other f16 op is pure Go on amd64).
 //     SSE2 is part of the amd64 baseline, so f32/f64/c128 always get SIMD on
 //     amd64, as do i16's interleave/dot/xcorr kernels; i16's element-wise ops
@@ -95,11 +96,13 @@
 //
 // Integer DSP (i16): Interleave2, Deinterleave2, DotProduct, DotProductUnsafe, XCorr (widening int16 x int16 -> wrapping int32; ARM64 SMLAL/SMLAL2, amd64 PMADDWD/VPMADDWD; XCorr evaluates 4 correlation lags per kernel call), Abs, MaxAbs, MulQ15 (wrapping 16-bit absolute value, widened abs-max, rounding Q15 multiply)
 //
-// Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, Abs, Sum, MinMax
+// Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, Abs, Sum, MinMax, MaxAbs, NegWhereNeg, ScaleQ31, ScaleQ15, Butterfly, FIRValidQ15
 //
 // Integer DSP (i8): AddSaturate, SubSaturate, AddScalarSaturate, SubScalarSaturate, Min, Max, Clamp, Abs, Neg, AbsDiff, MaxAbs, SumAbs, SAD, ToInt16, ToInt32, Sum, MinMax, DotProduct (int32-accumulated; ARM64 SDOT / amd64 VPMADDWD)
 //
 // Complex (c64/c128): Add, Sub, Mul, MulConj, DotProduct, DotProductConj, Conj, Abs, AbsSq, Scale
+//
+// Fixed-point complex (cint): Add, Sub, Mul, MulConj, MulByScalar (int32 data x int16 Q15 twiddle, truncating C_MUL; for integer FFT butterflies)
 //
 // CRC (crc): Checksum16 (CRC-16, poly 0x8005, MSB-first, no reflection; used by FLAC among others, PCLMULQDQ/PMULL carry-less-multiply fold)
 //
