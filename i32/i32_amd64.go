@@ -147,6 +147,23 @@ func scaleQ31AVX2(dst, a []int32, k int32)
 //go:noescape
 func scaleQ15AVX2(dst, a []int32, k int16)
 
+// minAVX2Butterfly is one 8-wide (256-bit) block, an independent literal like
+// the tier-3 thresholds above. The kernel is correct at any length (it falls
+// through to a scalar tail), so this is a performance cut only, never a safety
+// requirement. It gates on AVX2 because VPADDD/VPSUBD are 256-bit integer ops.
+const minAVX2Butterfly = 8
+
+func butterflyI32(lo, hi []int32) {
+	if hasAVX2 && len(lo) >= minAVX2Butterfly {
+		butterflyAVX2(lo, hi)
+		return
+	}
+	butterflyGo(lo, hi)
+}
+
+//go:noescape
+func butterflyAVX2(lo, hi []int32)
+
 // minMaxI32 dispatches the signed int32 min/max reduction. The AVX2 kernel does
 // the reduction in 8-wide VPMINSD/VPMAXSD lanes with a scalar tail, so it gates
 // on AVX2 and at least one full 8-element block; shorter slices use the pure-Go

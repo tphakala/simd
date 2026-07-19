@@ -233,3 +233,29 @@ func BenchmarkScaleQ15_1003(b *testing.B) { benchmarkScaleQ15(b, 1003, ScaleQ15)
 func BenchmarkScaleQ15Go_25(b *testing.B)   { benchmarkScaleQ15(b, 25, scaleQ15Go) }
 func BenchmarkScaleQ15Go_1000(b *testing.B) { benchmarkScaleQ15(b, 1000, scaleQ15Go) }
 func BenchmarkScaleQ15Go_1003(b *testing.B) { benchmarkScaleQ15(b, 1003, scaleQ15Go) }
+
+// Butterfly is in-place, so each call rewrites both slices. Resetting them to a
+// fixed pattern between iterations is unnecessary for timing because the operation
+// is length-bound, not value-bound (no data-dependent branches). SetBytes counts
+// both slices read and both written, 4 bytes per int32.
+func benchmarkButterfly(b *testing.B, n int, fn func(lo, hi []int32)) {
+	b.Helper()
+	lo := make([]int32, n)
+	hi := make([]int32, n)
+	for i := range lo {
+		lo[i] = int32(i*7 - 3000)
+		hi[i] = int32(i*3 + 1000)
+	}
+	b.SetBytes(int64(n) * 4 * 2)
+	for b.Loop() {
+		fn(lo, hi)
+	}
+}
+
+func BenchmarkButterfly_25(b *testing.B)   { benchmarkButterfly(b, 25, Butterfly) }
+func BenchmarkButterfly_1000(b *testing.B) { benchmarkButterfly(b, 1000, Butterfly) }
+func BenchmarkButterfly_1003(b *testing.B) { benchmarkButterfly(b, 1003, Butterfly) }
+
+func BenchmarkButterflyGo_25(b *testing.B)   { benchmarkButterfly(b, 25, butterflyGo) }
+func BenchmarkButterflyGo_1000(b *testing.B) { benchmarkButterfly(b, 1000, butterflyGo) }
+func BenchmarkButterflyGo_1003(b *testing.B) { benchmarkButterfly(b, 1003, butterflyGo) }

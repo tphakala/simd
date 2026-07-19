@@ -16,3 +16,5 @@ func negWhereNegI32(dst, mag []int32, sign []float32) { negWhereNegGo(dst, mag, 
 
 func scaleQ31I32(dst, a []int32, k int32) { scaleQ31Go(dst, a, k) }
 func scaleQ15I32(dst, a []int32, k int16) { scaleQ15Go(dst, a, k) }
+
+func butterflyI32(lo, hi []int32) { butterflyGo(lo, hi) }
