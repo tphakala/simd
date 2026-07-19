@@ -558,3 +558,54 @@ scaleq15_avx2_scalar:
 scaleq15_avx2_done:
     VZEROUPPER
     RET
+
+// func butterflyAVX2(lo, hi []int32)
+// In-place radix-2 butterfly, 8 int32 per iteration: each block loads lo and hi,
+// forms the wrapping sum (VPADDD) and difference (VPSUBD) into fresh registers
+// BEFORE storing either, then writes lo = lo+hi and hi = lo-hi. Reading the whole
+// block of both inputs before either store is what makes the in-place update safe
+// and is also why lo and hi must not overlap. The scalar tail does the same on
+// 32-bit GPRs, computing the sum in R8 while AX still holds lo so SUBL forms the
+// difference from the unmodified lo. Every add/sub wraps in a 32-bit lane, matching
+// butterflyGo exactly. Frame is two slice headers: lo+0, hi+24.
+TEXT ·butterflyAVX2(SB), NOSPLIT, $0-48
+    MOVQ lo_base+0(FP), SI
+    MOVQ lo_len+8(FP), CX
+    MOVQ hi_base+24(FP), DI
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   butterfly_remainder
+
+butterfly_loop8:
+    VMOVDQU (SI), Y0          // lo block
+    VMOVDQU (DI), Y1          // hi block
+    VPADDD  Y1, Y0, Y2        // Y2 = lo + hi
+    VPSUBD  Y1, Y0, Y3        // Y3 = lo - hi
+    VMOVDQU Y2, (SI)          // lo = lo + hi
+    VMOVDQU Y3, (DI)          // hi = lo - hi
+    ADDQ $32, SI
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  butterfly_loop8
+
+butterfly_remainder:
+    ANDQ $7, CX
+    JZ   butterfly_done
+
+butterfly_scalar:
+    MOVL (SI), AX             // lo
+    MOVL (DI), BX             // hi
+    MOVL AX, R8
+    ADDL BX, R8              // R8 = lo + hi (wraps in 32-bit)
+    SUBL BX, AX              // AX = lo - hi (AX still holds lo)
+    MOVL R8, (SI)            // lo = lo + hi
+    MOVL AX, (DI)            // hi = lo - hi
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ CX
+    JNZ  butterfly_scalar
+
+butterfly_done:
+    VZEROUPPER
+    RET

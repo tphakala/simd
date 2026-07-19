@@ -132,6 +132,23 @@ func scaleQ31NEON(dst, a []int32, k int32)
 //go:noescape
 func scaleQ15NEON(dst, a []int32, k int16)
 
+// minNEONButterfly is one 4-wide (.4S) block, an independent literal like the
+// tier-3 thresholds above. The kernel is correct at any length (it falls through
+// to a scalar tail), so this is a performance cut only, never a safety
+// requirement.
+const minNEONButterfly = 4
+
+func butterflyI32(lo, hi []int32) {
+	if hasNEON && len(lo) >= minNEONButterfly {
+		butterflyNEON(lo, hi)
+		return
+	}
+	butterflyGo(lo, hi)
+}
+
+//go:noescape
+func butterflyNEON(lo, hi []int32)
+
 // minMaxI32 dispatches the signed int32 min/max reduction. The NEON kernel does
 // the reduction in 4-wide SMIN/SMAX lanes with a single-instruction SMINV/SMAXV
 // across-vector fold and a scalar tail, so it gates on NEON and at least one full

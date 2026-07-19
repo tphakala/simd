@@ -440,3 +440,56 @@ scaleq15_neon_scalar:
 
 scaleq15_neon_done:
     RET
+
+// func butterflyNEON(lo, hi []int32)
+// In-place radix-2 butterfly, 4 int32 per iteration: each block loads lo and hi,
+// forms the wrapping sum (ADD .4S -> V2) and difference (SUB .4S -> V3) BEFORE
+// storing either, then writes lo = lo+hi and hi = lo-hi. Both loads precede both
+// stores, so each block of lo and hi is read in full before either is written;
+// that ordering is what makes the in-place update safe (and why lo and hi must not
+// overlap). The loads are plain VLD1 with a manual ADD $16 advance because each
+// slice uses a single pointer register for both its load and its store, so a
+// post-increment load (VLD1.P) would advance that pointer before the in-place store
+// and misaddress it. The ADD/SUB .4S
+// WORDs are the addNEON/subNEON encodings with the destination lane in V2 (sum)
+// and V3 (diff); they are cross-checked against arm64asm by TestArm64WordEncodings.
+// The scalar tail computes both results from the unmodified lo/hi in W registers
+// (ADDW/SUBW) so it wraps identically. Frame is two slice headers: lo+0, hi+24.
+TEXT ·butterflyNEON(SB), NOSPLIT, $0-48
+    MOVD lo_base+0(FP), R0
+    MOVD lo_len+8(FP), R3
+    MOVD hi_base+24(FP), R1
+
+    LSR  $2, R3, R4            // R4 = n / 4
+    CBZ  R4, butterfly_neon_remainder
+
+butterfly_neon_loop4:
+    VLD1 (R0), [V0.S4]         // lo
+    VLD1 (R1), [V1.S4]         // hi
+    WORD $0x4EA18402           // ADD V2.4S, V0.4S, V1.4S   (sum = lo + hi)
+    WORD $0x6EA18403           // SUB V3.4S, V0.4S, V1.4S   (diff = lo - hi)
+    VST1 [V2.S4], (R0)         // lo = lo + hi
+    VST1 [V3.S4], (R1)         // hi = lo - hi
+    ADD  $16, R0
+    ADD  $16, R1
+    SUB  $1, R4
+    CBNZ R4, butterfly_neon_loop4
+
+butterfly_neon_remainder:
+    AND  $3, R3
+    CBZ  R3, butterfly_neon_done
+
+butterfly_neon_loop1:
+    MOVW (R0), R5             // lo
+    MOVW (R1), R6             // hi
+    ADDW R6, R5, R7           // R7 = lo + hi (wraps in 32-bit)
+    SUBW R6, R5, R8           // R8 = lo - hi
+    MOVW R7, (R0)             // lo = lo + hi
+    MOVW R8, (R1)             // hi = lo - hi
+    ADD  $4, R0
+    ADD  $4, R1
+    SUB  $1, R3
+    CBNZ R3, butterfly_neon_loop1
+
+butterfly_neon_done:
+    RET

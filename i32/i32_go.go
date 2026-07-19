@@ -101,6 +101,27 @@ func negWhereNegGo(dst, mag []int32, sign []float32) {
 	}
 }
 
+// butterflyGo writes the in-place radix-2 butterfly that is Butterfly's source
+// of truth: lo[i], hi[i] = lo[i]+hi[i], lo[i]-hi[i]. Both operations wrap in
+// int32 (addition and subtraction modulo 2^32), matching the VPADDD/VPSUBD and
+// ADD/SUB .4S lanes exactly. Each lane forms the sum and difference into
+// temporaries before writing either output, so lo[i] is read for the difference
+// before its own store overwrites it and the in-place update is well defined.
+// lo and hi must not overlap each other. lo may be empty; the len-0 guard
+// protects the len(lo)-1 BCE hint.
+func butterflyGo(lo, hi []int32) {
+	if len(lo) == 0 {
+		return
+	}
+	_ = hi[len(lo)-1] // BCE hint: hi is indexed [0, len(lo))
+	for i := range lo {
+		s := lo[i] + hi[i] // wrapping int32 sum
+		d := lo[i] - hi[i] // wrapping int32 difference
+		lo[i] = s
+		hi[i] = d
+	}
+}
+
 // scaleQ31Shift is the fixed-point position of the Q31 result: the full 64-bit
 // product int64(a)*int64(k) is arithmetically shifted right by 31 to land the
 // Q31 fractional scale back in int32 range.
