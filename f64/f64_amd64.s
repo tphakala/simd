@@ -6102,3 +6102,244 @@ butterfly_scalar:
 butterfly_done:
     VZEROUPPER
     RET
+
+// func realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int)
+// Real-FFT unpack step, 4 float64 lanes per YMM (AVX+FMA). The float64
+// counterpart of f32's realFFTUnpackAVX: 4 lanes/iter instead of 8, so the
+// 256-bit byte stride ($32) is identical while the loop counter halves. For
+// k in [1, n-1] with nk = n-k:
+//   znk    = conj(Z[nk]) = (zRe[nk], -zIm[nk])
+//   even   = 0.5*(Z[k] + znk) ; diff = Z[k] - znk
+//   oddRe  = 0.5*(wr*diffIm + wi*diffRe) ; oddIm = 0.5*(wi*diffIm - wr*diffRe)
+//   X[k]   = even + odd
+// The mirror slice is read in reverse (highest index first) and permuted so a
+// forward vector Z[k:k+4] pairs with Z[nk:nk-3]. Frame:
+// outRe(24)+outIm(24)+zRe(24)+zIm(24)+twRe(24)+twIm(24)+n(8) = 152 bytes.
+TEXT ·realFFTUnpackAVX(SB), NOSPLIT, $0-152
+    // Load parameters
+    MOVQ outRe_base+0(FP), DX        // DX = outRe pointer
+    MOVQ outIm_base+24(FP), SI       // SI = outIm pointer
+    MOVQ zRe_base+48(FP), DI         // DI = zRe pointer (forward)
+    MOVQ zIm_base+72(FP), R8         // R8 = zIm pointer (forward)
+    MOVQ twRe_base+96(FP), R11       // R11 = twRe pointer
+    MOVQ twIm_base+120(FP), R12      // R12 = twIm pointer
+    MOVQ n+144(FP), CX               // CX = n
+
+    // Calculate number of iterations: (n-1) / 4
+    MOVQ CX, AX
+    DECQ AX                          // AX = n - 1
+    MOVQ AX, R13                     // R13 = n - 1 (save for remainder)
+    SHRQ $2, AX                      // AX = (n-1) / 4 = number of SIMD iterations
+    JZ   realfft64_remainder         // Skip SIMD loop if < 4 elements
+
+    // Set up reverse pointers: R9 = &zRe[n-4], R10 = &zIm[n-4].
+    // BX (not R14) holds byte offsets: R14 is the goroutine g pointer on Go amd64.
+    MOVQ CX, BX                      // BX = n
+    SUBQ $4, BX                      // BX = n - 4
+    SHLQ $3, BX                      // BX = (n-4) * 8 = byte offset
+    MOVQ DI, R9
+    ADDQ BX, R9                      // R9 = &zRe[n-4]
+    MOVQ R8, R10
+    ADDQ BX, R10                     // R10 = &zIm[n-4]
+
+    // Offset forward pointers to start at index 1
+    ADDQ $8, DI                      // DI = &zRe[1]
+    ADDQ $8, R8                      // R8 = &zIm[1]
+    ADDQ $8, DX                      // DX = &outRe[1]
+    ADDQ $8, SI                      // SI = &outIm[1]
+
+    // Broadcast 0.5 (0x3FE0000000000000 = 0.5)
+    MOVQ $0x3FE0000000000000, BX
+    MOVQ BX, X13
+    VBROADCASTSD X13, Y13            // Y13 = 0.5 broadcast
+
+    // Sign mask for negation (0x8000000000000000 = the float64 sign bit).
+    // VPSLLQ $63 gives 0x8000000000000000; VPSLLD $31 would give
+    // 0x8000000080000000 and corrupt the double.
+    VPCMPEQD Y14, Y14, Y14           // Y14 = all 1s
+    VPSLLQ $63, Y14, Y14             // Y14 = 0x8000000000000000
+
+realfft64_loop4:
+    // Load forward Z[k:k+4]
+    VMOVUPD (DI), Y0                 // Y0 = zRe[k:k+4] (forward)
+    VMOVUPD (R8), Y1                 // Y1 = zIm[k:k+4] (forward)
+
+    // Load reverse Z[n-k-3:n-k+1] and reverse the order
+    // Memory has: z[n-k-3], z[n-k-2], z[n-k-1], z[n-k]
+    // We need:    z[n-k], z[n-k-1], z[n-k-2], z[n-k-3]
+    VMOVUPD (R9), Y2                 // Y2 = zRe[n-k-3:n-k+1] (to be reversed)
+    VMOVUPD (R10), Y3                // Y3 = zIm[n-k-3:n-k+1] (to be reversed)
+
+    // Reverse Y2 and Y3 with a single VPERMPD: [a b c d] -> [d c b a].
+    // 0x1B = 0b00011011 = [3,2,1,0] over 4 qwords. The f32 kernel needs a two-step
+    // reverse because VPERMILPS permutes 32-bit lanes within each 128-bit half, so
+    // it cannot reverse 4 doubles; VPERMPD does the full cross-lane qword reverse.
+    VPERMPD $0x1B, Y2, Y2
+    VPERMPD $0x1B, Y3, Y3
+
+    // Now Y2 = znkRe (reversed), Y3 = zIm[n-k] (reversed, not yet negated)
+    // For conjugate: znkIm = -zIm[n-k]
+    VXORPD Y14, Y3, Y3               // Y3 = znkIm = -zIm[n-k] (conjugate)
+
+    // Compute even = 0.5 * (Z[k] + conj(Z[n-k]))
+    VADDPD Y0, Y2, Y4                // Y4 = zkRe + znkRe
+    VMULPD Y4, Y13, Y4               // Y4 = evenRe = 0.5 * (zkRe + znkRe)
+    VADDPD Y1, Y3, Y5                // Y5 = zkIm + znkIm (znkIm already negated)
+    VMULPD Y5, Y13, Y5               // Y5 = evenIm = 0.5 * (zkIm + znkIm)
+
+    // Compute diff = Z[k] - conj(Z[n-k])
+    VSUBPD Y2, Y0, Y6                // Y6 = diffRe = zkRe - znkRe
+    VSUBPD Y3, Y1, Y7                // Y7 = diffIm = zkIm - znkIm
+
+    // Load twiddles W[k]
+    VMOVUPD (R11), Y8                // Y8 = twRe (wr)
+    VMOVUPD (R12), Y9                // Y9 = twIm (wi)
+
+    // Compute odd = W[k] * (-0.5i) * diff
+    // oddRe = 0.5 * (wr*diffIm + wi*diffRe)
+    VMULPD Y8, Y7, Y10               // Y10 = wr * diffIm
+    VFMADD231PD Y9, Y6, Y10          // Y10 = wr*diffIm + wi*diffRe
+    VMULPD Y10, Y13, Y10             // Y10 = oddRe = 0.5 * (wr*diffIm + wi*diffRe)
+
+    // oddIm = 0.5 * (wi*diffIm - wr*diffRe)
+    VMULPD Y9, Y7, Y11               // Y11 = wi * diffIm
+    VFNMADD231PD Y8, Y6, Y11         // Y11 = wi*diffIm - wr*diffRe
+    VMULPD Y11, Y13, Y11             // Y11 = oddIm = 0.5 * (wi*diffIm - wr*diffRe)
+
+    // Compute output X[k] = even + odd
+    VADDPD Y4, Y10, Y0               // Y0 = outRe = evenRe + oddRe
+    VADDPD Y5, Y11, Y1               // Y1 = outIm = evenIm + oddIm
+
+    // Store results
+    VMOVUPD Y0, (DX)                 // store outRe[k:k+4]
+    VMOVUPD Y1, (SI)                 // store outIm[k:k+4]
+
+    // Advance pointers
+    ADDQ $32, DI                     // forward zRe += 4
+    ADDQ $32, R8                     // forward zIm += 4
+    SUBQ $32, R9                     // reverse zRe -= 4
+    SUBQ $32, R10                    // reverse zIm -= 4
+    ADDQ $32, R11                    // twRe += 4
+    ADDQ $32, R12                    // twIm += 4
+    ADDQ $32, DX                     // outRe += 4
+    ADDQ $32, SI                     // outIm += 4
+
+    DECQ AX
+    JNZ  realfft64_loop4
+
+realfft64_remainder:
+    // Handle remaining elements (n-1) % 4
+    ANDQ $3, R13                     // R13 = remainder count
+    JZ   realfft64_done
+
+    // Reload base pointers for remainder (need to recalculate positions)
+    MOVQ outRe_base+0(FP), DX
+    MOVQ outIm_base+24(FP), SI
+    MOVQ zRe_base+48(FP), DI
+    MOVQ zIm_base+72(FP), R8
+    MOVQ twRe_base+96(FP), R11
+    MOVQ twIm_base+120(FP), R12
+    MOVQ n+144(FP), CX
+
+    // Calculate starting k for remainder: 1 + 4 * num_full_iterations
+    MOVQ CX, AX
+    DECQ AX                          // AX = n - 1
+    SHRQ $2, AX                      // AX = num_full_iterations
+    SHLQ $2, AX                      // AX = 4 * num_full_iterations
+    INCQ AX                          // AX = 1 + 4 * num_full_iterations = starting k
+
+    // Offset pointers to starting k
+    MOVQ AX, BX
+    SHLQ $3, BX                      // BX = k * 8 bytes
+    ADDQ BX, DX                      // DX = &outRe[k]
+    ADDQ BX, SI                      // SI = &outIm[k]
+    ADDQ BX, DI                      // DI = &zRe[k]
+    ADDQ BX, R8                      // R8 = &zIm[k]
+
+    // Twiddle offset is (k-1)
+    DECQ AX
+    MOVQ AX, BX
+    SHLQ $3, BX
+    ADDQ BX, R11                     // R11 = &twRe[k-1]
+    ADDQ BX, R12                     // R12 = &twIm[k-1]
+    INCQ AX                          // Restore AX = k
+
+realfft64_scalar:
+    // Calculate mirror index: nk = n - k
+    MOVQ CX, BX
+    SUBQ AX, BX                      // BX = n - k = nk
+
+    // Load Z[k]
+    VMOVSD (DI), X0                  // X0 = zRe[k]
+    VMOVSD (R8), X1                  // X1 = zIm[k]
+
+    // Load conj(Z[n-k])
+    MOVQ zRe_base+48(FP), R15
+    MOVQ BX, R9
+    SHLQ $3, R9
+    ADDQ R9, R15
+    VMOVSD (R15), X2                 // X2 = zRe[nk]
+
+    MOVQ zIm_base+72(FP), R15
+    ADDQ R9, R15
+    VMOVSD (R15), X3                 // X3 = zIm[nk]
+
+    // Load 0.5 constant (0x3FE0000000000000 = 0.5)
+    MOVQ $0x3FE0000000000000, BX
+    MOVQ BX, X13
+
+    // Negate X3 for conjugate: znkIm = -zIm[nk]
+    VXORPD X14, X14, X14
+    VSUBSD X3, X14, X3               // X3 = -zIm[nk] = znkIm
+
+    // evenRe = 0.5 * (zkRe + znkRe)
+    VADDSD X0, X2, X4
+    VMULSD X4, X13, X4               // X4 = evenRe
+
+    // evenIm = 0.5 * (zkIm + znkIm)
+    VADDSD X1, X3, X5
+    VMULSD X5, X13, X5               // X5 = evenIm
+
+    // diffRe = zkRe - znkRe
+    VSUBSD X2, X0, X6                // X6 = diffRe
+
+    // diffIm = zkIm - znkIm
+    VSUBSD X3, X1, X7                // X7 = diffIm
+
+    // Load twiddles
+    VMOVSD (R11), X8                 // X8 = wr
+    VMOVSD (R12), X9                 // X9 = wi
+
+    // oddRe = 0.5 * (wr*diffIm + wi*diffRe)
+    VMULSD X8, X7, X10               // X10 = wr * diffIm
+    VFMADD231SD X9, X6, X10          // X10 = wr*diffIm + wi*diffRe
+    VMULSD X10, X13, X10             // X10 = oddRe
+
+    // oddIm = 0.5 * (wi*diffIm - wr*diffRe)
+    VMULSD X9, X7, X11               // X11 = wi * diffIm
+    VFNMADD231SD X8, X6, X11         // X11 = wi*diffIm - wr*diffRe
+    VMULSD X11, X13, X11             // X11 = oddIm
+
+    // output = even + odd
+    VADDSD X4, X10, X0               // X0 = outRe
+    VADDSD X5, X11, X1               // X1 = outIm
+
+    // Store
+    VMOVSD X0, (DX)
+    VMOVSD X1, (SI)
+
+    // Advance pointers
+    ADDQ $8, DI
+    ADDQ $8, R8
+    ADDQ $8, R11
+    ADDQ $8, R12
+    ADDQ $8, DX
+    ADDQ $8, SI
+    INCQ AX                          // k++
+
+    DECQ R13
+    JNZ  realfft64_scalar
+
+realfft64_done:
+    VZEROUPPER
+    RET

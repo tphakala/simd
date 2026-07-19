@@ -713,3 +713,43 @@ func butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float
 		lowerIm[i] = ui - tempIm
 	}
 }
+
+// realFFTUnpackHalf is the constant 0.5 used in real FFT unpack computation.
+const realFFTUnpackHalf = 0.5
+
+// realFFTUnpack64Go performs the unpacking step of real FFT.
+// For k in [1, n-1]:
+//
+//	X[k] = 0.5*(Z[k] + conj(Z[n-k])) + W[k]*(-0.5i)*(Z[k] - conj(Z[n-k]))
+func realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
+	// Process k from 1 to n-1
+	// For each k, we need Z[k] and Z[n-k] (mirrored)
+	for k := 1; k < n; k++ {
+		nk := n - k // Mirror index
+
+		// Load Z[k] and conj(Z[n-k])
+		zkRe, zkIm := zRe[k], zIm[k]
+		znkRe, znkIm := zRe[nk], -zIm[nk] // Conjugate
+
+		// even = 0.5 * (Z[k] + conj(Z[n-k]))
+		evenRe := realFFTUnpackHalf * (zkRe + znkRe)
+		evenIm := realFFTUnpackHalf * (zkIm + znkIm)
+
+		// diff = Z[k] - conj(Z[n-k])
+		diffRe := zkRe - znkRe
+		diffIm := zkIm - znkIm
+
+		// odd = W[k] * (-0.5i) * diff
+		// W[k] is at twRe[k-1], twIm[k-1]
+		wr, wi := twRe[k-1], twIm[k-1]
+		// (-0.5i) * diff = 0.5*diffIm - 0.5i*diffRe
+		// W * (-0.5i * diff) = (wr + i*wi) * (0.5*diffIm - 0.5i*diffRe)
+		//   = 0.5*(wr*diffIm + wi*diffRe) + 0.5i*(wi*diffIm - wr*diffRe)
+		oddRe := realFFTUnpackHalf * (wr*diffIm + wi*diffRe)
+		oddIm := realFFTUnpackHalf * (wi*diffIm - wr*diffRe)
+
+		// X[k] = even + odd
+		outRe[k] = evenRe + oddRe
+		outIm[k] = evenIm + oddIm
+	}
+}
