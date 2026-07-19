@@ -73,3 +73,6 @@ func powElem64(dst, base, exp []float64)    { powElemGo(dst, base, exp) }
 func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64) {
 	butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
 }
+func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
+	realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
+}

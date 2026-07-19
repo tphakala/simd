@@ -665,6 +665,20 @@ func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64
 	butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
 }
 
+func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
+	// realFFTUnpackAVX needs AVX2, not just AVX+FMA: the reversed load uses VPERMPD
+	// and the constants use register-source VBROADCASTSD plus VPCMPEQD/VPSLLQ on
+	// YMM, all AVX2-only. Gating on plain AVX would let an AVX1+FMA part (e.g. AMD
+	// Piledriver) reach it and SIGILL. hasAVX2 is the same guard the other VPERMPD
+	// users in this package use (autocorrelate, interleaveN).
+	// n > minAVXElements means n >= 5, so (n-1) >= 4 = one full 4-wide AVX pass.
+	if hasAVX2 && cpu.X86.FMA && n > minAVXElements {
+		realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm, n)
+		return
+	}
+	realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
+}
+
 func sigmoid64(dst, src []float64) {
 	// Requires AVX2: sigmoidAVX reconstructs 2^k with 256-bit YMM integer ops
 	// (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ) that do not exist on AVX1-only CPUs.
@@ -1059,3 +1073,8 @@ func cubicInterpDotAVX(hist, a, b, c, d []float64, x float64) float64
 //
 //go:noescape
 func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64)
+
+// RealFFTUnpack assembly function declaration
+//
+//go:noescape
+func realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int)
