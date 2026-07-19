@@ -155,9 +155,12 @@ sum := crc.Checksum16(p) // bit-identical to the scalar reference, zero-alloc
 ### `f64` - float64 Operations
 
 **Scope:** `f64` carries the FLAC/LPC and scientific double-precision surface,
-including `Autocorrelate` (lag-vectorized LPC autocorrelation). Audio/ML-specific
-helpers (PCM conversions, split-format complex ops, indexed/strided dot products)
-live in `f32` instead, so the two float surfaces are intentionally asymmetric.
+including `Autocorrelate` (lag-vectorized LPC autocorrelation) and the split-format
+FFT butterfly building blocks (`ButterflyComplex`, `RealFFTUnpack`) that a
+double-precision FFT/STFT path needs. The broader audio/ML helpers (PCM
+conversions, the general split-format complex ops such as `MulComplex` /
+`AbsSqComplex`, indexed/strided dot products) live in `f32` instead, so the two
+float surfaces remain intentionally asymmetric.
 
 | Category        | Function                            | Description                   | SIMD Width                          |
 | --------------- | ----------------------------------- | ----------------------------- | ----------------------------------- |
@@ -208,6 +211,8 @@ live in `f32` instead, so the two float surfaces are intentionally asymmetric.
 |                 | `ConvolveDecimate(dst,sig,k,f,p)`   | Strided FIR downsample (decimate) | 8x / 4x / 2x                    |
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
 |                 | `Autocorrelate(autoc, x, maxLag)`   | LPC autocorrelation Σ x[i]·x[i-lag] (bit-exact) | 4x (AVX2) / 2x (NEON)     |
+| **Complex/FFT** | `ButterflyComplex(uRe,uIm,lRe,lIm,twRe,twIm)` | FFT butterfly with twiddle multiply | 4x (AVX+FMA) / 2x (NEON)   |
+|                 | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real-FFT even/odd unpack step | 4x (AVX2) / 2x (NEON)       |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
 |                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
