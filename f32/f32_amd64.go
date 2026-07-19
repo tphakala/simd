@@ -304,6 +304,27 @@ func sqrt32(dst, a []float32) {
 	sqrtImpl(dst, a)
 }
 
+// absPow34_32 dispatches AbsPow34 directly to a //go:noescape kernel (rather than
+// through a function-pointer table) so the caller's dst/src do not escape to the
+// heap: an indirect call through a func value defeats //go:noescape and forces a
+// per-call allocation, which would break the zero-allocation contract. The
+// direct-dispatch shape mirrors the exp/relu/pow family in this file. AbsPow34
+// needs no FMA, so plain AVX gates the VEX kernel (AVX-512 CPUs also have AVX and
+// run it bit-identically). Unlike exp/relu/pow, no minimum-length guard is needed:
+// like the element-wise abs/neg/sqrt kernels, these compute the block count with a
+// shift and fall through to a scalar tail for short inputs, so a full-width load is
+// never issued out of bounds.
+func absPow34_32(dst, src []float32) {
+	switch {
+	case cpu.X86.AVX:
+		absPow34AVX(dst, src)
+	case cpu.X86.SSE2:
+		absPow34SSE(dst, src)
+	default:
+		absPow34Go(dst, src)
+	}
+}
+
 func reciprocal32(dst, a []float32) {
 	reciprocalImpl(dst, a)
 }
@@ -842,6 +863,9 @@ func clampScaleAVX(dst, src []float32, minVal, maxVal, scale float32)
 func sqrtAVX(dst, a []float32)
 
 //go:noescape
+func absPow34AVX(dst, src []float32)
+
+//go:noescape
 func roundAVX(dst, src []float32)
 
 //go:noescape
@@ -970,6 +994,9 @@ func clampSSE(dst, a []float32, minVal, maxVal float32)
 
 //go:noescape
 func sqrtSSE(dst, a []float32)
+
+//go:noescape
+func absPow34SSE(dst, src []float32)
 
 //go:noescape
 func reciprocalSSE(dst, a []float32)

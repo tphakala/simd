@@ -432,12 +432,58 @@ func DeinterleaveN(dsts [][]float32, src []float32) {
 
 // Sqrt computes element-wise square root: dst[i] = sqrt(a[i]).
 // Processes min(len(dst), len(a)) elements.
+//
+// The result is IEEE-754 correctly-rounded (round-to-nearest, ties to even) on
+// every backend: for each input it returns the float32 nearest the true square
+// root. This holds for VSQRTPS/SQRTPS on amd64 and FSQRT on arm64 (IEEE-754
+// mandates a correctly-rounded sqrt), and for the pure-Go fallback, which
+// computes float32(math.Sqrt(float64(x))). That fallback is a double rounding
+// (the correctly-rounded binary64 sqrt, then narrowed to binary32), yet it is
+// provably identical to the correctly-rounded binary32 sqrt: double rounding
+// through an intermediate format is innocuous for sqrt when the intermediate
+// carries at least 2*p+2 significand bits, and binary64's 53 bits exceed the
+// 2*24+2 = 50 that binary32 (p = 24) requires. All three backends therefore
+// return the same bits, so callers may compose bit-exact higher powers on top of
+// Sqrt (for example [AbsPow34]).
 func Sqrt(dst, a []float32) {
 	n := min(len(dst), len(a))
 	if n == 0 {
 		return
 	}
 	sqrt32(dst[:n], a[:n])
+}
+
+// AbsPow34 computes the element-wise 3/4 power of the magnitude:
+//
+//	dst[i] = |src[i]|^(3/4)
+//
+// evaluated as sqrt(|src[i]| * sqrt(|src[i]|)). Processes min(len(dst), len(src))
+// elements. dst may alias src (each output depends only on the matching input
+// element), so AbsPow34(x, x) computes the transform in place.
+//
+// This is the fused form of the C expression sqrtf(a * sqrtf(a)) with a = |x|,
+// and it is bit-identical to that expression on every backend: abs is exact, the
+// two square roots are IEEE-754 correctly-rounded (see [Sqrt]), and the middle
+// multiply is a single correctly-rounded float32 product. There is no add, so
+// the library's no-FMA contract does not apply. The result is the same bits on
+// VANDPS/VSQRTPS/VMULPS (amd64), FABS/FSQRT/FMUL (arm64), and the pure-Go
+// fallback; there is no relaxed tier.
+//
+// Range behavior is part of the contract, and this is NOT a full-range 3/4
+// power. The intermediate |x| * sqrt(|x|) is computed in float32, so it
+// overflows to +Inf once |x| exceeds about 2^85.33 (for example x = 2^100, whose
+// true |x|^0.75 = 2^75 is representable, still yields +Inf) and underflows to 0
+// for tiny |x| (for example x = 2^-100, true 2^-75, yields 0). This exactly
+// mirrors the C fused form. For an approximate 3/4 power over the whole range
+// without this intermediate saturation, use [Pow] with exp = 0.75. Edge cases:
+// 0 -> 0, +-Inf -> +Inf, NaN -> NaN (the NaN payload bits are not guaranteed
+// identical across backends, matching the rest of f32). It allocates nothing.
+func AbsPow34(dst, src []float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	absPow34_32(dst[:n], src[:n])
 }
 
 // Round rounds each element to the nearest integer, half away from zero:

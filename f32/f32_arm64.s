@@ -1024,6 +1024,53 @@ sqrt32_loop1:
 sqrt32_done:
     RET
 
+// absPow34NEON: dst[i] = |src[i]|^(3/4) = sqrt(|x| * sqrt(|x|)).
+// FABS -> FSQRT -> FMUL -> FSQRT, four lanes per block plus a scalar tail. abs is
+// exact, both sqrts are IEEE-754 correctly-rounded (FSQRT) and the middle product
+// is a single correctly-rounded FMUL, so this is bit-identical to the amd64 and
+// Go paths. The middle product stays in float32, overflowing/underflowing exactly
+// as C's sqrtf(a*sqrtf(a)). The vector float ops are WORD-encoded (Go's arm64
+// assembler has no NEON mnemonics); each WORD's comment is cross-checked against
+// arm64asm by TestArm64WordEncodings.
+//
+// func absPow34NEON(dst, src []float32)
+TEXT ·absPow34NEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R2
+    MOVD src_base+24(FP), R1
+
+    LSR $2, R2, R3
+    CBZ R3, abspow34_scalar
+
+abspow34_loop4:
+    VLD1.P 16(R1), [V0.S4]
+    WORD $0x4EA0F800           // FABS V0.4S, V0.4S
+    WORD $0x6EA1F801           // FSQRT V1.4S, V0.4S
+    WORD $0x6E21DC01           // FMUL V1.4S, V0.4S, V1.4S
+    WORD $0x6EA1F821           // FSQRT V1.4S, V1.4S
+    VST1.P [V1.S4], 16(R0)
+    SUB $1, R3
+    CBNZ R3, abspow34_loop4
+
+abspow34_scalar:
+    AND $3, R2
+    CBZ R2, abspow34_done
+
+abspow34_loop1:
+    FMOVS (R1), F0
+    FABSS F0, F0
+    FSQRTS F0, F1
+    FMULS F0, F1, F1
+    FSQRTS F1, F1
+    FMOVS F1, (R0)
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R2
+    CBNZ R2, abspow34_loop1
+
+abspow34_done:
+    RET
+
 // roundNEON: round-half-away-from-zero using FRINTA (round to nearest, ties to
 // away), which matches math.Round exactly. The float32 analogue of f64's
 // roundNEON.

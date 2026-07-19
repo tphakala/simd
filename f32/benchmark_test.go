@@ -309,6 +309,28 @@ func BenchmarkAbs(b *testing.B) {
 	}
 }
 
+func BenchmarkAbsPow34(b *testing.B) {
+	for _, size := range benchSizes {
+		a, _, _, dst := makeBenchData32(size)
+		// Include negatives; AbsPow34 takes the magnitude before the power.
+		for i := 0; i < len(a); i += 2 {
+			a[i] = -a[i]
+		}
+		b.Run(fmt.Sprintf("SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				AbsPow34(dst, a)
+			}
+			reportThroughput32(b, size*2)
+		})
+		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				absPow34Go(dst, a)
+			}
+			reportThroughput32(b, size*2)
+		})
+	}
+}
+
 func BenchmarkNeg(b *testing.B) {
 	for _, size := range benchSizes {
 		a, _, _, dst := makeBenchData32(size)

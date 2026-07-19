@@ -666,6 +666,54 @@ abs32_done:
     VZEROUPPER
     RET
 
+// func absPow34AVX(dst, src []float32)
+// dst[i] = |src[i]|^(3/4) = sqrt(|x| * sqrt(|x|)). Four single correctly-rounded
+// float32 ops per lane: VANDPS (abs) -> VSQRTPS -> VMULPS -> VSQRTPS. No add, so
+// the no-FMA contract is not in play; the middle product stays in float32 so it
+// overflows/underflows exactly as C's sqrtf(a*sqrtf(a)) does.
+TEXT ·absPow34AVX(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    VMOVUPS absf32mask<>(SB), Y2   // Y2 = abs mask (X2 = low 128 for the tail)
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   abspow34_avx_remainder
+
+abspow34_avx_loop8:
+    VMOVUPS (SI), Y0
+    VANDPS Y0, Y2, Y0          // Y0 = |x|
+    VSQRTPS Y0, Y1            // Y1 = sqrt(|x|)
+    VMULPS Y0, Y1, Y1        // Y1 = |x| * sqrt(|x|)
+    VSQRTPS Y1, Y1          // Y1 = sqrt(|x| * sqrt(|x|))
+    VMOVUPS Y1, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  abspow34_avx_loop8
+
+abspow34_avx_remainder:
+    ANDQ $7, CX
+    JZ   abspow34_avx_done
+
+abspow34_avx_scalar:
+    VMOVSS (SI), X0
+    VANDPS X0, X2, X0
+    VSQRTSS X0, X0, X1
+    VMULSS X0, X1, X1
+    VSQRTSS X1, X1, X1
+    VMOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  abspow34_avx_scalar
+
+abspow34_avx_done:
+    VZEROUPPER
+    RET
+
 // func negAVX(dst, a []float32)
 TEXT ·negAVX(SB), NOSPLIT, $0-48
     MOVQ dst_base+0(FP), DX
@@ -1981,6 +2029,51 @@ abs32_sse_scalar:
     JNZ  abs32_sse_scalar
 
 abs32_sse_done:
+    RET
+
+// func absPow34SSE(dst, src []float32)
+// SSE2 form of AbsPow34: ANDPS (abs) -> SQRTPS -> MULPS -> SQRTPS, 4 lanes per
+// block plus a scalar tail. Bit-identical to absPow34AVX and absPow34Go.
+TEXT ·absPow34SSE(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    MOVUPS absf32mask<>(SB), X2
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   abspow34_sse_remainder
+
+abspow34_sse_loop4:
+    MOVUPS (SI), X0
+    ANDPS X2, X0             // X0 = |x|
+    SQRTPS X0, X1           // X1 = sqrt(|x|)
+    MULPS X0, X1           // X1 = |x| * sqrt(|x|)
+    SQRTPS X1, X1         // X1 = sqrt(|x| * sqrt(|x|))
+    MOVUPS X1, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ  abspow34_sse_loop4
+
+abspow34_sse_remainder:
+    ANDQ $3, CX
+    JZ   abspow34_sse_done
+
+abspow34_sse_scalar:
+    MOVSS (SI), X0
+    ANDPS X2, X0
+    SQRTSS X0, X1
+    MULSS X0, X1
+    SQRTSS X1, X1
+    MOVSS X1, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  abspow34_sse_scalar
+
+abspow34_sse_done:
     RET
 
 // func negSSE(dst, a []float32)
