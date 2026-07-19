@@ -16,6 +16,7 @@ func max32(a []float32) float32                        { return maxGo(a) }
 func maxAbs32(a []float32) float32                     { return maxAbsGo(a) }
 func abs32(dst, a []float32)                           { absGo(dst, a) }
 func neg32(dst, a []float32)                           { negGo(dst, a) }
+func copySign32(dst, mag, sign []float32)              { copySign32Go(dst, mag, sign) }
 func fma32(dst, a, b, c []float32)                     { fmaGo(dst, a, b, c) }
 func clamp32(dst, a []float32, minVal, maxVal float32) { clampGo(dst, a, minVal, maxVal) }
 func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {

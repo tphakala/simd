@@ -112,6 +112,14 @@ func neg32(dst, a []float32) {
 	negGo(dst, a)
 }
 
+func copySign32(dst, mag, sign []float32) {
+	if hasNEON && len(dst) >= 4 {
+		copySignNEON(dst, mag, sign)
+		return
+	}
+	copySign32Go(dst, mag, sign)
+}
+
 func subFromScalar32(dst, a []float32, s float32) {
 	// Compose using already-dispatched primitives: (s - a) == (-a) + s.
 	// neg32 and addScalar each gate on hasNEON internally and fall back to pure
@@ -376,6 +384,9 @@ func absNEON(dst, a []float32)
 
 //go:noescape
 func negNEON(dst, a []float32)
+
+//go:noescape
+func copySignNEON(dst, mag, sign []float32)
 
 //go:noescape
 func fmaNEON(dst, a, b, c []float32)

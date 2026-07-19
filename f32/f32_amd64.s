@@ -752,6 +752,59 @@ neg32_done:
     VZEROUPPER
     RET
 
+// func copySignAVX(dst, mag, sign []float32)
+// dst[i] = |mag[i]| carrying sign[i]'s sign bit. Pure bit manipulation:
+// VANDPS absf32mask clears mag's sign bit (|mag|), VANDPS roundf32_signmask
+// isolates sign's sign bit, and VORPS combines them. No rounding, so bit-
+// identical to copySignSSE, copySignNEON, and copySign32Go. Reuses the shared
+// abs/sign RODATA masks; 8 lanes per block plus a scalar tail.
+TEXT ·copySignAVX(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ mag_base+24(FP), SI
+    MOVQ sign_base+48(FP), DI
+
+    VMOVUPS absf32mask<>(SB), Y2       // Y2 = 0x7fffffff x8 (X2 = low 128 for the tail)
+    VMOVUPS roundf32_signmask<>(SB), Y3   // Y3 = 0x80000000 x8 (X3 = low 128 for the tail)
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   copysign_avx_remainder
+
+copysign_avx_loop8:
+    VMOVUPS (SI), Y0
+    VMOVUPS (DI), Y1
+    VANDPS Y0, Y2, Y0          // Y0 = |mag|
+    VANDPS Y1, Y3, Y1          // Y1 = sign & sign bit
+    VORPS Y0, Y1, Y0           // Y0 = |mag| carrying sign's sign bit
+    VMOVUPS Y0, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  copysign_avx_loop8
+
+copysign_avx_remainder:
+    ANDQ $7, CX
+    JZ   copysign_avx_done
+
+copysign_avx_scalar:
+    VMOVSS (SI), X0
+    VMOVSS (DI), X1
+    VANDPS X0, X2, X0
+    VANDPS X1, X3, X1
+    VORPS X0, X1, X0
+    VMOVSS X0, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  copysign_avx_scalar
+
+copysign_avx_done:
+    VZEROUPPER
+    RET
+
 // func fmaAVX(dst, a, b, c []float32)
 TEXT ·fmaAVX(SB), NOSPLIT, $0-96
     MOVQ dst_base+0(FP), DX
@@ -2113,6 +2166,56 @@ neg32_sse_scalar:
     JNZ  neg32_sse_scalar
 
 neg32_sse_done:
+    RET
+
+// func copySignSSE(dst, mag, sign []float32)
+// SSE2 form of CopySign: ANDPS absf32mask (|mag|), ANDPS roundf32_signmask
+// (sign's sign bit), ORPS to combine. 4 lanes per block plus a scalar tail.
+// Bit-identical to copySignAVX, copySignNEON, and copySign32Go.
+TEXT ·copySignSSE(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ mag_base+24(FP), SI
+    MOVQ sign_base+48(FP), DI
+
+    MOVUPS absf32mask<>(SB), X2
+    MOVUPS roundf32_signmask<>(SB), X3
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   copysign_sse_remainder
+
+copysign_sse_loop4:
+    MOVUPS (SI), X0
+    MOVUPS (DI), X1
+    ANDPS X2, X0             // X0 = |mag|
+    ANDPS X3, X1             // X1 = sign & sign bit
+    ORPS X1, X0              // X0 = |mag| carrying sign's sign bit
+    MOVUPS X0, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ  copysign_sse_loop4
+
+copysign_sse_remainder:
+    ANDQ $3, CX
+    JZ   copysign_sse_done
+
+copysign_sse_scalar:
+    MOVSS (SI), X0
+    MOVSS (DI), X1
+    ANDPS X2, X0
+    ANDPS X3, X1
+    ORPS X1, X0
+    MOVSS X0, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  copysign_sse_scalar
+
+copysign_sse_done:
     RET
 
 // func fmaSSE(dst, a, b, c []float32)

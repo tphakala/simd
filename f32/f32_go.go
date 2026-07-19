@@ -183,6 +183,24 @@ func negGo(dst, a []float32) {
 	}
 }
 
+// copySign32Go is the pure-Go reference for CopySign: dst[i] carries |mag[i]|
+// with the sign bit of sign[i]. It is the exact IEEE copysign bit formula (clear
+// mag's sign bit, OR in sign's sign bit), so it matches math.Copysign and the
+// SIMD kernels bit-for-bit, including NaN payloads and signed zeros. mag and
+// sign are indexed independently, so dst may alias either.
+func copySign32Go(dst, mag, sign []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = mag[len(dst)-1]
+	_ = sign[len(dst)-1]
+	for i := range dst {
+		m := math.Float32bits(mag[i]) &^ (1 << float32SignBitPos)
+		s := math.Float32bits(sign[i]) & (1 << float32SignBitPos)
+		dst[i] = math.Float32frombits(m | s)
+	}
+}
+
 func fmaGo(dst, a, b, c []float32) {
 	if len(dst) == 0 {
 		return
