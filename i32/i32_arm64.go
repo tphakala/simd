@@ -84,6 +84,23 @@ func sumNEON(a []int32) int32
 //go:noescape
 func absNEON(dst, a []int32)
 
+// minNEONNegWhereNeg is one 4-wide (.4S) block, an independent literal like the
+// tier-3 thresholds above. The kernel is correct at any length (it falls through
+// to a scalar tail), so this is a performance cut only, never a safety
+// requirement.
+const minNEONNegWhereNeg = 4
+
+func negWhereNegI32(dst, mag []int32, sign []float32) {
+	if hasNEON && len(dst) >= minNEONNegWhereNeg {
+		negWhereNegNEON(dst, mag, sign)
+		return
+	}
+	negWhereNegGo(dst, mag, sign)
+}
+
+//go:noescape
+func negWhereNegNEON(dst, mag []int32, sign []float32)
+
 // minMaxI32 dispatches the signed int32 min/max reduction. The NEON kernel does
 // the reduction in 4-wide SMIN/SMAX lanes with a single-instruction SMINV/SMAXV
 // across-vector fold and a scalar tail, so it gates on NEON and at least one full

@@ -298,3 +298,49 @@ abs_neon_scalar:
 
 abs_neon_done:
     RET
+
+// func negWhereNegNEON(dst, mag []int32, sign []float32)
+// Branchless conditional negate, 4 lanes per iteration. SSHR V1.4S,#31 broadcasts
+// each sign lane's IEEE-754 sign bit to a full-width int32 mask m (all-ones iff
+// the sign bit is set, so -0.0/-Inf/-NaN negate); EOR then SUB apply (mag ^ m) -
+// m, which is -mag when m = -1 (MinInt32 wraps to itself) and mag when m = 0.
+// Bit-identical to negWhereNegGo. The scalar tail does the same in 64-bit GPRs:
+// ASR $31 of the sign-extended sign word yields m = 0 or -1, and the MOVW store
+// keeps the low 32 bits so -MinInt32 wraps back to MinInt32. The SSHR/EOR/SUB
+// WORDs are cross-checked against arm64asm by TestArm64WordEncodings. Frame is 3
+// slice headers: dst+0, mag+24, sign+48.
+TEXT ·negWhereNegNEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD mag_base+24(FP), R1
+    MOVD sign_base+48(FP), R2
+
+    LSR  $2, R3, R4            // R4 = n / 4
+    CBZ  R4, negwhereneg_neon_remainder
+
+negwhereneg_neon_loop4:
+    VLD1.P 16(R2), [V1.S4]     // sign
+    WORD $0x4F210421           // SSHR V1.4S, V1.4S, #31   -> mask m
+    VLD1.P 16(R1), [V0.S4]     // mag
+    WORD $0x6E211C00           // EOR V0.16B, V0.16B, V1.16B  -> mag ^ m
+    WORD $0x6EA18400           // SUB V0.4S, V0.4S, V1.4S     -> (mag ^ m) - m
+    VST1.P [V0.S4], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, negwhereneg_neon_loop4
+
+negwhereneg_neon_remainder:
+    AND  $3, R3
+    CBZ  R3, negwhereneg_neon_done
+
+negwhereneg_neon_scalar:
+    MOVW.P 4(R2), R6           // sign bits, sign-extended
+    ASR  $31, R6, R6           // m = sign >> 31 = 0 or -1
+    MOVW.P 4(R1), R5           // mag, sign-extended
+    EOR  R6, R5, R5            // mag ^ m
+    SUB  R6, R5, R5            // (mag ^ m) - m
+    MOVW.P R5, 4(R0)           // low 32 bits: -MinInt32 wraps to MinInt32
+    SUB  $1, R3
+    CBNZ R3, negwhereneg_neon_scalar
+
+negwhereneg_neon_done:
+    RET
