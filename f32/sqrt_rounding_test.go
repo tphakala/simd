@@ -45,17 +45,19 @@ func sqrtCorrectOracle(x float32) float32 {
 }
 
 // sqrtSweepInputs builds the representative input sweep from the design: specials
-// (0, -0, +Inf, NaN), perfect squares, all powers of two and four, a dense
-// contiguous band of float32 bit patterns around 1.0, a full-range exponent
-// sweep, subnormals, constructed near-midpoint targets, and random draws across
-// the whole positive range. Exhaustive portions shrink under -short.
+// (0, -0, +Inf, NaN), small integers and half-integers, all powers of two and
+// four, a dense contiguous band of float32 bit patterns around 1.0, a full-range
+// exponent sweep, subnormals, constructed near-midpoint targets, and random draws
+// across the whole positive range. Exhaustive portions shrink under -short.
 func sqrtSweepInputs(short bool) []float32 {
 	in := make([]float32, 0, 1<<21)
 
-	// Specials and small perfect squares (exact roots).
+	// Specials, then every small integer and half-integer up to 2048. The perfect
+	// squares among them have exact roots; the rest have irrational roots that
+	// exercise the rounding decision.
 	in = append(in, 0, float32(math.Copysign(0, -1)), float32(math.Inf(1)), float32(math.NaN()))
 	for k := 0; k <= 2048; k++ {
-		in = append(in, float32(k), float32(k)*0.5) // perfect squares and half-integers
+		in = append(in, float32(k), float32(k)*0.5) // all integers and half-integers 0..2048
 	}
 
 	// All powers of two (even exponents are also the powers of four): exact roots
