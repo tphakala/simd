@@ -183,8 +183,9 @@ func scaleQ15Go(dst, a []int32, k int16) {
 // firValidQ15Shift is the Q15 fixed-point position of each tap product: the
 // 64-bit int64(taps[j])*int64(x[i+j]) is arithmetically shifted right by 15 to
 // land the Q15 fractional scale back in int32 range, per product, before it is
-// accumulated (MULT16_32_Q15, a truncating shift with no rounding constant).
-const firValidQ15Shift = 15
+// accumulated (MULT16_32_Q15, a truncating shift with no rounding constant). It
+// is tied to scaleQ15Shift so the two Q15 kernels cannot drift out of lockstep.
+const firValidQ15Shift = scaleQ15Shift
 
 // firValidQ15Go writes the int32 valid convolution in correlation orientation
 // that is FIRValidQ15's source of truth:
