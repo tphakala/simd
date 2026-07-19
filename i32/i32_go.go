@@ -179,3 +179,47 @@ func scaleQ15Go(dst, a []int32, k int16) {
 		dst[i] = int32(int64(k) * int64(a[i]) >> scaleQ15Shift)
 	}
 }
+
+// firValidQ15Shift is the Q15 fixed-point position of each tap product: the
+// 64-bit int64(taps[j])*int64(x[i+j]) is arithmetically shifted right by 15 to
+// land the Q15 fractional scale back in int32 range, per product, before it is
+// accumulated (MULT16_32_Q15, a truncating shift with no rounding constant). It
+// is tied to scaleQ15Shift so the two Q15 kernels cannot drift out of lockstep.
+const firValidQ15Shift = scaleQ15Shift
+
+// firValidQ15Go writes the int32 valid convolution in correlation orientation
+// that is FIRValidQ15's source of truth:
+//
+//	dst[i] = sum_j int32(int64(taps[j]) * int64(x[i+j]) >> 15)
+//
+// for i in [0, n), n = min(len(dst), len(x)-len(taps)+1). Each tap product is
+// Q15-truncated (an arithmetic right shift, no rounding) BEFORE it is added, and
+// the accumulator is two's-complement wrapping int32, matching MULT16_32_Q15 and
+// a wrapping accumulate exactly. The product |taps[j] * x[i+j]| <= 2^15 * 2^31 =
+// 2^46 stays inside int64; only the per-product int32() cast and the running add
+// wrap. The public FIRValidQ15 applies the empty-taps / short-x guard and clamps
+// dst, but this function is self-guarding (it recomputes the safe output count),
+// so a direct fallback call cannot read x out of range. dst must not overlap x.
+func firValidQ15Go(dst, x []int32, taps []int16) {
+	if len(taps) == 0 || len(x) < len(taps) {
+		return
+	}
+	outLen := len(x) - len(taps) + 1
+	n := min(len(dst), outLen)
+	if n == 0 {
+		return
+	}
+	kl := len(taps)
+	for i := range n {
+		// One slice bound per output instead of a per-element x[i+j] check:
+		// i+kl <= (n-1)+kl <= len(x) because n <= len(x)-kl+1, so w has length kl
+		// and w[j] is provably in range for every j in [0, kl).
+		w := x[i : i+kl]
+		var acc int32 // wrapping int32 accumulator
+		for j := range taps {
+			p := int32(int64(taps[j]) * int64(w[j]) >> firValidQ15Shift)
+			acc += p // two's-complement wrapping add
+		}
+		dst[i] = acc
+	}
+}

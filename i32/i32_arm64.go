@@ -181,3 +181,22 @@ func maxAbsI32(a []int32) int32 {
 
 //go:noescape
 func maxAbsNEON(a []int32) int32
+
+// minNEONFIR is one 4-wide (.4S) output block: FIRValidQ15's NEON kernel
+// vectorizes over 4 outputs per iteration with a scalar-output tail, so it gates
+// on NEON and at least one full 4-output block; shorter outputs use the pure-Go
+// reference. The kernel is correct at any output length via the scalar-output
+// tail, so this is a performance cut only, never a safety requirement. len(dst)
+// here is already the clamped output count n from the public FIRValidQ15.
+const minNEONFIR = 4
+
+func firValidQ15I32(dst, x []int32, taps []int16) {
+	if hasNEON && len(dst) >= minNEONFIR {
+		firValidQ15NEON(dst, x, taps)
+		return
+	}
+	firValidQ15Go(dst, x, taps)
+}
+
+//go:noescape
+func firValidQ15NEON(dst, x []int32, taps []int16)

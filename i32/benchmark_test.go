@@ -280,3 +280,30 @@ func BenchmarkMaxAbs_1003(b *testing.B) { benchmarkMaxAbs(b, 1003, MaxAbs) }
 func BenchmarkMaxAbsGo_25(b *testing.B)   { benchmarkMaxAbs(b, 25, maxAbsGo) }
 func BenchmarkMaxAbsGo_1000(b *testing.B) { benchmarkMaxAbs(b, 1000, maxAbsGo) }
 func BenchmarkMaxAbsGo_1003(b *testing.B) { benchmarkMaxAbs(b, 1003, maxAbsGo) }
+
+// FIRValidQ15 is a sliding valid convolution: each of the outLen = n - kl + 1
+// outputs runs the full kl-tap inner loop, so cost scales with outLen*kl. The
+// 5-tap case is combFilterConst; the 16-tap case stresses a longer kernel.
+// SetBytes counts the outputs written, 4 bytes per int32.
+func benchmarkFIRValidQ15(b *testing.B, kl int, fn func(dst, x []int32, taps []int16)) {
+	b.Helper()
+	x := make([]int32, benchN)
+	taps := make([]int16, kl)
+	for i := range x {
+		x[i] = int32(i*7 - 3000)
+	}
+	for i := range taps {
+		taps[i] = int16(i*11 - 3)
+	}
+	dst := make([]int32, benchN-kl+1)
+	b.SetBytes(int64(benchN-kl+1) * 4)
+	for b.Loop() {
+		fn(dst, x, taps)
+	}
+}
+
+func BenchmarkFIRValidQ15_5(b *testing.B)  { benchmarkFIRValidQ15(b, 5, FIRValidQ15) }
+func BenchmarkFIRValidQ15_16(b *testing.B) { benchmarkFIRValidQ15(b, 16, FIRValidQ15) }
+
+func BenchmarkFIRValidQ15Go_5(b *testing.B)  { benchmarkFIRValidQ15(b, 5, firValidQ15Go) }
+func BenchmarkFIRValidQ15Go_16(b *testing.B) { benchmarkFIRValidQ15(b, 16, firValidQ15Go) }

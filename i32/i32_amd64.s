@@ -687,3 +687,87 @@ maxabs_ret_max:
     MOVL DX, ret+24(FP)
     VZEROUPPER
     RET
+
+// func firValidQ15AVX2(dst, x []int32, taps []int16)
+// int32 valid convolution in correlation orientation with int16 Q15 taps,
+// vectorized over the OUTPUT index: 8 outputs per iteration. For output block i
+// the accumulator Y2 starts at zero and, for each tap j, loads the sliding window
+// x[i+j .. i+j+7] (one unaligned VMOVDQU that supplies the tap-j contribution for
+// all 8 outputs at once, since output i+k reads lane k of the window), broadcasts
+// taps[j] sign-extended to int32, forms the 8 Q15-TRUNCATED products with the
+// exact scaleQ15AVX2 recombine (VPMULDQ even + VPSRLQ $32 slide + VPMULDQ odd,
+// each VPSRLQ $15 to keep the low 32 = arithmetic-shift result, VPSLLQ $32 +
+// VPBLENDD $0xAA to reassemble), and VPADDD-accumulates them (wrapping int32). The
+// window pointer BX slides by 4 bytes per tap; the taps pointer R10 by 2. After
+// all taps the 8 outputs are stored. The scalar-output tail runs the full inner
+// tap loop per remaining output (MOVLQSX/MOVWQSX, IMULQ, SARQ $15, ADDL), so the
+// per-product truncation is preserved and the result is bit-exact with
+// firValidQ15Go. The dispatch gates n = len(dst) >= 8, and the kernel reads x only
+// up to index n-1+len(taps)-1 <= len(x)-1, so there is no over-read. dst must not
+// overlap x. Frame is dst+x+taps slice headers: dst+0, x+24, taps+48.
+TEXT ·firValidQ15AVX2(SB), NOSPLIT, $0-72
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX        // n = number of outputs
+    MOVQ x_base+24(FP), SI        // x base = window base for output block 0
+    MOVQ taps_base+48(FP), DI     // taps base (constant)
+    MOVQ taps_len+56(FP), R8      // number of taps (>=1)
+
+    MOVQ CX, R9
+    SHRQ $3, R9                   // R9 = n / 8 = full 8-output blocks
+    JZ   fir_avx2_tail
+
+fir_avx2_block:
+    VPXOR Y2, Y2, Y2             // acc = 0
+    MOVQ  SI, BX                 // BX = window pointer = block base
+    MOVQ  DI, R10                // R10 = taps pointer
+    MOVQ  R8, R11                // R11 = tap counter
+fir_avx2_tap:
+    MOVWQSX (R10), AX           // AX = int64(taps[j]), sign-extended int16
+    VMOVD   AX, X3
+    VPBROADCASTD X3, Y3          // taps[j] in all 8 int32 lanes
+    VMOVDQU  (BX), Y0            // window x[i+j .. i+j+7]
+    VPMULDQ  Y3, Y0, Y4          // even-lane products (4x int64)
+    VPSRLQ   $32, Y0, Y1         // slide odd lanes into even positions
+    VPMULDQ  Y3, Y1, Y5          // odd-lane products (4x int64)
+    VPSRLQ   $15, Y4, Y4         // low 32 of each = even result lanes
+    VPSRLQ   $15, Y5, Y5         // low 32 of each = odd result lanes
+    VPSLLQ   $32, Y5, Y5         // lift odd results to positions 1,3,5,7
+    VPBLENDD $0xAA, Y5, Y4, Y6   // merge: 1,3,5,7 <- Y5 (odd), 0,2,4,6 <- Y4 (even)
+    VPADDD   Y6, Y2, Y2          // acc += 8 Q15-truncated products (wrapping)
+    ADDQ  $4, BX                 // slide window by 1 int32
+    ADDQ  $2, R10                // next tap (int16)
+    DECQ  R11
+    JNZ   fir_avx2_tap
+    VMOVDQU Y2, (DX)             // store 8 outputs
+    ADDQ  $32, SI                // next block window base
+    ADDQ  $32, DX                // next dst block
+    DECQ  R9
+    JNZ   fir_avx2_block
+
+fir_avx2_tail:
+    ANDQ $7, CX                  // CX = n mod 8 = scalar-output tail count
+    JZ   fir_avx2_done
+fir_avx2_tail_out:
+    XORL R11, R11               // acc32 = 0
+    MOVQ SI, BX                 // BX = window pointer for this output
+    MOVQ DI, R10                // R10 = taps pointer
+    MOVQ R8, R12                // R12 = tap counter
+fir_avx2_tail_tap:
+    MOVWQSX (R10), AX          // int64(taps[j])
+    MOVLQSX (BX), R13          // int64(x[i+j])
+    IMULQ   R13, AX            // taps[j] * x[i+j] (|p| <= 2^46)
+    SARQ    $15, AX            // Q15 truncating arithmetic shift
+    ADDL    AX, R11            // acc32 += low 32 (wrapping)
+    ADDQ    $4, BX             // slide window by 1 int32
+    ADDQ    $2, R10            // next tap
+    DECQ    R12
+    JNZ     fir_avx2_tail_tap
+    MOVL    R11, (DX)          // store output
+    ADDQ    $4, SI             // next output window base
+    ADDQ    $4, DX             // next dst
+    DECQ    CX
+    JNZ     fir_avx2_tail_out
+
+fir_avx2_done:
+    VZEROUPPER
+    RET

@@ -546,3 +546,79 @@ maxabs_neon_combine:
     CSEL GE, R6, R7, R0             // R0 = max(R6, R7) = max(maxVal, -minVal)
     MOVW R0, ret+24(FP)
     RET
+
+// func firValidQ15NEON(dst, x []int32, taps []int16)
+// int32 valid convolution in correlation orientation with int16 Q15 taps,
+// vectorized over the OUTPUT index: 4 outputs per iteration. For output block i
+// the accumulator V16 starts at zero and, for each tap j, loads the sliding window
+// x[i+j .. i+j+3] (one VLD1 that supplies the tap-j contribution for all 4 outputs
+// at once, since output i+k reads lane k of the window), broadcasts taps[j] (DUP
+// from W2, sign-extended by MOVH), forms the 4 Q15-TRUNCATED products with the
+// exact scaleQ15NEON widen-shift-narrow (SMULL/SMULL2 to int64, SSHR .2D #15,
+// XTN/XTN2 to the low 32 bits), and ADD .4S-accumulates them (wrapping int32). The
+// window pointer R7 slides by 4 bytes per tap; the taps pointer R8 by 2. After all
+// taps the 4 outputs are stored. The scalar-output tail runs the full inner tap
+// loop per remaining output (MOVH/MOVW sign-extend, MUL, ASR #15, ADDW), so the
+// per-product truncation is preserved and the result is bit-exact with
+// firValidQ15Go. All SMULL/SMULL2/SSHR/XTN/XTN2/DUP WORDs are the scaleQ15NEON
+// encodings verbatim (cross-checked by TestArm64WordEncodings). The dispatch gates
+// n = len(dst) >= 4, and the kernel reads x only up to index n-1+len(taps)-1 <=
+// len(x)-1, so there is no over-read. dst must not overlap x. Frame is dst+x+taps
+// slice headers: dst+0, x+24, taps+48.
+TEXT ·firValidQ15NEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3         // n = number of outputs
+    MOVD x_base+24(FP), R1         // x base = window base for output block 0
+    MOVD taps_base+48(FP), R6      // taps base (constant)
+    MOVD taps_len+56(FP), R5       // number of taps (>=1)
+
+    LSR  $2, R3, R4               // R4 = n / 4 = full 4-output blocks
+    CBZ  R4, fir_neon_tail
+
+fir_neon_block:
+    VEOR V16.B16, V16.B16, V16.B16 // acc = 0
+    MOVD R1, R7                    // R7 = window pointer = block base
+    MOVD R6, R8                    // R8 = taps pointer
+    MOVD R5, R9                    // R9 = tap counter
+fir_neon_tap:
+    MOVH.P 2(R8), R2             // R2 = taps[j], sign-extended int16 (W2 for DUP)
+    WORD $0x4E040C41            // DUP V1.4S, W2   (taps[j] in all 4 int32 lanes)
+    VLD1 (R7), [V0.S4]          // window x[i+j .. i+j+3]
+    ADD  $4, R7                  // slide window by 1 int32
+    WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
+    WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
+    WORD $0x4F710442           // SSHR V2.2D, V2.2D, #15
+    WORD $0x4F710463           // SSHR V3.2D, V3.2D, #15
+    WORD $0x0EA12844           // XTN V4.2S, V2.2D   (low 32 of results 0,1)
+    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    VADD V4.S4, V16.S4, V16.S4  // acc += 4 Q15-truncated products (wrapping)
+    SUB  $1, R9
+    CBNZ R9, fir_neon_tap
+    VST1.P [V16.S4], 16(R0)      // store 4 outputs
+    ADD  $16, R1                 // next block window base
+    SUB  $1, R4
+    CBNZ R4, fir_neon_block
+
+fir_neon_tail:
+    AND  $3, R3, R4              // R4 = n mod 4 = scalar-output tail count
+    CBZ  R4, fir_neon_done
+fir_neon_tail_out:
+    MOVD $0, R11                // acc32 = 0
+    MOVD R1, R7                 // R7 = window pointer for this output
+    MOVD R6, R8                 // R8 = taps pointer
+    MOVD R5, R9                 // R9 = tap counter
+fir_neon_tail_tap:
+    MOVH.P 2(R8), R10          // R10 = int64(taps[j]), sign-extended
+    MOVW.P 4(R7), R12          // R12 = int64(x[i+j]), sign-extended
+    MUL  R10, R12, R12         // taps[j] * x[i+j] (|p| <= 2^46)
+    ASR  $15, R12, R12         // Q15 truncating arithmetic shift
+    ADDW R12, R11, R11         // acc32 += low 32 (wrapping)
+    SUB  $1, R9
+    CBNZ R9, fir_neon_tail_tap
+    MOVW.P R11, 4(R0)          // store output
+    ADD  $4, R1                // next output window base
+    SUB  $1, R4
+    CBNZ R4, fir_neon_tail_out
+
+fir_neon_done:
+    RET
