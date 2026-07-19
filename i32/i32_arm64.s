@@ -344,3 +344,99 @@ negwhereneg_neon_scalar:
 
 negwhereneg_neon_done:
     RET
+
+// Fixed-point scale-by-scalar kernels (NEON / ASIMD).
+//
+// Unlike AVX2, NEON has a native 64-bit ARITHMETIC shift (SSHR .2D), so the Q31/
+// Q15 scale is a clean widen-shift-narrow: SMULL/SMULL2 multiply the int32 lanes
+// by the broadcast coefficient into int64 products (Q=0 takes lanes 0,1; Q=1 the
+// SMULL2 form takes lanes 2,3), SSHR .2D arithmetically shifts each 64-bit product
+// right by the fixed-point position, and XTN/XTN2 narrow the low 32 bits of each
+// int64 back to int32 (truncation = the int32() wrap, so a=k=MinInt32's 2^62 >> 31
+// = 2^31 lands as MinInt32). k is broadcast with DUP from a W register: MOVW
+// sign-extends the int32 for Q31, MOVH the int16 for Q15, and both leave int64(k)
+// in the register for the scalar tail (MUL then ASR then a MOVW store that keeps
+// the low 32 bits). dst may alias a exactly: each block/lane reads a before it
+// stores dst. SMULL/SMULL2/SSHR/XTN/XTN2/DUP have no Go assembler mnemonic and are
+// hand-encoded WORD directives with the decoded form in the trailing comment
+// (cross-checked against arm64asm by TestArm64WordEncodings). Frame is two slice
+// headers plus the scalar k: dst+0, a+24, k+48.
+
+// func scaleQ31NEON(dst, a []int32, k int32)
+TEXT ·scaleQ31NEON(SB), NOSPLIT, $0-52
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVW k+48(FP), R2          // R2 = int64(k), sign-extended int32 (also tail k)
+    WORD $0x4E040C41           // DUP V1.4S, W2   (k in all 4 int32 lanes)
+
+    LSR  $2, R3, R4            // R4 = n / 4
+    CBZ  R4, scaleq31_neon_remainder
+
+scaleq31_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]     // a[i..i+3]
+    WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
+    WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
+    WORD $0x4F610442           // SSHR V2.2D, V2.2D, #31
+    WORD $0x4F610463           // SSHR V3.2D, V3.2D, #31
+    WORD $0x0EA12844           // XTN V4.2S, V2.2D   (low 32 of results 0,1)
+    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    VST1.P [V4.S4], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, scaleq31_neon_loop4
+
+scaleq31_neon_remainder:
+    AND  $3, R3
+    CBZ  R3, scaleq31_neon_done
+
+scaleq31_neon_scalar:
+    MOVW.P 4(R1), R5           // a[i], sign-extended to 64-bit
+    MUL  R2, R5, R5            // a[i] * k (64-bit, |p| <= 2^62)
+    ASR  $31, R5, R5           // arithmetic shift right 31
+    MOVW.P R5, 4(R0)           // low 32 bits: wraps like int32()
+    SUB  $1, R3
+    CBNZ R3, scaleq31_neon_scalar
+
+scaleq31_neon_done:
+    RET
+
+// func scaleQ15NEON(dst, a []int32, k int16)
+// Identical widen-shift-narrow to scaleQ31NEON with a shift of 15. k is a signed
+// int16, sign-extended by MOVH to int64(k); |k * a[i]| <= 2^46, well inside the
+// int64 product.
+TEXT ·scaleQ15NEON(SB), NOSPLIT, $0-50
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVH k+48(FP), R2          // R2 = int64(k), sign-extended int16 (also tail k)
+    WORD $0x4E040C41           // DUP V1.4S, W2   (k in all 4 int32 lanes)
+
+    LSR  $2, R3, R4            // R4 = n / 4
+    CBZ  R4, scaleq15_neon_remainder
+
+scaleq15_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]     // a[i..i+3]
+    WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
+    WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
+    WORD $0x4F710442           // SSHR V2.2D, V2.2D, #15
+    WORD $0x4F710463           // SSHR V3.2D, V3.2D, #15
+    WORD $0x0EA12844           // XTN V4.2S, V2.2D   (low 32 of results 0,1)
+    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    VST1.P [V4.S4], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, scaleq15_neon_loop4
+
+scaleq15_neon_remainder:
+    AND  $3, R3
+    CBZ  R3, scaleq15_neon_done
+
+scaleq15_neon_scalar:
+    MOVW.P 4(R1), R5           // a[i], sign-extended to 64-bit
+    MUL  R2, R5, R5            // k * a[i] (64-bit, |p| <= 2^46)
+    ASR  $15, R5, R5           // arithmetic shift right 15
+    MOVW.P R5, 4(R0)           // low 32 bits: wraps like int32()
+    SUB  $1, R3
+    CBNZ R3, scaleq15_neon_scalar
+
+scaleq15_neon_done:
+    RET

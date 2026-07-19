@@ -115,6 +115,38 @@ func negWhereNegI32(dst, mag []int32, sign []float32) {
 //go:noescape
 func negWhereNegAVX2(dst, mag []int32, sign []float32)
 
+// minAVX2ScaleQ31 and minAVX2ScaleQ15 are one 8-wide (256-bit) block each,
+// independent literals like the tier-3 thresholds above. Both kernels are correct
+// at any length (each falls through to a scalar tail), so these are performance
+// cuts only, never a safety requirement. They gate on AVX2 because VPMULDQ/VPSRLQ/
+// VPSLLQ/VPBLENDD are 256-bit integer ops.
+const (
+	minAVX2ScaleQ31 = 8
+	minAVX2ScaleQ15 = 8
+)
+
+func scaleQ31I32(dst, a []int32, k int32) {
+	if hasAVX2 && len(dst) >= minAVX2ScaleQ31 {
+		scaleQ31AVX2(dst, a, k)
+		return
+	}
+	scaleQ31Go(dst, a, k)
+}
+
+func scaleQ15I32(dst, a []int32, k int16) {
+	if hasAVX2 && len(dst) >= minAVX2ScaleQ15 {
+		scaleQ15AVX2(dst, a, k)
+		return
+	}
+	scaleQ15Go(dst, a, k)
+}
+
+//go:noescape
+func scaleQ31AVX2(dst, a []int32, k int32)
+
+//go:noescape
+func scaleQ15AVX2(dst, a []int32, k int16)
+
 // minMaxI32 dispatches the signed int32 min/max reduction. The AVX2 kernel does
 // the reduction in 8-wide VPMINSD/VPMAXSD lanes with a scalar tail, so it gates
 // on AVX2 and at least one full 8-element block; shorter slices use the pure-Go
