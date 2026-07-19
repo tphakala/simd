@@ -424,6 +424,26 @@ func sqrt32Go(dst, a []float32) {
 	}
 }
 
+// absPow34Go is the pure-Go reference for AbsPow34: dst[i] = |src[i]|^(3/4),
+// evaluated as sqrt(|x| * sqrt(|x|)) with every step at float32 precision so it
+// matches the SIMD kernels bit-for-bit. The middle multiply MUST stay in float32
+// (p := ax * s, both operands float32): widening it to float64 would suppress the
+// intermediate overflow to +Inf (for |x| >~ 2^85.33) and underflow to 0 (tiny
+// |x|) that are part of the AbsPow34 contract, mirroring C's sqrtf(a*sqrtf(a)).
+// See the AbsPow34 doc comment.
+func absPow34Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
+	for i := range dst {
+		ax := math.Float32frombits(math.Float32bits(src[i]) &^ (1 << float32SignBitPos))
+		s := float32(math.Sqrt(float64(ax)))
+		p := ax * s // genuine float32 product: overflows to +Inf / underflows to 0
+		dst[i] = float32(math.Sqrt(float64(p)))
+	}
+}
+
 // round32Go rounds each element to the nearest integer, half away from zero,
 // matching math.Round. This is the trusted reference and the path that runs on
 // architectures without SIMD.

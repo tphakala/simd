@@ -44,6 +44,7 @@ func deinterleaveN32(dsts [][]float32, src []float32, n int) {
 	deinterleaveNGo(dsts, src, n)
 }
 func sqrt32(dst, a []float32)                               { sqrt32Go(dst, a) }
+func absPow34_32(dst, src []float32)                        { absPow34Go(dst, src) }
 func round32(dst, src []float32)                            { round32Go(dst, src) }
 func reciprocal32(dst, a []float32)                         { reciprocal32Go(dst, a) }
 func minIdx32(a []float32) int                              { return minIdxGo(a) }

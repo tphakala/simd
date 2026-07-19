@@ -527,6 +527,14 @@ func sqrt32(dst, a []float32) {
 	sqrt32Go(dst, a)
 }
 
+func absPow34_32(dst, src []float32) {
+	if hasNEON && len(dst) >= 4 {
+		absPow34NEON(dst, src)
+		return
+	}
+	absPow34Go(dst, src)
+}
+
 func round32(dst, src []float32) {
 	if hasNEON && len(dst) >= 4 {
 		roundNEON(dst, src)
@@ -615,6 +623,9 @@ func cumulativeSum32(dst, a []float32) {
 
 //go:noescape
 func sqrtNEON(dst, a []float32)
+
+//go:noescape
+func absPow34NEON(dst, src []float32)
 
 //go:noescape
 func roundNEON(dst, src []float32)
