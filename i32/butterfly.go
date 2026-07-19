@@ -1,6 +1,6 @@
 package i32
 
-// In-place radix-2 butterfly on two equal-length int32 slices.
+// In-place radix-2 butterfly on two int32 slices.
 //
 // Butterfly is the Hadamard/Haar radix-2 step of a fast Walsh-Hadamard
 // transform (FWHT): for each lane it replaces the pair (lo, hi) with their sum
