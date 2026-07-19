@@ -203,6 +203,35 @@ func Neg(dst, a []float32) {
 	neg32(dst[:n], a[:n])
 }
 
+// CopySign composes each result from the magnitude of mag[i] and the sign of
+// sign[i]: dst[i] = |mag[i]| carrying sign[i]'s sign bit. It is exactly IEEE-754
+// copysign applied elementwise,
+//
+//	dst[i] = Float32frombits((Float32bits(mag[i]) &^ 0x80000000) | (Float32bits(sign[i]) & 0x80000000))
+//
+// which equals math.Copysign(mag[i], sign[i]) elementwise, and is bit-for-bit
+// identical to it for every non-NaN input. Processes
+// min(len(dst), len(mag), len(sign)) elements.
+//
+// The predicate is the IEEE sign bit (bit 31), not arithmetic comparison, so a
+// sign of -0.0 yields a negative result and a sign of +0.0 a positive one
+// (matching math.Copysign). NaN and Inf magnitudes keep their bits and take
+// sign[i]'s sign; CopySign preserves the input float32 NaN payload exactly, which
+// a float64 round trip through math.Copysign does not guarantee.
+//
+// The operation is pure bit manipulation with no rounding, so it is exact and
+// bit-identical across amd64 (VANDPS/VORPS), arm64 (BIT), and the pure-Go
+// fallback: there is no relaxed tier. dst may alias mag and/or sign, since each
+// output depends only on its own index; CopySign(x, x, x) is a valid in-place
+// abs-with-own-sign (an identity). It allocates nothing.
+func CopySign(dst, mag, sign []float32) {
+	n := minLen(len(dst), len(mag), len(sign))
+	if n == 0 {
+		return
+	}
+	copySign32(dst[:n], mag[:n], sign[:n])
+}
+
 // FMA computes fused multiply-add: dst[i] = a[i] * b[i] + c[i].
 func FMA(dst, a, b, c []float32) {
 	n := min(len(c), minLen(len(dst), len(a), len(b)))

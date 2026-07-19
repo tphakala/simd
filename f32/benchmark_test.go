@@ -331,6 +331,24 @@ func BenchmarkAbsPow34(b *testing.B) {
 	}
 }
 
+func BenchmarkCopySign(b *testing.B) {
+	for _, size := range benchSizes {
+		mag, sign, _, dst := makeBenchData32(size)
+		b.Run(fmt.Sprintf("SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				CopySign(dst, mag, sign)
+			}
+			reportThroughput32(b, size*3)
+		})
+		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				copySign32Go(dst, mag, sign)
+			}
+			reportThroughput32(b, size*3)
+		})
+	}
+}
+
 func BenchmarkNeg(b *testing.B) {
 	for _, size := range benchSizes {
 		a, _, _, dst := makeBenchData32(size)

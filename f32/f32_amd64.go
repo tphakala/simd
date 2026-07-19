@@ -284,6 +284,26 @@ func neg32(dst, a []float32) {
 	negImpl(dst, a)
 }
 
+// copySign32 dispatches CopySign directly to a //go:noescape kernel (rather than
+// through a function-pointer table) so the caller's slices do not escape to the
+// heap: an indirect call through a func value defeats //go:noescape and forces a
+// per-call allocation, breaking the zero-allocation contract. The direct-dispatch
+// shape mirrors absPow34_32. CopySign is plain bit manipulation (VANDPS/VORPS),
+// so plain AVX gates the VEX kernel (AVX-512 CPUs also have AVX and run it
+// bit-identically) and SSE2 covers the rest. Like abs/neg, no minimum-length
+// guard is needed: the kernels compute the block count with a shift and fall
+// through to a scalar tail, so a full-width load is never issued out of bounds.
+func copySign32(dst, mag, sign []float32) {
+	switch {
+	case cpu.X86.AVX:
+		copySignAVX(dst, mag, sign)
+	case cpu.X86.SSE2:
+		copySignSSE(dst, mag, sign)
+	default:
+		copySign32Go(dst, mag, sign)
+	}
+}
+
 func subFromScalar32(dst, a []float32, s float32) {
 	// Compose using already-dispatched primitives: (s - a) == (-a) + s.
 	// Each step is internally vectorized or falls back to Go via the global impl
@@ -851,6 +871,9 @@ func absAVX(dst, a []float32)
 func negAVX(dst, a []float32)
 
 //go:noescape
+func copySignAVX(dst, mag, sign []float32)
+
+//go:noescape
 func fmaAVX(dst, a, b, c []float32)
 
 //go:noescape
@@ -985,6 +1008,9 @@ func absSSE(dst, a []float32)
 
 //go:noescape
 func negSSE(dst, a []float32)
+
+//go:noescape
+func copySignSSE(dst, mag, sign []float32)
 
 //go:noescape
 func fmaSSE(dst, a, b, c []float32)

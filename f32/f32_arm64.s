@@ -647,6 +647,56 @@ neg32_loop1:
 neg32_done:
     RET
 
+// copySignNEON: dst[i] = |mag[i]| carrying sign[i]'s sign bit. Builds the
+// 0x80000000-per-lane mask in V2, then BIT V0.16B, V1.16B, V2.16B inserts sign's
+// sign bit (where the mask is 1) into mag (where the mask is 0), which is exactly
+// copysign. Pure bit manipulation, so bit-identical to the amd64 and Go paths.
+// The scalar tail clears mag's sign bit and ORs in sign's with W-register logical
+// ops. The BIT WORD is cross-checked against arm64asm by TestArm64WordEncodings.
+//
+// func copySignNEON(dst, mag, sign []float32)
+TEXT ·copySignNEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R2
+    MOVD mag_base+24(FP), R1
+    MOVD sign_base+48(FP), R3
+
+    // Build the sign-bit mask 0x80000000 in all four lanes of V2.
+    MOVD $0x80000000, R4
+    FMOVS R4, F2
+    WORD $0x4E040442           // DUP V2.4S, V2.S[0]
+
+    LSR $2, R2, R5
+    CBZ R5, copysign_scalar
+
+copysign_loop4:
+    VLD1.P 16(R1), [V0.S4]     // mag
+    VLD1.P 16(R3), [V1.S4]     // sign
+    WORD $0x6EA21C20           // BIT V0.16B, V1.16B, V2.16B
+    VST1.P [V0.S4], 16(R0)
+    SUB $1, R5
+    CBNZ R5, copysign_loop4
+
+copysign_scalar:
+    AND $3, R2
+    CBZ R2, copysign_done
+
+copysign_loop1:
+    MOVWU (R1), R6            // mag bits
+    MOVWU (R3), R7            // sign bits
+    AND $0x7fffffff, R6, R6   // clear mag's sign bit -> |mag|
+    AND $0x80000000, R7, R7   // isolate sign's sign bit
+    ORR R7, R6, R6            // combine
+    MOVW R6, (R0)
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R3
+    SUB $1, R2
+    CBNZ R2, copysign_loop1
+
+copysign_done:
+    RET
+
 // func fmaNEON(dst, a, b, c []float32)
 TEXT ·fmaNEON(SB), NOSPLIT, $0-96
     MOVD dst_base+0(FP), R0
