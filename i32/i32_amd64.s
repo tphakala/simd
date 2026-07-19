@@ -436,3 +436,125 @@ negwhereneg_avx2_scalar:
 negwhereneg_avx2_done:
     VZEROUPPER
     RET
+
+// Fixed-point scale-by-scalar kernels (AVX2).
+//
+// AVX2 has VPMULDQ (signed 32x32 -> 64) but no 64-bit ARITHMETIC shift (VPSRAQ is
+// AVX-512). The kernels lean on one fact: for a 64-bit product p with |p| <= 2^62
+// and result = int32(p >> s), the LOW 32 bits of a LOGICAL shift (VPSRLQ $s) equal
+// the low 32 bits of the arithmetic shift. Result bit i (0..31) reads p bit (i+s),
+// and i+s <= 31+31 = 62 <= 63 is always a real bit of p for both shift kinds; the
+// two differ only in bits >= 32 (sign-fill vs zero-fill), which the int32() cast
+// discards. So VPSRLQ then keep the low 32 bits is exact, including the
+// a=k=MinInt32 wrap (2^62 >> 31 = 2^31 -> MinInt32). No EVEX is emitted: VPMULDQ,
+// VPSRLQ, VPSLLQ and VPBLENDD are all AVX2, and k reaches the vector via VMOVD to
+// an xmm then the AVX2 xmm->ymm VPBROADCASTD (VEX). The GP-register-source
+// VPBROADCASTD is AVX-512-only and would SIGILL on an AVX2-only core, so it is
+// avoided; k is sign-extended to int32 first (int32 for Q31, int16 for Q15) since
+// VPMULDQ is a signed 32x32 multiply.
+//
+// Per 8 int32: VPMULDQ folds the even 32-bit lanes (0,2,4,6) into 4 int64
+// products; VPSRLQ $32 slides the odd lanes (1,3,5,7) into even positions for a
+// second VPMULDQ; each product set is VPSRLQ $s so its low 32 bits hold the
+// result lane; VPSLLQ $32 lifts the odd results to positions 1,3,5,7; and
+// VPBLENDD $0xAA merges even (mask bit 0 -> second source) with odd (mask bit 1 ->
+// first source). The Go operand order is VPBLENDD $imm, YfromMask1, YfromMask0,
+// Ydst, so the shifted-odd register is listed FIRST. The scalar tail does the same
+// in 64-bit GPRs (MOVLQSX, IMULQ, SARQ $s, MOVL store). dst may alias a exactly:
+// each block/lane reads a before it stores dst. Frame is two slice headers plus
+// the scalar k: dst+0, a+24, k+48.
+
+// func scaleQ31AVX2(dst, a []int32, k int32)
+TEXT ·scaleQ31AVX2(SB), NOSPLIT, $0-52
+    MOVQ    dst_base+0(FP), DX
+    MOVQ    dst_len+8(FP), CX
+    MOVQ    a_base+24(FP), SI
+    MOVLQSX k+48(FP), BX          // BX = int64(k) for the scalar tail
+    VMOVD   BX, X3                // low 32 bits = int32(k)
+    VPBROADCASTD X3, Y3           // AVX2 xmm->ymm broadcast: k in all 8 int32 lanes
+
+    MOVQ CX, AX
+    SHRQ $3, AX                   // AX = n / 8
+    JZ   scaleq31_avx2_tail
+
+scaleq31_avx2_loop8:
+    VMOVDQU  (SI), Y0             // a[i..i+7]
+    VPMULDQ  Y3, Y0, Y4           // even-lane products a0,a2,a4,a6 * k (4x int64)
+    VPSRLQ   $32, Y0, Y1          // slide odd lanes a1,a3,a5,a7 into even positions
+    VPMULDQ  Y3, Y1, Y5           // odd-lane products a1,a3,a5,a7 * k (4x int64)
+    VPSRLQ   $31, Y4, Y4          // low 32 of each int64 = even result lanes
+    VPSRLQ   $31, Y5, Y5          // low 32 of each int64 = odd result lanes
+    VPSLLQ   $32, Y5, Y5          // lift odd results to 32-bit positions 1,3,5,7
+    VPBLENDD $0xAA, Y5, Y4, Y2    // lanes 1,3,5,7 <- Y5 (odd), 0,2,4,6 <- Y4 (even)
+    VMOVDQU  Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  scaleq31_avx2_loop8
+
+scaleq31_avx2_tail:
+    ANDQ $7, CX
+    JZ   scaleq31_avx2_done
+
+scaleq31_avx2_scalar:
+    MOVLQSX (SI), AX              // int64(a[i])
+    IMULQ   BX, AX                // a[i] * k (64-bit, no overflow: |p| <= 2^62)
+    SARQ    $31, AX               // arithmetic shift right 31
+    MOVL    AX, (DX)              // low 32 bits: wraps like int32()
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  scaleq31_avx2_scalar
+
+scaleq31_avx2_done:
+    VZEROUPPER
+    RET
+
+// func scaleQ15AVX2(dst, a []int32, k int16)
+// Identical recombine to scaleQ31AVX2 with a shift of 15. k is a signed int16, so
+// it is sign-extended to int32 before the broadcast (VPMULDQ is signed 32x32) and
+// to int64 for the tail; |k * a[i]| <= 2^46, well inside the int64 product.
+TEXT ·scaleQ15AVX2(SB), NOSPLIT, $0-50
+    MOVQ    dst_base+0(FP), DX
+    MOVQ    dst_len+8(FP), CX
+    MOVQ    a_base+24(FP), SI
+    MOVWQSX k+48(FP), BX          // BX = int64(k), sign-extended int16 (also tail k)
+    VMOVD   BX, X3                // low 32 bits = int32(k)
+    VPBROADCASTD X3, Y3           // AVX2 xmm->ymm broadcast of int32(k)
+
+    MOVQ CX, AX
+    SHRQ $3, AX                   // AX = n / 8
+    JZ   scaleq15_avx2_tail
+
+scaleq15_avx2_loop8:
+    VMOVDQU  (SI), Y0             // a[i..i+7]
+    VPMULDQ  Y3, Y0, Y4           // even-lane products a0,a2,a4,a6 * k (4x int64)
+    VPSRLQ   $32, Y0, Y1          // slide odd lanes a1,a3,a5,a7 into even positions
+    VPMULDQ  Y3, Y1, Y5           // odd-lane products a1,a3,a5,a7 * k (4x int64)
+    VPSRLQ   $15, Y4, Y4          // low 32 of each int64 = even result lanes
+    VPSRLQ   $15, Y5, Y5          // low 32 of each int64 = odd result lanes
+    VPSLLQ   $32, Y5, Y5          // lift odd results to 32-bit positions 1,3,5,7
+    VPBLENDD $0xAA, Y5, Y4, Y2    // lanes 1,3,5,7 <- Y5 (odd), 0,2,4,6 <- Y4 (even)
+    VMOVDQU  Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  scaleq15_avx2_loop8
+
+scaleq15_avx2_tail:
+    ANDQ $7, CX
+    JZ   scaleq15_avx2_done
+
+scaleq15_avx2_scalar:
+    MOVLQSX (SI), AX              // int64(a[i])
+    IMULQ   BX, AX                // k * a[i] (64-bit, |p| <= 2^46)
+    SARQ    $15, AX               // arithmetic shift right 15
+    MOVL    AX, (DX)              // low 32 bits: wraps like int32()
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  scaleq15_avx2_scalar
+
+scaleq15_avx2_done:
+    VZEROUPPER
+    RET

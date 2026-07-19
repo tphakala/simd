@@ -101,6 +101,37 @@ func negWhereNegI32(dst, mag []int32, sign []float32) {
 //go:noescape
 func negWhereNegNEON(dst, mag []int32, sign []float32)
 
+// minNEONScaleQ31 and minNEONScaleQ15 are one 4-wide (.4S) block each,
+// independent literals like the tier-3 thresholds above. Both kernels are correct
+// at any length (each falls through to a scalar tail), so these are performance
+// cuts only, never a safety requirement.
+const (
+	minNEONScaleQ31 = 4
+	minNEONScaleQ15 = 4
+)
+
+func scaleQ31I32(dst, a []int32, k int32) {
+	if hasNEON && len(dst) >= minNEONScaleQ31 {
+		scaleQ31NEON(dst, a, k)
+		return
+	}
+	scaleQ31Go(dst, a, k)
+}
+
+func scaleQ15I32(dst, a []int32, k int16) {
+	if hasNEON && len(dst) >= minNEONScaleQ15 {
+		scaleQ15NEON(dst, a, k)
+		return
+	}
+	scaleQ15Go(dst, a, k)
+}
+
+//go:noescape
+func scaleQ31NEON(dst, a []int32, k int32)
+
+//go:noescape
+func scaleQ15NEON(dst, a []int32, k int16)
+
 // minMaxI32 dispatches the signed int32 min/max reduction. The NEON kernel does
 // the reduction in 4-wide SMIN/SMAX lanes with a single-instruction SMINV/SMAXV
 // across-vector fold and a scalar tail, so it gates on NEON and at least one full

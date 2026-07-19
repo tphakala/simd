@@ -189,3 +189,47 @@ func BenchmarkNegWhereNeg_1003(b *testing.B) { benchmarkNegWhereNeg(b, 1003, Neg
 func BenchmarkNegWhereNegGo_25(b *testing.B)   { benchmarkNegWhereNeg(b, 25, negWhereNegGo) }
 func BenchmarkNegWhereNegGo_1000(b *testing.B) { benchmarkNegWhereNeg(b, 1000, negWhereNegGo) }
 func BenchmarkNegWhereNegGo_1003(b *testing.B) { benchmarkNegWhereNeg(b, 1003, negWhereNegGo) }
+
+func benchmarkScaleQ31(b *testing.B, n int, fn func(dst, a []int32, k int32)) {
+	b.Helper()
+	a := make([]int32, n)
+	dst := make([]int32, n)
+	for i := range a {
+		a[i] = int32(i*7 - 3000)
+	}
+	const k = int32(0x40000000) // 0.5 in Q31
+	b.SetBytes(int64(n) * 4 * 2)
+	for b.Loop() {
+		fn(dst, a, k)
+	}
+}
+
+func BenchmarkScaleQ31_25(b *testing.B)   { benchmarkScaleQ31(b, 25, ScaleQ31) }
+func BenchmarkScaleQ31_1000(b *testing.B) { benchmarkScaleQ31(b, 1000, ScaleQ31) }
+func BenchmarkScaleQ31_1003(b *testing.B) { benchmarkScaleQ31(b, 1003, ScaleQ31) }
+
+func BenchmarkScaleQ31Go_25(b *testing.B)   { benchmarkScaleQ31(b, 25, scaleQ31Go) }
+func BenchmarkScaleQ31Go_1000(b *testing.B) { benchmarkScaleQ31(b, 1000, scaleQ31Go) }
+func BenchmarkScaleQ31Go_1003(b *testing.B) { benchmarkScaleQ31(b, 1003, scaleQ31Go) }
+
+func benchmarkScaleQ15(b *testing.B, n int, fn func(dst, a []int32, k int16)) {
+	b.Helper()
+	a := make([]int32, n)
+	dst := make([]int32, n)
+	for i := range a {
+		a[i] = int32(i*7 - 3000)
+	}
+	const k = int16(0x4000) // 0.5 in Q15
+	b.SetBytes(int64(n) * 4 * 2)
+	for b.Loop() {
+		fn(dst, a, k)
+	}
+}
+
+func BenchmarkScaleQ15_25(b *testing.B)   { benchmarkScaleQ15(b, 25, ScaleQ15) }
+func BenchmarkScaleQ15_1000(b *testing.B) { benchmarkScaleQ15(b, 1000, ScaleQ15) }
+func BenchmarkScaleQ15_1003(b *testing.B) { benchmarkScaleQ15(b, 1003, ScaleQ15) }
+
+func BenchmarkScaleQ15Go_25(b *testing.B)   { benchmarkScaleQ15(b, 25, scaleQ15Go) }
+func BenchmarkScaleQ15Go_1000(b *testing.B) { benchmarkScaleQ15(b, 1000, scaleQ15Go) }
+func BenchmarkScaleQ15Go_1003(b *testing.B) { benchmarkScaleQ15(b, 1003, scaleQ15Go) }
