@@ -153,12 +153,14 @@ func TestMul(t *testing.T) {
 
 // plantExtremes seeds the head and tail complex with the wrap-driving extremes.
 func plantExtremes(a []int32, tw []int16) {
-	n := len(a)
-	if n >= 2 {
+	// Each slice is indexed by its own length so a shorter tw never panics.
+	if len(a) >= 2 {
 		a[0], a[1] = math.MinInt32, math.MaxInt32
+		a[len(a)-2], a[len(a)-1] = math.MaxInt32, math.MinInt32
+	}
+	if len(tw) >= 2 {
 		tw[0], tw[1] = math.MinInt16, math.MaxInt16
-		a[n-2], a[n-1] = math.MaxInt32, math.MinInt32
-		tw[n-2], tw[n-1] = math.MaxInt16, math.MinInt16
+		tw[len(tw)-2], tw[len(tw)-1] = math.MaxInt16, math.MinInt16
 	}
 }
 

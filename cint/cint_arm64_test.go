@@ -172,13 +172,23 @@ func TestMulNEON_AllocFree(t *testing.T) {
 	}
 	const n = 1024
 	a := make([]int32, n)
+	b := make([]int32, n)
 	tw := make([]int16, n)
 	dst := make([]int32, n)
 	if got := testing.AllocsPerRun(100, func() { mulNEON(dst, a, tw) }); got != 0 {
 		t.Errorf("mulNEON allocated %v times per run, want 0", got)
 	}
+	if got := testing.AllocsPerRun(100, func() { mulConjNEON(dst, a, tw) }); got != 0 {
+		t.Errorf("mulConjNEON allocated %v times per run, want 0", got)
+	}
 	if got := testing.AllocsPerRun(100, func() { mulByScalarNEON(a, 0x1234) }); got != 0 {
 		t.Errorf("mulByScalarNEON allocated %v times per run, want 0", got)
+	}
+	if got := testing.AllocsPerRun(100, func() { addNEON(dst, a, b) }); got != 0 {
+		t.Errorf("addNEON allocated %v times per run, want 0", got)
+	}
+	if got := testing.AllocsPerRun(100, func() { subNEON(dst, a, b) }); got != 0 {
+		t.Errorf("subNEON allocated %v times per run, want 0", got)
 	}
 }
 

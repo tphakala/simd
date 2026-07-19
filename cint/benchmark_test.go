@@ -91,3 +91,13 @@ func BenchmarkSub(b *testing.B) {
 		Sub(dst, a, c)
 	}
 }
+
+func BenchmarkSubGo(b *testing.B) {
+	dst := make([]int32, benchN)
+	a := genI32(benchN, 4)
+	c := genI32(benchN, 5)
+	b.SetBytes(benchN * 4 * 3)
+	for b.Loop() {
+		subGo(dst, a, c)
+	}
+}

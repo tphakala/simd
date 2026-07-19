@@ -174,13 +174,23 @@ func TestMulAVX2_AllocFree(t *testing.T) {
 	}
 	const n = 1024
 	a := make([]int32, n)
+	b := make([]int32, n)
 	tw := make([]int16, n)
 	dst := make([]int32, n)
 	if got := testing.AllocsPerRun(100, func() { mulAVX2(dst, a, tw) }); got != 0 {
 		t.Errorf("mulAVX2 allocated %v times per run, want 0", got)
 	}
+	if got := testing.AllocsPerRun(100, func() { mulConjAVX2(dst, a, tw) }); got != 0 {
+		t.Errorf("mulConjAVX2 allocated %v times per run, want 0", got)
+	}
 	if got := testing.AllocsPerRun(100, func() { mulByScalarAVX2(a, 0x1234) }); got != 0 {
 		t.Errorf("mulByScalarAVX2 allocated %v times per run, want 0", got)
+	}
+	if got := testing.AllocsPerRun(100, func() { addAVX2(dst, a, b) }); got != 0 {
+		t.Errorf("addAVX2 allocated %v times per run, want 0", got)
+	}
+	if got := testing.AllocsPerRun(100, func() { subAVX2(dst, a, b) }); got != 0 {
+		t.Errorf("subAVX2 allocated %v times per run, want 0", got)
 	}
 }
 

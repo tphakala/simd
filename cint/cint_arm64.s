@@ -21,11 +21,12 @@
 // [re, im] pair back to interleaved [r0,i0,r1,i1,...]. dst may alias a exactly:
 // each block deinterleaves its whole a and tw block before it stores dst.
 //
-// SXTL/SMULL/SMULL2/SSHR/XTN/XTN2/DUP and the ADD/SUB .4S combines have no Go
-// assembler mnemonic (or are pinned as verified encodings) and are hand-encoded
-// WORD directives with the decoded GNU form in the trailing comment, cross-checked
-// against golang.org/x/arch/arm64asm by TestArm64WordEncodings. LD2/ST2 use the
-// Go VLD2/VST2 mnemonics. Reserved registers (g in R28, R27/R18/R16/R17) are
+// SXTL/SMULL/SMULL2/SSHR/XTN/XTN2/DUP have no Go assembler mnemonic, and the
+// standalone Add/Sub kernels pin ADD/SUB .4S as verified WORD encodings (matching
+// i32); all are hand-encoded WORD directives with the decoded GNU form in the
+// trailing comment, cross-checked against golang.org/x/arch/arm64asm by
+// TestArm64WordEncodings. The Mul/MulConj re/im combines use the Go VADD/VSUB
+// mnemonics, and LD2/ST2 use VLD2/VST2. Reserved registers (g in R28, R27/R18/R16/R17) are
 // untouched. The scalar tails use the W-register (32-bit) ALU forms so they wrap
 // identically to the vector lanes.
 
