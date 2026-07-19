@@ -656,6 +656,15 @@ func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 	return cubicInterpDotGo(hist, a, b, c, d, x)
 }
 
+func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64) {
+	// Use AVX+FMA if available and have at least one full 4-wide vector.
+	if cpu.X86.AVX && cpu.X86.FMA && len(upperRe) >= minAVXElements {
+		butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+		return
+	}
+	butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+}
+
 func sigmoid64(dst, src []float64) {
 	// Requires AVX2: sigmoidAVX reconstructs 2^k with 256-bit YMM integer ops
 	// (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ) that do not exist on AVX1-only CPUs.
@@ -1045,3 +1054,8 @@ func deinterleave2SSE2(a, b, src []float64)
 //
 //go:noescape
 func cubicInterpDotAVX(hist, a, b, c, d []float64, x float64) float64
+
+// ButterflyComplex assembly function declaration
+//
+//go:noescape
+func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64)

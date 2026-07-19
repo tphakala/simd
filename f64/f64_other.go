@@ -70,3 +70,6 @@ func log2_64(dst, src []float64)            { log2Go(dst, src) }
 func log10_64(dst, src []float64)           { log10Go(dst, src) }
 func pow64(dst, src []float64, exp float64) { powGo(dst, src, exp) }
 func powElem64(dst, base, exp []float64)    { powElemGo(dst, base, exp) }
+func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64) {
+	butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+}
