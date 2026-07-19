@@ -80,6 +80,21 @@ func minMaxGo(res []int32) (minVal, maxVal int32) {
 	return lo, hi
 }
 
+// maxAbsGo is MaxAbs's source of truth: the peak magnitude with celtMaxabs32
+// semantics. It runs the signed min/max scan, then returns max(hi, -lo), where
+// -lo is a WRAPPING int32 negate (-MinInt32 == MinInt32). This is NOT per-lane
+// abs-then-max: for a = [MinInt32, -3] it returns max(-3, MinInt32) = -3, not 3.
+// minMaxGo requires a non-empty a, so the public MaxAbs guards the len==0 case
+// before dispatch.
+func maxAbsGo(a []int32) int32 {
+	lo, hi := minMaxGo(a) // reuse the signed min/max scan
+	neg := -lo            // wrapping: -MinInt32 == MinInt32
+	if hi > neg {
+		return hi
+	}
+	return neg
+}
+
 // negWhereNegGo writes the branchless conditional negate that is NegWhereNeg's
 // source of truth. For each lane it broadcasts sign[i]'s IEEE-754 sign bit into
 // a full-width int32 mask m via an arithmetic right shift (m = -1 when the sign
