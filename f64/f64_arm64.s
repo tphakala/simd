@@ -18,6 +18,7 @@
 // FNEG Vd.2D, Vn.2D:        0x6EE0F800 | (Vn << 5) | Vd
 // FRINTN Vd.2D, Vn.2D:      0x4E618800 | (Vn << 5) | Vd  (round to nearest, ties to even)
 // FMLA Vd.2D, Vn.2D, Vm.2D: 0x4E60CC00 | (Vm << 16) | (Vn << 5) | Vd
+// FMLS Vd.2D, Vn.2D, Vm.2D: 0x4EE0CC00 | (Vm << 16) | (Vn << 5) | Vd
 // FADDP Dd, Vn.2D:          0x7E70D800 | (Vn << 5) | Vd
 
 // func dotProductNEON(a, b []float64) float64
@@ -2718,4 +2719,112 @@ powelem64_neon_scalar_normal:
     CBNZ R3, powelem64_neon_scalar_loop
 
 powelem64_neon_done:
+    RET
+
+// func butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64)
+// Computes FFT butterfly with twiddle factor multiply using split arrays, the
+// float64 counterpart of f32's butterflyComplexNEON: 2 float64 lanes (.2D) per
+// vector register instead of 4 float32 (.4S), so the 16-byte stride is identical
+// while the loop counter halves.
+//   temp_re = lower_re[i]*tw_re[i] - lower_im[i]*tw_im[i]
+//   temp_im = lower_re[i]*tw_im[i] + lower_im[i]*tw_re[i]
+//   upper_re[i], lower_re[i] = upper_re[i]+temp_re, upper_re[i]-temp_re
+//   upper_im[i], lower_im[i] = upper_im[i]+temp_im, upper_im[i]-temp_im
+// Frame: upperRe(24) + upperIm(24) + lowerRe(24) + lowerIm(24) + twRe(24) + twIm(24) = 144 bytes
+TEXT ·butterflyComplexNEON(SB), NOSPLIT, $0-144
+    MOVD upperRe_base+0(FP), R0      // R0 = upperRe pointer
+    MOVD upperRe_len+8(FP), R3       // R3 = length
+    MOVD upperIm_base+24(FP), R1     // R1 = upperIm pointer
+    MOVD lowerRe_base+48(FP), R4     // R4 = lowerRe pointer
+    MOVD lowerIm_base+72(FP), R5     // R5 = lowerIm pointer
+    MOVD twRe_base+96(FP), R6        // R6 = twRe pointer
+    MOVD twIm_base+120(FP), R7       // R7 = twIm pointer
+
+    // Process 2 float64 per iteration
+    LSR $1, R3, R8
+    CBZ R8, butterfly_neon_scalar
+
+butterfly_neon_loop2:
+    // Load inputs
+    VLD1.P 16(R0), [V0.D2]           // V0 = upperRe[0:2]
+    VLD1.P 16(R1), [V1.D2]           // V1 = upperIm[0:2]
+    VLD1.P 16(R4), [V2.D2]           // V2 = lowerRe[0:2]
+    VLD1.P 16(R5), [V3.D2]           // V3 = lowerIm[0:2]
+    VLD1.P 16(R6), [V4.D2]           // V4 = twRe[0:2]
+    VLD1.P 16(R7), [V5.D2]           // V5 = twIm[0:2]
+
+    // tempRe = lowerRe*twRe - lowerIm*twIm
+    WORD $0x6E64DC46                  // FMUL V6.2D, V2.2D, V4.2D  (lowerRe * twRe)
+    WORD $0x4EE5CC66                  // FMLS V6.2D, V3.2D, V5.2D  (V6 -= lowerIm * twIm)
+
+    // tempIm = lowerRe*twIm + lowerIm*twRe
+    WORD $0x6E65DC47                  // FMUL V7.2D, V2.2D, V5.2D  (lowerRe * twIm)
+    WORD $0x4E64CC67                  // FMLA V7.2D, V3.2D, V4.2D  (V7 += lowerIm * twRe)
+
+    // new upperRe = upperRe + tempRe, new lowerRe = upperRe - tempRe
+    WORD $0x4E66D408                  // FADD V8.2D, V0.2D, V6.2D  (upperRe + tempRe)
+    WORD $0x4EE6D40A                  // FSUB V10.2D, V0.2D, V6.2D (upperRe - tempRe)
+
+    // new upperIm = upperIm + tempIm, new lowerIm = upperIm - tempIm
+    WORD $0x4E67D429                  // FADD V9.2D, V1.2D, V7.2D  (upperIm + tempIm)
+    WORD $0x4EE7D42B                  // FSUB V11.2D, V1.2D, V7.2D (upperIm - tempIm)
+
+    // Store results (need to rewind pointers since we post-incremented during load)
+    SUB $16, R0
+    SUB $16, R1
+    SUB $16, R4
+    SUB $16, R5
+    VST1.P [V8.D2], 16(R0)           // Store new upperRe
+    VST1.P [V9.D2], 16(R1)           // Store new upperIm
+    VST1.P [V10.D2], 16(R4)          // Store new lowerRe
+    VST1.P [V11.D2], 16(R5)          // Store new lowerIm
+
+    SUB $1, R8
+    CBNZ R8, butterfly_neon_loop2
+
+butterfly_neon_scalar:
+    AND $1, R3
+    CBZ R3, butterfly_neon_done
+
+butterfly_neon_scalar_loop:
+    // Load scalar values
+    FMOVD (R0), F0                   // F0 = upperRe
+    FMOVD (R1), F1                   // F1 = upperIm
+    FMOVD (R4), F2                   // F2 = lowerRe
+    FMOVD (R5), F3                   // F3 = lowerIm
+    FMOVD (R6), F4                   // F4 = twRe
+    FMOVD (R7), F5                   // F5 = twIm
+
+    // tempRe = lowerRe*twRe - lowerIm*twIm
+    FMULD F2, F4, F6                 // F6 = lowerRe * twRe
+    FMULD F3, F5, F7                 // F7 = lowerIm * twIm
+    FSUBD F7, F6, F6                 // F6 = tempRe (F6 - F7)
+
+    // tempIm = lowerRe*twIm + lowerIm*twRe
+    FMULD F2, F5, F7                 // F7 = lowerRe * twIm
+    FMULD F3, F4, F8                 // F8 = lowerIm * twRe
+    FADDD F7, F8, F7                 // F7 = tempIm
+
+    // Butterfly: upper' = upper + temp, lower' = upper - temp
+    FADDD F0, F6, F8                 // F8 = new upperRe
+    FSUBD F6, F0, F9                 // F9 = new lowerRe (F0 - F6)
+    FADDD F1, F7, F10                // F10 = new upperIm
+    FSUBD F7, F1, F11                // F11 = new lowerIm (F1 - F7)
+
+    // Store results
+    FMOVD F8, (R0)
+    FMOVD F10, (R1)
+    FMOVD F9, (R4)
+    FMOVD F11, (R5)
+
+    ADD $8, R0
+    ADD $8, R1
+    ADD $8, R4
+    ADD $8, R5
+    ADD $8, R6
+    ADD $8, R7
+    SUB $1, R3
+    CBNZ R3, butterfly_neon_scalar_loop
+
+butterfly_neon_done:
     RET

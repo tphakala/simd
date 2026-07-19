@@ -5991,3 +5991,114 @@ DATA log64_powclamp_lo<>+0x08(SB)/8, $0xc087500000000000
 DATA log64_powclamp_lo<>+0x10(SB)/8, $0xc087500000000000
 DATA log64_powclamp_lo<>+0x18(SB)/8, $0xc087500000000000
 GLOBL log64_powclamp_lo<>(SB), RODATA|NOPTR, $32
+
+// func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64)
+// FFT butterfly with twiddle multiply, 4 float64 lanes per YMM (AVX+FMA). The
+// float64 counterpart of f32's butterflyComplexAVX: 4 lanes/iter instead of 8,
+// so the 256-bit byte stride ($32) is identical while the loop counter halves.
+//   temp_re = lower_re*tw_re - lower_im*tw_im
+//   temp_im = lower_re*tw_im + lower_im*tw_re
+//   upper' = upper + temp ; lower' = upper - temp   (independently for re/im)
+TEXT ·butterflyComplexAVX(SB), NOSPLIT, $0-144
+    MOVQ upperRe_base+0(FP), DX      // DX = upperRe pointer
+    MOVQ upperRe_len+8(FP), CX       // CX = length
+    MOVQ upperIm_base+24(FP), R8     // R8 = upperIm pointer
+    MOVQ lowerRe_base+48(FP), SI     // SI = lowerRe pointer
+    MOVQ lowerIm_base+72(FP), DI     // DI = lowerIm pointer
+    MOVQ twRe_base+96(FP), R9        // R9 = twRe pointer
+    MOVQ twIm_base+120(FP), R10      // R10 = twIm pointer
+
+    // Process 4 float64 per iteration
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   butterfly_remainder
+
+butterfly_loop4:
+    // Load lower and twiddle
+    VMOVUPD (SI), Y0                 // Y0 = lower_re[0:4]
+    VMOVUPD (DI), Y1                 // Y1 = lower_im[0:4]
+    VMOVUPD (R9), Y2                 // Y2 = tw_re[0:4]
+    VMOVUPD (R10), Y3                // Y3 = tw_im[0:4]
+
+    // Complex multiply: temp = lower * twiddle
+    // temp_re = lower_re*tw_re - lower_im*tw_im
+    // temp_im = lower_re*tw_im + lower_im*tw_re
+    VMULPD Y0, Y2, Y4                // Y4 = lower_re * tw_re
+    VMULPD Y1, Y3, Y5                // Y5 = lower_im * tw_im
+    VSUBPD Y5, Y4, Y4                // Y4 = temp_re = lr*tr - li*ti
+
+    VMULPD Y0, Y3, Y5                // Y5 = lower_re * tw_im
+    VFMADD231PD Y1, Y2, Y5           // Y5 = temp_im = lr*ti + li*tr
+
+    // Load upper
+    VMOVUPD (DX), Y0                 // Y0 = upper_re[0:4]
+    VMOVUPD (R8), Y1                 // Y1 = upper_im[0:4]
+
+    // Butterfly: upper' = upper + temp, lower' = upper - temp
+    VADDPD Y0, Y4, Y2                // Y2 = upper_re + temp_re
+    VSUBPD Y4, Y0, Y3                // Y3 = upper_re - temp_re
+    VMOVUPD Y2, (DX)                 // store upper_re'
+    VMOVUPD Y3, (SI)                 // store lower_re'
+
+    VADDPD Y1, Y5, Y2                // Y2 = upper_im + temp_im
+    VSUBPD Y5, Y1, Y3                // Y3 = upper_im - temp_im
+    VMOVUPD Y2, (R8)                 // store upper_im'
+    VMOVUPD Y3, (DI)                 // store lower_im'
+
+    // Advance pointers (4 float64 = 32 bytes)
+    ADDQ $32, DX
+    ADDQ $32, R8
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, R9
+    ADDQ $32, R10
+    DECQ AX
+    JNZ  butterfly_loop4
+
+butterfly_remainder:
+    ANDQ $3, CX
+    JZ   butterfly_done
+
+butterfly_scalar:
+    // Load lower and twiddle (scalar)
+    VMOVSD (SI), X0                  // X0 = lower_re
+    VMOVSD (DI), X1                  // X1 = lower_im
+    VMOVSD (R9), X2                  // X2 = tw_re
+    VMOVSD (R10), X3                 // X3 = tw_im
+
+    // Complex multiply: temp = lower * twiddle
+    VMULSD X0, X2, X4                // X4 = lower_re * tw_re
+    VMULSD X1, X3, X5                // X5 = lower_im * tw_im
+    VSUBSD X5, X4, X4                // X4 = temp_re
+
+    VMULSD X0, X3, X5                // X5 = lower_re * tw_im
+    VFMADD231SD X1, X2, X5           // X5 = temp_im
+
+    // Load upper
+    VMOVSD (DX), X0                  // X0 = upper_re
+    VMOVSD (R8), X1                  // X1 = upper_im
+
+    // Butterfly
+    VADDSD X0, X4, X2                // X2 = upper_re + temp_re
+    VSUBSD X4, X0, X3                // X3 = upper_re - temp_re
+    VMOVSD X2, (DX)
+    VMOVSD X3, (SI)
+
+    VADDSD X1, X5, X2                // X2 = upper_im + temp_im
+    VSUBSD X5, X1, X3                // X3 = upper_im - temp_im
+    VMOVSD X2, (R8)
+    VMOVSD X3, (DI)
+
+    // Advance pointers (1 float64 = 8 bytes)
+    ADDQ $8, DX
+    ADDQ $8, R8
+    ADDQ $8, SI
+    ADDQ $8, DI
+    ADDQ $8, R9
+    ADDQ $8, R10
+    DECQ CX
+    JNZ  butterfly_scalar
+
+butterfly_done:
+    VZEROUPPER
+    RET

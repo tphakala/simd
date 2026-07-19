@@ -872,3 +872,30 @@ func PowElem(dst, base, exp []float64) {
 	}
 	powElem64(dst[:n], base[:n], exp[:n])
 }
+
+func minLen6(a, b, c, d, e, f int) int {
+	return min(a, b, c, d, e, f)
+}
+
+// ButterflyComplex performs the FFT butterfly operation with twiddle factor multiply:
+//
+//	temp_re = lower_re[i]*tw_re[i] - lower_im[i]*tw_im[i]
+//	temp_im = lower_re[i]*tw_im[i] + lower_im[i]*tw_re[i]
+//	upper_re[i], lower_re[i] = upper_re[i]+temp_re, upper_re[i]-temp_re
+//	upper_im[i], lower_im[i] = upper_im[i]+temp_im, upper_im[i]-temp_im
+//
+// This fused operation avoids intermediate memory writes, keeping temp values
+// in registers for significant speedup in FFT inner loops. It is the float64
+// counterpart of f32.ButterflyComplex.
+//
+// Processes min(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm)) elements.
+// All slices are modified in-place: upper receives upper+temp, lower receives upper-temp.
+//
+// Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback.
+func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64) {
+	n := minLen6(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm))
+	if n == 0 {
+		return
+	}
+	butterflyComplex64(upperRe[:n], upperIm[:n], lowerRe[:n], lowerIm[:n], twRe[:n], twIm[:n])
+}

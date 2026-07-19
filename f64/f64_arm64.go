@@ -500,6 +500,18 @@ func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 //go:noescape
 func cubicInterpDotNEON(hist, a, b, c, d []float64, x float64) float64
 
+func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64) {
+	// One NEON iteration needs 2 float64 lanes; anything shorter falls to Go.
+	if hasNEON && len(upperRe) >= 2 {
+		butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+		return
+	}
+	butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
+}
+
+//go:noescape
+func butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64)
+
 func sigmoid64(dst, src []float64) {
 	// Assumes len(src) >= len(dst); caller ensures this via public API
 	if hasNEON && len(dst) >= 2 {
