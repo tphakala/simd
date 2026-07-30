@@ -788,7 +788,8 @@ func ConvolveValidMaxAbsMulti(signal []float32, kernels [][]float32) float32 {
 // This is commonly used as an activation function in neural networks.
 // Processes min(len(dst), len(src)) elements.
 //
-// Uses AVX+FMA on AMD64 (8x float32), NEON on ARM64 (4x float32).
+// Uses AVX2 on AMD64 (8x float32), NEON on ARM64 (4x float32). FMA is not
+// used: the kernel reconstructs 2^k with 256-bit integer ops instead.
 func Sigmoid(dst, src []float32) {
 	n := min(len(dst), len(src))
 	if n == 0 {
@@ -800,7 +801,8 @@ func Sigmoid(dst, src []float32) {
 // SigmoidInPlace computes the sigmoid activation function in-place: a[i] = 1 / (1 + e^(-a[i])).
 // This is commonly used as an activation function in neural networks.
 //
-// Uses AVX+FMA on AMD64 (8x float32), NEON on ARM64 (4x float32).
+// Uses AVX2 on AMD64 (8x float32), NEON on ARM64 (4x float32). FMA is not
+// used: the kernel reconstructs 2^k with 256-bit integer ops instead.
 func SigmoidInPlace(a []float32) {
 	if len(a) == 0 {
 		return
@@ -846,7 +848,7 @@ func ClampScale(dst, src []float32, minVal, maxVal, scale float32) {
 // Uses fast approximation: tanh(x) ≈ x / (1 + |x|) for |x| < 1, sign(x) for |x| >= 2.5, polynomial otherwise.
 // Processes min(len(dst), len(src)) elements.
 //
-// Uses AVX on AMD64 (8x float32), NEON on ARM64 (4x float32).
+// Uses AVX2 on AMD64 (8x float32), NEON on ARM64 (4x float32).
 func Tanh(dst, src []float32) {
 	n := min(len(dst), len(src))
 	if n == 0 {
@@ -1244,7 +1246,7 @@ func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) 
 //	X[0] = Z[0].real + Z[0].imag  (DC component)
 //	X[n] = Z[0].real - Z[0].imag  (Nyquist component)
 //
-// Uses AVX+FMA on AMD64, NEON on ARM64, with pure Go fallback.
+// Uses AVX2+FMA on AMD64, NEON on ARM64, with pure Go fallback.
 func RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm []float32) {
 	n := len(zRe)
 	if n < realFFTUnpackMinN {

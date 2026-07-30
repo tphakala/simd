@@ -863,6 +863,23 @@ sqrt_avx_done:
     VZEROUPPER
     RET
 
+// 1.0 in IEEE 754 double precision, the broadcast source for reciprocalAVX.
+// It lives in memory rather than being materialized in a register because
+// VBROADCASTSD only takes an m64 source under AVX1; the register-source
+// (ymm, xmm) form was added by AVX2. This kernel is selected by BOTH the AVX+FMA
+// tier and the AVX-without-FMA tier, which is what made it the widest of the
+// five: an AVX1-only part reaches it, meaning Sandy Bridge, Ivy Bridge, and
+// original Bulldozer (which has AVX and FMA4 but neither FMA3 nor AVX2). See
+// #197.
+//
+// A dedicated 8-byte symbol rather than the first quadword of the existing
+// 32-byte roundf64_one<>/sigmoid_one64<> splats: those belong to other kernels,
+// and sharing would make this kernel's correctness depend on a constant it does
+// not own. Broadcast source only, so 8 bytes is the whole symbol; do not turn it
+// into a 256-bit load.
+DATA recip64_one<>+0x00(SB)/8, $0x3FF0000000000000
+GLOBL recip64_one<>(SB), RODATA|NOPTR, $8
+
 // func reciprocalAVX(dst, a []float64)
 //
 // Reciprocal via Division with Latency Hiding
@@ -883,11 +900,9 @@ TEXT ·reciprocalAVX(SB), NOSPLIT, $0-48
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
-    // Broadcast 1.0 to Y3 (preserved across all iterations)
-    // 0x3FF0000000000000 is 1.0 in IEEE 754 double precision
-    MOVQ $0x3FF0000000000000, AX
-    MOVQ AX, X3
-    VBROADCASTSD X3, Y3
+    // Broadcast 1.0 to Y3 (preserved across all iterations).
+    // AVX1 encoding: m64 source, not the AVX2-only register source.
+    VBROADCASTSD recip64_one<>(SB), Y3
 
     // Process 16 elements per iteration (4 vectors × 4 doubles)
     // This allows 4 independent VDIVPD operations to be in-flight

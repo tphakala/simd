@@ -1,7 +1,13 @@
-// Package asmcheck validates hand-encoded ARM64 WORD directives against
-// the instruction described in their comment. It decodes each 32-bit word with
-// the same disassembler go tool objdump uses, so it runs on any architecture
-// with no ARM hardware.
+// Package asmcheck validates this repository's hand-written assembly.
+//
+// Two independent checks live here. ARM64 hand-encoded WORD directives are
+// decoded and compared against the instruction their comment claims, using the
+// same disassembler go tool objdump uses. AMD64 kernels are classified by the
+// x86 SIMD feature level their instructions require, so a kernel's body cannot
+// outrun the CPU feature its dispatch guard demands.
+//
+// Both are pure source analysis, so they run on any architecture with no ARM or
+// x86 hardware.
 package asmcheck
 
 import (
@@ -45,8 +51,9 @@ type Directive struct {
 	Source  CommentSource
 }
 
-// ScanSource parses every WORD $0x... directive in src, associating each with
-// its inline comment, or the comment on the line directly above it.
+// ScanSource parses every ARM64 WORD $0x... directive in src, associating each
+// with its inline comment, or the comment on the line directly above it. For the
+// AMD64 feature-level scanner see ScanX86Source.
 func ScanSource(src string) []Directive {
 	lines := strings.Split(src, "\n")
 	out := make([]Directive, 0, len(lines))
