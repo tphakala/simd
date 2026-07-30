@@ -145,11 +145,13 @@ TEXT ·scaleAVX(SB), NOSPLIT, $0-56
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
-    // Load scalar s and broadcast
-    // s is at offset 48 (complex64 = 8 bytes)
-    VMOVSD s+48(FP), X8      // X8 = [sr, si, ?, ?]
-    // Broadcast to YMM: [sr,si,sr,si,sr,si,sr,si]
-    VBROADCASTSD X8, Y1
+    // Broadcast scalar s to YMM: [sr,si,sr,si,sr,si,sr,si].
+    // s is at offset 48 (complex64 = 8 bytes). Broadcasting straight from the
+    // argument slot keeps VBROADCASTSD on its AVX1 encoding, which only defines
+    // an m64 source; the register-source form is AVX2-only, and this kernel runs
+    // on the AVX+FMA tier that AVX1+FMA3 parts (AMD Piledriver and Steamroller)
+    // also reach. See #196/#197.
+    VBROADCASTSD s+48(FP), Y1
 
     // Create swapped [si,sr,si,sr,...] for cross products
     VSHUFPS $0xB1, Y1, Y1, Y4

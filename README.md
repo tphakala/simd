@@ -345,7 +345,7 @@ Results are identical to the per-row path either way.
 |            | `MulConjComplex(dstRe,dstIm,aRe,aIm,bRe,bIm)` | Multiply by conjugate      | 8x / 4x          |
 |            | `AbsSqComplex(dst,aRe,aIm)`           | Magnitude squared                  | 8x / 4x          |
 |            | `ButterflyComplex(uRe,uIm,lRe,lIm,twRe,twIm)` | FFT butterfly with twiddle | 8x / 4x          |
-|            | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real FFT unpack step     | 8x / 4x          |
+|            | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real FFT unpack step     | 8x (AVX2+FMA) / 4x (NEON)          |
 | **Utility**| `Reverse(dst, src)`                   | Reverse slice order                | 8x / 4x          |
 |            | `AddSub(sum, diff, a, b)`             | Fused sum and difference           | 8x / 4x          |
 

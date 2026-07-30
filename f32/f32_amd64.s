@@ -3426,6 +3426,21 @@ sqrt32_sse_scalar:
 sqrt32_sse_done:
     RET
 
+// 1.0 in IEEE 754 single precision, the broadcast source for reciprocalAVX.
+// It lives in memory rather than being materialized in a register because
+// VBROADCASTSS only takes an m32 source under AVX1; the register-source
+// (ymm, xmm) form was added by AVX2, and this kernel runs on the AVX+FMA tier,
+// which AVX1+FMA3 parts (AMD Piledriver and Steamroller; original Bulldozer
+// has FMA4 but not the FMA3 this tier tests, and Excavator added AVX2) also reach. See #196/#197.
+//
+// A dedicated 4-byte symbol rather than the first dword of the existing 32-byte
+// roundf32_one<> splat: that one belongs to roundAVX, and sharing would make
+// this kernel's correctness depend on a constant it does not own. Broadcast
+// source only, so 4 bytes is the whole symbol; do not turn it into a 256-bit
+// load.
+DATA recip32_one<>+0x00(SB)/4, $0x3f800000
+GLOBL recip32_one<>(SB), RODATA|NOPTR, $4
+
 // func reciprocalAVX(dst, a []float32)
 //
 // Reciprocal via Division with Latency Hiding (float32)
@@ -3449,11 +3464,9 @@ TEXT ·reciprocalAVX(SB), NOSPLIT, $0-48
     MOVQ dst_len+8(FP), CX
     MOVQ a_base+24(FP), SI
 
-    // Broadcast 1.0 to Y7 (preserved across all iterations)
-    // 0x3f800000 is 1.0 in IEEE 754 single precision
-    MOVL $0x3f800000, AX
-    MOVD AX, X7
-    VBROADCASTSS X7, Y7
+    // Broadcast 1.0 to Y7 (preserved across all iterations).
+    // AVX1 encoding: m32 source, not the AVX2-only register source.
+    VBROADCASTSS recip32_one<>(SB), Y7
 
     // Process 32 elements per iteration (4 vectors × 8 floats)
     // This allows 4 independent VDIVPS operations to be in-flight
@@ -3634,11 +3647,13 @@ recip32_sse_done:
 TEXT ·addScaledAVX(SB), NOSPLIT, $0-56
     MOVQ dst_base+0(FP), DX
     MOVQ dst_len+8(FP), CX
-    MOVSS alpha+24(FP), X3
     MOVQ s_base+32(FP), SI
 
-    // Broadcast alpha to Y3
-    VBROADCASTSS X3, Y3
+    // Broadcast alpha to Y3 straight from its argument slot. AVX1 only defines
+    // the m32 source for VBROADCASTSS; the register-source form is AVX2-only,
+    // and this kernel runs on the AVX+FMA tier that AVX1+FMA3 parts (AMD
+    // Piledriver and Steamroller) also reach. See #196/#197.
+    VBROADCASTSS alpha+24(FP), Y3
 
     MOVQ CX, AX
     SHRQ $3, AX
