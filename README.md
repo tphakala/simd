@@ -1009,10 +1009,10 @@ All int32 kernels are zero-allocation and bit-exact against the pure-Go referenc
   `*Go` reference; each pair reports the best of repeated runs. Displayed nanoseconds
   are rounded to whole ns, so the speedup column (computed from the raw timings) may
   differ from a recomputation using the rounded ns shown. The float32 and float64
-  Variance/StdDev rows are the exception on both counts, having been re-measured
-  under a stricter protocol with #214: medians of 9 rounds, one process per point
-  with the order alternated each round, pinned to one P-core, and speedups computed
-  from the rounded nanoseconds shown so a reader can check the division.
+  Variance/StdDev rows were re-measured with #214 under a stricter protocol:
+  medians of 9 rounds, one process per point with the order alternated each round,
+  pinned to one P-core, and speedups computed from the rounded nanoseconds shown,
+  so for those four rows the division can be checked by hand.
 
 ## Known Limitations
 

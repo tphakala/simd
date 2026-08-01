@@ -3184,12 +3184,10 @@ var_sse2_divide:
     // Keep the legacy CVTSQ2SD. Do not copy the VEX convert from
     // var_avx_divide above: varianceSSE2 is dispatched on CPUs without AVX,
     // where VCVTSI2SDQ is a SIGILL. TestAmd64KernelISALevel will not stop you.
-    // It gives any kernel whose name does not end in AVX2/AVX512 the AVX floor
-    // and a VEX-128 instruction classifies at that same floor, so the mutant
-    // leaves it green, while a genuine AVX2 instruction here does fail it. Both
-    // MEASURED. What does catch it is the cross-isa CI, where the Conroe and
-    // qemu64 SSE2 legs die on this line. #214 measured this kernel at 0
-    // assists, so there is nothing to fix here in the first place.
+    // It gives varianceSSE2 the AVX floor, and VCVTSI2SDQ classifies at that
+    // same floor, so the mutant leaves it green, while a genuine AVX2
+    // instruction here does fail it. Both MEASURED. What does catch it is the
+    // cross-isa CI, where the Conroe and qemu64 SSE2 legs die on this line.
     MOVQ a_len+8(FP), CX
     CVTSQ2SD CX, X1
     DIVSD X1, X0
