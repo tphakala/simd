@@ -100,6 +100,12 @@ func TestApplyDisableAll(t *testing.T) {
 
 // TestHelperInfo is the helper process for TestSIMDDisableAllIntegration. It only
 // runs when re-executed with SIMD_DISABLE_HELPER=1 and prints cpu.Info().
+//
+// It has a second caller outside this package: the cross-isa job in
+// .github/workflows/ci.yml runs it under qemu and parses the CPUINFO= line to
+// assert each CPU model reports the tier its matrix entry is named for. Renaming
+// it, or changing that output format, breaks every leg of that job. Keep the
+// bare fmt.Printf; a t.Logf would prefix the file:line and defeat the parse.
 func TestHelperInfo(t *testing.T) {
 	if os.Getenv("SIMD_DISABLE_HELPER") != "1" {
 		t.Skip("not the helper process")
