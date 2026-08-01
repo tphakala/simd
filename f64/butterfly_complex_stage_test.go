@@ -174,6 +174,13 @@ func TestButterflyComplexStage_MatchesPerBlockLoop(t *testing.T) {
 	}
 }
 
+// stageSIMDvsGoTol bounds the SIMD-vs-Go difference. Both sides compute the same
+// stage over the same data and differ only in how their multiply-adds fuse, so this
+// is a tighter absolute bound than closeEnough, which compares against a separate
+// scalar reference. On stageTestData's inputs (magnitudes of order 10) the observed
+// difference is a few ULP, far under this.
+const stageSIMDvsGoTol = 1e-12
+
 func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
 	for _, span := range stageSpans {
 		for _, blocks := range stageBlockCounts {
@@ -190,10 +197,10 @@ func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
 				butterflyComplexStage64Go(reGo, imGo, span, blocks, twRe, twIm)
 
 				for i := range n {
-					if math.Abs(re[i]-reGo[i]) > 1e-12 {
+					if math.Abs(re[i]-reGo[i]) > stageSIMDvsGoTol {
 						t.Errorf("re[%d]: SIMD=%v, Go=%v", i, re[i], reGo[i])
 					}
-					if math.Abs(im[i]-imGo[i]) > 1e-12 {
+					if math.Abs(im[i]-imGo[i]) > stageSIMDvsGoTol {
 						t.Errorf("im[%d]: SIMD=%v, Go=%v", i, im[i], imGo[i])
 					}
 				}

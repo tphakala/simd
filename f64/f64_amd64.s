@@ -6123,7 +6123,11 @@ butterfly_done:
 // float64. For every block k in steps of 2*span and every j in [0, span), the
 // butterfly at (k+j, k+span+j) with twiddle tw[j]. Same arithmetic sequence as
 // butterflyComplexAVX above (VMULPD/VMULPD/VSUBPD then VMULPD/VFMADD231PD), so
-// a stage produces the same bits as driving butterflyComplexAVX per block.
+// a stage produces the same bits as driving THAT KERNEL per block, for every span
+// and block count tested. That is a kernel-to-kernel statement, not a claim about
+// the exported ButterflyComplex: its dispatch withholds short slices from this
+// kernel, so a per-block loop through the public API can land on the Go path and
+// round differently. Compare kernels, not entry points.
 //
 // The stage form exists to pick its own vectorization axis. Long spans vectorize
 // across j, where the twiddles and both halves of the block are contiguous. Spans

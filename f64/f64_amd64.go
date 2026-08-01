@@ -666,11 +666,18 @@ func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64
 }
 
 func butterflyComplexStage64(re, im []float64, span, blocks int, twRe, twIm []float64) {
-	// butterflyComplexStageAVX handles every span: across j when span fills a
+	// butterflyComplexStageAVX is correct for every span: across j when span fills a
 	// 4-wide YMM, across blocks for span 1 and 2. span == 3 fills neither and runs
 	// through the kernel's scalar tail, which still beats the Go fallback by roughly
 	// 2-3x because the kernel absorbs the whole block loop into one call while the
 	// Go path pays a call per block that is over the inliner's budget.
+	//
+	// The guard below is about total work, not about span: a stage carrying fewer
+	// than minAVXElements butterflies goes to Go regardless of its span. So "every
+	// span" describes what the kernel handles, not what always reaches it. The
+	// threshold is conservative rather than load-bearing, since the kernel is
+	// correct below it too; see #206 for relaxing it, which needs coverage first
+	// because every current test enters through this guard.
 	//
 	// AVX+FMA is the whole requirement, with no AVX2 anywhere: the block-axis paths
 	// shuffle with VUNPCKLPD/VUNPCKHPD and VPERM2F128 and splat their twiddles with
