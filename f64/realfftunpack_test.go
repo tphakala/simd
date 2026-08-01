@@ -337,8 +337,105 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 	}
 }
 
+// TestRealFFTUnpack_SignedZero pins the sign of a zero result. Every input is a
+// signed zero and every twiddle is +1 or -1, so every intermediate is an exact
+// zero and nothing rounds: the comparison can be bit-for-bit. The AVX scalar
+// tail used to negate for the conjugate with 0 - x, which returns +0 where -x
+// returns -0, so it disagreed with both its own 4-wide body and the Go
+// reference on these inputs (#208).
+//
+// Both comparisons are needed and neither covers the other. Dispatched-vs-Go
+// pins the kernel, but wherever the dispatcher declines SIMD it CALLS
+// realFFTUnpack64Go, so that arm degenerates to comparing a value with itself.
+// Go-vs-realFFTUnpackRef pins the fallback against an independently written
+// oracle and holds on every tier. Swapping the first arm to the oracle instead
+// of adding the second would just move the blind spot onto the AVX path, where
+// realFFTUnpack64Go stops being reachable from RealFFTUnpack.
+func TestRealFFTUnpack_SignedZero(t *testing.T) {
+	// (n-1)%4 runs 0..3 over 5..8, so the AVX scalar tail is exercised at every
+	// length it can have; the NEON tail is (n-1)%2 and this list sweeps that too.
+	// 16, 64 and 65 add sizes with several full 4-wide blocks ahead of the tail,
+	// including one with no tail at all.
+	sizes := []int{5, 6, 7, 8, 16, 64, 65}
+
+	for _, n := range sizes {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			zRe := make([]float64, n)
+			zIm := make([]float64, n)
+			twRe := make([]float64, n-1)
+			twIm := make([]float64, n-1)
+			outRe := make([]float64, n)
+			outIm := make([]float64, n)
+			outReGo := make([]float64, n)
+			outImGo := make([]float64, n)
+			outReRef := make([]float64, n)
+			outImRef := make([]float64, n)
+
+			// Six independent sign bits. zRe and zIm each get one sign for the low
+			// half of the input and one for the high half: a tail element has k in
+			// the high half and its mirror index nk = n-k in the low half, so the
+			// split lets the sweep drive the two ends of a mirrored pair apart.
+			// The two twiddles take one sign each. 64 patterns covers every
+			// combination.
+			const signBits = 6
+			for pat := range 1 << signBits {
+				sign := func(bit uint) float64 {
+					if pat&(1<<bit) != 0 {
+						return -1
+					}
+					return 1
+				}
+				half := n / 2
+				for i := range n {
+					reBit, imBit := uint(0), uint(1)
+					if i >= half {
+						reBit, imBit = 2, 3
+					}
+					zRe[i] = math.Copysign(0, sign(reBit))
+					zIm[i] = math.Copysign(0, sign(imBit))
+				}
+				for k := 1; k < n; k++ {
+					twRe[k-1] = sign(4)
+					twIm[k-1] = sign(5)
+				}
+
+				RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
+				realFFTUnpack64Go(outReGo, outImGo, zRe, zIm, twRe, twIm, n)
+				realFFTUnpackRef(outReRef, outImRef, zRe, zIm, twRe, twIm, n)
+
+				for k := 1; k < n; k++ {
+					if math.Float64bits(outRe[k]) != math.Float64bits(outReGo[k]) {
+						t.Errorf("pat=%#02x k=%d: outRe = %v (%#016x), Go = %v (%#016x)",
+							pat, k, outRe[k], math.Float64bits(outRe[k]),
+							outReGo[k], math.Float64bits(outReGo[k]))
+					}
+					if math.Float64bits(outIm[k]) != math.Float64bits(outImGo[k]) {
+						t.Errorf("pat=%#02x k=%d: outIm = %v (%#016x), Go = %v (%#016x)",
+							pat, k, outIm[k], math.Float64bits(outIm[k]),
+							outImGo[k], math.Float64bits(outImGo[k]))
+					}
+					if math.Float64bits(outReGo[k]) != math.Float64bits(outReRef[k]) {
+						t.Errorf("pat=%#02x k=%d: Go outRe = %v (%#016x), ref = %v (%#016x)",
+							pat, k, outReGo[k], math.Float64bits(outReGo[k]),
+							outReRef[k], math.Float64bits(outReRef[k]))
+					}
+					if math.Float64bits(outImGo[k]) != math.Float64bits(outImRef[k]) {
+						t.Errorf("pat=%#02x k=%d: Go outIm = %v (%#016x), ref = %v (%#016x)",
+							pat, k, outImGo[k], math.Float64bits(outImGo[k]),
+							outImRef[k], math.Float64bits(outImRef[k]))
+					}
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkRealFFTUnpack(b *testing.B) {
-	sizes := []int{64, 128, 256, 512, 1024, 4096}
+	// 513 sits next to 512 because every power of two in this list has
+	// (n-1)%4 == 3, the longest AVX scalar tail (and (n-1)%2 == 1, the longest
+	// NEON one). Without a size where the tail is empty its cost is charged to
+	// every row and reads as the kernel's baseline.
+	sizes := []int{64, 128, 256, 512, 513, 1024, 4096}
 
 	benchFn := func(b *testing.B, n int, fn func(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int)) {
 		b.Helper()

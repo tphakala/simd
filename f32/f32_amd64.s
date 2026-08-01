@@ -5371,33 +5371,42 @@ realfft_remainder:
     ADDQ BX, R12                     // R12 = &twIm[k-1]
     INCQ AX                          // Restore AX = k
 
-realfft_scalar:
-    // Calculate mirror index: nk = n - k
+    // Mirror pointers for the tail. nk = n-k falls by one as k rises, so R9 and
+    // R10 walk backwards through zRe/zIm instead of being recomputed from the
+    // frame on every iteration. Both are dead here: the 8-wide loop above has
+    // finished with them, and this block sets both unconditionally, so the
+    // AX == 0 entry that skips the vector preamble is covered too.
     MOVQ CX, BX
-    SUBQ AX, BX                      // BX = n - k = nk
+    SUBQ AX, BX                      // BX = n - k = nk of the first tail element
+    SHLQ $2, BX                      // BX = nk * 4 = byte offset
+    MOVQ zRe_base+48(FP), R9
+    ADDQ BX, R9                      // R9 = &zRe[nk]
+    MOVQ zIm_base+72(FP), R10
+    ADDQ BX, R10                     // R10 = &zIm[nk]
 
+    // Tail constants, hoisted out of the loop and loaded from RODATA with VEX.
+    // Whenever the 8-wide loop ran, the upper YMM halves are dirty here (the
+    // only VZEROUPPER is at realfft_done), so a legacy-SSE MOVD in the loop
+    // body pays an AVX-SSE transition: MEASURED at 2 assists.sse_avx_mix per
+    // iteration on an i7-1260P, about 213 cycles each, which is essentially the
+    // whole per-element tail cost. Dropping them took n=64 from 662 ns to
+    // 27 ns. See #208.
+    VMOVSS roundf32_half<>(SB), X13     // X13 = 0.5f
+    VMOVSS roundf32_signmask<>(SB), X14 // X14 = 0x80000000 (sign bit only)
+
+realfft_scalar:
     // Load Z[k]
     VMOVSS (DI), X0                  // X0 = zRe[k]
     VMOVSS (R8), X1                  // X1 = zIm[k]
 
     // Load conj(Z[n-k])
-    MOVQ zRe_base+48(FP), R15
-    MOVQ BX, R9
-    SHLQ $2, R9
-    ADDQ R9, R15
-    VMOVSS (R15), X2                 // X2 = zRe[nk]
+    VMOVSS (R9), X2                  // X2 = zRe[nk]
+    VMOVSS (R10), X3                 // X3 = zIm[nk]
 
-    MOVQ zIm_base+72(FP), R15
-    ADDQ R9, R15
-    VMOVSS (R15), X3                 // X3 = zIm[nk]
-
-    // Load 0.5 constant (0x3F000000 = 0.5f)
-    MOVL $0x3F000000, BX
-    MOVD BX, X13
-
-    // Negate X3 for conjugate: znkIm = -zIm[nk]
-    VXORPS X14, X14, X14
-    VSUBSS X3, X14, X3               // X3 = -zIm[nk] = znkIm
+    // Negate X3 for conjugate: znkIm = -zIm[nk]. The sign-bit flip matches the
+    // 8-wide body above and realFFTUnpack32Go, both of which negate; a 0 - x
+    // subtract returns +0 for zIm[nk] == +0 where -x returns -0.
+    VXORPS X14, X3, X3               // X3 = -zIm[nk] = znkIm
 
     // evenRe = 0.5 * (zkRe + znkRe)
     VADDSS X0, X2, X4
@@ -5438,11 +5447,12 @@ realfft_scalar:
     // Advance pointers
     ADDQ $4, DI
     ADDQ $4, R8
+    SUBQ $4, R9                      // mirror zRe: nk--
+    SUBQ $4, R10                     // mirror zIm: nk--
     ADDQ $4, R11
     ADDQ $4, R12
     ADDQ $4, DX
     ADDQ $4, SI
-    INCQ AX                          // k++
 
     DECQ R13
     JNZ  realfft_scalar
