@@ -3447,22 +3447,21 @@ func TestRealFFTUnpack_KnownValues(t *testing.T) {
 	}
 }
 
-// realFFTUnpack32Close is the tolerance for the two tests below, which compare
-// the dispatched kernel against realFFTUnpackRef. The two differ only in how
-// their multiply-adds fuse, so they agree to within float32 rounding rather than
-// exactly.
+// realFFTUnpack32Close is the tolerance for TestRealFFTUnpack_OverRead below,
+// which compares the dispatched kernel against realFFTUnpackRef. The two differ
+// only in how their multiply-adds fuse, so they agree to within float32 rounding
+// rather than exactly.
 //
-// MEASURED over the size sweep below plus 128/256/512/1000: the largest absolute
-// difference is 1.907e-06 on an AVX+FMA amd64 core and 9.537e-07 on a NEON
-// Cortex-A76, so realFFTUnpack32AbsTol carries every row at about 52x the worst
-// case.
+// MEASURED by instrumenting this predicate and running the whole f32 suite: over
+// its 690 comparisons the worst absolute difference is 1.907e-06 on an AVX+FMA
+// amd64 core and 9.537e-07 on a NEON Cortex-A76, so realFFTUnpack32AbsTol carries
+// every row at about 52x the worst case.
 //
-// Do not delete the absolute arm in favour of the relative one. The worst
-// RELATIVE difference over the same sweep is 2.017e-05 on amd64, which is above
-// realFFTUnpack32RelTol, and it occurs on an element where the unpack's sum and
-// difference cancel to near zero while the rounding that produced them does not
-// shrink with them. The relative arm is a safety valve for data larger than this
-// fixture's; it only takes over above |want| == 10.
+// Do not delete the absolute arm in favour of the relative one. It is the
+// deciding arm for 592 of those 690 comparisons, and the worst relative
+// difference, 1.425e-05, is above realFFTUnpack32RelTol. The relative band is a
+// safety valve for data larger than this fixture's; it only takes over above
+// |want| == 10.
 const (
 	realFFTUnpack32AbsTol = 1e-4
 	realFFTUnpack32RelTol = 1e-5
@@ -3484,8 +3483,8 @@ func realFFTUnpack32Close(got, want float32) bool {
 // the slice and a diagnostic that names the cause. MEASURED: shifting the reverse
 // pointer to &zRe[n-7] is caught here AND by TestRealFFTUnpack,
 // TestRealFFTUnpack_GoVsSIMD and TestRealFFTUnpack_SignedZero, so this is not the
-// only net under that particular mutation. Those three depend on whatever the
-// allocator happens to leave after the slice; this one does not.
+// only net under that particular mutation. It is the only one that reports the
+// over-read as such rather than as a value mismatch.
 //
 // Three things make the guard band work, and checking only the first two reads as
 // thorough. It is non-zero; NaN is not an algebraic identity for the add or the
@@ -3494,10 +3493,11 @@ func realFFTUnpack32Close(got, want float32) bool {
 // AVX-512 realFFTUnpack kernel, and NEON is 4-wide).
 func TestRealFFTUnpack_OverRead(t *testing.T) {
 	const pad = 16 // two 8-wide AVX blocks of NaN guard band on each side of z
-	// n > minAVXElements (8) is what dispatches to AVX, and these sizes vary
-	// (n-1)%8 and (n-1)%4 so both the AVX and NEON reverse paths are stressed at
-	// their minimum reverse index and at every tail length.
-	for _, n := range []int{9, 10, 16, 17, 18, 31, 32, 33, 64, 65} {
+	// n > minAVXElements (8) is what dispatches to AVX. 9 to 16 sweeps (n-1)%8
+	// through all of 0..7, so the 8-wide AVX path is hit at every scalar-tail
+	// length and at its minimum reverse index; that range also covers (n-1)%4 for
+	// the 4-wide NEON path. The larger sizes add multi-iteration reverse walks.
+	for _, n := range []int{9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 31, 32, 33, 64, 65} {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
 			nan := float32(math.NaN())
 			zReBack := make([]float32, pad+n+pad)

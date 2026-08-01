@@ -133,7 +133,9 @@ var stageBlockCounts = []int{1, 2, 3, 4, 5, 6, 7, 8, 16, 33}
 // MEASURED by flipping the sign in butterflyComplex64Go's complex multiply. Under
 // SIMD_DISABLE=all, which models the sub-AVX2 qemu legs added in #203/#213, this
 // test fails while MatchesPerBlockLoop and SIMDvsGo both stay green. Natively on
-// AVX2 all three fail.
+// AVX2 all three fail. It is not the only net on those legs, since
+// TestButterflyComplexStage_FullFFT also catches that mutation there; it is the
+// only one of the three parity tests that does.
 func TestButterflyComplexStage(t *testing.T) {
 	for _, span := range stageSpans {
 		for _, blocks := range stageBlockCounts {

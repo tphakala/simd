@@ -45,19 +45,24 @@ func realFFTUnpackRef(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 
 // Tolerances for realFFTUnpackClose.
 //
-// MEASURED over sizes 2 to 1000: the worst absolute divergence between the
-// dispatched kernel and realFFTUnpackRef is 3.553e-15 on an AVX+FMA amd64 core
-// and 1.776e-15 on a NEON Cortex-A76, so realFFTUnpackAbsTol sits about 28x above
-// the worst case. The absolute floor has to exist because the unpack's sum and
-// difference can cancel to near zero while the rounding that produced them does
-// not shrink with them; the relative band only takes over above |want| == 0.01,
-// and the worst relative divergence measured is 3.757e-14 against it.
+// MEASURED by instrumenting this predicate and running the whole f64 suite: over
+// its 7106 comparisons the worst absolute divergence between the dispatched
+// kernel and realFFTUnpackRef is 2.842e-14 on an AVX2+FMA amd64 core (which is
+// the tier this kernel needs, see realFFTUnpack64) and 1.776e-15 on a NEON
+// Cortex-A76. realFFTUnpackAbsTol therefore sits about 35x above the worst case,
+// in line with the ~52x this repo uses elsewhere. The worst relative divergence
+// is 3.757e-14 against the 1e-11 band.
 //
-// The absolute floor was 1e-9 until #211, four orders of magnitude looser than
-// this, while the comment above it already named 1e-13 as the divergence it
-// needed to admit.
+// The two arms split at |want| == 0.1. Below that the absolute floor is the
+// deciding arm, which covers 40 of the 7106 comparisons, and the worst divergence
+// among those is 1.776e-15. The element producing the 2.842e-14 above is far
+// larger than 0.1, so the relative band is what carries it.
+//
+// The floor is there for outputs where the unpack cancels to near zero, and the
+// tightening is what gives it teeth: it was 1e-9 until #211, which admitted a
+// 1e-10 error at an exactly-cancelled element. This rejects that.
 const (
-	realFFTUnpackAbsTol = 1e-13
+	realFFTUnpackAbsTol = 1e-12
 	realFFTUnpackRelTol = 1e-11
 )
 
@@ -306,6 +311,11 @@ func TestRealFFTUnpack_OverRead(t *testing.T) {
 // TestRealFFTUnpack_ShortSlices exercises the length-validation guards: with n
 // taken from len(zRe), any operand shorter than required (zIm/outRe/outIm < n, or
 // twRe/twIm < n-1) must make the call return without writing output or panicking.
+//
+// Each case shortens exactly one operand, so every clause of the guard is pinned
+// on its own. Shortening twRe and twIm together, which this table used to do,
+// left either twiddle clause deletable with the package still green, since the
+// other clause caught the case on its own.
 func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 	const n = 8
 	makeZ := func() ([]float64, []float64) {
@@ -316,10 +326,13 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 		}
 		return zRe, zIm
 	}
-	makeTw := func(m int) ([]float64, []float64) {
-		a, b := make([]float64, m), make([]float64, m)
-		for i := range m {
-			a[i], b[i] = 0.5, -0.5
+	makeTw := func(reLen, imLen int) ([]float64, []float64) {
+		a, b := make([]float64, reLen), make([]float64, imLen)
+		for i := range a {
+			a[i] = 0.5
+		}
+		for i := range b {
+			b[i] = -0.5
 		}
 		return a, b
 	}
@@ -333,19 +346,20 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 	}
 
 	cases := []struct {
-		name                              string
-		zImLen, outReLen, outImLen, twLen int
+		name                                         string
+		zImLen, outReLen, outImLen, twReLen, twImLen int
 	}{
-		{"shortZIm", n - 1, n, n, n - 1},
-		{"shortOutRe", n, n - 1, n, n - 1},
-		{"shortOutIm", n, n, n - 1, n - 1},
-		{"shortTwiddles", n, n, n, n - 2},
+		{"shortZIm", n - 1, n, n, n - 1, n - 1},
+		{"shortOutRe", n, n - 1, n, n - 1, n - 1},
+		{"shortOutIm", n, n, n - 1, n - 1, n - 1},
+		{"shortTwRe", n, n, n, n - 2, n - 1},
+		{"shortTwIm", n, n, n, n - 1, n - 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			zRe, zImFull := makeZ()
 			zIm := zImFull[:c.zImLen]
-			twRe, twIm := makeTw(c.twLen)
+			twRe, twIm := makeTw(c.twReLen, c.twImLen)
 			outRe := make([]float64, c.outReLen)
 			outIm := make([]float64, c.outImLen)
 			RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
