@@ -798,7 +798,9 @@ and re-measured after the variance divide-epilogue fix (#214)
 \*Variance/StdDev/EuclideanDistance use their own fixed 1000-element benchmark
 (the other rows are at 1024 elements). The Variance and StdDev rows were
 re-measured after the variance divide-epilogue fix (#214); the other rows come
-from one earlier run on this host.
+from one earlier run on this host. `BenchmarkVariance_1000` and
+`BenchmarkStdDev_1000` have no Go sub-benchmark, so those two Go figures come
+from running the same benchmarks under `SIMD_DISABLE=all`.
 
 #### Activation Functions - SIMD vs Pure Go
 
