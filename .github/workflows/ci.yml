@@ -66,6 +66,21 @@ jobs:
           SIMD_REQUIRE_OBJDUMP: ${{ runner.os == 'Linux' && '1' || '' }}
         run: go test -v -race ./...
 
+      - name: Run tests with AVX2 masked off
+        # SIMD_DISABLE=avx2 clears AVX2, AVX-VNNI and the AVX-512 pair at package
+        # init and leaves AVX, FMA3 and F16C set, so the suite runs on the
+        # highest sub-AVX2 tier this runner offers and the normal parity,
+        # bit-exactness and zero-allocation assertions all apply to it. Only the
+        # ubuntu-latest leg runs it: the arm64 legs have no x86 tiers to mask,
+        # and one x86 run covers the dispatch. It cannot catch a SIGILL, because
+        # the silicon still has AVX2 and executes an out-of-tier encoding
+        # happily; the cross-isa qemu legs are what enforce the encodings. The
+        # two are complementary, not substitutes.
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          SIMD_DISABLE: avx2
+        run: go test ./...
+
       - name: Run tests with coverage
         if: matrix.coverage
         env:
@@ -157,14 +172,65 @@ jobs:
         run: go build ./...
 
   cross-isa:
-    # Run the amd64 test suite under qemu on CPU models that lack AVX (and, for
-    # Conroe, SSE4.1) so the SSE2/SSE4.x fallback dispatch paths are actually
-    # exercised. Every CI/dev host has AVX, so without this leg the fallback
-    # kernels are never run: a fallback that issues an unsupported instruction
-    # (SIGILL) or diverges from the SIMD kernel ships undetected. qemu-x86_64
-    # v7+ enforces the -cpu feature set, raising #UD for out-of-baseline ops.
-    name: Cross-ISA (no-AVX fallbacks)
+    # Run the amd64 test suite under qemu on CPU models below the AVX2 tier that
+    # every CI and dev host provides, so the SSE2, SSE4.x, AVX1 and AVX1+FMA3
+    # dispatch paths are actually executed. Without this leg they never run at
+    # all: a kernel whose body needs a higher tier than its own dispatch guard
+    # requires faults with #UD (SIGILL) only on hardware nobody here owns, and a
+    # fallback that diverges numerically from the SIMD kernel ships undetected.
+    # That is how #196 and #197 shipped. qemu-x86_64 v7+ enforces the -cpu
+    # feature set, raising #UD for out-of-baseline instructions.
+    #
+    # One job per model rather than one job looping over all of them: the work is
+    # packages x models and the emulated f32/f64 suites dominate it, so running
+    # four models in series would make what is already the slowest job in this
+    # workflow markedly slower still. Fanned out, wall time is set by the slowest
+    # single model instead of by their sum.
+    name: Cross-ISA (${{ matrix.label }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every feature set below was read back through this repo's own cpu
+        # package under qemu-x86_64 10.0.11 and cross-checked by executing a
+        # probe instruction from each tier under each model. `tier` is the
+        # cpu.Info() string the model must report, asserted before the suite runs
+        # because a model whose flags are silently ignored gives a green leg that
+        # proves nothing: qemu accepts "+avx" on a base model that carries no
+        # XSAVE/OSXSAVE, and Go's CPUID probe then reports no AVX at all, quietly
+        # demoting the leg to a second copy of the SSE2 baseline.
+        include:
+          # SSE3 + SSSE3, no SSE4.1, no AVX. Catches the c128 BLENDPD SIGILL and
+          # any SSE4.x instruction inside an SSSE3-gated kernel.
+          - label: Conroe (SSSE3)
+            model: Conroe
+            tier: AMD64 SSE2
+
+          # qemu64 stripped to the amd64 SSE2 baseline. Catches SSE3-and-later
+          # ops such as MOVDDUP inside an SSE2-gated kernel.
+          - label: qemu64 (SSE2 baseline)
+            model: qemu64,-pni,-ssse3,-sse4.1,-sse4.2,-avx,-avx2
+            tier: AMD64 SSE2
+
+          # SSE4.2 + AVX, no FMA3, no AVX2, no F16C: VEX.256 float ops execute
+          # while FMA3 and AVX2 both fault. The only model here that reaches
+          # f64's initAVXNoFMA tier, and the tier #197's f64.Reciprocal SIGILLed
+          # on.
+          - label: SandyBridge (AVX1)
+            model: SandyBridge
+            tier: AMD64 AVX
+
+          # AMD Piledriver: SSE4.2 + AVX + FMA3 + F16C, no AVX2. FMA3 executes
+          # and AVX2 faults, so a guard that tests AVX and FMA but not AVX2 is
+          # reached here with AVX2 encodings still illegal. That is the tier
+          # #196's f32.RealFFTUnpack SIGILLed on, and the tier the rest of the
+          # kernels fixed by the #200 sweep can reach. qemu prints "TCG doesn't
+          # support requested feature" warnings for XOP/FMA4/TBM/misalignsse
+          # under this model; they are cosmetic, none of those features is used
+          # here.
+          - label: Opteron_G5 (AVX1+FMA3)
+            model: Opteron_G5
+            tier: AMD64 AVX+FMA
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -177,13 +243,33 @@ jobs:
       - name: Install qemu-user
         run: sudo apt-get update && sudo apt-get install -y qemu-user
 
-      - name: Run amd64 tests under no-AVX CPU models
+      - name: Assert the model reports the tier it is named for
+        env:
+          MODEL: ${{ matrix.model }}
+          WANT_TIER: ${{ matrix.tier }}
+        run: |
+          set -euo pipefail
+          # cpu.Info() collapses AVX2 into "AMD64 AVX+FMA", so this pins the AVX,
+          # FMA3 and AVX-512 bits but not the absence of AVX2; that absence is a
+          # property of the qemu model definition and is what the #UD enforcement
+          # in the next step rests on. TestHelperInfo lives in cpu/disable_test.go
+          # and prints cpu.Info() when SIMD_DISABLE_HELPER=1.
+          CGO_ENABLED=0 go test -c -o /tmp/cpu.test ./cpu
+          got=$(SIMD_DISABLE_HELPER=1 qemu-x86_64 -cpu "$MODEL" /tmp/cpu.test \
+                  -test.run='^TestHelperInfo$' -test.v 2>/dev/null \
+                | sed -n 's/^[[:space:]]*CPUINFO=//p')
+          if [ "$got" != "$WANT_TIER" ]; then
+            echo "::error::qemu -cpu $MODEL reports cpu.Info()=\"$got\", want \"$WANT_TIER\""
+            exit 1
+          fi
+          echo "qemu -cpu $MODEL reports $got"
+          rm -f /tmp/cpu.test
+
+      - name: Run amd64 tests under the qemu CPU model
+        env:
+          MODEL: ${{ matrix.model }}
         run: |
           set -uo pipefail
-          # Conroe: SSSE3, no SSE4.1, no AVX (catches the c128 BLENDPD SIGILL).
-          # qemu64 stripped to SSE2: the amd64 baseline (catches SSE3+ ops like
-          # MOVDDUP and any non-SSE2 instruction in an SSE2-gated kernel).
-          models=("Conroe" "qemu64,-pni,-ssse3,-sse4.1,-sse4.2,-avx,-avx2")
           fail=0
           for pkg in $(go list ./...); do
             # Skip packages with no test files; a compile failure in a real test
@@ -196,16 +282,14 @@ jobs:
               fail=1
               continue
             fi
-            for m in "${models[@]}"; do
-              echo "::group::$pkg @ qemu -cpu $m"
-              if qemu-x86_64 -cpu "$m" "$bin" -test.v; then
-                echo "ok"
-              else
-                echo "::error::$pkg failed under qemu -cpu $m"
-                fail=1
-              fi
-              echo "::endgroup::"
-            done
+            echo "::group::$pkg @ qemu -cpu $MODEL"
+            if qemu-x86_64 -cpu "$MODEL" "$bin" -test.v; then
+              echo "ok"
+            else
+              echo "::error::$pkg failed under qemu -cpu $MODEL"
+              fail=1
+            fi
+            echo "::endgroup::"
             rm -f "$bin"
           done
           exit "$fail"
