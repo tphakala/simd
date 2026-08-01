@@ -921,9 +921,10 @@ const butterflyStageRadix = 2
 // ButterflyComplex costs one call per block, so the call count grows as the
 // runs get short and per-call overhead dominates the small-span stages. Taking
 // the whole stage lets the implementation pick its own vectorization axis,
-// which is not expressible through the per-block API: across j when span fills
-// a vector, and across blocks at the short spans that do. A span that fills
-// neither (span 3 on the 4-wide AVX path) runs the scalar tail.
+// which is not expressible through the per-block API: across j when span is
+// large enough to fill a vector, and across blocks when span is short enough
+// that a whole vector of them fits. A span between the two fills neither axis
+// (span 3 on the 4-wide AVX path) and runs the scalar tail.
 //
 // The stage is a no-op unless span > 0, len(twRe) >= span and len(twIm) >= span,
 // and it is also a no-op when no complete block fits. Blocks are processed while

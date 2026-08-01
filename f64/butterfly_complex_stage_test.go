@@ -237,7 +237,8 @@ func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
 // which grows as n^2 rather than as n.
 //
 // Measured over n in [8, 8192] on a NEON Cortex-A76 and an AVX+FMA amd64 core,
-// the fitted exponent is roughly n^2 and this bound holds with at least 65x
+// the error grows as roughly n^2 (fitted exponent about 2, the exact figure
+// depending on the fit) and this bound holds with at least 65x
 // headroom at every size measured (the minimum is 69.7x at n = 128), on arm64
 // and on amd64 under both GOAMD64=v1 and v3. The mechanism sits on
 // the reference side, not in the kernels: the naive DFT accumulates n terms per
