@@ -344,7 +344,13 @@ func asmFuncBody(src, fn string) ([]string, bool) {
 func TestNoFMAContract(t *testing.T) {
 	// VFMADD/VFNMADD/VFMSUB/VFNMSUB (amd64); FMADD/FMSUB/FNMADD/FNMSUB and the
 	// FMLA/FMLS vector forms (arm64). Deliberately excludes FMUL/FADD/FMAX/FMIN.
-	fmaRe := regexp.MustCompile(`^(VFN?M(ADD|SUB)|FN?M(ADD|SUB)|FML[AS])`)
+	//
+	// FML[AS] carries an optional V because the two spellings reach this test by
+	// different routes: a WORD decoded through arm64asm yields the ARM spelling
+	// FMLA, while a source-level mnemonic yields Go's Plan 9 spelling VFMLA.
+	// Matching only the former would let a kernel written with the mnemonic (the
+	// form docs/assembly-encoding.md recommends for new kernels) fuse silently.
+	fmaRe := regexp.MustCompile(`^(VFN?M(ADD|SUB)|FN?M(ADD|SUB)|V?FML[AS])`)
 
 	for _, k := range singleRoundingKernels {
 		src, err := os.ReadFile(k.file)

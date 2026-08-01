@@ -81,13 +81,27 @@ func stageTestData(n, span int) (re, im, twRe, twIm []float64) {
 // 1e-3 in magnitude.
 const stageTwiddlePhase = 0.4
 
-// Tolerances for closeEnough. The absolute floor carries values near zero, where a
-// relative bound is meaningless because the butterfly's sum and difference can
-// cancel to nearly nothing; the relative bound carries everything else. Both match
-// TestButterflyComplex's relTol.
+// Tolerances for closeEnough.
+//
+// Three of this file's tests compare two implementations of the same butterfly
+// over the same data, differing only in how their multiply-adds fuse: SIMD vs
+// butterflyComplexStageRef, SIMD vs the per-block ButterflyComplex loop, and
+// SIMD vs the Go fallback. All three use this one bound rather than inventing
+// their own. Over the full stageSpans x stageBlockCounts sweep the largest
+// difference any of them produces is 1.78e-15, on both an AVX+FMA amd64 core
+// and a NEON Cortex-A76.
+//
+// The bound has to be absolute rather than relative, because the butterfly's
+// sum and difference can cancel to near zero while the rounding that produced
+// them does not shrink with them. On amd64 the worst RELATIVE difference over
+// the same sweep is 1.46e-13, and it occurs on exactly such a cancelled element.
+//
+// So stageAbsTol carries every row, at 56x the measured worst case. stageRelTol
+// is a safety valve for data larger than this fixture's; it only takes over
+// above |want| == 10 and no current row depends on it.
 const (
-	stageAbsTol = 1e-9
-	stageRelTol = 1e-11
+	stageAbsTol = 1e-13
+	stageRelTol = 1e-14
 )
 
 // closeEnough is the tolerance used throughout: the vector and scalar paths fuse
@@ -183,13 +197,14 @@ func TestButterflyComplexStage_MatchesPerBlockLoop(t *testing.T) {
 	}
 }
 
-// stageSIMDvsGoTol bounds the SIMD-vs-Go difference. Both sides compute the same
-// stage over the same data and differ only in how their multiply-adds fuse, so this
-// is a tighter absolute bound than closeEnough, which compares against a separate
-// scalar reference. On stageTestData's inputs (magnitudes of order 10) the observed
-// difference is a few ULP, far under this.
-const stageSIMDvsGoTol = 1e-12
-
+// TestButterflyComplexStage_SIMDvsGo compares the dispatched kernel against the
+// Go fallback over an explicit (span, blocks) grid, rather than through the
+// public wrapper, which derives blocks from the slice lengths.
+//
+// This does NOT get below the SIMD-versus-Go threshold: that lives inside
+// butterflyComplexStage64, which is the function called here, so rows under it
+// compare the Go path against itself. On amd64 that is 5 of the 140 rows
+// (blocks*span < 4), on arm64 1 (blocks*span < 2).
 func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
 	for _, span := range stageSpans {
 		for _, blocks := range stageBlockCounts {
@@ -206,10 +221,10 @@ func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
 				butterflyComplexStage64Go(reGo, imGo, span, blocks, twRe, twIm)
 
 				for i := range n {
-					if math.Abs(re[i]-reGo[i]) > stageSIMDvsGoTol {
+					if !closeEnough(re[i], reGo[i]) {
 						t.Errorf("re[%d]: SIMD=%v, Go=%v", i, re[i], reGo[i])
 					}
-					if math.Abs(im[i]-imGo[i]) > stageSIMDvsGoTol {
+					if !closeEnough(im[i], imGo[i]) {
 						t.Errorf("im[%d]: SIMD=%v, Go=%v", i, im[i], imGo[i])
 					}
 				}
@@ -217,6 +232,22 @@ func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
 		}
 	}
 }
+
+// stageFFTTolPerN2 bounds TestButterflyComplexStage_FullFFT's per-bin error,
+// which grows as n^2 rather than as n.
+//
+// Measured over n in [8, 8192] on a NEON Cortex-A76 and an AVX+FMA amd64 core,
+// the error grows as roughly n^2 (fitted exponent about 2, the exact figure
+// depending on the fit) and this bound holds with at least 65x
+// headroom at every size measured (the minimum is 69.7x at n = 128), on arm64
+// and on amd64 under both GOAMD64=v1 and v3. The mechanism sits on
+// the reference side, not in the kernels: the naive DFT accumulates n terms per
+// bin, and |X[k]| for this input itself grows like O(n).
+//
+// It replaces a 1e-10*n bound, which grew as n^1 against an n^2 error, so its
+// headroom shrank with size. Scaling by n^2 keeps it roughly flat instead, so
+// adding a larger row later does not silently spend the margin.
+const stageFFTTolPerN2 = 1e-14
 
 // TestButterflyComplexStage_FullFFT drives a complete iterative Cooley-Tukey
 // transform through ButterflyComplexStage and checks it against a naive DFT.
@@ -271,9 +302,9 @@ func TestButterflyComplexStage_FullFFT(t *testing.T) {
 					wantRe += srcRe[i]*c - srcIm[i]*s
 					wantIm += srcRe[i]*s + srcIm[i]*c
 				}
-				// Accumulated FFT/DFT rounding grows with n; scale the bound by
-				// the transform size rather than using a flat epsilon.
-				tol := 1e-10 * float64(n)
+				// Accumulated rounding, dominated by the naive DFT reference,
+				// grows as n^2; see stageFFTTolPerN2.
+				tol := stageFFTTolPerN2 * float64(n) * float64(n)
 				if math.Abs(re[k]-wantRe) > tol || math.Abs(im[k]-wantIm) > tol {
 					t.Fatalf("bin %d = (%v, %v), want (%v, %v), tol %v",
 						k, re[k], im[k], wantRe, wantIm, tol)

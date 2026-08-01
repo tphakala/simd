@@ -188,7 +188,10 @@ Add the operation to `testdata/generate_expectations.c` for validation.
 
 ### 7. Update Documentation
 
-Update `README.md` to include the new operation in the API table.
+Update `README.md` to include the new operation in the API table, and add it to
+the package index in `doc.go`. Both are hand-maintained and nothing checks them,
+so an operation added to one and not the other drifts silently; that is how the
+FFT primitives ended up in the README but not in `doc.go`.
 
 ## Code Style
 
