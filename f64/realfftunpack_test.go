@@ -335,10 +335,22 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 		}
 		return a, b
 	}
-	allZero := func(t *testing.T, name string, s []float64) {
+	// Outputs are prefilled with a sentinel rather than left zero. A zero-filled
+	// buffer cannot distinguish "the guard returned without writing" from "the
+	// kernel ran and wrote a zero", so the assertion would not catch the case it
+	// is named for.
+	const sentinel = -1.5
+	makeOut := func(n int) []float64 {
+		s := make([]float64, n)
+		for i := range s {
+			s[i] = sentinel
+		}
+		return s
+	}
+	untouched := func(t *testing.T, name string, s []float64) {
 		t.Helper()
 		for i, v := range s {
-			if v != 0 {
+			if v != sentinel {
 				t.Errorf("%s written at [%d]=%v, want untouched (guard should have returned)", name, i, v)
 			}
 		}
@@ -359,11 +371,11 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 			zRe, zImFull := makeZ()
 			zIm := zImFull[:c.zImLen]
 			twRe, twIm := makeTw(c.twReLen, c.twImLen)
-			outRe := make([]float64, c.outReLen)
-			outIm := make([]float64, c.outImLen)
+			outRe := makeOut(c.outReLen)
+			outIm := makeOut(c.outImLen)
 			RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
-			allZero(t, "outRe", outRe)
-			allZero(t, "outIm", outIm)
+			untouched(t, "outRe", outRe)
+			untouched(t, "outIm", outIm)
 		})
 	}
 }

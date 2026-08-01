@@ -3452,10 +3452,11 @@ func TestRealFFTUnpack_KnownValues(t *testing.T) {
 // only in how their multiply-adds fuse, so they agree to within float32 rounding
 // rather than exactly.
 //
-// MEASURED by instrumenting this predicate and running the whole f32 suite on a
-// default build: over its 690 comparisons the worst absolute difference is
-// 1.907e-06 on an AVX+FMA amd64 core and 9.537e-07 on a NEON Cortex-A76, so
-// realFFTUnpack32AbsTol carries every row at about 52x the worst case.
+// MEASURED by instrumenting this predicate and running the whole f32 suite. On a
+// default amd64 build, over its 690 comparisons, the worst absolute difference is
+// 1.907e-06 on an AVX+FMA core. A separate run on a NEON Cortex-A76 reached
+// 9.537e-07. So realFFTUnpack32AbsTol carries every row at about 52x the worst
+// case.
 //
 // Keep the absolute arm. On that build the worst relative difference, 1.425e-05,
 // is above realFFTUnpack32RelTol, so deleting the absolute arm fails
@@ -3469,7 +3470,9 @@ const (
 )
 
 func realFFTUnpack32Close(got, want float32) bool {
-	diff := math.Abs(float64(got - want))
+	// Widen before subtracting. float32(got-want) would round the difference in
+	// float32 before it is ever compared, which is the quantity under test.
+	diff := math.Abs(float64(got) - float64(want))
 	return diff <= realFFTUnpack32AbsTol || diff <= math.Abs(float64(want))*realFFTUnpack32RelTol
 }
 
@@ -3570,10 +3573,22 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 		}
 		return twRe, twIm
 	}
-	allZero := func(t *testing.T, name string, s []float32) {
+	// Outputs are prefilled with a sentinel rather than left zero. A zero-filled
+	// buffer cannot distinguish "the guard returned without writing" from "the
+	// kernel ran and wrote a zero", so the assertion would not catch the case it
+	// is named for.
+	const sentinel = float32(-1.5)
+	makeOut := func(n int) []float32 {
+		s := make([]float32, n)
+		for i := range s {
+			s[i] = sentinel
+		}
+		return s
+	}
+	untouched := func(t *testing.T, name string, s []float32) {
 		t.Helper()
 		for i, v := range s {
-			if v != 0 {
+			if v != sentinel {
 				t.Errorf("%s written at [%d]=%v, want untouched (guard should have returned)", name, i, v)
 			}
 		}
@@ -3594,11 +3609,11 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 			zRe, zImFull := makeZ()
 			zIm := zImFull[:c.zImLen]
 			twRe, twIm := makeTw(c.twReLen, c.twImLen)
-			outRe := make([]float32, c.outReLen)
-			outIm := make([]float32, c.outImLen)
+			outRe := makeOut(c.outReLen)
+			outIm := makeOut(c.outImLen)
 			RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
-			allZero(t, "outRe", outRe)
-			allZero(t, "outIm", outIm)
+			untouched(t, "outRe", outRe)
+			untouched(t, "outIm", outIm)
 		})
 	}
 }
