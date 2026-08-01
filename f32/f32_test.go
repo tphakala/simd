@@ -3327,7 +3327,10 @@ func TestRealFFTUnpack_EdgeCases(t *testing.T) {
 }
 
 func TestRealFFTUnpack_GoVsSIMD(t *testing.T) {
-	// Test that Go and SIMD implementations produce identical results
+	// Test that Go and SIMD agree within the tolerance below. They are not
+	// bit-identical in general: the two paths can make different FMA contraction
+	// choices, and which of them fuses depends on GOARCH and on the dispatched
+	// CPU tier.
 	sizes := []int{9, 16, 17, 32, 64, 128, 256, 512}
 
 	for _, n := range sizes {

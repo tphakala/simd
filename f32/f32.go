@@ -1246,7 +1246,7 @@ func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) 
 //	X[0] = Z[0].real + Z[0].imag  (DC component)
 //	X[n] = Z[0].real - Z[0].imag  (Nyquist component)
 //
-// Uses AVX2+FMA on AMD64, NEON on ARM64, with pure Go fallback.
+// Uses AVX+FMA on AMD64, NEON on ARM64, with pure Go fallback.
 func RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm []float32) {
 	n := len(zRe)
 	if n < realFFTUnpackMinN {

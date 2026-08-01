@@ -66,7 +66,6 @@ var avx2GatedAVXKernels = map[string]string{
 	"f32/f32_amd64.s:powAVX":                 f32LogGate,
 	"f32/f32_amd64.s:powElemAVX":             f32LogGate,
 	"f32/f32_amd64.s:int16ToFloat32ScaleAVX": "f32_amd64.go int16ToFloat32Scale: cpu.X86.AVX2",
-	"f32/f32_amd64.s:realFFTUnpackAVX":       "f32_amd64.go realFFTUnpack32: cpu.X86.AVX2 && cpu.X86.FMA",
 
 	// f64: same shape as f32, plus VPERMPD in the autocorrelation and unpack steps.
 	"f64/f64_amd64.s:interleave3AVX":   "f64_amd64.go interleaveN64: cpu.X86.AVX2",
