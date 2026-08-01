@@ -665,6 +665,25 @@ func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64
 	butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
 }
 
+func butterflyComplexStage64(re, im []float64, span, blocks int, twRe, twIm []float64) {
+	// butterflyComplexStageAVX handles every span: across j when span fills a
+	// 4-wide YMM, across blocks for span 1 and 2. span == 3 fills neither and runs
+	// through the kernel's scalar tail, which still beats the Go fallback by roughly
+	// 2-3x because the kernel absorbs the whole block loop into one call while the
+	// Go path pays a call per block that is over the inliner's budget.
+	//
+	// AVX+FMA is the whole requirement, with no AVX2 anywhere: the block-axis paths
+	// shuffle with VUNPCKLPD/VUNPCKHPD and VPERM2F128 and splat their twiddles with
+	// the memory-source forms of VBROADCASTSD and VBROADCASTF128. The register-source
+	// VBROADCASTSD would be AVX2, which is the trap #196/#197 swept for; see the
+	// realFFTUnpack64 comment below.
+	if cpu.X86.AVX && cpu.X86.FMA && blocks*span >= minAVXElements {
+		butterflyComplexStageAVX(re, im, span, blocks, twRe, twIm)
+		return
+	}
+	butterflyComplexStage64Go(re, im, span, blocks, twRe, twIm)
+}
+
 func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	// realFFTUnpackAVX needs AVX2, not just AVX+FMA: the reversed load uses VPERMPD
 	// and the constants use register-source VBROADCASTSD plus VPCMPEQD/VPSLLQ on
@@ -1073,6 +1092,17 @@ func cubicInterpDotAVX(hist, a, b, c, d []float64, x float64) float64
 //
 //go:noescape
 func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64)
+
+// ButterflyComplexStage assembly function declaration.
+//
+// Callers MUST satisfy len(re) == len(im) == 2*span*blocks and
+// len(twRe) == len(twIm) >= span, with span >= 1 and blocks >= 1. Every address
+// the kernel forms is derived from span and blocks, never from the slice headers,
+// so a violated precondition reads and writes out of bounds silently rather than
+// panicking the way the Go fallback would. ButterflyComplexStage establishes it.
+//
+//go:noescape
+func butterflyComplexStageAVX(re, im []float64, span, blocks int, twRe, twIm []float64)
 
 // RealFFTUnpack assembly function declaration
 //
