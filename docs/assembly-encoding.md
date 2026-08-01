@@ -33,8 +33,13 @@ one against `golang.org/x/arch/arm64asm` (see the `asmcheck` package and
 ```
 VADD (.S4/.H8), VSHL, VADDV, VEXT, VDUP, VMOV, VEOR, VUMAX,
 VLD1/VLD1.P/VST1/VST1.P (including the multi-register forms),
-VZIP1/VZIP2/VUZP1/VUZP2 (.D2 and .S4), VFMLA/VFMLS (.D2 and .S4)
+VZIP1/VZIP2/VUZP1/VUZP2 (any arrangement),
+VFMLA/VFMLS (.S2/.S4/.D2 only, NOT the FP16 .H4/.H8)
 ```
+
+This list says these instructions do not NEED a `WORD`. It is not an instruction
+to convert the existing kernels, which hand-encode them deliberately; see the note
+below the tables before changing any of them.
 
 `VADDV` and `VUMAX` are the two worth calling out: both look like they might need
 encoding and both do not. Reach for a `WORD` only after confirming the mnemonic is
@@ -62,10 +67,15 @@ The `.S4` forms behave the same way. Spot-checked against `f32/f32_arm64.s`:
 emits `0x4E811802`, and `VFMLA V4.S4, V2.S4, V0.S4` emits `0x4E24CC40`, each
 identical to the `WORD` that file already carries for those operands.
 
-Every arm64 kernel in this repo still spells these six as `WORD`s; a grep for the
-mnemonics at the start of a line finds no use anywhere. That is consistency with
-the neighbouring instructions in kernels that hand-encode anyway, not a toolchain
-constraint. A new kernel with no other `WORD` in it should use the mnemonics.
+A grep for these mnemonics at the start of a line finds no use anywhere in the
+tree: every occurrence is a `WORD`. That is consistency with the neighbouring
+instructions in kernels that hand-encode anyway, not a toolchain constraint. A new
+kernel with no other `WORD` in it should use the mnemonics.
+
+One caveat if you do. `TestNoFMAContract` forbids a fused multiply-add in the
+kernels listed in `singleRoundingKernels`, and it sees a `WORD` through its decoded
+ARM spelling (`FMLA`) but a mnemonic through Go's Plan 9 spelling (`VFMLA`). Its
+regex covers both, so either form is caught; do not narrow it.
 
 An amusing asymmetry: `go tool objdump` happily *decodes* a hand-encoded word back
 to `VSMLAL ...`. The toolchain knows the instruction on the way out but not on the

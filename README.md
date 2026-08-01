@@ -164,7 +164,7 @@ instead, so the two float surfaces remain intentionally asymmetric.
 
 Prefer `ButterflyComplexStage` over `ButterflyComplex` when driving a whole
 transform. It takes the stage rather than one block, so the per-block call
-overhead disappears and the short spans, which cannot fill a vector along `j`,
+overhead disappears and the short spans that cannot fill a vector along `j`
 vectorize across blocks instead. Measured over one stage of a 1024-point
 transform on an x86 core, that collapses the cost spread across spans from
 roughly 30x to under 2x, so the small-span stages stop dominating the transform.

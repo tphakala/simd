@@ -86,25 +86,19 @@ const stageTwiddlePhase = 0.4
 // Three of this file's tests compare two implementations of the same butterfly
 // over the same data, differing only in how their multiply-adds fuse: SIMD vs
 // butterflyComplexStageRef, SIMD vs the per-block ButterflyComplex loop, and
-// SIMD vs the Go fallback. All three land at the same magnitude, so all three
-// use this one bound rather than inventing their own. Measured 2026-08-01 with
-// go1.26 over the full stageSpans x stageBlockCounts sweep, the largest
+// SIMD vs the Go fallback. All three use this one bound rather than inventing
+// their own. Over the full stageSpans x stageBlockCounts sweep the largest
 // difference any of them produces is 1.78e-15, on both an AVX+FMA amd64 core
-// (i7-1260P) and a NEON Cortex-A76 (Pi 5).
+// and a NEON Cortex-A76.
 //
-// The bound has to be absolute. The largest value the sweep leaves behind after
-// a stage is 13.147, and 1.78e-15 is exactly one ULP there, so the error tracks
-// the magnitude of the OPERANDS rather than of the individual result: the
-// butterfly's sum and difference can cancel to near zero while the rounding that
-// produced them does not shrink with them. On amd64 the worst RELATIVE
-// difference over the same sweep is 1.46e-13, and it occurs on exactly such a
-// cancelled element.
+// The bound has to be absolute rather than relative, because the butterfly's
+// sum and difference can cancel to near zero while the rounding that produced
+// them does not shrink with them. On amd64 the worst RELATIVE difference over
+// the same sweep is 1.46e-13, and it occurs on exactly such a cancelled element.
 //
 // So stageAbsTol carries every row, at 56x the measured worst case. stageRelTol
 // is a safety valve for data larger than this fixture's; it only takes over
-// above |want| == 10 and no current row depends on it. Both are far tighter than
-// TestButterflyComplex's 1e-9/1e-11, which they used to copy: that pair is a
-// round number, not a measurement.
+// above |want| == 10 and no current row depends on it.
 const (
 	stageAbsTol = 1e-13
 	stageRelTol = 1e-14
@@ -204,13 +198,13 @@ func TestButterflyComplexStage_MatchesPerBlockLoop(t *testing.T) {
 }
 
 // TestButterflyComplexStage_SIMDvsGo compares the dispatched kernel against the
-// Go fallback directly, below the public wrapper's guard, so the shapes the
-// wrapper would send to Go still reach the kernel here.
+// Go fallback over an explicit (span, blocks) grid, rather than through the
+// public wrapper, which derives blocks from the slice lengths.
 //
-// It uses closeEnough like the rest of the file. It used to carry its own bare
-// 1e-12 absolute bound, described as tighter than closeEnough; measurement says
-// the two comparisons produce the same 1.78e-15 worst case, so a separate
-// constant bought nothing and hid a 560x-loose bound behind the word "tighter".
+// This does NOT get below the SIMD-versus-Go threshold: that lives inside
+// butterflyComplexStage64, which is the function called here, so rows under it
+// compare the Go path against itself. On amd64 that is 5 of the 140 rows
+// (blocks*span < 4), on arm64 1 (blocks*span < 2).
 func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
 	for _, span := range stageSpans {
 		for _, blocks := range stageBlockCounts {
@@ -242,19 +236,16 @@ func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
 // stageFFTTolPerN2 bounds TestButterflyComplexStage_FullFFT's per-bin error,
 // which grows as n^2 rather than as n.
 //
-// Measured 2026-08-01 with go1.26 over n in [8, 8192] on a NEON Cortex-A76 and
-// an AVX+FMA amd64 core: the largest per-bin error divided by n^2 stays inside
-// [4.5e-17, 1.4e-16], and the exponent fitted across that range is n^2.04. The
-// mechanism sits on the reference side, not in the kernels. The naive DFT
-// accumulates n terms per bin, so its own error is O(n * eps * |X[k]|), and
-// |X[k]| for this input grows like O(n); over the same range
-// err/(n * eps * max|X|) stays inside [0.38, 1.25].
+// Measured over n in [8, 8192] on a NEON Cortex-A76 and an AVX+FMA amd64 core,
+// the fitted exponent is roughly n^2 and this bound holds with at least 65x
+// headroom at every size measured (the minimum is 69.7x at n = 128), on arm64
+// and on amd64 under both GOAMD64=v1 and v3. The mechanism sits on
+// the reference side, not in the kernels: the naive DFT accumulates n terms per
+// bin, and |X[k]| for this input itself grows like O(n).
 //
-// This replaces a 1e-10*n bound, which grew as n^1 against an n^2 error, so its
-// headroom shrank with size: 1.7e5x at n = 8, 1167x at n = 1024, 125x at
-// n = 8192. Scaling by n^2 instead holds the headroom flat at 74x to 225x
-// across the whole measured range, so adding a larger row later does not
-// silently spend the margin.
+// It replaces a 1e-10*n bound, which grew as n^1 against an n^2 error, so its
+// headroom shrank with size. Scaling by n^2 keeps it roughly flat instead, so
+// adding a larger row later does not silently spend the margin.
 const stageFFTTolPerN2 = 1e-14
 
 // TestButterflyComplexStage_FullFFT drives a complete iterative Cooley-Tukey

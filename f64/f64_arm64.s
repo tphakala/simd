@@ -2957,14 +2957,15 @@ bfstage_neon_next:
     // separate the uppers from the lowers, ZIP1/ZIP2 to re-interleave on the
     // way out. The twiddle is the single tw[0], splatted once.
     //
-    // The loop body's six load instructions and four stores could be two
-    // multi-register loads and two multi-register stores instead
-    // (VLD1 (R0), [V0.D2, V1.D2] and VST1.P [V0.D2, V1.D2], 32(R0)), dropping 6
-    // of its 28 instructions. Measured on a Cortex-A76 (Pi 5, binaries built
-    // with go1.26.5, 15 paired rounds at 2s over span 1 of a 1024-point stage):
-    // 1389ns median before, 1383ns after, 0.4%, with the two ranges
-    // overlapping. The loop is not issue-bound, so the shorter form is not worth
-    // rewriting a hot kernel for; see #206.
+    // The loop body's four loads, the two ADDs that address them, and its four
+    // stores could be two multi-register loads and two multi-register stores
+    // instead (VLD1 (R0), [V0.D2, V1.D2] and VST1.P [V0.D2, V1.D2], 32(R0)),
+    // dropping 6 of its 28 instructions. Measured on a Cortex-A76 over span 1
+    // of a 1024-point stage, in paired interleaved rounds: under 1%, which is
+    // not worth rewriting a hot kernel for. Neither throughput floor binds here
+    // (about 13 cycles per iteration against a decode floor of 7 and an ASIMD
+    // floor of 8), and none of the six removed instructions is ASIMD, so the
+    // shorter form cannot move the higher of the two. See #206.
     // ----------------------------------------------------------------------
 bfstage_neon_span1:
     FMOVD (R2), F12
