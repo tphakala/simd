@@ -81,12 +81,21 @@ func stageTestData(n, span int) (re, im, twRe, twIm []float64) {
 // 1e-3 in magnitude.
 const stageTwiddlePhase = 0.4
 
+// Tolerances for closeEnough. The absolute floor carries values near zero, where a
+// relative bound is meaningless because the butterfly's sum and difference can
+// cancel to nearly nothing; the relative bound carries everything else. Both match
+// TestButterflyComplex's relTol.
+const (
+	stageAbsTol = 1e-9
+	stageRelTol = 1e-11
+)
+
 // closeEnough is the tolerance used throughout: the vector and scalar paths fuse
 // their multiply-adds differently, so they agree to within rounding rather than
-// exactly. It matches TestButterflyComplex's relTol.
+// exactly.
 func closeEnough(got, want float64) bool {
 	diff := math.Abs(got - want)
-	return diff <= 1e-9 || diff <= math.Abs(want)*1e-11
+	return diff <= stageAbsTol || diff <= math.Abs(want)*stageRelTol
 }
 
 // stageSpans covers every dispatch path: span 1 and 2 are the block-axis AVX
