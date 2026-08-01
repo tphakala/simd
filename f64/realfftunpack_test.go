@@ -45,22 +45,21 @@ func realFFTUnpackRef(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 
 // Tolerances for realFFTUnpackClose.
 //
-// MEASURED by instrumenting this predicate and running the whole f64 suite: over
-// its 7106 comparisons the worst absolute divergence between the dispatched
-// kernel and realFFTUnpackRef is 2.842e-14 on an AVX2+FMA amd64 core (which is
-// the tier this kernel needs, see realFFTUnpack64) and 1.776e-15 on a NEON
-// Cortex-A76. realFFTUnpackAbsTol therefore sits about 35x above the worst case,
-// in line with the ~52x this repo uses elsewhere. The worst relative divergence
-// is 3.757e-14 against the 1e-11 band.
+// MEASURED by instrumenting this predicate and running the whole f64 suite on a
+// default build: over its 7106 comparisons the worst absolute divergence against
+// realFFTUnpackRef is 2.842e-14 on an AVX2+FMA amd64 core (the tier this kernel
+// needs, see realFFTUnpack64) and 1.776e-15 on a NEON Cortex-A76, so
+// realFFTUnpackAbsTol sits about 35x above the worst case. Those 7106 are not all
+// against realFFTUnpackRef: 2064 come from TestRealFFTUnpack_GoVsSIMD, which
+// compares against realFFTUnpack64Go. The worst relative divergence over all 7106
+// is 3.757e-14 against the 1e-11 band, and the two arms split at |want| == 0.1.
 //
-// The two arms split at |want| == 0.1. Below that the absolute floor is the
-// deciding arm, which covers 40 of the 7106 comparisons, and the worst divergence
-// among those is 1.776e-15. The element producing the 2.842e-14 above is far
-// larger than 0.1, so the relative band is what carries it.
-//
-// The floor is there for outputs where the unpack cancels to near zero, and the
-// tightening is what gives it teeth: it was 1e-9 until #211, which admitted a
-// 1e-10 error at an exactly-cancelled element. This rejects that.
+// Unlike its f32 counterpart the absolute floor here is unexercised: no
+// comparison in the suite depends on it, and deleting it leaves the package
+// green. It is for outputs where the unpack cancels to near zero, which these
+// fixtures never produce. So the tightening from the old 1e-9 changes no outcome
+// today. It narrows what the predicate would accept if such an output appears,
+// which is the whole of its value; do not read it as having fixed a live gap.
 const (
 	realFFTUnpackAbsTol = 1e-12
 	realFFTUnpackRelTol = 1e-11

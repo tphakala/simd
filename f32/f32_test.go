@@ -3452,16 +3452,17 @@ func TestRealFFTUnpack_KnownValues(t *testing.T) {
 // only in how their multiply-adds fuse, so they agree to within float32 rounding
 // rather than exactly.
 //
-// MEASURED by instrumenting this predicate and running the whole f32 suite: over
-// its 690 comparisons the worst absolute difference is 1.907e-06 on an AVX+FMA
-// amd64 core and 9.537e-07 on a NEON Cortex-A76, so realFFTUnpack32AbsTol carries
-// every row at about 52x the worst case.
+// MEASURED by instrumenting this predicate and running the whole f32 suite on a
+// default build: over its 690 comparisons the worst absolute difference is
+// 1.907e-06 on an AVX+FMA amd64 core and 9.537e-07 on a NEON Cortex-A76, so
+// realFFTUnpack32AbsTol carries every row at about 52x the worst case.
 //
-// Do not delete the absolute arm in favour of the relative one. It is the
-// deciding arm for 592 of those 690 comparisons, and the worst relative
-// difference, 1.425e-05, is above realFFTUnpack32RelTol. The relative band is a
-// safety valve for data larger than this fixture's; it only takes over above
-// |want| == 10.
+// Keep the absolute arm. On that build the worst relative difference, 1.425e-05,
+// is above realFFTUnpack32RelTol, so deleting the absolute arm fails
+// TestRealFFTUnpack_OverRead/n=64. Exactly one comparison depends on it, and at
+// GOAMD64=v3 the Go reference fuses differently and none does, so treat that
+// single comparison as the reason rather than any larger count. The relative band
+// only takes over above |want| == 10.
 const (
 	realFFTUnpack32AbsTol = 1e-4
 	realFFTUnpack32RelTol = 1e-5
