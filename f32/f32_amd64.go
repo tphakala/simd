@@ -1300,13 +1300,12 @@ func butterflyComplex32(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32
 }
 
 func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
-	// realFFTUnpackAVX needs AVX2, not just AVX+FMA: it builds the sign mask with
-	// VPCMPEQD/VPSLLD on YMM and broadcasts with the register-source VBROADCASTSS,
-	// all AVX2-only. Gating on plain AVX let an AVX1+FMA part (e.g. AMD Piledriver)
-	// reach it and SIGILL. This matches realFFTUnpack64, whose reversed load needs
-	// VPERMPD. See #196.
+	// Use AVX+FMA if available and have enough elements. realFFTUnpackAVX needs
+	// nothing above AVX1+FMA3; TestAmd64KernelISALevel enforces the AVX2 half of
+	// that claim, and the cpu.X86.FMA conjunct below covers the rest. See #202,
+	// and #196 for the SIGILL an AVX2 encoding here would cause.
 	// Need at least 9 elements: process k=1..n-1 where n>=9 gives 8+ iterations
-	if cpu.X86.AVX2 && cpu.X86.FMA && n > minAVXElements {
+	if cpu.X86.AVX && cpu.X86.FMA && n > minAVXElements {
 		realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm, n)
 		return
 	}

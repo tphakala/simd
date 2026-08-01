@@ -13,8 +13,11 @@ DATA absf32mask<>+0x18(SB)/4, $0x7fffffff
 DATA absf32mask<>+0x1c(SB)/4, $0x7fffffff
 GLOBL absf32mask<>(SB), RODATA|NOPTR, $32
 
-// Constants for roundAVX (round-half-away-from-zero). absf32mask above doubles
-// as the |frac| mask; these supply the sign bit, the 0.5 threshold and 1.0.
+// Shared float32 constants, added for roundAVX (round-half-away-from-zero).
+// absf32mask above doubles as the |frac| mask; these supply the sign bit, 0.5
+// and 1.0. roundf32_signmask and roundf32_half are read by other kernels too,
+// so grep for a symbol before changing its value. roundf32_one is roundAVX's
+// alone.
 DATA roundf32_signmask<>+0x00(SB)/4, $0x80000000
 DATA roundf32_signmask<>+0x04(SB)/4, $0x80000000
 DATA roundf32_signmask<>+0x08(SB)/4, $0x80000000
@@ -5251,15 +5254,12 @@ TEXT ·realFFTUnpackAVX(SB), NOSPLIT, $0-152
 
     // Load constants. The reverse permutation is performed per iteration in the
     // loop with VPERM2F128 + VPERMILPS, so no permutation mask is needed here.
-
-    // Broadcast 0.5 (0x3F000000 = 0.5f)
-    MOVL $0x3F000000, BX
-    MOVD BX, X13
-    VBROADCASTSS X13, Y13            // Y13 = 0.5 broadcast
-
-    // Sign mask for negation (0x80000000)
-    VPCMPEQD Y14, Y14, Y14           // Y14 = all 1s
-    VPSLLD $31, Y14, Y14             // Y14 = 0x80000000 (sign bit only)
+    // The 8-wide loop's constants come from RODATA rather than being
+    // materialised in registers: a register-source VBROADCASTSS and 256-bit
+    // VPCMPEQD/VPSLLD are AVX2, and this kernel is dispatched on the plain
+    // AVX+FMA tier, which AMD Piledriver and Steamroller reach. See #202.
+    VMOVUPS roundf32_half<>(SB), Y13     // Y13 = 0.5f x8
+    VMOVUPS roundf32_signmask<>(SB), Y14 // Y14 = 0x80000000 x8 (sign bit only)
 
 realfft_loop8:
     // Load forward Z[k:k+8]

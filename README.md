@@ -349,11 +349,11 @@ Results are identical to the per-row path either way.
 
 | Category   | Function                              | Description                        | SIMD Width       |
 | ---------- | ------------------------------------- | ---------------------------------- | ---------------- |
-| **Complex**| `MulComplex(dstRe,dstIm,aRe,aIm,bRe,bIm)` | Split-format complex multiply  | 8x (AVX) / 4x (NEON) |
+| **Complex**| `MulComplex(dstRe,dstIm,aRe,aIm,bRe,bIm)` | Split-format complex multiply  | 8x (AVX+FMA) / 4x (NEON) |
 |            | `MulConjComplex(dstRe,dstIm,aRe,aIm,bRe,bIm)` | Multiply by conjugate      | 8x / 4x          |
 |            | `AbsSqComplex(dst,aRe,aIm)`           | Magnitude squared                  | 8x / 4x          |
 |            | `ButterflyComplex(uRe,uIm,lRe,lIm,twRe,twIm)` | FFT butterfly with twiddle | 8x / 4x          |
-|            | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real FFT unpack step     | 8x (AVX2+FMA) / 4x (NEON)          |
+|            | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real FFT unpack step     | 8x / 4x          |
 | **Utility**| `Reverse(dst, src)`                   | Reverse slice order                | 8x / 4x          |
 |            | `AddSub(sum, diff, a, b)`             | Fused sum and difference           | 8x / 4x          |
 
