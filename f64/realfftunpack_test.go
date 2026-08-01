@@ -43,12 +43,30 @@ func realFFTUnpackRef(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	}
 }
 
-// realFFTUnpackClose reports whether got is within the tight float64 tolerance
-// of want. Float64 FMA divergence is ~1e-13, so an absolute floor plus a
-// relative band comfortably covers it.
+// Tolerances for realFFTUnpackClose.
+//
+// MEASURED over sizes 2 to 1000: the worst absolute divergence between the
+// dispatched kernel and realFFTUnpackRef is 3.553e-15 on an AVX+FMA amd64 core
+// and 1.776e-15 on a NEON Cortex-A76, so realFFTUnpackAbsTol sits about 28x above
+// the worst case. The absolute floor has to exist because the unpack's sum and
+// difference can cancel to near zero while the rounding that produced them does
+// not shrink with them; the relative band only takes over above |want| == 0.01,
+// and the worst relative divergence measured is 3.757e-14 against it.
+//
+// The absolute floor was 1e-9 until #211, four orders of magnitude looser than
+// this, while the comment above it already named 1e-13 as the divergence it
+// needed to admit.
+const (
+	realFFTUnpackAbsTol = 1e-13
+	realFFTUnpackRelTol = 1e-11
+)
+
+// realFFTUnpackClose reports whether got is within the float64 tolerance of want.
+// The dispatched kernel and realFFTUnpackRef differ only in how their
+// multiply-adds fuse, so they agree to within rounding rather than exactly.
 func realFFTUnpackClose(got, want float64) bool {
 	diff := math.Abs(got - want)
-	return diff <= 1e-9 || diff <= math.Abs(want)*1e-11
+	return diff <= realFFTUnpackAbsTol || diff <= math.Abs(want)*realFFTUnpackRelTol
 }
 
 func TestRealFFTUnpack(t *testing.T) {
