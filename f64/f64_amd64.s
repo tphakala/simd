@@ -1042,9 +1042,16 @@ var_avx_scalar:
     JNZ  var_avx_scalar
 
 var_avx_divide:
-    // Divide by n
+    // Divide by n. VEX convert, not CVTSQ2SD. The upper YMM halves are always
+    // dirty here: VBROADCASTSD and the VXORPD accumulator init run
+    // unconditionally at entry and the kernel's only VZEROUPPER is below, so the
+    // legacy-SSE write to X1 paid an AVX-SSE transition. MEASURED at 2
+    // assists.sse_avx_mix per call on an i7-1260P, at eight lengths from 0 to
+    // 4096, and 0 after this change. X1's bits 127:64 are dead (VDIVSD takes
+    // them from X0), so the merge source is free; X1 keeps this a
+    // one-instruction drop-in. See #214.
     MOVQ a_len+8(FP), CX
-    CVTSQ2SD CX, X1
+    VCVTSI2SDQ CX, X1, X1
     VDIVSD X1, X0, X0
     VMOVSD X0, ret+32(FP)
     VZEROUPPER
@@ -2394,8 +2401,15 @@ var_512_scalar:
     JNZ  var_512_scalar
 
 var_512_divide:
+    // The same legacy-SSE write in the same position as var_avx_divide, fixed
+    // the same way; X1's bits 127:64 are dead here too, so the merge source is
+    // free. The assembler emits the VEX form of VCVTSI2SDQ (c4 e1 f3 2a c9,
+    // checked with objdump), which every AVX-512 CPU supports, so the kernel's
+    // tier does not change. NOT MEASURED: no AVX-512 hardware is available to
+    // this project (#75/#96), so unlike var_avx_divide the assist count and the
+    // bit-for-bit output of this kernel are unverified. See #214.
     MOVQ a_len+8(FP), CX
-    CVTSQ2SD CX, X1
+    VCVTSI2SDQ CX, X1, X1
     VDIVSD X1, X0, X0
     VMOVSD X0, ret+32(FP)
     VZEROUPPER
@@ -3167,6 +3181,13 @@ var_sse2_remainder:
     ADDSD X1, X0
 
 var_sse2_divide:
+    // Keep the legacy CVTSQ2SD. Do not copy the VEX convert from
+    // var_avx_divide above: varianceSSE2 is dispatched on CPUs without AVX,
+    // where VCVTSI2SDQ is a SIGILL. TestAmd64KernelISALevel will not stop you.
+    // It gives varianceSSE2 the AVX floor, and VCVTSI2SDQ classifies at that
+    // same floor, so the mutant leaves it green, while a genuine AVX2
+    // instruction here does fail it. Both MEASURED. What does catch it is the
+    // cross-isa CI, where the Conroe and qemu64 SSE2 legs die on this line.
     MOVQ a_len+8(FP), CX
     CVTSQ2SD CX, X1
     DIVSD X1, X0

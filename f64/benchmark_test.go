@@ -2,6 +2,7 @@ package f64
 
 import (
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -440,6 +441,29 @@ func BenchmarkVariance(b *testing.B) {
 		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				sink64 = varianceFullGo(a)
+			}
+			// Two passes: mean + variance, so 2x data read
+			reportThroughput64(b, size*2)
+		})
+	}
+}
+
+// BenchmarkStdDev mirrors BenchmarkVariance. StdDev is Variance plus one
+// math.Sqrt, so this is not an independent kernel; it exists because the README
+// publishes a float64 StdDev row and nothing here could reproduce it.
+func BenchmarkStdDev(b *testing.B) {
+	for _, size := range benchSizes {
+		a, _, _, _ := makeBenchData64(size)
+		b.Run(fmt.Sprintf("SIMD_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink64 = StdDev(a)
+			}
+			// Two passes: mean + variance, so 2x data read
+			reportThroughput64(b, size*2)
+		})
+		b.Run(fmt.Sprintf("Go_%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink64 = math.Sqrt(varianceFullGo(a))
 			}
 			// Two passes: mean + variance, so 2x data read
 			reportThroughput64(b, size*2)

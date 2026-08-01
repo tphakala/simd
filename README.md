@@ -763,14 +763,15 @@ i8.ToInt16(w16, a) // sign-extend to int16 (exact)
 |                 | Min               | 148       | 350     | **2.4x**  |
 |                 | Max               | 151       | 370     | **2.5x**  |
 | **Statistical** | Mean              | 33        | 419     | **12.7x** |
-|                 | Variance\*        | 552       | 3893    | **7.1x**  |
-|                 | StdDev\*          | 556       | 3900    | **7.0x**  |
+|                 | Variance\*        | 419       | 3483    | **8.3x**  |
+|                 | StdDev\*          | 421       | 3481    | **8.3x**  |
 | **Vector**      | EuclideanDistance | 76        | 1173    | **15.4x** |
 |                 | Normalize         | 536       | 692     | **1.3x**  |
 |                 | CumulativeSum     | 472       | 457     | 1.0x      |
 | **Range**       | Clamp             | 83        | 880     | **10.6x** |
 
-\*Variance/StdDev benchmarked at 4096 elements (SIMD benefits at larger sizes)
+\*Variance/StdDev benchmarked at 4096 elements (SIMD benefits at larger sizes),
+and re-measured after the variance divide-epilogue fix (#214)
 
 #### float32 Operations - SIMD vs Pure Go (1024 elements)
 
@@ -789,13 +790,17 @@ i8.ToInt16(w16, a) // sign-extend to int16 (exact)
 |                | Sum        | 18        | 416     | **22.6x** |
 |                | Min        | 66        | 347     | **5.2x**  |
 |                | Max        | 120       | 382     | **3.2x**  |
-| **Statistical**| Variance\*  | 164       | 921     | **5.6x**  |
-|                | StdDev\*    | 164       | 903     | **5.5x**  |
+| **Statistical**| Variance\*  | 54        | 842     | **15.6x** |
+|                | StdDev\*    | 54        | 842     | **15.6x** |
 | **Vector**     | EuclideanDistance\* | 35 | 434     | **12.4x** |
 | **Range**      | Clamp      | 45        | 753     | **16.6x** |
 
 \*Variance/StdDev/EuclideanDistance use their own fixed 1000-element benchmark
-(the other rows are at 1024 elements); all numbers come from one run on this host.
+(the other rows are at 1024 elements). The Variance and StdDev rows were
+re-measured after the variance divide-epilogue fix (#214); the other rows come
+from one earlier run on this host. `BenchmarkVariance_1000` and
+`BenchmarkStdDev_1000` have no Go sub-benchmark, so those two Go figures come
+from running the same benchmarks under `SIMD_DISABLE=all`.
 
 #### Activation Functions - SIMD vs Pure Go
 
@@ -1005,7 +1010,11 @@ All int32 kernels are zero-allocation and bit-exact against the pure-Go referenc
   Pure-Go baselines use the same binary via `SIMD_DISABLE=all` or each operation's
   `*Go` reference; each pair reports the best of repeated runs. Displayed nanoseconds
   are rounded to whole ns, so the speedup column (computed from the raw timings) may
-  differ from a recomputation using the rounded ns shown.
+  differ from a recomputation using the rounded ns shown. The float32 and float64
+  Variance/StdDev rows were re-measured with #214 under a stricter protocol:
+  medians of 9 rounds, one process per point with the order alternated each round,
+  pinned to one P-core, and speedups computed from the rounded nanoseconds shown,
+  so for those four rows the division can be checked by hand.
 
 ## Known Limitations
 

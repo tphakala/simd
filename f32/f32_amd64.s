@@ -6500,6 +6500,13 @@ var32_sse_scalar:
     JNZ  var32_sse_scalar
 
 var32_sse_divide:
+    // Keep the legacy CVTSQ2SS. Do not copy the VEX convert from
+    // var32_avx_divide below: varianceSSE is dispatched on CPUs without AVX,
+    // where VCVTSI2SSQ is a SIGILL. TestAmd64KernelISALevel will not stop you.
+    // It gives varianceSSE the AVX floor, and VCVTSI2SSQ classifies at that
+    // same floor, so the mutant leaves it green, while a genuine AVX2
+    // instruction here does fail it. Both MEASURED. What does catch it is the
+    // cross-isa CI, where the Conroe and qemu64 SSE2 legs die on this line.
     MOVQ a_len+8(FP), CX
     CVTSQ2SS CX, X1
     DIVSS X1, X0
@@ -6582,8 +6589,15 @@ var32_avx_scalar:
     JNZ  var32_avx_scalar
 
 var32_avx_divide:
+    // VEX convert, not CVTSQ2SS. The upper YMM halves are always dirty here:
+    // VBROADCASTSS and the VXORPS accumulator init run unconditionally at entry
+    // and the kernel's only VZEROUPPER is below, so the legacy-SSE write to X1
+    // paid an AVX-SSE transition. MEASURED at 2 assists.sse_avx_mix per call
+    // on an i7-1260P, at eight lengths from 0 to 4096, and 0 after this change.
+    // X1's bits 127:32 are dead (VDIVSS takes them from X0), so the merge source
+    // is free; X1 keeps this a one-instruction drop-in. See #214.
     MOVQ a_len+8(FP), CX
-    CVTSQ2SS CX, X1
+    VCVTSI2SSQ CX, X1, X1
     VDIVSS X1, X0, X0
     VMOVSS X0, ret+32(FP)
     VZEROUPPER
