@@ -6501,11 +6501,14 @@ var32_sse_scalar:
 
 var32_sse_divide:
     // Keep the legacy CVTSQ2SS. Do not copy the VEX convert from
-    // var32_avx_divide below: initSSE dispatches varianceSSE on CPUs without
-    // AVX, where VCVTSI2SSQ is a SIGILL. Nothing would catch that edit.
-    // MEASURED: making it leaves TestAmd64KernelISALevel green, while a genuine
-    // AVX2 instruction at this line does fail it. There is also nothing to fix
-    // here, since this kernel writes no YMM. See #214.
+    // var32_avx_divide below: varianceSSE is dispatched on CPUs without AVX,
+    // where VCVTSI2SSQ is a SIGILL. TestAmd64KernelISALevel will not stop you.
+    // It gives any kernel whose name does not end in AVX2/AVX512 the AVX floor
+    // and a VEX-128 instruction classifies at that same floor, so the mutant
+    // leaves it green, while a genuine AVX2 instruction here does fail it. Both
+    // MEASURED. What does catch it is the cross-isa CI, where the Conroe and
+    // qemu64 SSE2 legs die on this line. #214 measured this kernel at 0
+    // assists, so there is nothing to fix here in the first place.
     MOVQ a_len+8(FP), CX
     CVTSQ2SS CX, X1
     DIVSS X1, X0

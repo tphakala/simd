@@ -1008,7 +1008,11 @@ All int32 kernels are zero-allocation and bit-exact against the pure-Go referenc
   Pure-Go baselines use the same binary via `SIMD_DISABLE=all` or each operation's
   `*Go` reference; each pair reports the best of repeated runs. Displayed nanoseconds
   are rounded to whole ns, so the speedup column (computed from the raw timings) may
-  differ from a recomputation using the rounded ns shown.
+  differ from a recomputation using the rounded ns shown. The float32 and float64
+  Variance/StdDev rows are the exception on both counts, having been re-measured
+  under a stricter protocol with #214: medians of 9 rounds, one process per point
+  with the order alternated each round, pinned to one P-core, and speedups computed
+  from the rounded nanoseconds shown so a reader can check the division.
 
 ## Known Limitations
 
