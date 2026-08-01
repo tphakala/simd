@@ -3382,6 +3382,34 @@ func TestRealFFTUnpack_GoVsSIMD(t *testing.T) {
 	}
 }
 
+// TestRealFFTUnpack_AllocFree pins the package convention that every operation
+// writes into caller-provided slices and allocates nothing. n = 67 gives
+// (n-1)%8 == 2, so the run covers eight full AVX blocks and a two-iteration
+// scalar remainder; a tail that allocated would go unnoticed at a size where
+// (n-1)%8 is zero.
+func TestRealFFTUnpack_AllocFree(t *testing.T) {
+	const n = 67
+	zRe := make([]float32, n)
+	zIm := make([]float32, n)
+	twRe := make([]float32, n-1)
+	twIm := make([]float32, n-1)
+	outRe := make([]float32, n)
+	outIm := make([]float32, n)
+	for i := range n {
+		zRe[i] = float32(i+1) * 0.1
+		zIm[i] = float32(i+2) * 0.2
+	}
+	for k := 1; k < n; k++ {
+		angle := -2 * math.Pi * float64(k) / float64(2*n)
+		twRe[k-1] = float32(math.Cos(angle))
+		twIm[k-1] = float32(math.Sin(angle))
+	}
+	fn := func() { RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm) }
+	if a := testing.AllocsPerRun(50, fn); a != 0 {
+		t.Errorf("RealFFTUnpack allocated %v times per run, want 0", a)
+	}
+}
+
 func TestRealFFTUnpack_KnownValues(t *testing.T) {
 	// Test with known values for a small case
 	// n=4: process k=1,2,3
