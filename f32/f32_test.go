@@ -3447,6 +3447,177 @@ func TestRealFFTUnpack_KnownValues(t *testing.T) {
 	}
 }
 
+// realFFTUnpack32Close is the tolerance for TestRealFFTUnpack_OverRead below,
+// which compares the dispatched kernel against realFFTUnpackRef. The two differ
+// only in how their multiply-adds fuse, so they agree to within float32 rounding
+// rather than exactly.
+//
+// MEASURED by instrumenting this predicate and running the whole f32 suite. On a
+// default amd64 build, over its 690 comparisons, the worst absolute difference is
+// 1.907e-06 on an AVX+FMA core. A separate run on a NEON Cortex-A76 reached
+// 9.537e-07. So realFFTUnpack32AbsTol carries every row at about 52x the worst
+// case.
+//
+// Keep the absolute arm. On that build the worst relative difference, 1.425e-05,
+// is above realFFTUnpack32RelTol, so deleting the absolute arm fails
+// TestRealFFTUnpack_OverRead/n=64. Exactly one comparison depends on it, and at
+// GOAMD64=v3 the Go reference fuses differently and none does, so treat that
+// single comparison as the reason rather than any larger count. The relative band
+// only takes over above |want| == 10.
+const (
+	realFFTUnpack32AbsTol = 1e-4
+	realFFTUnpack32RelTol = 1e-5
+)
+
+func realFFTUnpack32Close(got, want float32) bool {
+	// Widen before subtracting. float32(got-want) would round the difference in
+	// float32 before it is ever compared, which is the quantity under test.
+	diff := math.Abs(float64(got) - float64(want))
+	return diff <= realFFTUnpack32AbsTol || diff <= math.Abs(float64(want))*realFFTUnpack32RelTol
+}
+
+// TestRealFFTUnpack_OverRead guards the reversed mirror load, mirroring the f64
+// test of the same name. The kernel reads Z[n-k] descending against Z[k]
+// ascending, so a reverse pointer sized one block too far, or a forward load past
+// the end, reads outside [0,n). zRe/zIm are backed by padded arrays whose guard
+// bands hold NaN, then sliced to exactly length n, so an out-of-range read pulls
+// a NaN into an output lane and reports itself.
+//
+// What this adds over the other RealFFTUnpack tests is a defined value next to
+// the slice and a diagnostic that names the cause. MEASURED: shifting the reverse
+// pointer to &zRe[n-7] is caught here AND by TestRealFFTUnpack,
+// TestRealFFTUnpack_GoVsSIMD and TestRealFFTUnpack_SignedZero, so this is not the
+// only net under that particular mutation. It is the only one that reports the
+// over-read as such rather than as a value mismatch.
+//
+// Three things make the guard band work, and checking only the first two reads as
+// thorough. It is non-zero; NaN is not an algebraic identity for the add or the
+// multiply in the unpack, so it can never be swallowed; and the pad is two full
+// blocks of the widest kernel reachable here, the 8-wide AVX path (f32 has no
+// AVX-512 realFFTUnpack kernel, and NEON is 4-wide).
+func TestRealFFTUnpack_OverRead(t *testing.T) {
+	const pad = 16 // two 8-wide AVX blocks of NaN guard band on each side of z
+	// n > minAVXElements (8) is what dispatches to AVX. 9 to 16 sweeps (n-1)%8
+	// through all of 0..7, so the 8-wide AVX path is hit at every scalar-tail
+	// length and at its minimum reverse index; that range also covers (n-1)%4 for
+	// the 4-wide NEON path. The larger sizes add multi-iteration reverse walks.
+	for _, n := range []int{9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 31, 32, 33, 64, 65} {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			nan := float32(math.NaN())
+			zReBack := make([]float32, pad+n+pad)
+			zImBack := make([]float32, pad+n+pad)
+			for i := range zReBack {
+				zReBack[i], zImBack[i] = nan, nan
+			}
+			zRe := zReBack[pad : pad+n]
+			zIm := zImBack[pad : pad+n]
+			for i := range n {
+				zRe[i] = float32(math.Sin(float64(i)*0.7) * 10)
+				zIm[i] = float32(math.Cos(float64(i)*0.9) * 10)
+			}
+			twRe := make([]float32, n-1)
+			twIm := make([]float32, n-1)
+			for k := 1; k < n; k++ {
+				angle := -2 * math.Pi * float64(k) / float64(2*n)
+				twRe[k-1] = float32(math.Cos(angle))
+				twIm[k-1] = float32(math.Sin(angle))
+			}
+			outRe := make([]float32, n)
+			outIm := make([]float32, n)
+			outReRef := make([]float32, n)
+			outImRef := make([]float32, n)
+
+			RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
+			realFFTUnpackRef(outReRef, outImRef, zRe, zIm, twRe, twIm, n)
+
+			for k := 1; k < n; k++ {
+				if math.IsNaN(float64(outRe[k])) || math.IsNaN(float64(outIm[k])) {
+					t.Fatalf("k=%d: NaN in output -> kernel over-read the zRe/zIm guard band", k)
+				}
+				if !realFFTUnpack32Close(outRe[k], outReRef[k]) {
+					t.Errorf("k=%d outRe = %v, want %v", k, outRe[k], outReRef[k])
+				}
+				if !realFFTUnpack32Close(outIm[k], outImRef[k]) {
+					t.Errorf("k=%d outIm = %v, want %v", k, outIm[k], outImRef[k])
+				}
+			}
+		})
+	}
+}
+
+// TestRealFFTUnpack_ShortSlices exercises the length-validation guard. With n
+// taken from len(zRe), any operand shorter than required must make the call
+// return without writing output or panicking.
+//
+// Each case shortens exactly one operand, so every clause of the guard is pinned
+// on its own. Shortening twRe and twIm together would leave either clause
+// deletable, since the other would still catch it.
+func TestRealFFTUnpack_ShortSlices(t *testing.T) {
+	const n = 16 // above minAVXElements, so a missing guard reaches the AVX kernel
+	makeZ := func() ([]float32, []float32) {
+		zRe := make([]float32, n)
+		zIm := make([]float32, n)
+		for i := range n {
+			zRe[i], zIm[i] = float32(i+1)*0.1, float32(i+2)*0.2
+		}
+		return zRe, zIm
+	}
+	makeTw := func(reLen, imLen int) ([]float32, []float32) {
+		twRe := make([]float32, reLen)
+		twIm := make([]float32, imLen)
+		for k := range twRe {
+			twRe[k] = float32(math.Cos(-2 * math.Pi * float64(k+1) / float64(2*n)))
+		}
+		for k := range twIm {
+			twIm[k] = float32(math.Sin(-2 * math.Pi * float64(k+1) / float64(2*n)))
+		}
+		return twRe, twIm
+	}
+	// Outputs are prefilled with a sentinel rather than left zero. A zero-filled
+	// buffer cannot distinguish "the guard returned without writing" from "the
+	// kernel ran and wrote a zero", so the assertion would not catch the case it
+	// is named for.
+	const sentinel = float32(-1.5)
+	makeOut := func(n int) []float32 {
+		s := make([]float32, n)
+		for i := range s {
+			s[i] = sentinel
+		}
+		return s
+	}
+	untouched := func(t *testing.T, name string, s []float32) {
+		t.Helper()
+		for i, v := range s {
+			if v != sentinel {
+				t.Errorf("%s written at [%d]=%v, want untouched (guard should have returned)", name, i, v)
+			}
+		}
+	}
+
+	cases := []struct {
+		name                                         string
+		zImLen, outReLen, outImLen, twReLen, twImLen int
+	}{
+		{"shortZIm", n - 1, n, n, n - 1, n - 1},
+		{"shortOutRe", n, n - 1, n, n - 1, n - 1},
+		{"shortOutIm", n, n, n - 1, n - 1, n - 1},
+		{"shortTwRe", n, n, n, n - 2, n - 1},
+		{"shortTwIm", n, n, n, n - 1, n - 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			zRe, zImFull := makeZ()
+			zIm := zImFull[:c.zImLen]
+			twRe, twIm := makeTw(c.twReLen, c.twImLen)
+			outRe := makeOut(c.outReLen)
+			outIm := makeOut(c.outImLen)
+			RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
+			untouched(t, "outRe", outRe)
+			untouched(t, "outIm", outIm)
+		})
+	}
+}
+
 // TestRealFFTUnpack_SignedZero pins the sign of a zero result. Every input is a
 // signed zero and every twiddle is +1 or -1, so every intermediate is an exact
 // zero and nothing rounds: the comparison can be bit-for-bit. The AVX scalar

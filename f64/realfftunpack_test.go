@@ -43,12 +43,34 @@ func realFFTUnpackRef(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	}
 }
 
-// realFFTUnpackClose reports whether got is within the tight float64 tolerance
-// of want. Float64 FMA divergence is ~1e-13, so an absolute floor plus a
-// relative band comfortably covers it.
+// Tolerances for realFFTUnpackClose.
+//
+// MEASURED by instrumenting this predicate and running the whole f64 suite on a
+// default build: over its 7106 comparisons the worst absolute divergence against
+// realFFTUnpackRef is 2.842e-14 on an AVX2+FMA amd64 core (the tier this kernel
+// needs, see realFFTUnpack64) and 1.776e-15 on a NEON Cortex-A76, so
+// realFFTUnpackAbsTol sits about 35x above the worst case. Those 7106 are not all
+// against realFFTUnpackRef: 2064 come from TestRealFFTUnpack_GoVsSIMD, which
+// compares against realFFTUnpack64Go. The worst relative divergence over all 7106
+// is 3.757e-14 against the 1e-11 band, and the two arms split at |want| == 0.1.
+//
+// Unlike its f32 counterpart the absolute floor here is unexercised: no
+// comparison in the suite depends on it, and deleting it leaves the package
+// green. It is for outputs where the unpack cancels to near zero, which these
+// fixtures never produce. So the tightening from the old 1e-9 changes no outcome
+// today. It narrows what the predicate would accept if such an output appears,
+// which is the whole of its value; do not read it as having fixed a live gap.
+const (
+	realFFTUnpackAbsTol = 1e-12
+	realFFTUnpackRelTol = 1e-11
+)
+
+// realFFTUnpackClose reports whether got is within the float64 tolerance of want.
+// The dispatched kernel and realFFTUnpackRef differ only in how their
+// multiply-adds fuse, so they agree to within rounding rather than exactly.
 func realFFTUnpackClose(got, want float64) bool {
 	diff := math.Abs(got - want)
-	return diff <= 1e-9 || diff <= math.Abs(want)*1e-11
+	return diff <= realFFTUnpackAbsTol || diff <= math.Abs(want)*realFFTUnpackRelTol
 }
 
 func TestRealFFTUnpack(t *testing.T) {
@@ -288,6 +310,11 @@ func TestRealFFTUnpack_OverRead(t *testing.T) {
 // TestRealFFTUnpack_ShortSlices exercises the length-validation guards: with n
 // taken from len(zRe), any operand shorter than required (zIm/outRe/outIm < n, or
 // twRe/twIm < n-1) must make the call return without writing output or panicking.
+//
+// Each case shortens exactly one operand, so every clause of the guard is pinned
+// on its own. Shortening twRe and twIm together, which this table used to do,
+// left either twiddle clause deletable with the package still green, since the
+// other clause caught the case on its own.
 func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 	const n = 8
 	makeZ := func() ([]float64, []float64) {
@@ -298,41 +325,57 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 		}
 		return zRe, zIm
 	}
-	makeTw := func(m int) ([]float64, []float64) {
-		a, b := make([]float64, m), make([]float64, m)
-		for i := range m {
-			a[i], b[i] = 0.5, -0.5
+	makeTw := func(reLen, imLen int) ([]float64, []float64) {
+		a, b := make([]float64, reLen), make([]float64, imLen)
+		for i := range a {
+			a[i] = 0.5
+		}
+		for i := range b {
+			b[i] = -0.5
 		}
 		return a, b
 	}
-	allZero := func(t *testing.T, name string, s []float64) {
+	// Outputs are prefilled with a sentinel rather than left zero. A zero-filled
+	// buffer cannot distinguish "the guard returned without writing" from "the
+	// kernel ran and wrote a zero", so the assertion would not catch the case it
+	// is named for.
+	const sentinel = -1.5
+	makeOut := func(n int) []float64 {
+		s := make([]float64, n)
+		for i := range s {
+			s[i] = sentinel
+		}
+		return s
+	}
+	untouched := func(t *testing.T, name string, s []float64) {
 		t.Helper()
 		for i, v := range s {
-			if v != 0 {
+			if v != sentinel {
 				t.Errorf("%s written at [%d]=%v, want untouched (guard should have returned)", name, i, v)
 			}
 		}
 	}
 
 	cases := []struct {
-		name                              string
-		zImLen, outReLen, outImLen, twLen int
+		name                                         string
+		zImLen, outReLen, outImLen, twReLen, twImLen int
 	}{
-		{"shortZIm", n - 1, n, n, n - 1},
-		{"shortOutRe", n, n - 1, n, n - 1},
-		{"shortOutIm", n, n, n - 1, n - 1},
-		{"shortTwiddles", n, n, n, n - 2},
+		{"shortZIm", n - 1, n, n, n - 1, n - 1},
+		{"shortOutRe", n, n - 1, n, n - 1, n - 1},
+		{"shortOutIm", n, n, n - 1, n - 1, n - 1},
+		{"shortTwRe", n, n, n, n - 2, n - 1},
+		{"shortTwIm", n, n, n, n - 1, n - 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			zRe, zImFull := makeZ()
 			zIm := zImFull[:c.zImLen]
-			twRe, twIm := makeTw(c.twLen)
-			outRe := make([]float64, c.outReLen)
-			outIm := make([]float64, c.outImLen)
+			twRe, twIm := makeTw(c.twReLen, c.twImLen)
+			outRe := makeOut(c.outReLen)
+			outIm := makeOut(c.outImLen)
 			RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
-			allZero(t, "outRe", outRe)
-			allZero(t, "outIm", outIm)
+			untouched(t, "outRe", outRe)
+			untouched(t, "outIm", outIm)
 		})
 	}
 }

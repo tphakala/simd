@@ -123,6 +123,19 @@ var stageSpans = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 32, 64}
 // leftover case for both.
 var stageBlockCounts = []int{1, 2, 3, 4, 5, 6, 7, 8, 16, 33}
 
+// TestButterflyComplexStage is the one of this file's three parity tests that
+// still asserts something on a tier where the dispatcher declines SIMD, so do not
+// delete it as redundant with the two below. Its reference,
+// butterflyComplexStageRef, indexes re/im directly instead of delegating, while
+// the other two compare against code that reduces to the same Go fallback:
+// butterflyComplexStage64Go is only a loop over butterflyComplex64Go.
+//
+// MEASURED by flipping the sign in butterflyComplex64Go's complex multiply. Under
+// SIMD_DISABLE=all, which models the sub-AVX2 qemu legs added in #203/#213, this
+// test fails while MatchesPerBlockLoop and SIMDvsGo both stay green. Natively on
+// AVX2 all three fail. It is not the only net on those legs, since
+// TestButterflyComplexStage_FullFFT also catches that mutation there; it is the
+// only one of the three parity tests that does.
 func TestButterflyComplexStage(t *testing.T) {
 	for _, span := range stageSpans {
 		for _, blocks := range stageBlockCounts {
