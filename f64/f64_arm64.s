@@ -2853,12 +2853,13 @@ butterfly_neon_done:
 // pairs into an upper and a lower vector, and ZIP1/ZIP2 put them back.
 //
 // Registers, span >= 2 path: R0/R1 re+im block bases, R2/R3 twiddle bases,
-// R4 span, R5 blocks, R6/R7 upper pointers, R19/R20 lower pointers, R21/R22
-// twiddle pointers, R23 inner counter, R24 span bytes, R25 block bytes.
-// The span == 1 path uses R0/R1 as the running re+im cursors, R6/R7 as the
-// second block's addresses, V12/V13 as the splat twiddle and R23 as the
-// block-pair counter; it never writes R19-R22, R24 or R25. Frame:
-// re(24)+im(24)+span(8)+blocks(8)+twRe(24)+twIm(24) = 112 bytes.
+// R4 span, R5 blocks, R6/R7 upper pointers, R8 span/2 and R9 span&1 (both
+// invariant across the block loop, so both are hoisted above it), R19/R20
+// lower pointers, R21/R22 twiddle pointers, R23 inner counter, R24 span bytes,
+// R25 block bytes. The span == 1 path uses R0/R1 as the running re+im cursors,
+// R6/R7 as the second block's addresses, V12/V13 as the splat twiddle and R23
+// as the block-pair counter; it never writes R8, R9, R19-R22, R24 or R25.
+// Frame: re(24)+im(24)+span(8)+blocks(8)+twRe(24)+twIm(24) = 112 bytes.
 TEXT ·butterflyComplexStageNEON(SB), NOSPLIT, $0-112
     MOVD re_base+0(FP), R0           // R0 = re block base
     MOVD im_base+24(FP), R1          // R1 = im block base
@@ -2877,6 +2878,8 @@ TEXT ·butterflyComplexStageNEON(SB), NOSPLIT, $0-112
     // ----------------------------------------------------------------------
     LSL  $3, R4, R24                 // R24 = span*8 = upper->lower byte offset
     LSL  $4, R4, R25                 // R25 = span*16 = block stride in bytes
+    LSR  $1, R4, R8                  // R8 = span/2 = vector iterations per block
+    AND  $1, R4, R9                  // R9 = span&1, the odd-span scalar butterfly
 
 bfstage_neon_block:
     MOVD R0, R6                      // R6 = upper re
@@ -2885,7 +2888,7 @@ bfstage_neon_block:
     ADD  R24, R1, R20                // R20 = lower im
     MOVD R2, R21                     // R21 = twRe
     MOVD R3, R22                     // R22 = twIm
-    LSR  $1, R4, R23                 // R23 = span/2 vector iterations
+    MOVD R8, R23                     // R23 = working copy of the vector count
     CBZ  R23, bfstage_neon_tail_pre
 
 bfstage_neon_vec:
@@ -2918,8 +2921,7 @@ bfstage_neon_vec:
     CBNZ R23, bfstage_neon_vec
 
 bfstage_neon_tail_pre:
-    AND  $1, R4, R23                 // odd span leaves one scalar butterfly
-    CBZ  R23, bfstage_neon_next
+    CBZ  R9, bfstage_neon_next       // even span: no scalar butterfly left
 
     FMOVD (R19), F2                  // lowerRe
     FMOVD (R20), F3                  // lowerIm
@@ -2954,6 +2956,15 @@ bfstage_neon_next:
     // interleaved. Take 2 blocks (4 float64) per iteration, UZP1/UZP2 to
     // separate the uppers from the lowers, ZIP1/ZIP2 to re-interleave on the
     // way out. The twiddle is the single tw[0], splatted once.
+    //
+    // The loop body's six load instructions and four stores could be two
+    // multi-register loads and two multi-register stores instead
+    // (VLD1 (R0), [V0.D2, V1.D2] and VST1.P [V0.D2, V1.D2], 32(R0)), dropping 6
+    // of its 28 instructions. Measured on a Cortex-A76 (Pi 5, binaries built
+    // with go1.26.5, 15 paired rounds at 2s over span 1 of a 1024-point stage):
+    // 1389ns median before, 1383ns after, 0.4%, with the two ranges
+    // overlapping. The loop is not issue-bound, so the shorter form is not worth
+    // rewriting a hot kernel for; see #206.
     // ----------------------------------------------------------------------
 bfstage_neon_span1:
     FMOVD (R2), F12
@@ -3009,13 +3020,16 @@ bfstage_neon_span1_tail_pre:
 
     FMOVD 8(R0), F2                  // lowerRe
     FMOVD 8(R1), F3                  // lowerIm
-    FMOVD (R2), F4                   // twRe[0]
-    FMOVD (R3), F5                   // twIm[0]
-    FMULD F2, F4, F6
-    FMULD F3, F5, F7
+    // The twiddle is already in registers: F12/F13 alias lane 0 of the V12/V13
+    // splats built at bfstage_neon_span1, and the vector loop above only ever
+    // reads V12/V13 (they are sources of the FMUL/FMLS/FMLA words, never
+    // destinations), so lane 0 still holds twRe[0]/twIm[0]. Reloading them from
+    // (R2)/(R3) would be two redundant loads.
+    FMULD F2, F12, F6
+    FMULD F3, F13, F7
     FSUBD F7, F6, F6                 // F6 = tempRe
-    FMULD F2, F5, F7
-    FMULD F3, F4, F8
+    FMULD F2, F13, F7
+    FMULD F3, F12, F8
     FADDD F7, F8, F7                 // F7 = tempIm
     FMOVD (R0), F0                   // upperRe
     FMOVD (R1), F1                   // upperIm
