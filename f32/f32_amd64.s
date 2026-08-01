@@ -6500,6 +6500,12 @@ var32_sse_scalar:
     JNZ  var32_sse_scalar
 
 var32_sse_divide:
+    // Keep the legacy CVTSQ2SS. Do not copy the VEX convert from
+    // var32_avx_divide below: initSSE dispatches varianceSSE on CPUs without
+    // AVX, where VCVTSI2SSQ is a SIGILL. Nothing would catch that edit.
+    // MEASURED: making it leaves TestAmd64KernelISALevel green, while a genuine
+    // AVX2 instruction at this line does fail it. There is also nothing to fix
+    // here, since this kernel writes no YMM. See #214.
     MOVQ a_len+8(FP), CX
     CVTSQ2SS CX, X1
     DIVSS X1, X0

@@ -763,14 +763,15 @@ i8.ToInt16(w16, a) // sign-extend to int16 (exact)
 |                 | Min               | 148       | 350     | **2.4x**  |
 |                 | Max               | 151       | 370     | **2.5x**  |
 | **Statistical** | Mean              | 33        | 419     | **12.7x** |
-|                 | Variance\*        | 552       | 3893    | **7.1x**  |
-|                 | StdDev\*          | 556       | 3900    | **7.0x**  |
+|                 | Variance\*        | 419       | 3483    | **8.3x**  |
+|                 | StdDev\*          | 421       | 3481    | **8.3x**  |
 | **Vector**      | EuclideanDistance | 76        | 1173    | **15.4x** |
 |                 | Normalize         | 536       | 692     | **1.3x**  |
 |                 | CumulativeSum     | 472       | 457     | 1.0x      |
 | **Range**       | Clamp             | 83        | 880     | **10.6x** |
 
-\*Variance/StdDev benchmarked at 4096 elements (SIMD benefits at larger sizes)
+\*Variance/StdDev benchmarked at 4096 elements (SIMD benefits at larger sizes),
+and re-measured after the variance divide-epilogue fix (#214)
 
 #### float32 Operations - SIMD vs Pure Go (1024 elements)
 
@@ -789,13 +790,15 @@ i8.ToInt16(w16, a) // sign-extend to int16 (exact)
 |                | Sum        | 18        | 416     | **22.6x** |
 |                | Min        | 66        | 347     | **5.2x**  |
 |                | Max        | 120       | 382     | **3.2x**  |
-| **Statistical**| Variance\*  | 164       | 921     | **5.6x**  |
-|                | StdDev\*    | 164       | 903     | **5.5x**  |
+| **Statistical**| Variance\*  | 54        | 842     | **15.6x** |
+|                | StdDev\*    | 54        | 842     | **15.6x** |
 | **Vector**     | EuclideanDistance\* | 35 | 434     | **12.4x** |
 | **Range**      | Clamp      | 45        | 753     | **16.6x** |
 
 \*Variance/StdDev/EuclideanDistance use their own fixed 1000-element benchmark
-(the other rows are at 1024 elements); all numbers come from one run on this host.
+(the other rows are at 1024 elements). The Variance and StdDev rows were
+re-measured after the variance divide-epilogue fix (#214); the other rows come
+from one earlier run on this host.
 
 #### Activation Functions - SIMD vs Pure Go
 

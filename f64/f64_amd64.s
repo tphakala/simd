@@ -3181,6 +3181,12 @@ var_sse2_remainder:
     ADDSD X1, X0
 
 var_sse2_divide:
+    // Keep the legacy CVTSQ2SD. Do not copy the VEX convert from
+    // var_avx_divide above: initSSE2 dispatches varianceSSE2 on CPUs without
+    // AVX, where VCVTSI2SDQ is a SIGILL. Nothing would catch that edit.
+    // MEASURED: making it leaves TestAmd64KernelISALevel green, while a genuine
+    // AVX2 instruction at this line does fail it. There is also nothing to fix
+    // here, since this kernel writes no YMM. See #214.
     MOVQ a_len+8(FP), CX
     CVTSQ2SD CX, X1
     DIVSD X1, X0
