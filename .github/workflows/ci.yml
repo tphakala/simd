@@ -304,6 +304,14 @@ jobs:
             exit 1
           fi
           got=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*CPUINFO=//p')
+          if [ -z "$got" ]; then
+            # No CPUINFO line at all means the helper skipped or its output
+            # format changed, not that the tier is wrong. Say so, and show what
+            # it did print, rather than reporting an empty tier mismatch.
+            echo "::error::probe emitted no CPUINFO line under -cpu $MODEL; TestHelperInfo skipped or its output format changed"
+            printf '%s\n' "$out"
+            exit 1
+          fi
           if [ "$got" != "$WANT_TIER" ]; then
             echo "::error::qemu -cpu $MODEL reports cpu.Info()=\"$got\", want \"$WANT_TIER\""
             exit 1
@@ -332,8 +340,16 @@ jobs:
           fi
           for pkg in $pkgs; do
             # Skip packages with no test files; a compile failure in a real test
-            # package must fail the job, not be silently swallowed.
-            read -r ntest nxtest <<<"$(go list -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' "$pkg")"
+            # package must fail the job, not be silently swallowed. The counts
+            # are captured separately so this go list's own failure is a fatal
+            # error rather than an empty read, which would fall through to the
+            # compile step and surface as a confusing missing-binary failure.
+            if ! counts=$(go list -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' "$pkg"); then
+              echo "::error::go list -f failed for $pkg"
+              fail=1
+              continue
+            fi
+            read -r ntest nxtest <<<"$counts"
             if [ "$ntest" -eq 0 ] && [ "$nxtest" -eq 0 ]; then continue; fi
             bin="/tmp/$(echo "$pkg" | tr '/.' '__').test"
             if ! CGO_ENABLED=0 go test -c -o "$bin" "$pkg"; then
