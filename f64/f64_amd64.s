@@ -6118,6 +6118,296 @@ butterfly_done:
     VZEROUPPER
     RET
 
+// func butterflyComplexStageAVX(re, im []float64, span, blocks int, twRe, twIm []float64)
+// One complete radix-2 decimation-in-time stage, in place over split-complex
+// float64. For every block k in steps of 2*span and every j in [0, span), the
+// butterfly at (k+j, k+span+j) with twiddle tw[j]. Same arithmetic sequence as
+// butterflyComplexAVX above (VMULPD/VMULPD/VSUBPD then VMULPD/VFMADD231PD), so
+// a stage produces the same bits as driving THAT KERNEL per block, for every span
+// and block count tested. That is a kernel-to-kernel statement, not a claim about
+// the exported ButterflyComplex: its dispatch withholds short slices from this
+// kernel, so a per-block loop through the public API can land on the Go path and
+// round differently. Compare kernels, not entry points.
+//
+// The stage form exists to pick its own vectorization axis. Long spans vectorize
+// across j, where the twiddles and both halves of the block are contiguous. Spans
+// of 1 and 2 cannot fill a 4-wide YMM along j at all, so they vectorize across
+// blocks instead, gathering 4 (span 1) or 2 (span 2) blocks per iteration with
+// in-register shuffles. That is what a per-block API cannot express, and it is
+// where the per-call overhead used to dominate.
+//
+// span 3 is the one span with neither axis: it enters the j-axis path, whose
+// 4-wide bound (span &^ 3) is 0 there, so every butterfly runs in that path's
+// scalar tail. It is still dispatched here, because absorbing the block loop into
+// one call beats the Go fallback's call per block.
+//
+// AVX+FMA only, no AVX2: the block-axis shuffles are VUNPCKLPD/VUNPCKHPD and
+// VPERM2F128, the twiddle splats are the memory-source forms of VBROADCASTSD and
+// VBROADCASTF128 (the register-source VBROADCASTSD would be AVX2), and all vector
+// arithmetic is floating point, in 256-bit, 128-bit and scalar widths. Frame:
+// re(24)+im(24)+span(8)+blocks(8)+twRe(24)+twIm(24) = 112 bytes.
+TEXT ·butterflyComplexStageAVX(SB), NOSPLIT, $0-112
+    MOVQ re_base+0(FP), DX           // DX = re block base
+    MOVQ im_base+24(FP), R8          // R8 = im block base
+    MOVQ span+48(FP), CX             // CX = span
+    MOVQ blocks+56(FP), AX           // AX = block count
+    MOVQ twRe_base+64(FP), R9        // R9 = twRe base
+    MOVQ twIm_base+88(FP), R10       // R10 = twIm base
+
+    TESTQ AX, AX
+    JZ    bfstage_done
+    CMPQ  CX, $1
+    JEQ   bfstage_span1
+    CMPQ  CX, $2
+    JEQ   bfstage_span2
+
+// ---------------------------------------------------------------------------
+// Long span: vectorize across j. Per block, span/4 full YMM iterations over the
+// contiguous run, then a scalar tail for span%4. Twiddles restart at j=0 for
+// every block, so they are addressed by the same j index as the data.
+// ---------------------------------------------------------------------------
+    MOVQ CX, R11
+    SHLQ $3, R11                     // R11 = span*8 = upper->lower byte offset
+    MOVQ CX, R12
+    SHLQ $4, R12                     // R12 = span*16 = block stride in bytes
+    MOVQ CX, R13
+    ANDQ $-4, R13                    // R13 = span &^ 3 = 4-wide loop bound
+
+bfstage_block:
+    LEAQ (DX)(R11*1), SI             // SI = lower re for this block
+    LEAQ (R8)(R11*1), DI             // DI = lower im for this block
+    XORQ BX, BX                      // BX = j
+    CMPQ BX, R13
+    JGE  bfstage_tail_pre
+
+bfstage_vec:
+    VMOVUPD (SI)(BX*8), Y0           // Y0 = lower_re[j:j+4]
+    VMOVUPD (DI)(BX*8), Y1           // Y1 = lower_im[j:j+4]
+    VMOVUPD (R9)(BX*8), Y2           // Y2 = tw_re[j:j+4]
+    VMOVUPD (R10)(BX*8), Y3          // Y3 = tw_im[j:j+4]
+
+    VMULPD Y0, Y2, Y4                // Y4 = lr*tr
+    VMULPD Y1, Y3, Y5                // Y5 = li*ti
+    VSUBPD Y5, Y4, Y4                // Y4 = temp_re = lr*tr - li*ti
+    VMULPD Y0, Y3, Y5                // Y5 = lr*ti
+    VFMADD231PD Y1, Y2, Y5           // Y5 = temp_im = lr*ti + li*tr
+
+    VMOVUPD (DX)(BX*8), Y0           // Y0 = upper_re[j:j+4]
+    VMOVUPD (R8)(BX*8), Y1           // Y1 = upper_im[j:j+4]
+
+    VADDPD Y0, Y4, Y2                // upper_re + temp_re
+    VSUBPD Y4, Y0, Y3                // upper_re - temp_re
+    VMOVUPD Y2, (DX)(BX*8)
+    VMOVUPD Y3, (SI)(BX*8)
+    VADDPD Y1, Y5, Y2                // upper_im + temp_im
+    VSUBPD Y5, Y1, Y3                // upper_im - temp_im
+    VMOVUPD Y2, (R8)(BX*8)
+    VMOVUPD Y3, (DI)(BX*8)
+
+    ADDQ $4, BX
+    CMPQ BX, R13
+    JLT  bfstage_vec
+
+bfstage_tail_pre:
+    CMPQ BX, CX
+    JGE  bfstage_next
+
+bfstage_tail:
+    VMOVSD (SI)(BX*8), X0            // X0 = lower_re[j]
+    VMOVSD (DI)(BX*8), X1            // X1 = lower_im[j]
+    VMOVSD (R9)(BX*8), X2            // X2 = tw_re[j]
+    VMOVSD (R10)(BX*8), X3           // X3 = tw_im[j]
+
+    VMULSD X0, X2, X4
+    VMULSD X1, X3, X5
+    VSUBSD X5, X4, X4                // X4 = temp_re
+    VMULSD X0, X3, X5
+    VFMADD231SD X1, X2, X5           // X5 = temp_im
+
+    VMOVSD (DX)(BX*8), X0            // X0 = upper_re[j]
+    VMOVSD (R8)(BX*8), X1            // X1 = upper_im[j]
+
+    VADDSD X0, X4, X2
+    VSUBSD X4, X0, X3
+    VMOVSD X2, (DX)(BX*8)
+    VMOVSD X3, (SI)(BX*8)
+    VADDSD X1, X5, X2
+    VSUBSD X5, X1, X3
+    VMOVSD X2, (R8)(BX*8)
+    VMOVSD X3, (DI)(BX*8)
+
+    INCQ BX
+    CMPQ BX, CX
+    JLT  bfstage_tail
+
+bfstage_next:
+    ADDQ R12, DX
+    ADDQ R12, R8
+    DECQ AX
+    JNZ  bfstage_block
+    JMP  bfstage_done
+
+// ---------------------------------------------------------------------------
+// span == 1: each block is one pair [u, l], so the array is fully interleaved.
+// Take 4 blocks (8 float64) at a time and split them with VUNPCKLPD/VUNPCKHPD.
+// Those unpacks work inside each 128-bit half, so the four uppers land in lane
+// order (b0, b2, b1, b3) rather than (b0, b1, b2, b3). That permutation is
+// harmless: the lowers land in the SAME order, the twiddle is one broadcast
+// scalar, and the inverse unpack on the way out puts every lane back where it
+// came from. Keeping the permuted order is what avoids needing VPERMPD (AVX2).
+// ---------------------------------------------------------------------------
+bfstage_span1:
+    VBROADCASTSD (R9), Y6            // Y6 = tw_re[0] in all lanes
+    VBROADCASTSD (R10), Y7           // Y7 = tw_im[0] in all lanes
+
+    MOVQ AX, BX
+    SHRQ $2, BX                      // BX = blocks/4 = 4-block iterations
+    JZ   bfstage_span1_tail_pre
+
+bfstage_span1_vec:
+    VMOVUPD (DX), Y0                 // [u0,l0,u1,l1] re
+    VMOVUPD 32(DX), Y1               // [u2,l2,u3,l3] re
+    VUNPCKLPD Y1, Y0, Y4             // Y4 = upper_re = [u0,u2,u1,u3]
+    VUNPCKHPD Y1, Y0, Y5             // Y5 = lower_re = [l0,l2,l1,l3]
+    VMOVUPD (R8), Y2                 // [u0,l0,u1,l1] im
+    VMOVUPD 32(R8), Y3               // [u2,l2,u3,l3] im
+    VUNPCKLPD Y3, Y2, Y8             // Y8 = upper_im, same lane order
+    VUNPCKHPD Y3, Y2, Y9             // Y9 = lower_im, same lane order
+
+    VMULPD Y5, Y6, Y10               // lr*tr
+    VMULPD Y9, Y7, Y11               // li*ti
+    VSUBPD Y11, Y10, Y10             // Y10 = temp_re
+    VMULPD Y5, Y7, Y11               // lr*ti
+    VFMADD231PD Y9, Y6, Y11          // Y11 = temp_im
+
+    VADDPD Y4, Y10, Y0               // new upper_re
+    VSUBPD Y10, Y4, Y1               // new lower_re
+    VADDPD Y8, Y11, Y2               // new upper_im
+    VSUBPD Y11, Y8, Y3               // new lower_im
+
+    VUNPCKLPD Y1, Y0, Y12            // [U0,L0,U1,L1] re
+    VUNPCKHPD Y1, Y0, Y13            // [U2,L2,U3,L3] re
+    VMOVUPD Y12, (DX)
+    VMOVUPD Y13, 32(DX)
+    VUNPCKLPD Y3, Y2, Y12            // [U0,L0,U1,L1] im
+    VUNPCKHPD Y3, Y2, Y13            // [U2,L2,U3,L3] im
+    VMOVUPD Y12, (R8)
+    VMOVUPD Y13, 32(R8)
+
+    ADDQ $64, DX
+    ADDQ $64, R8
+    DECQ BX
+    JNZ  bfstage_span1_vec
+
+bfstage_span1_tail_pre:
+    ANDQ $3, AX                      // AX = leftover blocks (0..3)
+    JZ   bfstage_done
+
+bfstage_span1_tail:
+    VMOVSD 8(DX), X0                 // lower_re
+    VMOVSD 8(R8), X1                 // lower_im
+    VMULSD X0, X6, X4
+    VMULSD X1, X7, X5
+    VSUBSD X5, X4, X4                // temp_re
+    VMULSD X0, X7, X5
+    VFMADD231SD X1, X6, X5           // temp_im
+
+    VMOVSD (DX), X0                  // upper_re
+    VMOVSD (R8), X1                  // upper_im
+    VADDSD X0, X4, X2
+    VSUBSD X4, X0, X3
+    VMOVSD X2, (DX)
+    VMOVSD X3, 8(DX)
+    VADDSD X1, X5, X2
+    VSUBSD X5, X1, X3
+    VMOVSD X2, (R8)
+    VMOVSD X3, 8(R8)
+
+    ADDQ $16, DX
+    ADDQ $16, R8
+    DECQ AX
+    JNZ  bfstage_span1_tail
+    JMP  bfstage_done
+
+// ---------------------------------------------------------------------------
+// span == 2: each block is [u0,u1,l0,l1], exactly one 128-bit half per side.
+// Take 2 blocks (8 float64) at a time; VPERM2F128 collects the two upper halves
+// into one YMM and the two lower halves into another, so the 4 lanes carry 2
+// blocks x 2 j values. The twiddle pair repeats per block, which is one
+// memory-source VBROADCASTF128.
+// ---------------------------------------------------------------------------
+bfstage_span2:
+    VBROADCASTF128 (R9), Y6          // Y6 = [tr0,tr1,tr0,tr1]
+    VBROADCASTF128 (R10), Y7         // Y7 = [ti0,ti1,ti0,ti1]
+
+    MOVQ AX, BX
+    SHRQ $1, BX                      // BX = blocks/2 = 2-block iterations
+    JZ   bfstage_span2_tail_pre
+
+bfstage_span2_vec:
+    VMOVUPD (DX), Y0                 // block0 re = [u0,u1,l0,l1]
+    VMOVUPD 32(DX), Y1               // block1 re
+    VPERM2F128 $0x20, Y1, Y0, Y4     // Y4 = upper_re = [u0,u1,u0',u1']
+    VPERM2F128 $0x31, Y1, Y0, Y5     // Y5 = lower_re = [l0,l1,l0',l1']
+    VMOVUPD (R8), Y2                 // block0 im
+    VMOVUPD 32(R8), Y3               // block1 im
+    VPERM2F128 $0x20, Y3, Y2, Y8     // Y8 = upper_im
+    VPERM2F128 $0x31, Y3, Y2, Y9     // Y9 = lower_im
+
+    VMULPD Y5, Y6, Y10
+    VMULPD Y9, Y7, Y11
+    VSUBPD Y11, Y10, Y10             // Y10 = temp_re
+    VMULPD Y5, Y7, Y11
+    VFMADD231PD Y9, Y6, Y11          // Y11 = temp_im
+
+    VADDPD Y4, Y10, Y0               // new upper_re
+    VSUBPD Y10, Y4, Y1               // new lower_re
+    VADDPD Y8, Y11, Y2               // new upper_im
+    VSUBPD Y11, Y8, Y3               // new lower_im
+
+    VPERM2F128 $0x20, Y1, Y0, Y12    // block0 re = [U0,U1,L0,L1]
+    VPERM2F128 $0x31, Y1, Y0, Y13    // block1 re
+    VMOVUPD Y12, (DX)
+    VMOVUPD Y13, 32(DX)
+    VPERM2F128 $0x20, Y3, Y2, Y12    // block0 im
+    VPERM2F128 $0x31, Y3, Y2, Y13    // block1 im
+    VMOVUPD Y12, (R8)
+    VMOVUPD Y13, 32(R8)
+
+    ADDQ $64, DX
+    ADDQ $64, R8
+    DECQ BX
+    JNZ  bfstage_span2_vec
+
+bfstage_span2_tail_pre:
+    ANDQ $1, AX                      // one leftover block at most
+    JZ   bfstage_done
+
+    // Single block, 2 lanes wide: XMM halves of the same broadcast twiddles.
+    VMOVUPD (DX), X4                 // [u0,u1] re
+    VMOVUPD 16(DX), X5               // [l0,l1] re
+    VMOVUPD (R8), X8                 // [u0,u1] im
+    VMOVUPD 16(R8), X9               // [l0,l1] im
+
+    VMULPD X5, X6, X10
+    VMULPD X9, X7, X11
+    VSUBPD X11, X10, X10             // temp_re
+    VMULPD X5, X7, X11
+    VFMADD231PD X9, X6, X11          // temp_im
+
+    VADDPD X4, X10, X0
+    VSUBPD X10, X4, X1
+    VMOVUPD X0, (DX)
+    VMOVUPD X1, 16(DX)
+    VADDPD X8, X11, X2
+    VSUBPD X11, X8, X3
+    VMOVUPD X2, (R8)
+    VMOVUPD X3, 16(R8)
+
+bfstage_done:
+    VZEROUPPER
+    RET
+
 // func realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int)
 // Real-FFT unpack step, 4 float64 lanes per YMM (AVX+FMA). The float64
 // counterpart of f32's realFFTUnpackAVX: 4 lanes/iter instead of 8, so the

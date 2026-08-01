@@ -156,11 +156,18 @@ sum := crc.Checksum16(p) // bit-identical to the scalar reference, zero-alloc
 
 **Scope:** `f64` carries the FLAC/LPC and scientific double-precision surface,
 including `Autocorrelate` (lag-vectorized LPC autocorrelation) and the split-format
-FFT butterfly building blocks (`ButterflyComplex`, `RealFFTUnpack`) that a
-double-precision FFT/STFT path needs. The broader audio/ML helpers (PCM
-conversions, the general split-format complex ops such as `MulComplex` /
-`AbsSqComplex`, indexed/strided dot products) live in `f32` instead, so the two
-float surfaces remain intentionally asymmetric.
+FFT butterfly building blocks (`ButterflyComplex`, `ButterflyComplexStage`,
+`RealFFTUnpack`) that a double-precision FFT/STFT path needs. The broader
+audio/ML helpers (PCM conversions, the general split-format complex ops such as
+`MulComplex` / `AbsSqComplex`, indexed/strided dot products) live in `f32`
+instead, so the two float surfaces remain intentionally asymmetric.
+
+Prefer `ButterflyComplexStage` over `ButterflyComplex` when driving a whole
+transform. It takes the stage rather than one block, so the per-block call
+overhead disappears and the short spans, which cannot fill a vector along `j`,
+vectorize across blocks instead. Measured over one stage of a 1024-point
+transform on an x86 core, that collapses the cost spread across spans from
+roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 
 | Category        | Function                            | Description                   | SIMD Width                          |
 | --------------- | ----------------------------------- | ----------------------------- | ----------------------------------- |
@@ -212,6 +219,7 @@ float surfaces remain intentionally asymmetric.
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
 |                 | `Autocorrelate(autoc, x, maxLag)`   | LPC autocorrelation Σ x[i]·x[i-lag] (bit-exact) | 4x (AVX2) / 2x (NEON)     |
 | **Complex/FFT** | `ButterflyComplex(uRe,uIm,lRe,lIm,twRe,twIm)` | FFT butterfly with twiddle multiply | 4x (AVX+FMA) / 2x (NEON)   |
+|                 | `ButterflyComplexStage(re,im,span,twRe,twIm)` | One whole radix-2 DIT stage (any span) | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real-FFT even/odd unpack step | 4x (AVX2) / 2x (NEON)       |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
