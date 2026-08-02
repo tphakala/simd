@@ -320,11 +320,15 @@ func TestFloat32ToInt32ScaleClampSignedUnsafe(t *testing.T) {
 func FuzzFloat32ToInt32ScaleClampSigned(f *testing.F) {
 	f.Add(uint64(0x1234567), 17, float32(3.0), float32(0.4054), float32(-5000), float32(5000))
 	f.Add(uint64(0xdeadbeef), 40, float32(1.0), float32(0.0), float32(-100), float32(100))
+	f.Add(uint64(1), math.MinInt, float32(1.0), float32(0.0), float32(-100), float32(100)) // regression: n=MinInt must not panic in normalization
 	f.Fuzz(func(t *testing.T, seed uint64, n int, scale, offset, minV, maxV float32) {
+		// Bound n FIRST, then take the absolute value: negating before bounding
+		// would overflow on n == math.MinInt (-math.MinInt is still math.MinInt),
+		// leaving a negative length that panics make. After %300, |n| < 300.
+		n %= 300
 		if n < 0 {
 			n = -n
 		}
-		n %= 300
 		// The signed kernel abs's the clamped magnitude before the truncating
 		// conversion, so cross-tier bit-identity needs max(|minV|,|maxV|) <=
 		// 2147483520 (tighter than the unsigned kernel; see the doc). NaN bounds are
