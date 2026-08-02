@@ -701,3 +701,36 @@ func TestSTFTGuards(t *testing.T) {
 		}
 	}
 }
+
+// TestSTFTStageTwiddles pins the per-stage contiguous twiddle layout that lets
+// fftHalf drive each radix-2 stage through ButterflyComplexStage (issue #205).
+// Stage m in {2,4,...,half} must hold span = m/2 factors W_m^j = exp(-i*2*pi*j/m)
+// at offset span-1, and the tables must total exactly half-1 entries.
+func TestSTFTStageTwiddles(t *testing.T) {
+	for _, nfft := range []int{2, 4, 8, 16, 256, 1024} {
+		p, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatalf("nfft=%d: NewSTFTPlan: %v", nfft, err)
+		}
+		half := nfft >> 1
+		wantLen := max(half-1, 0)
+		if len(p.stageTwRe) != wantLen || len(p.stageTwIm) != wantLen {
+			t.Fatalf("nfft=%d: twiddle table len = (%d,%d), want %d",
+				nfft, len(p.stageTwRe), len(p.stageTwIm), wantLen)
+		}
+		for m := 2; m <= half; m <<= 1 {
+			span := m >> 1
+			off := span - 1
+			for j := range span {
+				ang := 2 * math.Pi * float64(j) / float64(m)
+				s, c := math.Sincos(ang)
+				if d := math.Abs(p.stageTwRe[off+j] - c); d > 1e-15 {
+					t.Errorf("nfft=%d m=%d j=%d: stageTwRe=%g want %g", nfft, m, j, p.stageTwRe[off+j], c)
+				}
+				if d := math.Abs(p.stageTwIm[off+j] - (-s)); d > 1e-15 {
+					t.Errorf("nfft=%d m=%d j=%d: stageTwIm=%g want %g", nfft, m, j, p.stageTwIm[off+j], -s)
+				}
+			}
+		}
+	}
+}
