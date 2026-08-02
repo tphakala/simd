@@ -830,6 +830,36 @@ func float32ToInt32ScaleClampGo(dst []int32, src []float32, scale, offset, minV,
 	}
 }
 
+// float32ToInt32ScaleClampSignedGo is the pure-Go reference for
+// Float32ToInt32ScaleClampSigned. The magnitude path is exactly
+// float32ToInt32ScaleClampGo; the sign of sign[i] (IEEE-754 copysign, bit 31) is
+// applied to the clamped value in the float domain before the truncating
+// conversion. Truncation toward zero commutes with the sign, so the result
+// equals copysign(int32(clamp(mag[i]*scale+offset, minV, maxV)), sign[i]).
+func float32ToInt32ScaleClampSignedGo(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32) {
+	for i := range mag {
+		v := float32(mag[i]*scale) + offset // two roundings; the conversion blocks FMA fusion
+		if v != v {                         // NaN magnitude -> 0 (sign not applied), as on both kernels
+			dst[i] = 0
+			continue
+		}
+		// Clamp order mirrors the kernels' FMAX(minV) then FMIN(maxV).
+		if v < minV {
+			v = minV
+		}
+		if v > maxV {
+			v = maxV
+		}
+		// Copysign in the float domain: |v| carrying sign[i]'s sign bit. This is
+		// the same bit operation the AVX (VANDPS/VORPS) and NEON (BIT) kernels run
+		// before their truncating conversion.
+		v = math.Float32frombits(
+			(math.Float32bits(v) &^ (1 << float32SignBitPos)) |
+				(math.Float32bits(sign[i]) & (1 << float32SignBitPos)))
+		dst[i] = int32(v) // truncate toward zero
+	}
+}
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS (Pure Go)
 // ============================================================================

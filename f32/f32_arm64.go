@@ -834,6 +834,17 @@ func float32ToInt32ScaleClamp(dst []int32, src []float32, scale, offset, minV, m
 	float32ToInt32ScaleClampGo(dst, src, scale, offset, minV, maxV)
 }
 
+func float32ToInt32ScaleClampSigned(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32) {
+	if hasNEON && len(dst) >= 4 {
+		float32ToInt32ScaleClampSignedNEON(dst, mag, sign, scale, offset, minV, maxV)
+		return
+	}
+	float32ToInt32ScaleClampSignedGo(dst, mag, sign, scale, offset, minV, maxV)
+}
+
+//go:noescape
+func float32ToInt32ScaleClampSignedNEON(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32)
+
 //go:noescape
 func float32ToInt32ScaleClampNEON(dst []int32, src []float32, scale, offset, minV, maxV float32)
 

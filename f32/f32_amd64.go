@@ -1256,6 +1256,20 @@ func float32ToInt32ScaleClamp(dst []int32, src []float32, scale, offset, minV, m
 	float32ToInt32ScaleClampGo(dst, src, scale, offset, minV, maxV)
 }
 
+func float32ToInt32ScaleClampSigned(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32) {
+	// Pure AVX: the magnitude path matches float32ToInt32ScaleClampAVX and the
+	// sign is applied in the float domain (VANDPS/VORPS) before VCVTTPS2DQ, so the
+	// int32 output needs no saturating pack and AVX2 is not required.
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
+		float32ToInt32ScaleClampSignedAVX(dst, mag, sign, scale, offset, minV, maxV)
+		return
+	}
+	float32ToInt32ScaleClampSignedGo(dst, mag, sign, scale, offset, minV, maxV)
+}
+
+//go:noescape
+func float32ToInt32ScaleClampSignedAVX(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32)
+
 //go:noescape
 func float32ToInt32ScaleClampAVX(dst []int32, src []float32, scale, offset, minV, maxV float32)
 
