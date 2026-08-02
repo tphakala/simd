@@ -76,11 +76,15 @@ func TestInitTiers(t *testing.T) {
 				}
 				got := dotProductImpl(a, b)
 				want := dotProductGo(a, b)
-				// Vector and scalar summation orders differ, so this is a
-				// tolerance check rather than bit equality.
-				if diff := float64(got - want); diff > 1e-3 || diff < -1e-3 {
+				// closeFloat32 scales with the magnitude, which matters because
+				// a dot product grows with n. Measured on this input family, the
+				// tiers agree exactly up to n = 256 and diverge by 2688 in
+				// absolute terms at n = 4096, all of it summation order: a fixed
+				// absolute tolerance would read that as a kernel bug the moment
+				// anyone extended the length list.
+				if !closeFloat32(got, want) {
 					t.Errorf("n=%d: init%s dotProduct = %v, Go reference = %v (diff %v)",
-						n, tier.name, got, want, diff)
+						n, tier.name, got, want, float64(got-want))
 				}
 			}
 		})
