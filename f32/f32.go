@@ -1246,6 +1246,18 @@ func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) 
 //	X[0] = Z[0].real + Z[0].imag  (DC component)
 //	X[n] = Z[0].real - Z[0].imag  (Nyquist component)
 //
+// # Aliasing
+//
+// outRe and outIm must not overlap zRe or zIm in any way, not even as an exact
+// element-for-element overlay. Every bin reads the mirror z[n-k] as well as
+// z[k], so a write to out[k] destroys an input that the bin at n-k has not
+// consumed yet. Measured on the pure Go path, the first corrupted bin is
+// floor(n/2)+1 and every bin above it is wrong. The vector kernels currently
+// survive a few more sizes, because a SIMD block loads its whole input block
+// before storing any output lane, but that is block scheduling rather than a
+// guarantee and it varies with kernel width and n. Pass output slices distinct
+// from the input.
+//
 // Uses AVX+FMA on AMD64, NEON on ARM64, with pure Go fallback.
 func RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm []float32) {
 	n := len(zRe)

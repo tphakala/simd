@@ -3331,7 +3331,13 @@ func TestRealFFTUnpack_GoVsSIMD(t *testing.T) {
 	// bit-identical in general: the two paths can make different FMA contraction
 	// choices, and which of them fuses depends on GOARCH and on the dispatched
 	// CPU tier.
-	sizes := []int{9, 16, 17, 32, 64, 128, 256, 512}
+	//
+	// 9 through 16 is one full (n-1)%8 cycle, so every AVX remainder length is
+	// compared against the reference and not just the empty and maximal ones.
+	// This arm goes inert wherever the dispatcher declines SIMD, because it then
+	// calls realFFTUnpack32Go on both sides; TestRealFFTUnpack_SignedZero carries
+	// the independent oracle that holds on every tier.
+	sizes := []int{9, 10, 11, 12, 13, 14, 15, 16, 17, 32, 64, 128, 256, 512}
 
 	for _, n := range sizes {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
@@ -3384,9 +3390,9 @@ func TestRealFFTUnpack_GoVsSIMD(t *testing.T) {
 
 // TestRealFFTUnpack_AllocFree pins the package convention that every operation
 // writes into caller-provided slices and allocates nothing. n = 67 gives
-// (n-1)%8 == 2, so the run covers eight full AVX blocks and a two-iteration
-// scalar remainder; a tail that allocated would go unnoticed at a size where
-// (n-1)%8 is zero.
+// (n-1)%8 == 2, so the run covers eight full AVX blocks plus the overlapping
+// remainder block; remainder handling that allocated would go unnoticed at a
+// size where (n-1)%8 is zero and the remainder path is skipped.
 func TestRealFFTUnpack_AllocFree(t *testing.T) {
 	const n = 67
 	zRe := make([]float32, n)
@@ -3498,9 +3504,14 @@ func realFFTUnpack32Close(got, want float32) bool {
 func TestRealFFTUnpack_OverRead(t *testing.T) {
 	const pad = 16 // two 8-wide AVX blocks of NaN guard band on each side of z
 	// n > minAVXElements (8) is what dispatches to AVX. 9 to 16 sweeps (n-1)%8
-	// through all of 0..7, so the 8-wide AVX path is hit at every scalar-tail
+	// through all of 0..7, so the 8-wide AVX path is hit at every remainder
 	// length and at its minimum reverse index; that range also covers (n-1)%4 for
 	// the 4-wide NEON path. The larger sizes add multi-iteration reverse walks.
+	//
+	// This is the test that bounds the overlapping remainder block (#215). That
+	// block re-anchors at k = n-8 and mirror-reads zRe[1..8] whatever n is, so at
+	// n = 9 its forward and mirror windows are the same 8 elements and both sit
+	// hard against the ends of z; a guard band violation would show up here first.
 	for _, n := range []int{9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 31, 32, 33, 64, 65} {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
 			nan := float32(math.NaN())
@@ -3623,7 +3634,9 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 // zero and nothing rounds: the comparison can be bit-for-bit. The AVX scalar
 // tail used to negate for the conjugate with 0 - x, which returns +0 where -x
 // returns -0, so it disagreed with both its own 8-wide body and the Go
-// reference on these inputs (#208).
+// reference on these inputs (#208). #215 then replaced that tail with an
+// overlapping 8-wide block, so on AMD64 there is no longer a separate negation
+// to drift; the NEON kernel still has a scalar tail and this still guards it.
 //
 // Both comparisons are needed and neither covers the other. Dispatched-vs-Go
 // pins the kernel, but wherever the dispatcher declines SIMD it CALLS
@@ -3633,10 +3646,10 @@ func TestRealFFTUnpack_ShortSlices(t *testing.T) {
 // of adding the second would just move the blind spot onto the AVX path, where
 // realFFTUnpack32Go stops being reachable from RealFFTUnpack.
 func TestRealFFTUnpack_SignedZero(t *testing.T) {
-	// (n-1)%8 runs 0..7 over 9..16, so the AVX scalar tail is exercised at every
-	// length it can have; the NEON tail is (n-1)%4 and this list sweeps that too.
-	// 64 and 65 add a size with several full 8-wide blocks ahead of a full tail
-	// and one with no tail at all.
+	// (n-1)%8 runs 0..7 over 9..16, so the AVX remainder path is exercised at
+	// every length it can have; the NEON scalar tail is (n-1)%4 and this list
+	// sweeps that too. 64 and 65 add a size with several full 8-wide blocks ahead
+	// of a full remainder and one with no remainder at all.
 	sizes := []int{9, 10, 11, 12, 13, 14, 15, 16, 64, 65}
 
 	for _, n := range sizes {
@@ -3711,48 +3724,76 @@ func TestRealFFTUnpack_SignedZero(t *testing.T) {
 	}
 }
 
+// benchRealFFTUnpack32 runs fn at size n over freshly built inputs. Shared by
+// BenchmarkRealFFTUnpack and BenchmarkRealFFTUnpackTail so the two measure the
+// same thing at different size ranges.
+func benchRealFFTUnpack32(b *testing.B, n int, fn func(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int)) {
+	b.Helper()
+	zRe := make([]float32, n)
+	zIm := make([]float32, n)
+	twRe := make([]float32, n-1)
+	twIm := make([]float32, n-1)
+	outRe := make([]float32, n)
+	outIm := make([]float32, n)
+
+	for i := range n {
+		zRe[i] = float32(i) * 0.1
+		zIm[i] = float32(i) * 0.2
+	}
+	for k := 1; k < n; k++ {
+		angle := -2 * math.Pi * float64(k) / float64(2*n)
+		twRe[k-1] = float32(math.Cos(angle))
+		twIm[k-1] = float32(math.Sin(angle))
+	}
+
+	b.ResetTimer()
+	b.SetBytes(int64(n * 4 * 4)) // 4 slices of float32 (in/out re/im)
+
+	for i := 0; i < b.N; i++ {
+		fn(outRe, outIm, zRe, zIm, twRe, twIm, n)
+	}
+}
+
+// benchRealFFTUnpack32Dispatched adapts the public entry point, which takes no
+// explicit n, to the shared helper's signature.
+func benchRealFFTUnpack32Dispatched(outRe, outIm, zRe, zIm, twRe, twIm []float32, _ int) {
+	RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
+}
+
 func BenchmarkRealFFTUnpack(b *testing.B) {
 	// 513 sits next to 512 because every power of two in this list has
-	// (n-1)%8 == 7, the longest AVX scalar tail (and (n-1)%4 == 3, the longest
-	// NEON one). Without a size where the tail is empty its cost is charged to
-	// every row and reads as the kernel's baseline.
+	// (n-1)%8 == 7, the longest AVX remainder (and (n-1)%4 == 3, the longest NEON
+	// scalar tail). Without a size where the remainder is empty its cost is
+	// charged to every row and reads as the kernel's baseline.
 	sizes := []int{64, 128, 256, 512, 513, 1024, 4096}
-
-	benchFn := func(b *testing.B, n int, fn func(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int)) {
-		b.Helper()
-		zRe := make([]float32, n)
-		zIm := make([]float32, n)
-		twRe := make([]float32, n-1)
-		twIm := make([]float32, n-1)
-		outRe := make([]float32, n)
-		outIm := make([]float32, n)
-
-		for i := range n {
-			zRe[i] = float32(i) * 0.1
-			zIm[i] = float32(i) * 0.2
-		}
-		for k := 1; k < n; k++ {
-			angle := -2 * math.Pi * float64(k) / float64(2*n)
-			twRe[k-1] = float32(math.Cos(angle))
-			twIm[k-1] = float32(math.Sin(angle))
-		}
-
-		b.ResetTimer()
-		b.SetBytes(int64(n * 4 * 4)) // 4 slices of float32 (in/out re/im)
-
-		for i := 0; i < b.N; i++ {
-			fn(outRe, outIm, zRe, zIm, twRe, twIm, n)
-		}
-	}
 
 	for _, n := range sizes {
 		b.Run(fmt.Sprintf("SIMD_%d", n), func(b *testing.B) {
-			benchFn(b, n, func(outRe, outIm, zRe, zIm, twRe, twIm []float32, _ int) {
-				RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm)
-			})
+			benchRealFFTUnpack32(b, n, benchRealFFTUnpack32Dispatched)
 		})
 		b.Run(fmt.Sprintf("Go_%d", n), func(b *testing.B) {
-			benchFn(b, n, realFFTUnpack32Go)
+			benchRealFFTUnpack32(b, n, realFFTUnpack32Go)
+		})
+	}
+}
+
+// BenchmarkRealFFTUnpackTail sweeps one full remainder cycle at the smallest
+// dispatched sizes, so the per-tail-length cost is visible as a slope across
+// adjacent rows. n = 9 is the first size the AVX kernel takes (the guard is
+// n > minAVXElements with minAVXElements == 8) and has an empty remainder,
+// (n-1)%8 == 0; n = 16 has the longest one, (n-1)%8 == 7. The shipped size list
+// in BenchmarkRealFFTUnpack holds only those two extremes and nothing between,
+// which is what makes a change in remainder handling hard to read there.
+//
+// The NEON kernel is 4 wide, so this range covers two of its cycles rather than
+// one; the same slope reading applies per group of four.
+func BenchmarkRealFFTUnpackTail(b *testing.B) {
+	for n := 9; n <= 16; n++ {
+		b.Run(fmt.Sprintf("SIMD_%d", n), func(b *testing.B) {
+			benchRealFFTUnpack32(b, n, benchRealFFTUnpack32Dispatched)
+		})
+		b.Run(fmt.Sprintf("Go_%d", n), func(b *testing.B) {
+			benchRealFFTUnpack32(b, n, realFFTUnpack32Go)
 		})
 	}
 }
