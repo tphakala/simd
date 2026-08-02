@@ -696,7 +696,7 @@ func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	// and the constants use register-source VBROADCASTSD plus VPCMPEQD/VPSLLQ on
 	// YMM, all AVX2-only. Gating on plain AVX would let an AVX1+FMA part (e.g. AMD
 	// Piledriver) reach it and SIGILL. hasAVX2 is the same guard the other VPERMPD
-	// users in this package use (autocorrelate, interleaveN).
+	// users in this package use (autocorrelate64, interleaveN64).
 	// n > minAVXElements means n >= 5, so (n-1) >= 4 = one full 4-wide AVX pass.
 	if hasAVX2 && cpu.X86.FMA && n > minAVXElements {
 		realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm, n)

@@ -437,8 +437,20 @@ func BenchmarkAdd(b *testing.B) {
 	benchmarkBinaryOp(b, 1024, Add, addGo)
 }
 
+// BenchmarkScale sweeps sizes rather than pinning one. The old single row was
+// size = 1024, which is 0 mod 4 and 0 mod 16, so it never executed either
+// kernel's scalar tail and a per-call cost could not be separated from a
+// per-element one (#204). 1025 is the ragged partner.
 func BenchmarkScale(b *testing.B) {
-	size := 1024
+	for _, size := range []int{64, 1024, 1025, 4096} {
+		b.Run(fmt.Sprintf("n%d", size), func(b *testing.B) {
+			benchScaleAt(b, size)
+		})
+	}
+}
+
+func benchScaleAt(b *testing.B, size int) {
+	b.Helper()
 	a := make([]complex64, size)
 	dst := make([]complex64, size)
 	s := complex64(1.5 + 2.5i)

@@ -4050,17 +4050,6 @@ DATA exp_magic<>+0x18(SB)/4, $0x4b400000
 DATA exp_magic<>+0x1c(SB)/4, $0x4b400000
 GLOBL exp_magic<>(SB), RODATA|NOPTR, $32
 
-// 127 << 23 = 1065353216 (exponent bias)
-DATA exp_bias<>+0x00(SB)/4, $0x3f800000  // This is 1.0 as integer = 127<<23
-DATA exp_bias<>+0x04(SB)/4, $0x3f800000
-DATA exp_bias<>+0x08(SB)/4, $0x3f800000
-DATA exp_bias<>+0x0c(SB)/4, $0x3f800000
-DATA exp_bias<>+0x10(SB)/4, $0x3f800000
-DATA exp_bias<>+0x14(SB)/4, $0x3f800000
-DATA exp_bias<>+0x18(SB)/4, $0x3f800000
-DATA exp_bias<>+0x1c(SB)/4, $0x3f800000
-GLOBL exp_bias<>(SB), RODATA|NOPTR, $32
-
 // Exp clamp thresholds: ±88.0 keeps the 2^k reconstruction inside the
 // representable float32 range (exp(88) ~= 1.65e38 < MaxFloat32). Matches the
 // pure-Go fallback's overflow/underflow clamp.

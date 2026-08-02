@@ -736,6 +736,18 @@ const realFFTUnpackHalf = 0.5
 //
 //	X[k] = 0.5*(Z[k] + conj(Z[n-k])) + W[k]*(-0.5i)*(Z[k] - conj(Z[n-k]))
 func realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
+	if n < realFFTUnpackMinN {
+		return
+	}
+	// Reslice to exactly the range the loop touches, so the prover can discharge
+	// the bounds checks from the loop condition alone. Without this the mirrored
+	// index n-k defeats it and every iteration pays eight IsInBounds; the caller
+	// has already validated these lengths, so the reslices cannot panic. Same
+	// change as realFFTUnpack32Go (#204).
+	zRe, zIm = zRe[:n], zIm[:n]
+	outRe, outIm = outRe[:n], outIm[:n]
+	twRe, twIm = twRe[:n-1], twIm[:n-1]
+
 	// Process k from 1 to n-1
 	// For each k, we need Z[k] and Z[n-k] (mirrored)
 	for k := 1; k < n; k++ {

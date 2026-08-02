@@ -1039,15 +1039,15 @@ each package's `*_amd64.go` dispatch):
 
 | Package | amd64 minimum SIMD tier | Higher amd64 tiers used | Below the minimum |
 | ------- | ----------------------- | ----------------------- | ----------------- |
-| `f32`   | SSE2                    | AVX+FMA, AVX-512        | pure Go (baseline guarantees SSE2 on amd64) |
-| `f64`   | SSE2                    | AVX (no FMA), AVX+FMA, AVX-512 | pure Go (baseline guarantees SSE2) |
+| `f32`   | SSE2                    | AVX+FMA, AVX2, AVX-512  | pure Go (baseline guarantees SSE2 on amd64) |
+| `f64`   | SSE2                    | AVX (no FMA), AVX+FMA, AVX2, AVX-512 | pure Go (baseline guarantees SSE2) |
 | `c128`  | SSE2                    | AVX (no FMA), AVX+FMA, AVX-512 | pure Go (baseline guarantees SSE2) |
 | `c64`   | SSE4.1 (BLENDPS)        | AVX+FMA, AVX-512        | pure Go |
 | `i16`   | SSE2 (interleave, dot, xcorr); AVX2 (Abs, MulQ15, MaxAbs) | AVX2; AVX-VNNI (xcorr) | pure Go (baseline guarantees SSE2 for the SSE2-tier ops) |
 | `i32`   | AVX (interleave), AVX2 (arithmetic) | -           | pure Go |
 | `i8`    | AVX2                    | -                       | pure Go |
 | `f16`   | F16C (slice conversions only) | -                 | pure Go (all f16 compute is pure Go on amd64) |
-| `crc`   | PCLMULQDQ               | -                       | scalar slice-by-16 |
+| `crc`   | PCLMULQDQ + SSE4.1      | -                       | scalar slice-by-16 |
 
 SSE2 is part of the amd64 baseline, so `f32`/`f64`/`c128` always run SIMD on amd64
 (their pure-Go path is effectively a non-amd64 safety net), and so do `i16`'s
@@ -1056,6 +1056,17 @@ reduction are AVX2-or-Go, like `i8` and the `i32` arithmetic. AVX-512 uses the
 `AVX512F && AVX512VL` gate. `cpu.Info()` reports the host-wide tier (AVX-512 /
 AVX+FMA / AVX / SSE2 / scalar); a package whose minimum is above that tier (e.g.
 `i32` on an SSE-only host) runs pure Go even though `Info()` shows SSE2.
+
+AVX2 sits between AVX+FMA and AVX-512 for `f32` and `f64` and is easy to miss,
+because the kernels behind it keep the `...AVX` name and only their dispatch
+guard names AVX2. Both packages gate `Sigmoid`, `Tanh`, `Exp`, `Log`, `Pow`,
+`InterleaveN` and `DeinterleaveN` on it; `f32` adds `MinIdxOfSumRows` (unit
+slides), `Int16ToFloat32Scale` and `Float32ToInt16Scale`, and `f64` adds
+`Autocorrelate` and `RealFFTUnpack`. `cpu.Info()` cannot show this: it collapses
+AVX2 into `AMD64 AVX+FMA`, so an AVX+FMA host without AVX2 (AMD Piledriver and
+Steamroller) reports the same string while taking the Go path for those
+operations. `TestAmd64KernelISALevel` and `TestAmd64KernelDispatchRequiresAVX2`
+are what keep the names and the guards consistent.
 
 ARM64 runs NEON kernels throughout, with an FP16 (FEAT_FP16) fast path in `f16`
 and FP16-widened variants elsewhere, plus an SDOT (FEAT_DotProd) fast path for

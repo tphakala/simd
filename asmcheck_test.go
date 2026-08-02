@@ -183,10 +183,15 @@ func crossCheckObjdump(t *testing.T, file, tool string, deferred []objdumpDirect
 	}
 }
 
-// TestNoUncheckedAmd64Encodings is a warn-only tripwire: amd64 currently has no
-// hand-encoded instructions. If any appear (for example from AVX-512 work that
-// the Go assembler cannot express as mnemonics), this logs them so they can be
-// brought under a decoder-based check too. It does not fail the build.
+// TestNoUncheckedAmd64Encodings is a warn-only tripwire over hand-encoded amd64
+// instructions, which are not covered by a decoder-based check the way the ARM64
+// WORDs are. It logs what it finds and does not fail the build.
+//
+// It is not looking at an empty set: i16's AVX-VNNI kernel carries four BYTE
+// directives, because go1.26 assembles VPDPWSSD to the EVEX form, which faults
+// on Alder Lake, so the VEX bytes are spelled out instead (#169). Those four are
+// what this test prints on every run. AVX-512 work that the assembler cannot
+// express as mnemonics would land here too.
 func TestNoUncheckedAmd64Encodings(t *testing.T) {
 	var hits []string
 	err := filepath.WalkDir(".", func(p string, d os.DirEntry, err error) error {

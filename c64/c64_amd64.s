@@ -182,9 +182,13 @@ scale_avx_remainder:
     JZ   scale_avx_done
 
 scale_avx_tail:
+    // X1 and X4 are the low halves of Y1 and Y4, which the prologue set before
+    // the branch that skips the 4-wide loop, and which that loop reads but never
+    // writes. So the scalar broadcast and swap are already in place on every path
+    // here; reloading s and re-shuffling it once per tail element was pure
+    // repetition. Lanes 2 and 3 differ from the old zero-extended form and do not
+    // matter: only the low complex is stored (#204).
     VMOVSD (SI), X0
-    VMOVSD s+48(FP), X1
-    VSHUFPS $0xB1, X1, X1, X4
 
     VMOVSLDUP X0, X2
     VMOVSHDUP X0, X3
@@ -441,9 +445,9 @@ scale_avx512_remainder:
     JZ   scale_avx512_done
 
 scale_avx512_tail:
+    // Same reasoning as scale_avx_tail: X1/X4 alias the low halves of Z1/Z4,
+    // which the prologue set and the 16-wide loop only reads (#204).
     VMOVSD (SI), X0
-    VMOVSD s+48(FP), X1
-    VSHUFPS $0xB1, X1, X1, X4
 
     VMOVSLDUP X0, X2
     VMOVSHDUP X0, X3
