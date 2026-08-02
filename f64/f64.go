@@ -985,6 +985,20 @@ const realFFTUnpackMinN = 2
 //	X[0] = Z[0].real + Z[0].imag  (DC component)
 //	X[n] = Z[0].real - Z[0].imag  (Nyquist component)
 //
+// # Aliasing
+//
+// outRe and outIm must not overlap each other, nor any of zRe, zIm, twRe or
+// twIm, in any way, not even as an exact element-for-element overlay. Bin k
+// reads z at both k and the mirror n-k, plus the twiddles at k-1, before it
+// writes out[k], so any overlay lets a store land on an input that a later bin
+// has not read yet. Measured on the pure Go path, an output overlaid on z first
+// corrupts bin floor(n/2)+1 and every bin above it. The vector kernels survive a
+// few more sizes, because a SIMD block loads its whole input block before
+// storing any output lane, but that is block scheduling rather than a guarantee
+// and it varies with kernel width and n. Passing the same slice as outRe and
+// outIm makes every bin wrong on every path. Pass outputs distinct from the
+// inputs and from each other.
+//
 // It is the float64 counterpart of f32.RealFFTUnpack.
 //
 // Uses AVX2+FMA on AMD64, NEON on ARM64, with a pure Go fallback.
