@@ -39,18 +39,45 @@ import (
 // cpu.clearAVX2 clears it alongside AVX2, so it implies AVX2 in this repo by
 // construction. Package-level caches such as `var hasAVX2 = cpu.X86.AVX2` are
 // resolved to their initializer rather than trusted by name; see gateVars.
+// avx2Feature is the cpu.X86 field name and the label used in failure messages.
+const avx2Feature = "AVX2"
+
 var avx2GateIdents = map[string]bool{
-	"AVX2": true, "AVX512F": true, "AVX512VL": true, "AVXVNNI": true,
+	avx2Feature: true, "AVX512F": true, "AVX512VL": true, "AVXVNNI": true,
+}
+
+// fmaGateIdents are the identifiers that establish FMA3. Only cpu.X86.FMA does
+// directly. AVX512F/AVX512VL are included because every part implementing an
+// AVX-512 extension also implements FMA3, which is what lets an AVX-512 tier
+// carry FMA kernels without naming FMA. AVX2 is deliberately NOT here: it is a
+// separate CPUID bit, and although no shipping part has AVX2 without FMA3, the
+// architecture does not require the pairing and this repo's whole reason for an
+// initAVXNoFMA tier is that the two axes are independent.
+var fmaGateIdents = map[string]bool{
+	"FMA": true, "AVX512F": true, "AVX512VL": true,
 }
 
 // pkgFuncs is one package's amd64 dispatch source, parsed once.
 type pkgFuncs struct {
 	funcs map[string]*ast.FuncDecl
-	// gateVars holds package-level bools whose initializer establishes AVX2,
-	// for example `var hasAVX2 = cpu.X86.AVX2`. Resolving the initializer is
-	// what stops the check trusting a name: redefining hasAVX2 as cpu.X86.AVX
+	// varInits holds package-level bool vars and their initializer expressions,
+	// for example `var hasAVX2 = cpu.X86.AVX2`. The expression is kept rather
+	// than a precomputed verdict so the same parse serves every feature axis,
+	// and so the check never trusts a name: redefining hasAVX2 as cpu.X86.AVX
 	// must fail, and by name alone it would not.
-	gateVars map[string]bool
+	varInits map[string]ast.Expr
+}
+
+// avx2Axis is the AVX2 dispatch axis added by #200.
+var avx2Axis = gateAxis{
+	name:   avx2Feature,
+	idents: avx2GateIdents,
+	remedy: "An AVX1-only CPU (Intel Sandy/Ivy Bridge, AMD Bulldozer) or an " +
+		"AVX+FMA3-without-AVX2 CPU (AMD Piledriver, Steamroller) reaching this " +
+		"kernel faults with SIGILL. That is #196/#197. Restore the AVX2 guard on " +
+		"this branch, or move the kernel behind one.",
+	firstLine: firstUseLine,
+	firstText: firstUseText,
 }
 
 // TestAmd64KernelDispatchRequiresAVX2 asserts that every AMD64 kernel whose body
@@ -77,14 +104,14 @@ func TestAmd64KernelDispatchRequiresAVX2(t *testing.T) {
 				pf = parseAmd64Package(t, pkgDir)
 				parsed[pkgDir] = pf
 			}
-			checkKernelGated(t, file, pkgDir, k, pf)
+			checkKernelGated(t, file, pkgDir, k, pf, avx2Axis)
 		}
 	}
 }
 
-// checkKernelGated reports every dispatch of one AVX2-requiring kernel that is
-// not dominated by an AVX2 condition.
-func checkKernelGated(t *testing.T, file, pkgDir string, k asmcheck.X86Kernel, pf *pkgFuncs) {
+// checkKernelGated reports every dispatch of one feature-requiring kernel that
+// is not dominated by a condition establishing that feature.
+func checkKernelGated(t *testing.T, file, pkgDir string, k asmcheck.X86Kernel, pf *pkgFuncs, ax gateAxis) {
 	t.Helper()
 	refs := 0
 	for _, name := range sortedFuncNames(pf.funcs) {
@@ -94,24 +121,71 @@ func checkKernelGated(t *testing.T, file, pkgDir string, k asmcheck.X86Kernel, p
 		}
 		for _, path := range referencePaths(fn, k.Name) {
 			refs++
-			if dominatedByAVX2(path, fn, pf) {
+			if dominatedByGate(path, bindParams(pf, name), ax.idents) {
 				continue
 			}
-			t.Errorf("%s: kernel %s needs AVX2, but %s.%s dispatches it from a branch "+
-				"that does not require AVX2.\n"+
-				"\tfirst AVX2 use: %s:%d %s\n"+
-				"An AVX1-only CPU (Intel Sandy/Ivy Bridge, AMD Bulldozer) or an "+
-				"AVX+FMA3-without-AVX2 CPU (AMD Piledriver, Steamroller) reaching this "+
-				"kernel faults with SIGILL. That is #196/#197. Restore the AVX2 guard on "+
-				"this branch, or move the kernel behind one.",
-				file, k.Name, pkgDir, name, file, firstUseLine(k), firstUseText(k))
+			// The guard may sit one frame up. Two shapes in this repo put it
+			// there: the initXxx tier assigners, whose selecting case lives in
+			// init(), and helpers such as dotProductBatchKernel that take the
+			// tier decision as a bool parameter and are only ever called from an
+			// already-gated branch.
+			if callSitesGated(name, pf, ax.idents, 0) {
+				continue
+			}
+			t.Errorf("%s: kernel %s needs %s, but %s.%s dispatches it from a branch "+
+				"that does not require %s, and not every call site of %s requires it "+
+				"either.\n\tfirst %s use: %s:%d %s\n%s",
+				file, k.Name, ax.name, pkgDir, name, ax.name, name,
+				ax.name, file, ax.firstLine(k), ax.firstText(k), ax.remedy)
 		}
 	}
 	if refs == 0 {
-		t.Errorf("%s: kernel %s needs AVX2 but nothing in %s references it. "+
+		t.Errorf("%s: kernel %s needs %s but nothing in %s references it. "+
 			"Either it is dead code, or its dispatch lives somewhere this test does not "+
-			"parse (only %s/*_amd64.go is read).", file, k.Name, pkgDir, pkgDir)
+			"parse (only %s/*_amd64.go is read).", file, k.Name, ax.name, pkgDir, pkgDir)
 	}
+}
+
+// callSiteDepth bounds the walk up the call graph. This repo's deepest gated
+// chain is two hops (init -> selectImpl -> initAVX in c128), so three leaves
+// slack; the bound is what stops a recursive pair from spinning.
+const callSiteDepth = 3
+
+// callSitesGated reports whether EVERY call site of the named function is itself
+// reached only when the gate held. A function nothing calls returns false: an
+// unreferenced dispatcher proves nothing, and treating "no call sites" as safe
+// would silently excuse a helper whose caller had been deleted.
+func callSitesGated(name string, pf *pkgFuncs, idents map[string]bool, depth int) bool {
+	if depth > callSiteDepth {
+		return false
+	}
+	sites := 0
+	for _, caller := range sortedFuncNames(pf.funcs) {
+		cf := pf.funcs[caller]
+		if cf.Body == nil || caller == name {
+			continue
+		}
+		for _, path := range referencePaths(cf, name) {
+			sites++
+			if dominatedByGate(path, bindParams(pf, caller), idents) {
+				continue
+			}
+			if callSitesGated(caller, pf, idents, depth+1) {
+				continue
+			}
+			return false
+		}
+	}
+	return sites > 0
+}
+
+// gateAxis describes one CPU feature axis the dispatch check can be run over.
+type gateAxis struct {
+	name      string          // the feature as it appears in messages
+	idents    map[string]bool // identifiers whose truth establishes it
+	remedy    string          // what the author should do about a failure
+	firstLine func(asmcheck.X86Kernel) int
+	firstText func(asmcheck.X86Kernel) string
 }
 
 func firstUseLine(k asmcheck.X86Kernel) int {
@@ -138,7 +212,7 @@ func parseAmd64Package(t *testing.T, dir string) *pkgFuncs {
 	if len(paths) == 0 {
 		t.Fatalf("no *_amd64.go in %s, so no dispatch could be checked", dir)
 	}
-	pf := &pkgFuncs{funcs: map[string]*ast.FuncDecl{}, gateVars: map[string]bool{}}
+	pf := &pkgFuncs{funcs: map[string]*ast.FuncDecl{}, varInits: map[string]ast.Expr{}}
 	fset := token.NewFileSet()
 	for _, p := range paths {
 		f, perr := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
@@ -152,15 +226,17 @@ func parseAmd64Package(t *testing.T, dir string) *pkgFuncs {
 					pf.funcs[decl.Name.Name] = decl
 				}
 			case *ast.GenDecl:
-				collectGateVars(decl, pf.gateVars)
+				collectVarInits(decl, pf.varInits)
 			}
 		}
 	}
 	return pf
 }
 
-// collectGateVars records package-level vars whose initializer establishes AVX2.
-func collectGateVars(decl *ast.GenDecl, out map[string]bool) {
+// collectVarInits records package-level vars together with their initializer
+// expressions, so a gate spelled through a cached bool can be resolved to the
+// CPU feature it actually reads.
+func collectVarInits(decl *ast.GenDecl, out map[string]ast.Expr) {
 	if decl.Tok != token.VAR {
 		return
 	}
@@ -170,8 +246,8 @@ func collectGateVars(decl *ast.GenDecl, out map[string]bool) {
 			continue
 		}
 		for i, name := range vs.Names {
-			if i < len(vs.Values) && mentionsGateIdent(vs.Values[i]) {
-				out[name.Name] = true
+			if i < len(vs.Values) {
+				out[name.Name] = vs.Values[i]
 			}
 		}
 	}
@@ -198,48 +274,47 @@ func referencePaths(fn *ast.FuncDecl, name string) [][]ast.Node {
 	return out
 }
 
-// dominatedByAVX2 reports whether the reference at the end of path is reached
-// only when an AVX2 condition held.
+// dominatedByGate reports whether the reference at the end of path is reached
+// only when a condition in idents held.
 //
 // Two shapes count, and they are the two this repo uses. First, the reference
 // sits inside the taken branch of an `if` (or a `case`) whose condition requires
-// AVX2 positively. Second, an earlier statement in an enclosing block is an
-// early-out guard, `if !hasAVX2 { return }`, which is a negated gate whose body
-// leaves the function.
-func dominatedByAVX2(path []ast.Node, fn *ast.FuncDecl, pf *pkgFuncs) bool {
+// the feature positively. Second, an earlier statement in an enclosing block is
+// an early-out guard, `if !hasAVX2 { return }`, which is a negated gate whose
+// body leaves the function.
+func dominatedByGate(path []ast.Node, pf *pkgFuncs, idents map[string]bool) bool {
 	for i, n := range path {
 		switch node := n.(type) {
 		case *ast.IfStmt:
 			// Only the then-branch is guarded by the condition. A reference in
 			// the else-branch is reached precisely when the condition was false.
-			if i+1 < len(path) && path[i+1] == ast.Node(node.Body) && positiveGate(node.Cond, pf) {
+			if i+1 < len(path) && path[i+1] == ast.Node(node.Body) && positiveGate(node.Cond, pf, idents) {
 				return true
 			}
 		case *ast.CaseClause:
 			for _, expr := range node.List {
-				if positiveGate(expr, pf) {
+				if positiveGate(expr, pf, idents) {
 					return true
 				}
 			}
 		case *ast.BlockStmt:
-			if i+1 < len(path) && earlyOutGuardBefore(node, path[i+1], pf) {
+			if i+1 < len(path) && earlyOutGuardBefore(node, path[i+1], pf, idents) {
 				return true
 			}
 		}
 	}
-	_ = fn
 	return false
 }
 
 // earlyOutGuardBefore reports whether block contains, before stmt, an
-// `if !<avx2 gate> { ... return ... }` guard.
-func earlyOutGuardBefore(block *ast.BlockStmt, stmt ast.Node, pf *pkgFuncs) bool {
+// `if !<gate> { ... return ... }` guard.
+func earlyOutGuardBefore(block *ast.BlockStmt, stmt ast.Node, pf *pkgFuncs, idents map[string]bool) bool {
 	for _, s := range block.List {
 		if ast.Node(s) == stmt {
 			return false
 		}
 		ifStmt, ok := s.(*ast.IfStmt)
-		if !ok || !negativeGate(ifStmt.Cond, pf) {
+		if !ok || !negativeGate(ifStmt.Cond, pf, idents) {
 			continue
 		}
 		if blockExits(ifStmt.Body) {
@@ -270,63 +345,77 @@ func blockExits(b *ast.BlockStmt) bool {
 	}
 }
 
-// positiveGate reports whether cond requires AVX2 when true. A gate identifier
-// under a `!` does not count: that is the inverted guard, which runs the kernel
-// on exactly the CPUs that lack the feature.
-func positiveGate(cond ast.Expr, pf *pkgFuncs) bool {
-	return gatePolarity(cond, pf, false)
+// positiveGate reports whether cond requires the feature named by idents when
+// true. A gate identifier under a `!` does not count: that is the inverted
+// guard, which runs the kernel on exactly the CPUs that lack the feature.
+func positiveGate(cond ast.Expr, pf *pkgFuncs, idents map[string]bool) bool {
+	return gatePolarity(cond, pf, idents, false)
 }
 
-// negativeGate reports whether cond is true when AVX2 is ABSENT.
-func negativeGate(cond ast.Expr, pf *pkgFuncs) bool {
-	return gatePolarity(cond, pf, true)
+// negativeGate reports whether cond is true when the feature is ABSENT.
+func negativeGate(cond ast.Expr, pf *pkgFuncs, idents map[string]bool) bool {
+	return gatePolarity(cond, pf, idents, true)
 }
 
-// gatePolarity walks cond looking for an AVX2 gate whose sense matches want
+// gateWalkDepth bounds the recursion through cached vars and predicate
+// functions. Two hops covers every shape in this repo (`hasAVX2` resolving to
+// cpu.X86.AVX2, and logSIMDOK32 returning a conjunction of them); the bound
+// exists so a var or predicate that refers to itself cannot spin.
+const gateWalkDepth = 4
+
+// gatePolarity walks cond looking for a gate in idents whose sense matches want
 // (want=false: the gate as written; want=true: the gate under a `!`).
-func gatePolarity(cond ast.Expr, pf *pkgFuncs, want bool) bool {
+func gatePolarity(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool) bool {
 	found := false
-	var walk func(e ast.Expr, negated bool)
-	walk = func(e ast.Expr, negated bool) {
-		if e == nil || found {
+	var walk func(e ast.Expr, negated bool, depth int)
+	walk = func(e ast.Expr, negated bool, depth int) {
+		if e == nil || found || depth > gateWalkDepth {
 			return
 		}
 		switch x := e.(type) {
 		case *ast.UnaryExpr:
 			if x.Op == token.NOT {
-				walk(x.X, !negated)
+				walk(x.X, !negated, depth)
 				return
 			}
-			walk(x.X, negated)
+			walk(x.X, negated, depth)
 		case *ast.BinaryExpr:
-			walk(x.X, negated)
-			walk(x.Y, negated)
+			walk(x.X, negated, depth)
+			walk(x.Y, negated, depth)
 		case *ast.ParenExpr:
-			walk(x.X, negated)
+			walk(x.X, negated, depth)
 		case *ast.SelectorExpr:
-			if avx2GateIdents[x.Sel.Name] && negated == want {
+			if idents[x.Sel.Name] && negated == want {
 				found = true
 			}
 		case *ast.Ident:
-			if (avx2GateIdents[x.Name] || pf.gateVars[x.Name]) && negated == want {
+			if idents[x.Name] && negated == want {
 				found = true
+				return
+			}
+			// A cached gate such as `var hasAVX2 = cpu.X86.AVX2`. Resolving the
+			// initializer rather than trusting the name is what makes redefining
+			// it as cpu.X86.AVX fail the check.
+			if init, ok := pf.varInits[x.Name]; ok {
+				walk(init, negated, depth+1)
 			}
 		case *ast.CallExpr:
 			// A predicate such as logSIMDOK32(n) whose body returns the gate.
-			if id, ok := x.Fun.(*ast.Ident); ok && negated == want && predicateGates(id.Name, pf) {
+			id, ok := x.Fun.(*ast.Ident)
+			if ok && negated == want && predicateGates(id.Name, pf, idents, depth+1) {
 				found = true
 			}
 		}
 	}
-	walk(cond, false)
+	walk(cond, false, 0)
 	return found
 }
 
 // predicateGates reports whether a same-package function returns an expression
-// that requires AVX2, which is how the log and pow family keeps its guard.
-func predicateGates(name string, pf *pkgFuncs) bool {
+// that requires the feature, which is how the log and pow family keeps its guard.
+func predicateGates(name string, pf *pkgFuncs, idents map[string]bool, depth int) bool {
 	fn := pf.funcs[name]
-	if fn == nil || fn.Body == nil {
+	if fn == nil || fn.Body == nil || depth > gateWalkDepth {
 		return false
 	}
 	found := false
@@ -339,33 +428,11 @@ func predicateGates(name string, pf *pkgFuncs) bool {
 			return true
 		}
 		for _, r := range ret.Results {
-			if gatePolarity(r, pf, false) {
+			if gatePolarity(r, pf, idents, false) {
 				found = true
 			}
 		}
 		return true
-	})
-	return found
-}
-
-// mentionsGateIdent reports whether e contains an AVX2 feature identifier.
-func mentionsGateIdent(e ast.Expr) bool {
-	found := false
-	ast.Inspect(e, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		switch x := n.(type) {
-		case *ast.SelectorExpr:
-			if avx2GateIdents[x.Sel.Name] {
-				found = true
-			}
-		case *ast.Ident:
-			if avx2GateIdents[x.Name] {
-				found = true
-			}
-		}
-		return !found
 	})
 	return found
 }

@@ -56,6 +56,34 @@ suite cross-checks every `WORD` against `golang.org/x/arch/arm64asm` (see
 `asmcheck_test.go` / the public `asmcheck` package). When you add or change a `WORD`,
 verify the encoding with `aarch64-linux-gnu-as` + objdump or `arm64asm`.
 
+### AMD64: the dispatch guard is machine-checked, on two axes
+
+An amd64 kernel's body is checked against the CPU features its dispatch actually
+requires. A guard that is merely documented is not enough; both of these fail the
+suite rather than SIGILLing on hardware CI does not own.
+
+- **AVX2** (`asmcheck_amd64_isa_test.go`, `asmcheck_amd64_gate_test.go`, #200). The
+  name suffix is a claim: a kernel called `...AVX` may not contain an AVX2-only
+  encoding. The traps are register-source `VBROADCASTSS`/`VBROADCASTSD` and any
+  256-bit integer op, since AVX1's YMM support is float-only. A kernel that must
+  outrun its name goes in `avx2GatedAVXKernels` together with the gate that
+  protects it; renaming it to `...AVX2` is the better fix.
+- **FMA3** (`asmcheck_amd64_fma_test.go`, #201). `cpu.X86.FMA` is a CPUID bit
+  separate from AVX, so a `VFMADD`-family instruction needs its own conjunct in
+  the guard. A kernel using one may not be assigned by `initAVXNoFMA`, `initSSE`,
+  `initSSE2` or `initGo`, and may not be dispatched from a branch testing only
+  `cpu.X86.AVX`. f64 and c128 keep an `initAVXNoFMA` tier precisely for the parts
+  that have AVX and no FMA3.
+
+Both checks are pure source analysis, so they run on any host. Both resolve a
+guard spelled through a cached package var, a function parameter or a local, so
+write the dispatch in whatever shape reads best. Neither can see across a package
+boundary: only `<pkg>/*_amd64.go` is parsed.
+
+Separately, `TestNoFMAContract` forbids fusing in the kernels listed in
+`singleRoundingKernels`. That is the #156 numerical contract about where rounding
+happens, not about CPU features, and it applies to both architectures.
+
 ## Testing across architectures
 
 - AMD64 tests run natively here.
