@@ -1,6 +1,7 @@
 package f64
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -684,18 +685,26 @@ func BenchmarkMaxIdx_1000(b *testing.B) {
 	_ = result
 }
 
-func BenchmarkAddScaled_1000(b *testing.B) {
-	dst := make([]float64, 1000)
-	s := make([]float64, 1000)
-	for i := range dst {
-		dst[i] = float64(i)
-		s[i] = float64(i)
-	}
+// BenchmarkAddScaled sweeps sizes rather than pinning one. The old single row
+// was n = 1000, which is 0 mod 4 and 0 mod 8, so it never executed the kernel's
+// scalar tail and a per-call cost could not be separated from a per-element one
+// (#204). 1001 is the ragged partner; 64 and 4096 bracket the cache behaviour.
+func BenchmarkAddScaled(b *testing.B) {
+	for _, n := range []int{64, 1000, 1001, 4096} {
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			dst := make([]float64, n)
+			s := make([]float64, n)
+			for i := range dst {
+				dst[i] = float64(i)
+				s[i] = 1.0
+			}
 
-	b.SetBytes(1000 * 8 * 2) // read s, read+write dst
+			b.SetBytes(int64(n * 8 * 3)) // read dst, read s, write dst
 
-	for b.Loop() {
-		AddScaled(dst, 0.5, s)
+			for b.Loop() {
+				AddScaled(dst, 2.0, s)
+			}
+		})
 	}
 }
 

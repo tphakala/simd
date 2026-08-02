@@ -11,75 +11,78 @@ import (
 // Tests for init functions to ensure they properly configure function pointers
 // These tests are AMD64-specific because they test x86 SIMD initialization paths.
 
-func TestInitGo(t *testing.T) {
-	savedDotProduct := dotProductImpl
-	// init* also reassigns convolveValidMaxAbsImpl; restore it so the fused kernel
-	// stays consistent with dotProductImpl for the exact-equality convolution tests.
-	savedConvolveValidMaxAbs := convolveValidMaxAbsImpl
-
-	initGo()
-
-	a := []float32{1, 2, 3, 4}
-	b := []float32{4, 3, 2, 1}
-
-	got := dotProductImpl(a, b)
-	want := float32(20)
-	if got != want {
-		t.Errorf("After initGo, dotProduct = %v, want %v", got, want)
-	}
-
-	dotProductImpl = savedDotProduct
-	convolveValidMaxAbsImpl = savedConvolveValidMaxAbs
+// tierInits enumerates every init-time tier assigner in this package together
+// with the CPU support it needs. initAVX was missing from this file entirely
+// (#204): the AVX kernels were reachable only through the package's own init(),
+// so nothing here ever bound them, and they were never checked against a
+// sibling tier.
+var tierInits = []struct {
+	name      string
+	init      func()
+	supported func() bool
+	// minSIMD is the value the tier must leave in minSIMDElements, or 0 when the
+	// tier does not set it.
+	minSIMD int
+}{
+	{"Go", initGo, func() bool { return true }, 0},
+	{"SSE", initSSE, func() bool { return cpu.X86.SSE2 }, 0},
+	{"AVX", initAVX, func() bool { return cpu.X86.AVX && cpu.X86.FMA }, 0},
+	{"AVX512", initAVX512, func() bool { return cpu.X86.AVX512F && cpu.X86.AVX512VL }, minAVX512Elements},
 }
 
-func TestInitSSE(t *testing.T) {
-	savedDotProduct := dotProductImpl
-	// init* also reassigns convolveValidMaxAbsImpl; restore it so the fused kernel
+// TestInitTiers binds each tier in turn and checks its dotProduct against the
+// pure-Go reference over lengths that reach the vector body, not just its scalar
+// tail. The previous form used one length-4 input, which is below both
+// minAVXElements and minAVX512Elements, so it exercised the tail of whichever
+// kernel it bound and could not have told two tiers apart.
+func TestInitTiers(t *testing.T) {
+	// Lengths straddling the block widths: 4 stays under every vector threshold,
+	// 8 and 16 are whole AVX blocks, 17 and 33 leave a remainder, 64 covers
+	// several AVX-512 blocks.
+	lengths := []int{4, 8, 16, 17, 33, 64}
+
+	// init* reassigns convolveValidMaxAbsImpl too; restore it so the fused kernel
 	// stays consistent with dotProductImpl for the exact-equality convolution tests.
-	savedConvolveValidMaxAbs := convolveValidMaxAbsImpl
-
-	initSSE()
-
-	a := []float32{1, 2, 3, 4}
-	b := []float32{4, 3, 2, 1}
-
-	got := dotProductImpl(a, b)
-	want := float32(20)
-	if got != want {
-		t.Errorf("After initSSE, dotProduct = %v, want %v", got, want)
-	}
-
-	dotProductImpl = savedDotProduct
-	convolveValidMaxAbsImpl = savedConvolveValidMaxAbs
-}
-
-func TestInitAVX512(t *testing.T) {
-	if !cpu.X86.AVX512F || !cpu.X86.AVX512VL {
-		t.Skip("AVX-512 not supported on this CPU")
-	}
-
 	savedDotProduct := dotProductImpl
-	// init* also reassigns convolveValidMaxAbsImpl; restore it so the fused kernel
-	// stays consistent with dotProductImpl for the exact-equality convolution tests.
 	savedConvolveValidMaxAbs := convolveValidMaxAbsImpl
 	savedMinSIMD := minSIMDElements
+	t.Cleanup(func() {
+		dotProductImpl = savedDotProduct
+		convolveValidMaxAbsImpl = savedConvolveValidMaxAbs
+		minSIMDElements = savedMinSIMD
+	})
 
-	initAVX512()
+	for _, tier := range tierInits {
+		t.Run(tier.name, func(t *testing.T) {
+			if !tier.supported() {
+				t.Skipf("%s not supported on this CPU", tier.name)
+			}
+			tier.init()
 
-	a := []float32{1, 2, 3, 4}
-	b := []float32{4, 3, 2, 1}
+			if tier.minSIMD != 0 && minSIMDElements != tier.minSIMD {
+				t.Errorf("init%s left minSIMDElements = %d, want %d",
+					tier.name, minSIMDElements, tier.minSIMD)
+			}
 
-	got := dotProductImpl(a, b)
-	want := float32(20)
-	if got != want {
-		t.Errorf("After initAVX512, dotProduct = %v, want %v", got, want)
+			for _, n := range lengths {
+				a := make([]float32, n)
+				b := make([]float32, n)
+				for i := range n {
+					// Asymmetric values on purpose: a ramp against its own
+					// reverse yields the same total when lanes are dropped or
+					// reordered, so it cannot detect a missing block.
+					a[i] = float32(i)*0.5 + 1
+					b[i] = float32(n-i) * 0.25
+				}
+				got := dotProductImpl(a, b)
+				want := dotProductGo(a, b)
+				// Vector and scalar summation orders differ, so this is a
+				// tolerance check rather than bit equality.
+				if diff := float64(got - want); diff > 1e-3 || diff < -1e-3 {
+					t.Errorf("n=%d: init%s dotProduct = %v, Go reference = %v (diff %v)",
+						n, tier.name, got, want, diff)
+				}
+			}
+		})
 	}
-
-	if minSIMDElements != minAVX512Elements {
-		t.Errorf("initAVX512 didn't set minSIMDElements correctly")
-	}
-
-	dotProductImpl = savedDotProduct
-	convolveValidMaxAbsImpl = savedConvolveValidMaxAbs
-	minSIMDElements = savedMinSIMD
 }

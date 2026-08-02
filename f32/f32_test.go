@@ -1232,18 +1232,26 @@ func BenchmarkMinIdx_1000(b *testing.B) {
 	_ = idx
 }
 
-func BenchmarkAddScaled_1000(b *testing.B) {
-	dst := make([]float32, 1000)
-	s := make([]float32, 1000)
-	for i := range dst {
-		dst[i] = float32(i)
-		s[i] = 1.0
-	}
+// BenchmarkAddScaled sweeps sizes rather than pinning one. The old single row
+// was n = 1000, which is 0 mod 8 and 0 mod 16, so it never executed the kernel's
+// scalar tail and a per-call cost could not be separated from a per-element one
+// (#204). 1001 is the ragged partner; 64 and 4096 bracket the cache behaviour.
+func BenchmarkAddScaled(b *testing.B) {
+	for _, n := range []int{64, 1000, 1001, 4096} {
+		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+			dst := make([]float32, n)
+			s := make([]float32, n)
+			for i := range dst {
+				dst[i] = float32(i)
+				s[i] = 1.0
+			}
 
-	b.SetBytes(1000 * 4 * 3) // read dst, read s, write dst
+			b.SetBytes(int64(n * 4 * 3)) // read dst, read s, write dst
 
-	for b.Loop() {
-		AddScaled(dst, 2.0, s)
+			for b.Loop() {
+				AddScaled(dst, 2.0, s)
+			}
+		})
 	}
 }
 
