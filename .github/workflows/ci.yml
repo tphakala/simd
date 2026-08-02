@@ -418,10 +418,17 @@ jobs:
           # The action is pinned by commit, but it fetches the emulator binary at
           # run time, so pin what actually executes too. A version bump under the
           # same tag would otherwise change what this job tests without any diff.
-          if ! ver=$("$SDE_PATH/sde64" --version 2>&1 | head -1); then
+          # Capture in full and trim in-shell rather than piping to head. sde64
+          # --version prints a banner plus a copyright line, and under pipefail a
+          # head that exits after the first one can leave sde64 killed by SIGPIPE
+          # and the pipeline status non-zero, failing this guard on a run where
+          # SDE worked perfectly.
+          if ! banner=$("$SDE_PATH/sde64" --version 2>&1); then
             echo "::error::sde64 did not run; SDE_PATH=$SDE_PATH"
+            printf '%s\n' "$banner"
             exit 1
           fi
+          IFS= read -r ver <<<"$banner"
           echo "$ver"
           case "$ver" in
             *"Version:  10.8.0 external"*) ;;
