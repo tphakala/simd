@@ -65,7 +65,6 @@ func TestAmd64InitTierFMA(t *testing.T) {
 		needsFMA := fmaKernels(t, pkgDir)
 		pf := parseAmd64Package(t, pkgDir)
 
-		sawTier := false
 		for _, name := range sortedFuncNames(pf.funcs) {
 			if !isInitTier(name) {
 				continue
@@ -77,12 +76,11 @@ func TestAmd64InitTierFMA(t *testing.T) {
 			guaranteed, known := initTierFMA[name]
 			if !known {
 				t.Errorf("%s: %s looks like an init-time tier assigner but is not "+
-					"classified in initTierFMA. Add it with true if the CCPU reaching it "+
+					"classified in initTierFMA. Add it with true if the CPU reaching it "+
 					"always has FMA3, false otherwise. Leaving it out would let the tier "+
 					"assign FMA kernels unchecked.", pkgDir, name)
 				continue
 			}
-			sawTier = true
 			if guaranteed {
 				continue
 			}
@@ -95,10 +93,10 @@ func TestAmd64InitTierFMA(t *testing.T) {
 					pkgDir, name, kernel, fmaUseText(needsFMA[kernel]))
 			}
 		}
-		// Packages without a tiered init dispatch per call instead, and
-		// TestAmd64KernelDispatchRequiresFMA covers those; only the presence of
-		// an unclassified tier is an error here.
-		_ = sawTier
+		// A package with no tiered init dispatches per call instead, which
+		// TestAmd64KernelDispatchRequiresFMA covers, so finding no tier here is
+		// not itself an error. What must not go unnoticed is an initAVXNoFMA
+		// that moved or appeared, hence the set comparison after the loop.
 		if pf.funcs["initAVXNoFMA"] != nil {
 			gotNoFMATier = append(gotNoFMATier, pkgDir)
 		}

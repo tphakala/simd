@@ -38,7 +38,7 @@ import (
 // AVXVNNI is defined in cpu/cpu_amd64.go as AVX2 AND the VNNI bit, and
 // cpu.clearAVX2 clears it alongside AVX2, so it implies AVX2 in this repo by
 // construction. Package-level caches such as `var hasAVX2 = cpu.X86.AVX2` are
-// resolved to their initializer rather than trusted by name; see gateVars.
+// resolved to their initializer rather than trusted by name; see varInits.
 // avx2Feature is the cpu.X86 field name and the label used in failure messages.
 const avx2Feature = "AVX2"
 
