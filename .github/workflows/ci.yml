@@ -368,3 +368,142 @@ jobs:
             rm -f "$bin"
           done
           exit "$fail"
+
+  avx512-sde:
+    # Execute the AVX-512 dispatch tier under Intel SDE. Without this leg the
+    # AVX-512 kernels are never executed anywhere: the GitHub runners do not
+    # reliably expose AVX-512, no AVX-512 development hardware is available, and
+    # the cross-isa legs above cannot help because qemu's TCG stops at AVX2. That
+    # left 58 kernels (f64 21, f32 19, c64 9, c128 9) shipping unexecuted.
+    #
+    # SDE emulates the instruction set in user space and its CPUID reports the
+    # emulated features, so this repo's existing runtime dispatch selects the
+    # AVX-512 tier on its own. No library change is needed.
+    #
+    # Verified by mutation on an i7-1260P, which has no AVX-512 of its own:
+    # changing VADDPD to VSUBPD inside f64's addAVX512 leaves the native run
+    # GREEN, because nothing there reaches the kernel, and fails under SDE. An
+    # instruction-mix count over the f64 suite records 753,675 EVEX instructions
+    # retired, 749,483 of them 512-bit, so the tier is genuinely exercised rather
+    # than merely selected.
+    #
+    # Every package runs, not just the four that currently hold AVX-512 kernels.
+    # #96 proposed restricting the list to keep the job fast, but measured on the
+    # same host the whole suite takes 33 seconds under SDE, so the restriction
+    # buys nothing and would silently miss a package that gains an AVX-512 kernel
+    # later.
+    #
+    # SDE is emulation, not silicon. It validates encodings and logic; it does
+    # not prove timing, and it is not a substitute for the real-hardware
+    # confirmation #75 asks for.
+    name: AVX-512 (Intel SDE)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Intel SDE
+        uses: petarpetrovt/setup-sde@31aa4a8e85e109bef00f1d838613fcc6ec421271 # v5.0
+        with:
+          sdeVersion: 10.8.0
+
+      - name: Assert SDE is the pinned version
+        run: |
+          set -euo pipefail
+          # The action is pinned by commit, but it fetches the emulator binary at
+          # run time, so pin what actually executes too. A version bump under the
+          # same tag would otherwise change what this job tests without any diff.
+          # Capture in full and trim in-shell rather than piping to head. sde64
+          # --version prints a banner plus a copyright line, and under pipefail a
+          # head that exits after the first one can leave sde64 killed by SIGPIPE
+          # and the pipeline status non-zero, failing this guard on a run where
+          # SDE worked perfectly.
+          if ! banner=$("$SDE_PATH/sde64" --version 2>&1); then
+            echo "::error::sde64 did not run; SDE_PATH=$SDE_PATH"
+            printf '%s\n' "$banner"
+            exit 1
+          fi
+          IFS= read -r ver <<<"$banner"
+          echo "$ver"
+          case "$ver" in
+            *"Version:  10.8.0 external"*) ;;
+            *) echo "::error::unexpected SDE version: $ver"; exit 1 ;;
+          esac
+
+      - name: Assert SDE reports the AVX-512 tier
+        run: |
+          set -euo pipefail
+          # Without this the job degrades silently: if -skx stopped implying
+          # AVX512F+AVX512VL, or SDE ran the binary natively, every package would
+          # still pass while testing the AVX2 tier a dozen other legs already
+          # cover. TestHelperInfo lives in cpu/disable_test.go and prints
+          # cpu.Info() when SIMD_DISABLE_HELPER=1; the cross-isa job parses the
+          # same line, so its output format is load-bearing in two places.
+          CGO_ENABLED=0 go test -c -o /tmp/cpu.test ./cpu
+          if ! out=$(SIMD_DISABLE_HELPER=1 "$SDE_PATH/sde64" -skx -- /tmp/cpu.test \
+                       -test.run='^TestHelperInfo$' -test.v 2>/tmp/sde.err); then
+            echo "::error::sde64 -skx failed to run the probe"
+            cat /tmp/sde.err
+            exit 1
+          fi
+          got=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*CPUINFO=//p')
+          if [ -z "$got" ]; then
+            echo "::error::probe emitted no CPUINFO line under sde64 -skx; TestHelperInfo skipped or its output format changed"
+            printf '%s\n' "$out"
+            exit 1
+          fi
+          if [ "$got" != "AMD64 AVX-512" ]; then
+            echo "::error::sde64 -skx reports cpu.Info()=\"$got\", want \"AMD64 AVX-512\""
+            exit 1
+          fi
+          echo "sde64 -skx reports $got"
+          rm -f /tmp/cpu.test
+
+      - name: Run the test suite under SDE with AVX-512 enabled
+        run: |
+          set -uo pipefail
+          fail=0
+          # Same fail-closed shape as the cross-isa job: resolve the package list
+          # first and treat an empty one as an error, because a for-word-list
+          # command substitution does not trip errexit and would exit 0 having
+          # tested nothing.
+          if ! pkgs=$(go list ./...); then
+            echo "::error::go list ./... failed; nothing was tested"
+            exit 1
+          fi
+          if [ -z "$pkgs" ]; then
+            echo "::error::go list ./... produced no packages; nothing was tested"
+            exit 1
+          fi
+          for pkg in $pkgs; do
+            if ! counts=$(go list -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' "$pkg"); then
+              echo "::error::go list -f failed for $pkg"
+              fail=1
+              continue
+            fi
+            read -r ntest nxtest <<<"$counts"
+            if [ "$ntest" -eq 0 ] && [ "$nxtest" -eq 0 ]; then continue; fi
+            bin="/tmp/$(echo "$pkg" | tr '/.' '__').test"
+            if ! CGO_ENABLED=0 go test -c -o "$bin" "$pkg"; then
+              echo "::error::failed to compile tests for $pkg"
+              fail=1
+              continue
+            fi
+            echo "::group::$pkg @ sde64 -skx"
+            # -race is deliberately absent: the native legs cover it, and it
+            # multiplies an already emulated run.
+            if "$SDE_PATH/sde64" -skx -- "$bin" -test.v; then
+              echo "ok"
+            else
+              echo "::error::$pkg failed under sde64 -skx"
+              fail=1
+            fi
+            echo "::endgroup::"
+            rm -f "$bin"
+          done
+          exit "$fail"
