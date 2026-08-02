@@ -20,6 +20,7 @@ package asmcheck
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -49,21 +50,56 @@ func (l X86Level) String() string {
 	}
 }
 
-// X86Use is one instruction that requires a feature level above AVX1.
+// X86Feature names a CPUID feature bit that is ORTHOGONAL to the AVX level
+// ladder, so it cannot be expressed as an X86Level. A CPU can have AVX1 with or
+// without it, which is why it needs its own axis rather than a rung.
+type X86Feature string
+
+// X86FeatureFMA is FMA3, CPUID.01H:ECX.FMA[bit 12], reported by Go as
+// cpu.X86.HasFMA. It is a separate bit from AVX: Sandy Bridge and Ivy Bridge
+// have AVX and no FMA3, and this repo keeps an initAVXNoFMA dispatch tier for
+// exactly those parts. A VFMADD-family instruction reaching such a CPU faults
+// with #UD (SIGILL), the same failure #196 and #197 were about on the AVX2 axis.
+const X86FeatureFMA X86Feature = "FMA"
+
+// X86Use is one instruction that requires a feature level above AVX1, or a
+// feature off the level ladder, or both.
 type X86Use struct {
-	Line   int      // 1-based line number in the scanned source
-	Text   string   // the instruction as written, with any comment stripped
-	Level  X86Level // the level the instruction needs
-	Reason string   // why it needs that level
+	Line    int        // 1-based line number in the scanned source
+	Text    string     // the instruction as written, with any comment stripped
+	Level   X86Level   // the level the instruction needs
+	Feature X86Feature // an off-ladder feature it needs, or "" for none
+	Reason  string     // why it needs that level or feature
 }
 
 // X86Kernel is one TEXT symbol together with the instructions in it that need
-// more than AVX1.
+// more than plain AVX1.
+//
+// Off-ladder features are derived from Uses rather than stored alongside Level,
+// so there is one place a feature can be recorded and no second field to keep in
+// step with it.
 type X86Kernel struct {
 	Name  string   // symbol name, without the leading interpunct
 	Line  int      // 1-based line of the TEXT directive
 	Level X86Level // the highest level any instruction in the body needs
-	Uses  []X86Use // instructions above AVX1, in source order; nil when clean
+	Uses  []X86Use // qualifying instructions, in source order; nil when clean
+}
+
+// Needs reports whether the kernel's body uses an instruction requiring f.
+func (k X86Kernel) Needs(f X86Feature) bool {
+	return slices.ContainsFunc(k.Uses, func(u X86Use) bool { return u.Feature == f })
+}
+
+// FeatureUses returns the instructions in the kernel that require f, in source
+// order.
+func (k X86Kernel) FeatureUses(f X86Feature) []X86Use {
+	out := make([]X86Use, 0, len(k.Uses))
+	for _, u := range k.Uses {
+		if u.Feature == f {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // avx2Mnemonics are AVX2-only in every VEX form, whatever their operands.
@@ -134,6 +170,13 @@ var (
 	maskOperandRe = regexp.MustCompile(`^K[0-7]$`)
 	// xmmOperandRe matches an operand that is exactly an XMM register.
 	xmmOperandRe = regexp.MustCompile(`^X\d+$`)
+	// fmaRe matches the FMA3 multiply-add family. The set is closed and regular:
+	// an optional N for the negated forms, ADD or SUB, an optional second ADD or
+	// SUB for the alternating VFMADDSUB/VFMSUBADD pair, one of the three operand
+	// orders, then packed or scalar and single or double. Every member is FMA3,
+	// in both its 128-bit and 256-bit form, so no operand inspection is needed:
+	// unlike VBROADCASTSS, there is no FMA mnemonic with an AVX1-legal form.
+	fmaRe = regexp.MustCompile(`^VF(N)?M(ADD|SUB)(ADD|SUB)?(132|213|231)[PS][SD]$`)
 )
 
 // noFeatureMnemonics are directives and instructions that carry no SIMD feature
@@ -202,6 +245,23 @@ func x86InstrLevel(instr string) (level X86Level, reason string) {
 	return X86LevelAVX, ""
 }
 
+// x86InstrFeature reports the off-ladder CPUID feature one AMD64 instruction
+// needs, or "" if it needs none. It is deliberately independent of
+// x86InstrLevel: an FMA3 instruction is AVX1-legal as far as the level ladder is
+// concerned, and an AVX-512 kernel's EVEX-encoded FMA needs no separate claim
+// because every AVX-512 part implements FMA3. What this catches is the middle
+// case the ladder cannot express, an AVX1 CPU without FMA3.
+func x86InstrFeature(instr string) (feature X86Feature, reason string) {
+	m := instrRe.FindStringSubmatch(instr)
+	if m == nil {
+		return "", ""
+	}
+	if fmaRe.MatchString(m[1]) {
+		return X86FeatureFMA, "FMA3 multiply-add (a CPUID bit separate from AVX)"
+	}
+	return "", ""
+}
+
 // ScanX86Source parses every TEXT symbol in an AMD64 assembly source and reports
 // each one's required feature level together with the instructions that set it.
 // Kernels are returned in source order. Content before the first TEXT directive
@@ -231,11 +291,17 @@ func ScanX86Source(src string) []X86Kernel {
 				continue
 			}
 			level, reason := x86InstrLevel(stmt)
-			if level == X86LevelAVX {
+			feature, freason := x86InstrFeature(stmt)
+			if level == X86LevelAVX && feature == "" {
 				continue
 			}
+			if reason == "" {
+				reason = freason
+			}
 			k := &out[cur]
-			k.Uses = append(k.Uses, X86Use{Line: i + 1, Text: stmt, Level: level, Reason: reason})
+			k.Uses = append(k.Uses, X86Use{
+				Line: i + 1, Text: stmt, Level: level, Feature: feature, Reason: reason,
+			})
 			if level > k.Level {
 				k.Level = level
 			}
