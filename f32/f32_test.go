@@ -3753,7 +3753,7 @@ func benchRealFFTUnpack32(b *testing.B, n int, fn func(outRe, outIm, zRe, zIm, t
 	// unaffected; only the derived MB/s figures move.
 	b.SetBytes(int64(n * 4 * 6))
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		fn(outRe, outIm, zRe, zIm, twRe, twIm, n)
 	}
 }
