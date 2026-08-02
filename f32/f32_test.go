@@ -3747,7 +3747,11 @@ func benchRealFFTUnpack32(b *testing.B, n int, fn func(outRe, outIm, zRe, zIm, t
 	}
 
 	b.ResetTimer()
-	b.SetBytes(int64(n * 4 * 4)) // 4 slices of float32 (in/out re/im)
+	// 6 float32 slices touched (in/out re/im + twiddles), matching the f64
+	// helper. This counted 4 before, omitting twRe/twIm, which understated the
+	// traffic and made the two packages' MB/s columns incomparable. ns/op is
+	// unaffected; only the derived MB/s figures move.
+	b.SetBytes(int64(n * 4 * 6))
 
 	for i := 0; i < b.N; i++ {
 		fn(outRe, outIm, zRe, zIm, twRe, twIm, n)
