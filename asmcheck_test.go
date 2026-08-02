@@ -312,6 +312,8 @@ type singleRoundingKernel struct {
 var singleRoundingKernels = []singleRoundingKernel{
 	{"f32/f32_amd64.s", "float32ToInt32ScaleClampAVX", "VMULPS", "VADDPS"},
 	{"f32/f32_arm64.s", "float32ToInt32ScaleClampNEON", "FMUL", "FADD"},
+	{"f32/f32_amd64.s", "float32ToInt32ScaleClampSignedAVX", "VMULPS", "VADDPS"},
+	{"f32/f32_arm64.s", "float32ToInt32ScaleClampSignedNEON", "FMUL", "FADD"},
 }
 
 // asmFuncBody returns the lines of the TEXT ·fn(...) block, from its TEXT line to

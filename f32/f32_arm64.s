@@ -2291,6 +2291,76 @@ f32toi32_neon_tail:
 f32toi32_neon_done:
     RET
 
+// func float32ToInt32ScaleClampSignedNEON(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32)
+// dst[i] = copysign(int32(clamp(mag[i]*scale + offset, minV, maxV)), sign[i]).
+// The magnitude path is identical to float32ToInt32ScaleClampNEON (FMUL then
+// FADD, two roundings, never an FMLA). The sign is applied with a single BIT
+// (bitwise insert-if-true) using a 0x80000000 lane mask, before FCVTZS:
+// truncation toward zero commutes with the sign. A NaN magnitude stays NaN
+// through BIT (only its sign bit changes) and FCVTZS(NaN) yields 0.
+// Frame: dst(24) + mag(24) + sign(24) + scale(4)+offset(4)+minV(4)+maxV(4) = 88.
+TEXT ·float32ToInt32ScaleClampSignedNEON(SB), NOSPLIT, $0-88
+    MOVD dst_base+0(FP), R0        // R0 = dst pointer (int32 out)
+    MOVD dst_len+8(FP), R3         // R3 = length (== len(mag) == len(sign))
+    MOVD mag_base+24(FP), R1       // R1 = mag pointer (float32 in)
+    MOVD sign_base+48(FP), R2      // R2 = sign pointer (float32 in)
+    FMOVS scale+72(FP), F2         // F2 = scale
+    FMOVS offset+76(FP), F3        // F3 = offset
+    FMOVS minV+80(FP), F4          // F4 = minV
+    FMOVS maxV+84(FP), F5          // F5 = maxV
+
+    // Broadcast each scalar to all 4 lanes (DUP element form, native VDUP).
+    VDUP V2.S[0], V2.S4            // scale  x4
+    VDUP V3.S[0], V3.S4            // offset x4
+    VDUP V4.S[0], V4.S4            // minV   x4
+    VDUP V5.S[0], V5.S4            // maxV   x4
+
+    // Sign-bit mask 0x80000000 broadcast to V6 for the BIT copysign.
+    MOVD $0x80000000, R8
+    FMOVS R8, F6
+    VDUP V6.S[0], V6.S4            // 0x80000000 x4
+
+    LSR $2, R3, R4                 // R4 = len / 4
+    CBZ R4, f32toi32s_neon_tail
+
+f32toi32s_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]         // V0 = 4 x float32 magnitude source
+    WORD $0x6E22DC00              // FMUL V0.4S, V0.4S, V2.4S   (v = mag * scale)
+    WORD $0x4E23D400             // FADD V0.4S, V0.4S, V3.4S   (v += offset; separate, not FMLA)
+    WORD $0x4E24F400            // FMAX V0.4S, V0.4S, V4.4S   (>= minV; -Inf -> minV, NaN propagates)
+    WORD $0x4EA5F400           // FMIN V0.4S, V0.4S, V5.4S   (<= maxV; +Inf -> maxV, NaN propagates)
+    VLD1.P 16(R2), [V1.S4]    // V1 = 4 x float32 sign source
+    WORD $0x6EA61C20         // BIT V0.16B, V1.16B, V6.16B (insert sign[i]'s sign bit into |v|)
+    WORD $0x4EA1B800        // FCVTZS V0.4S, V0.4S        (truncate toward zero; NaN -> 0)
+    VST1.P [V0.S4], 16(R0)  // store 4 x int32 (16 bytes)
+    SUB $1, R4
+    CBNZ R4, f32toi32s_neon_loop4
+
+f32toi32s_neon_tail:
+    AND $3, R3, R5                 // R5 = len % 4
+    CBZ R5, f32toi32s_neon_done
+
+    // Back up to the final aligned block of 4 and reprocess it (overlap). All
+    // three streams are 4-byte elements, so each backs up by (4 - rem) * 4 bytes.
+    MOVD $4, R6
+    SUB R5, R6, R6                 // R6 = 4 - (len % 4)  (1..3)
+    LSL $2, R6, R7                 // R7 = (4 - rem) * 4 bytes
+    SUB R7, R1, R1
+    SUB R7, R2, R2
+    SUB R7, R0, R0
+    VLD1 (R1), [V0.S4]             // final 4 x float32 magnitude
+    WORD $0x6E22DC00               // FMUL V0.4S, V0.4S, V2.4S
+    WORD $0x4E23D400               // FADD V0.4S, V0.4S, V3.4S
+    WORD $0x4E24F400               // FMAX V0.4S, V0.4S, V4.4S
+    WORD $0x4EA5F400               // FMIN V0.4S, V0.4S, V5.4S
+    VLD1 (R2), [V1.S4]             // final 4 x float32 sign
+    WORD $0x6EA61C20               // BIT V0.16B, V1.16B, V6.16B
+    WORD $0x4EA1B800               // FCVTZS V0.4S, V0.4S
+    VST1 [V0.S4], (R0)             // store final 4 x int32
+
+f32toi32s_neon_done:
+    RET
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

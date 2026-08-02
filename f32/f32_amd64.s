@@ -4851,6 +4851,83 @@ f32toi32_done:
     VZEROUPPER
     RET
 
+// func float32ToInt32ScaleClampSignedAVX(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32)
+// dst[i] = copysign(int32(clamp(mag[i]*scale + offset, minV, maxV)), sign[i]).
+// The magnitude path is identical to float32ToInt32ScaleClampAVX (VMULPS then
+// VADDPS, two roundings, never an FMA). The sign is applied in the FLOAT domain
+// (VANDPS abs mask, VANDPS sign mask, VORPS) before VCVTTPS2DQ; truncation toward
+// zero commutes with the sign, and the int32 output needs no saturating pack, so
+// no AVX2 op is used. NaN magnitudes are zeroed by ANDing the int32 result with
+// the pre-clamp (v == v) mask, exactly as in the unsigned kernel.
+// Frame: dst(24) + mag(24) + sign(24) + scale(4)+offset(4)+minV(4)+maxV(4) = 88.
+TEXT ·float32ToInt32ScaleClampSignedAVX(SB), NOSPLIT, $0-88
+    MOVQ dst_base+0(FP), DX        // DX = dst pointer (int32 out)
+    MOVQ dst_len+8(FP), CX         // CX = length (== len(mag) == len(sign))
+    MOVQ mag_base+24(FP), SI       // SI = mag pointer (float32 in)
+    MOVQ sign_base+48(FP), DI      // DI = sign pointer (float32 in)
+
+    VBROADCASTSS scale+72(FP), Y3  // Y3 = scale  x8
+    VBROADCASTSS offset+76(FP), Y4 // Y4 = offset x8
+    VBROADCASTSS minV+80(FP), Y5   // Y5 = minV   x8
+    VBROADCASTSS maxV+84(FP), Y6   // Y6 = maxV   x8
+    VMOVUPS absf32mask<>(SB), Y7        // Y7 = 0x7fffffff x8 (|v| mask)
+    VMOVUPS roundf32_signmask<>(SB), Y8 // Y8 = 0x80000000 x8 (sign-bit mask)
+
+    MOVQ CX, AX
+    SHRQ $3, AX                    // len / 8
+    JZ   f32toi32s_tail
+
+f32toi32s_loop8:
+    VMOVUPS (SI), Y0               // 8 x float32 magnitude source
+    VMULPS Y3, Y0, Y0              // v = mag * scale (rounds to float32)
+    VADDPS Y4, Y0, Y0             // v += offset (separate rounding; NOT an FMA)
+    VCMPPS $0, Y0, Y0, Y1        // Y1 = (v == v) ? ones : 0  (0 for NaN), pre-clamp
+    VMAXPS Y5, Y0, Y0           // clamp low  (>= minV; -Inf -> minV)
+    VMINPS Y6, Y0, Y0          // clamp high (<= maxV; +Inf -> maxV)
+    VMOVUPS (DI), Y2          // 8 x float32 sign source
+    VANDPS Y7, Y0, Y0        // |v|
+    VANDPS Y8, Y2, Y2       // sign[i] & sign bit
+    VORPS Y2, Y0, Y0       // |v| carrying sign[i]'s sign bit
+    VCVTTPS2DQ Y0, Y0     // 8 x int32, truncate toward zero
+    VANDPS Y1, Y0, Y0    // NaN magnitude lanes -> 0
+    VMOVDQU Y0, (DX)     // store 8 x int32 (32 bytes)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  f32toi32s_loop8
+
+f32toi32s_tail:
+    ANDQ $7, CX                    // remainder = len % 8
+    JZ   f32toi32s_done
+
+    // Back up to the final aligned block of 8 and reprocess it (overlap). All
+    // three streams are 4-byte elements, so each backs up by (8 - rem) * 4 bytes.
+    MOVQ $8, BX
+    SUBQ CX, BX                    // BX = 8 - (len % 8)  (1..7)
+    SHLQ $2, BX                    // (8 - rem) * 4 bytes
+    SUBQ BX, SI
+    SUBQ BX, DI
+    SUBQ BX, DX
+
+    VMOVUPS (SI), Y0               // final 8 x float32 magnitude
+    VMULPS Y3, Y0, Y0
+    VADDPS Y4, Y0, Y0
+    VCMPPS $0, Y0, Y0, Y1
+    VMAXPS Y5, Y0, Y0
+    VMINPS Y6, Y0, Y0
+    VMOVUPS (DI), Y2               // final 8 x float32 sign
+    VANDPS Y7, Y0, Y0
+    VANDPS Y8, Y2, Y2
+    VORPS Y2, Y0, Y0
+    VCVTTPS2DQ Y0, Y0
+    VANDPS Y1, Y0, Y0
+    VMOVDQU Y0, (DX)               // store final 8 x int32
+
+f32toi32s_done:
+    VZEROUPPER
+    RET
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

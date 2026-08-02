@@ -10,7 +10,8 @@
 // Rounding and fusion: each floating-point operation is a single IEEE-754
 // rounded instruction. The elementwise scale, offset, clamp and float-to-fixed
 // conversion primitives (for example [Scale], [AddScalar], [ClampScale],
-// [Float32ToInt32ScaleClamp] and the Int*ToFloat32Scale family) never contract a
+// [Float32ToInt32ScaleClamp], [Float32ToInt32ScaleClampSigned] and the
+// Int*ToFloat32Scale family) never contract a
 // multiply and a following add into a fused multiply-add: a consumer that
 // reproduces a scalar reference bit-for-bit depends on the product rounding to
 // float32 before the add. Where fusion is wanted, use [FMA] or the AXPY
@@ -1126,6 +1127,68 @@ func Float32ToInt32ScaleClamp(dst []int32, src []float32, scale, offset, minV, m
 func Float32ToInt32ScaleClampUnsafe(dst []int32, src []float32, scale, offset, minV, maxV float32) {
 	// Slice dst to len(src) to ensure SIMD implementations don't write past dst
 	float32ToInt32ScaleClamp(dst[:len(src)], src, scale, offset, minV, maxV)
+}
+
+// Float32ToInt32ScaleClampSigned converts float32 magnitudes to int32 in one pass
+// and reattaches a sign, fusing the affine fixed-point quantize and the sign
+// transfer so both happen in a single pass over memory:
+//
+//	dst[i] = copysign(int32(clamp(mag[i]*scale + offset, minV, maxV)), sign[i])
+//
+// It is the signed sibling of Float32ToInt32ScaleClamp, exactly as CopySign is
+// the sign-transfer sibling of the magnitude ops. The magnitude path is identical
+// to Float32ToInt32ScaleClamp: the product rounds before offset is added and is
+// never contracted into an FMA; truncation is toward zero; out-of-range values
+// clamp to [minV, maxV] rather than wrapping; +Inf -> maxV, -Inf -> minV, and a
+// NaN magnitude -> 0 (its sign is not applied). The sign then follows IEEE-754
+// copysign semantics on bit 31 of sign[i]: the clamped magnitude is made
+// non-negative and given sign[i]'s sign bit. In the common case the magnitude is
+// computed from a rectified value and this reattaches the original sign; there
+// sign(0) is a no-op on a zero result, so a zero-magnitude lane is unaffected by
+// its sign source. Only bit 31 of sign[i] is read, so its NaN payload is
+// irrelevant.
+//
+// Fusing this into one kernel avoids the store-to-load stall of the two-pass
+// composition, where Float32ToInt32ScaleClamp writes dst with wide vector stores
+// and a following scalar pass reloads dst with narrow int32 loads to negate: the
+// int32 result never leaves registers between the magnitude and the sign step.
+//
+// The result is bit-identical across the AVX, NEON, and portable-Go paths (no
+// relaxed tier) when max(|minV|, |maxV|) <= 2147483520.0. That is tighter than
+// Float32ToInt32ScaleClamp's minV >= -2147483648.0 lower bound, because the sign
+// step re-expands a floor-clamped magnitude before the truncating conversion: a
+// value clamped to a minV below -2147483520.0 and then given a positive sign
+// reaches +2^31, which converts in an architecture-dependent way (x86 yields the
+// integer indefinite 0x80000000, ARM64 saturates), exactly as the sibling
+// documents for an out-of-range value. Keep minV >= -2147483520.0 (and, as for
+// the sibling, maxV <= 2147483520.0) for a portable result. Processes
+// min(len(dst), len(mag), len(sign)) elements.
+//
+// Uses AVX on AMD64 (8x float32; the sign is applied with VANDPS/VORPS in the
+// float domain, so AVX2 is not required), NEON on ARM64 (4x float32, one BIT).
+func Float32ToInt32ScaleClampSigned(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32) {
+	n := min(len(dst), len(mag), len(sign))
+	if n == 0 {
+		return
+	}
+	float32ToInt32ScaleClampSigned(dst[:n], mag[:n], sign[:n], scale, offset, minV, maxV)
+}
+
+// Float32ToInt32ScaleClampSignedUnsafe converts float32 magnitudes to int32 with
+// a reattached sign without length validation. This is a low-overhead variant for
+// performance-critical code paths.
+//
+// PRECONDITIONS (caller must ensure):
+//   - len(dst) >= len(mag)
+//   - len(sign) >= len(mag)
+//   - len(mag) > 0
+//
+// Violating these preconditions results in undefined behavior.
+// Use Float32ToInt32ScaleClampSigned for safe operation with automatic length handling.
+func Float32ToInt32ScaleClampSignedUnsafe(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32) {
+	// Slice dst and sign to len(mag) so SIMD implementations neither write past dst
+	// nor read past sign.
+	float32ToInt32ScaleClampSigned(dst[:len(mag)], mag, sign[:len(mag)], scale, offset, minV, maxV)
 }
 
 // ============================================================================
