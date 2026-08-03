@@ -921,6 +921,20 @@ func butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float
 	}
 }
 
+// butterflyComplexStage32Go applies one radix-2 decimation-in-time stage in
+// place over split-complex data. blocks is the number of complete 2*span
+// blocks; the caller has already reconciled it against len(re)/len(im).
+func butterflyComplexStage32Go(re, im []float32, span, blocks int, twRe, twIm []float32) {
+	tr, ti := twRe[:span], twIm[:span]
+	for b := range blocks {
+		k := b * butterflyStageRadix * span
+		mid, end := k+span, k+butterflyStageRadix*span
+		upRe, upIm := re[k:mid:mid], im[k:mid:mid]
+		loRe, loIm := re[mid:end:end], im[mid:end:end]
+		butterflyComplex32Go(upRe, upIm, loRe, loIm, tr, ti)
+	}
+}
+
 // realFFTUnpackHalf is the constant 0.5 used in real FFT unpack computation.
 const realFFTUnpackHalf = 0.5
 

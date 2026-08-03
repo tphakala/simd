@@ -1313,6 +1313,31 @@ func butterflyComplex32(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32
 	butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
 }
 
+func butterflyComplexStage32(re, im []float32, span, blocks int, twRe, twIm []float32) {
+	// butterflyComplexStageAVX is correct for every span: across j when span fills
+	// an 8-wide YMM, across blocks for span 1, 2 and 4 (all below the float32 lane
+	// count). span 3, 5, 6 and 7 fill neither axis and run through the kernel's
+	// scalar tail, which still beats the Go fallback because the kernel absorbs the
+	// whole block loop into one call while the Go path pays a call per block that is
+	// over the inliner's budget.
+	//
+	// The guard below is about total work, not about span: a stage carrying fewer
+	// than minAVXElements butterflies goes to Go regardless of its span. So "every
+	// span" describes what the kernel handles, not what always reaches it.
+	//
+	// AVX+FMA is the whole requirement, with no AVX2 anywhere: the block-axis paths
+	// shuffle with VSHUFPS/VUNPCKLPS/VUNPCKHPS (span 1), VUNPCKLPD/VUNPCKHPD (span 2)
+	// and VPERM2F128 (span 4), and splat their twiddles with the memory-source forms
+	// of VBROADCASTSS, VBROADCASTSD and VBROADCASTF128. The register-source
+	// VBROADCASTSS/VBROADCASTSD would be AVX2, the trap TestAmd64KernelISALevel
+	// sweeps for.
+	if cpu.X86.AVX && cpu.X86.FMA && blocks*span >= minAVXElements {
+		butterflyComplexStageAVX(re, im, span, blocks, twRe, twIm)
+		return
+	}
+	butterflyComplexStage32Go(re, im, span, blocks, twRe, twIm)
+}
+
 func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	// Use AVX+FMA if available and have enough elements. realFFTUnpackAVX needs
 	// nothing above AVX1+FMA3; TestAmd64KernelISALevel enforces the AVX2 half of
@@ -1339,6 +1364,15 @@ func absSqComplexAVX(dst, aRe, aIm []float32)
 
 //go:noescape
 func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32)
+
+// Callers MUST satisfy len(re) == len(im) == 2*span*blocks and
+// len(twRe) == len(twIm) >= span, with span >= 1 and blocks >= 1. Every address
+// the kernel forms is derived from span and blocks, never from the slice headers,
+// so a violated precondition reads and writes out of bounds silently rather than
+// panicking the way the Go fallback would. ButterflyComplexStage establishes it.
+//
+//go:noescape
+func butterflyComplexStageAVX(re, im []float32, span, blocks int, twRe, twIm []float32)
 
 //go:noescape
 func realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int)

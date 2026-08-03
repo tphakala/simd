@@ -1276,6 +1276,54 @@ func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) 
 	butterflyComplex32(upperRe[:n], upperIm[:n], lowerRe[:n], lowerIm[:n], twRe[:n], twIm[:n])
 }
 
+// butterflyStageRadix is the radix of a decimation-in-time stage: every block
+// holds exactly one upper half and one lower half, each span elements long, so
+// a block is butterflyStageRadix*span elements wide.
+const butterflyStageRadix = 2
+
+// ButterflyComplexStage applies one complete radix-2 decimation-in-time stage
+// in place over split-complex data. For every block k in steps of 2*span, and
+// every j in [0, span), it performs the ButterflyComplex operation on the pair
+// (k+j, k+span+j) with twiddle (twRe[j], twIm[j]):
+//
+//	temp_re = re[k+span+j]*twRe[j] - im[k+span+j]*twIm[j]
+//	temp_im = re[k+span+j]*twIm[j] + im[k+span+j]*twRe[j]
+//	re[k+j], re[k+span+j] = re[k+j]+temp_re, re[k+j]-temp_re
+//	im[k+j], im[k+span+j] = im[k+j]+temp_im, im[k+j]-temp_im
+//
+// It is the stage-level form of [ButterflyComplex]. Driving a stage through
+// ButterflyComplex costs one call per block, so the call count grows as the
+// runs get short and per-call overhead dominates the small-span stages. Taking
+// the whole stage lets the implementation pick its own vectorization axis,
+// which is not expressible through the per-block API: across j when span is
+// large enough to fill a vector, and across blocks when span is short enough
+// that a whole vector of them fits. The float32 vector is 8 lanes on AVX and 4
+// on NEON, so span 1, 2 and 4 vectorize across blocks on AVX (1 and 2 on NEON);
+// a span that fills neither axis runs the scalar tail.
+//
+// The stage is a no-op unless span > 0, len(twRe) >= span and len(twIm) >= span,
+// and it is also a no-op when no complete block fits. Blocks are processed while
+// k+2*span <= n, where n = min(len(re), len(im)); a trailing partial block is
+// left untouched.
+//
+// Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
+// [ButterflyComplex], results are not guaranteed bit-identical between the
+// vector and fallback paths, so do not depend on exact equality across build
+// targets or across spans.
+func ButterflyComplexStage(re, im []float32, span int, twRe, twIm []float32) {
+	if span <= 0 || len(twRe) < span || len(twIm) < span {
+		return
+	}
+	n := min(len(re), len(im))
+	blockLen := butterflyStageRadix * span
+	blocks := n / blockLen
+	if blocks == 0 {
+		return
+	}
+	used := blocks * blockLen
+	butterflyComplexStage32(re[:used], im[:used], span, blocks, twRe[:span], twIm[:span])
+}
+
 // RealFFTUnpack performs the unpacking step of a real-valued FFT.
 //
 // Given Z = FFT(packed real data of size 2n), this computes the real FFT output X
