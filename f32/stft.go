@@ -28,9 +28,10 @@ import (
 //
 // The transform runs in float32 to match the rest of the f32 package; the
 // twiddle and unravel tables are computed in float64 and rounded once to float32
-// so the resident constants carry full precision. This first cut is a correct
-// scalar radix-2 transform (power-of-two nfft only); vectorizing the inner
-// butterfly is a separate, profile-gated change. See #108.
+// so the resident constants carry full precision. It is a radix-2 rfft
+// (power-of-two nfft only); its butterfly stages run through ButterflyComplexStage,
+// so they take the AVX+FMA / NEON vector paths where the span and block count
+// justify them and fall back to scalar Go otherwise. See #108 and #205.
 
 // ErrSTFT* describe invalid STFTPlan configurations.
 var (
@@ -76,9 +77,12 @@ type STFTPlan struct {
 
 	bitrev []int // bit-reversal permutation for the size-half FFT
 
-	// Twiddles for the size-half radix-2 FFT: twRe[t] = cos(2*pi*t/half),
-	// twIm[t] = -sin(2*pi*t/half) for t in [0, half/2).
-	twRe, twIm []float32
+	// Per-stage contiguous twiddles for the size-half radix-2 FFT, so each stage
+	// can be driven through ButterflyComplexStage (which reads its twiddles
+	// contiguous in j over [0, span)). Stage m in {2,4,...,half} uses span = m/2
+	// factors W_m^j = exp(-i*2*pi*j/m) for j in [0, span); the stage with span s
+	// occupies stageTwRe[s-1 : 2*s-1], and the tables total half-1 entries.
+	stageTwRe, stageTwIm []float32
 
 	// Unravel twiddles W_N^k = exp(-i*2*pi*k/nfft) for k in [0, half], used to
 	// recombine the even/odd half-spectra into the real-input spectrum.
@@ -104,15 +108,15 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 	half := nfft >> 1
 
 	p := &STFTPlan{
-		nfft:   nfft,
-		half:   half,
-		bitrev: make([]int, half),
-		twRe:   make([]float32, max(half>>1, 1)),
-		twIm:   make([]float32, max(half>>1, 1)),
-		unRe:   make([]float32, half+1),
-		unIm:   make([]float32, half+1),
-		re:     make([]float32, half),
-		im:     make([]float32, half),
+		nfft:      nfft,
+		half:      half,
+		bitrev:    make([]int, half),
+		stageTwRe: make([]float32, max(half-1, 0)),
+		stageTwIm: make([]float32, max(half-1, 0)),
+		unRe:      make([]float32, half+1),
+		unIm:      make([]float32, half+1),
+		re:        make([]float32, half),
+		im:        make([]float32, half),
 	}
 
 	// Bit-reversal permutation for a size-half FFT.
@@ -128,12 +132,18 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 		p.bitrev[i] = r
 	}
 
-	// Size-half FFT twiddles (computed in float64, stored as float32).
-	for t := range p.twRe {
-		ang := 2 * math.Pi * float64(t) / float64(half)
-		s, c := math.Sincos(ang)
-		p.twRe[t] = float32(c)
-		p.twIm[t] = float32(-s)
+	// Per-stage contiguous FFT twiddles (computed in float64, stored as float32):
+	// stage m in {2,4,...,half} writes its span = m/2 factors
+	// W_m^j = exp(-i*2*pi*j/m) starting at offset span-1.
+	for m := 2; m <= half; m <<= 1 {
+		span := m >> 1
+		off := span - 1
+		for j := range span {
+			ang := 2 * math.Pi * float64(j) / float64(m)
+			s, c := math.Sincos(ang)
+			p.stageTwRe[off+j] = float32(c)
+			p.stageTwIm[off+j] = float32(-s)
+		}
 	}
 
 	// Real-input unravel twiddles W_N^k.
@@ -148,7 +158,9 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 }
 
 // fftHalf runs an in-place size-half radix-2 decimation-in-time complex FFT on
-// the plan's scratch (p.re, p.im), using the resident bit-reversal and twiddles.
+// the plan's scratch (p.re, p.im), using the resident bit-reversal and per-stage
+// twiddles. Each stage is one ButterflyComplexStage call, so the butterflies take
+// the AVX+FMA / NEON vector paths where the span and block count justify them.
 func (p *STFTPlan) fftHalf() {
 	re, im := p.re, p.im
 	// Bit-reversal reorder.
@@ -158,24 +170,12 @@ func (p *STFTPlan) fftHalf() {
 			im[i], im[j] = im[j], im[i]
 		}
 	}
-	// Butterfly stages.
+	// Butterfly stages. Stage m operates on span = m/2 with block stride m; its
+	// contiguous twiddles live at stageTwRe/stageTwIm[span-1 : 2*span-1].
 	for m := 2; m <= p.half; m <<= 1 {
-		halfM := m >> 1
-		step := p.half / m // twiddle stride into twRe/twIm
-		for k := 0; k < p.half; k += m {
-			for j := range halfM {
-				idx := j * step
-				wr, wi := p.twRe[idx], p.twIm[idx]
-				a := k + j
-				b := a + halfM
-				vr := wr*re[b] - wi*im[b]
-				vi := wr*im[b] + wi*re[b]
-				re[b] = re[a] - vr
-				im[b] = im[a] - vi
-				re[a] += vr
-				im[a] += vi
-			}
-		}
+		span := m >> 1
+		off := span - 1
+		ButterflyComplexStage(re, im, span, p.stageTwRe[off:off+span], p.stageTwIm[off:off+span])
 	}
 }
 
