@@ -150,11 +150,16 @@ func TestSTFTStageTwiddles(t *testing.T) {
 			for j := range span {
 				ang := 2 * math.Pi * float64(j) / float64(m)
 				s, c := math.Sincos(ang)
-				if d := math.Abs(float64(p.stageTwRe[off+j]) - c); d > 1e-6 {
-					t.Errorf("nfft=%d m=%d j=%d: stageTwRe=%g want %g", nfft, m, j, p.stageTwRe[off+j], c)
+				// NewSTFTPlan stores float32(c)/float32(-s) from this same float64
+				// sincos, so the stored bits must match exactly (same machine, same
+				// expression); an exact check catches any factor corruption a loose
+				// tolerance would let pass.
+				wantRe, wantIm := float32(c), float32(-s)
+				if math.Float32bits(p.stageTwRe[off+j]) != math.Float32bits(wantRe) {
+					t.Errorf("nfft=%d m=%d j=%d: stageTwRe=%g want %g", nfft, m, j, p.stageTwRe[off+j], wantRe)
 				}
-				if d := math.Abs(float64(p.stageTwIm[off+j]) - (-s)); d > 1e-6 {
-					t.Errorf("nfft=%d m=%d j=%d: stageTwIm=%g want %g", nfft, m, j, p.stageTwIm[off+j], -s)
+				if math.Float32bits(p.stageTwIm[off+j]) != math.Float32bits(wantIm) {
+					t.Errorf("nfft=%d m=%d j=%d: stageTwIm=%g want %g", nfft, m, j, p.stageTwIm[off+j], wantIm)
 				}
 			}
 		}
