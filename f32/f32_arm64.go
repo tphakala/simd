@@ -884,6 +884,20 @@ func butterflyComplex32(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32
 	butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
 }
 
+func butterflyComplexStage32(re, im []float32, span, blocks int, twRe, twIm []float32) {
+	// butterflyComplexStageNEON is correct for every span: across j when span
+	// fills a 4-wide vector, across blocks for span 1 and 2 (both below the
+	// float32 lane count). span 3 fills neither axis and runs entirely in the
+	// kernel's scalar tail, which still beats the Go fallback's call per block.
+	// One 4-wide iteration needs 4 lanes, so anything below 4 total butterflies
+	// falls to Go.
+	if hasNEON && blocks*span >= 4 {
+		butterflyComplexStageNEON(re, im, span, blocks, twRe, twIm)
+		return
+	}
+	butterflyComplexStage32Go(re, im, span, blocks, twRe, twIm)
+}
+
 func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	// Use NEON if available and have enough elements
 	// Need at least 5 elements: process k=1..n-1 where n>=5 gives 4+ iterations
@@ -905,6 +919,15 @@ func absSqComplexNEON(dst, aRe, aIm []float32)
 
 //go:noescape
 func butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32)
+
+// Callers MUST satisfy len(re) == len(im) == 2*span*blocks and
+// len(twRe) == len(twIm) >= span, with span >= 1 and blocks >= 1. Every address
+// the kernel forms is derived from span and blocks, never from the slice headers,
+// so a violated precondition reads and writes out of bounds silently rather than
+// panicking the way the Go fallback would. ButterflyComplexStage establishes it.
+//
+//go:noescape
+func butterflyComplexStageNEON(re, im []float32, span, blocks int, twRe, twIm []float32)
 
 //go:noescape
 func realFFTUnpackNEON(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int)

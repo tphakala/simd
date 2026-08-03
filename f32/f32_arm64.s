@@ -2697,6 +2697,304 @@ butterfly_neon_scalar_loop:
 butterfly_neon_done:
     RET
 
+// func butterflyComplexStageNEON(re, im []float32, span, blocks int, twRe, twIm []float32)
+// One complete radix-2 decimation-in-time stage, in place over split-complex
+// float32, NEON (4 float32 lanes per .4S register). The float32 sibling of
+// f64.butterflyComplexStageNEON: the vector is 4 wide instead of 2, so span 1 and
+// 2 vectorize across blocks (both below the lane count) while span >= 4 vectorizes
+// across j. span 3 fills neither axis and runs the j-axis scalar tail; real
+// radix-2 stages use only power-of-two spans, so that is a synthetic-test span.
+//
+// Every hand-encoded WORD carries its decoded mnemonic; asmcheck cross-checks each
+// against golang.org/x/arch/arm64asm. Frame:
+// re(24)+im(24)+span(8)+blocks(8)+twRe(24)+twIm(24) = 112 bytes.
+TEXT ·butterflyComplexStageNEON(SB), NOSPLIT, $0-112
+    MOVD re_base+0(FP), R0           // R0 = re block base
+    MOVD im_base+24(FP), R1          // R1 = im block base
+    MOVD span+48(FP), R4             // R4 = span
+    MOVD blocks+56(FP), R5           // R5 = block count
+    MOVD twRe_base+64(FP), R2        // R2 = twRe base
+    MOVD twIm_base+88(FP), R3        // R3 = twIm base
+
+    CBZ  R5, bfstage_neon_done
+    CMP  $1, R4
+    BEQ  bfstage_neon_span1
+    CMP  $2, R4
+    BEQ  bfstage_neon_span2
+
+    // ----------------------------------------------------------------------
+    // span >= 3: vectorize across j, four lanes per iteration, scalar tail for
+    // span%4. Pointers are reset from the block bases on every block. span 3
+    // has span/4 == 0, so it runs entirely in the scalar tail.
+    // ----------------------------------------------------------------------
+    LSL  $2, R4, R24                 // R24 = span*4 = upper->lower byte offset
+    LSL  $3, R4, R25                 // R25 = span*8 = block stride in bytes
+    LSR  $2, R4, R8                  // R8 = span/4 = vector iterations per block
+    AND  $3, R4, R9                  // R9 = span&3 = scalar butterflies per block
+
+bfstage_neon_block:
+    MOVD R0, R6                      // R6 = upper re
+    MOVD R1, R7                      // R7 = upper im
+    ADD  R24, R0, R19               // R19 = lower re
+    ADD  R24, R1, R20               // R20 = lower im
+    MOVD R2, R21                     // R21 = twRe
+    MOVD R3, R22                     // R22 = twIm
+    MOVD R8, R23                     // R23 = working copy of the vector count
+    CBZ  R23, bfstage_neon_tail_pre
+
+bfstage_neon_vec:
+    VLD1   (R19), [V2.S4]            // V2 = lowerRe[j:j+4]
+    VLD1   (R20), [V3.S4]            // V3 = lowerIm[j:j+4]
+    VLD1.P 16(R21), [V4.S4]          // V4 = twRe[j:j+4]
+    VLD1.P 16(R22), [V5.S4]          // V5 = twIm[j:j+4]
+    VLD1   (R6), [V0.S4]             // V0 = upperRe[j:j+4]
+    VLD1   (R7), [V1.S4]             // V1 = upperIm[j:j+4]
+
+    // tempRe = lowerRe*twRe - lowerIm*twIm
+    WORD $0x6E24DC46                 // FMUL V6.4S, V2.4S, V4.4S
+    WORD $0x4EA5CC66                 // FMLS V6.4S, V3.4S, V5.4S
+    // tempIm = lowerRe*twIm + lowerIm*twRe
+    WORD $0x6E25DC47                 // FMUL V7.4S, V2.4S, V5.4S
+    WORD $0x4E24CC67                 // FMLA V7.4S, V3.4S, V4.4S
+
+    WORD $0x4E26D408                 // FADD V8.4S, V0.4S, V6.4S  (new upperRe)
+    WORD $0x4EA6D40A                 // FSUB V10.4S, V0.4S, V6.4S (new lowerRe)
+    WORD $0x4E27D429                 // FADD V9.4S, V1.4S, V7.4S  (new upperIm)
+    WORD $0x4EA7D42B                 // FSUB V11.4S, V1.4S, V7.4S (new lowerIm)
+
+    VST1.P [V8.S4], 16(R6)
+    VST1.P [V9.S4], 16(R7)
+    VST1.P [V10.S4], 16(R19)
+    VST1.P [V11.S4], 16(R20)
+
+    SUB  $1, R23
+    CBNZ R23, bfstage_neon_vec
+
+bfstage_neon_tail_pre:
+    MOVD R9, R23                     // R23 = scalar butterflies remaining
+    CBZ  R23, bfstage_neon_next
+
+bfstage_neon_tail:
+    FMOVS (R19), F2                  // lowerRe
+    FMOVS (R20), F3                  // lowerIm
+    FMOVS (R21), F4                  // twRe
+    FMOVS (R22), F5                  // twIm
+    FMULS F2, F4, F6
+    FMULS F3, F5, F7
+    FSUBS F7, F6, F6                 // F6 = tempRe
+    FMULS F2, F5, F7
+    FMULS F3, F4, F8
+    FADDS F7, F8, F7                 // F7 = tempIm
+    FMOVS (R6), F0                   // upperRe
+    FMOVS (R7), F1                   // upperIm
+    FADDS F0, F6, F8
+    FSUBS F6, F0, F9
+    FADDS F1, F7, F10
+    FSUBS F7, F1, F11
+    FMOVS F8, (R6)
+    FMOVS F10, (R7)
+    FMOVS F9, (R19)
+    FMOVS F11, (R20)
+    ADD  $4, R6
+    ADD  $4, R7
+    ADD  $4, R19
+    ADD  $4, R20
+    ADD  $4, R21
+    ADD  $4, R22
+    SUB  $1, R23
+    CBNZ R23, bfstage_neon_tail
+
+bfstage_neon_next:
+    ADD  R25, R0, R0
+    ADD  R25, R1, R1
+    SUB  $1, R5
+    CBNZ R5, bfstage_neon_block
+    RET
+
+    // ----------------------------------------------------------------------
+    // span == 1: every block is one [u, l] pair, so re/im are fully
+    // interleaved. Take 4 blocks (8 float32) per iteration, UZP1/UZP2 (.4S) to
+    // separate the uppers from the lowers, ZIP1/ZIP2 (.4S) to re-interleave on
+    // the way out. The twiddle is the single tw[0], splatted once.
+    // ----------------------------------------------------------------------
+bfstage_neon_span1:
+    FMOVS (R2), F12
+    VDUP  V12.S[0], V12.S4           // V12 = twRe[0] in all four lanes
+    FMOVS (R3), F13
+    VDUP  V13.S[0], V13.S4           // V13 = twIm[0] in all four lanes
+
+    LSR  $2, R5, R23                 // R23 = blocks/4 = 4-block iterations
+    CBZ  R23, bfstage_neon_span1_tail_pre
+
+bfstage_neon_span1_vec:
+    VLD1 (R0), [V0.S4]               // V0 = [u0,l0,u1,l1] re
+    ADD  $16, R0, R6
+    VLD1 (R6), [V1.S4]               // V1 = [u2,l2,u3,l3] re
+    VLD1 (R1), [V4.S4]               // V4 = [u0,l0,u1,l1] im
+    ADD  $16, R1, R7
+    VLD1 (R7), [V5.S4]               // V5 = [u2,l2,u3,l3] im
+
+    WORD $0x4E811802                 // UZP1 V2.4S, V0.4S, V1.4S -> upperRe [u0,u1,u2,u3]
+    WORD $0x4E815803                 // UZP2 V3.4S, V0.4S, V1.4S -> lowerRe [l0,l1,l2,l3]
+    WORD $0x4E851886                 // UZP1 V6.4S, V4.4S, V5.4S -> upperIm
+    WORD $0x4E855887                 // UZP2 V7.4S, V4.4S, V5.4S -> lowerIm
+
+    // tempRe = lowerRe*twRe - lowerIm*twIm
+    WORD $0x6E2CDC68                 // FMUL V8.4S, V3.4S, V12.4S
+    WORD $0x4EADCCE8                 // FMLS V8.4S, V7.4S, V13.4S
+    // tempIm = lowerRe*twIm + lowerIm*twRe
+    WORD $0x6E2DDC69                 // FMUL V9.4S, V3.4S, V13.4S
+    WORD $0x4E2CCCE9                 // FMLA V9.4S, V7.4S, V12.4S
+
+    WORD $0x4E28D44A                 // FADD V10.4S, V2.4S, V8.4S  (new upperRe)
+    WORD $0x4EA8D44B                 // FSUB V11.4S, V2.4S, V8.4S  (new lowerRe)
+    WORD $0x4E29D4CE                 // FADD V14.4S, V6.4S, V9.4S  (new upperIm)
+    WORD $0x4EA9D4CF                 // FSUB V15.4S, V6.4S, V9.4S  (new lowerIm)
+
+    WORD $0x4E8B3940                 // ZIP1 V0.4S, V10.4S, V11.4S -> [U0,L0,U1,L1] re
+    WORD $0x4E8B7941                 // ZIP2 V1.4S, V10.4S, V11.4S -> [U2,L2,U3,L3] re
+    WORD $0x4E8F39C4                 // ZIP1 V4.4S, V14.4S, V15.4S -> im
+    WORD $0x4E8F79C5                 // ZIP2 V5.4S, V14.4S, V15.4S -> im
+
+    VST1.P [V0.S4], 16(R0)
+    VST1.P [V1.S4], 16(R0)
+    VST1.P [V4.S4], 16(R1)
+    VST1.P [V5.S4], 16(R1)
+
+    SUB  $1, R23
+    CBNZ R23, bfstage_neon_span1_vec
+
+bfstage_neon_span1_tail_pre:
+    AND  $3, R5, R23                 // leftover blocks (0..3)
+    CBZ  R23, bfstage_neon_done
+
+bfstage_neon_span1_tail:
+    FMOVS 4(R0), F2                  // lowerRe
+    FMOVS 4(R1), F3                  // lowerIm
+    // F12/F13 lane 0 still hold twRe[0]/twIm[0]: the vector loop only reads
+    // V12/V13, never writes them, so no reload is needed.
+    FMULS F2, F12, F6
+    FMULS F3, F13, F7
+    FSUBS F7, F6, F6                 // tempRe
+    FMULS F2, F13, F7
+    FMULS F3, F12, F8
+    FADDS F7, F8, F7                 // tempIm
+    FMOVS (R0), F0                   // upperRe
+    FMOVS (R1), F1                   // upperIm
+    FADDS F0, F6, F8
+    FSUBS F6, F0, F9
+    FADDS F1, F7, F10
+    FSUBS F7, F1, F11
+    FMOVS F8, (R0)
+    FMOVS F10, (R1)
+    FMOVS F9, 4(R0)
+    FMOVS F11, 4(R1)
+    ADD  $8, R0
+    ADD  $8, R1
+    SUB  $1, R23
+    CBNZ R23, bfstage_neon_span1_tail
+    RET
+
+    // ----------------------------------------------------------------------
+    // span == 2: each block is [u0,u1,l0,l1], and a float32 pair is exactly one
+    // 64-bit lane, so UZP1/UZP2 (.2D) gather two blocks' upper pairs into one
+    // register and their lower pairs into another, ZIP1/ZIP2 (.2D) put them
+    // back. Arithmetic is .4S (2 blocks x 2 j). The twiddle pair [tr0,tr1]
+    // repeats per block, splatted once with FMOVD + VDUP (.D).
+    // ----------------------------------------------------------------------
+bfstage_neon_span2:
+    FMOVD (R2), F12
+    VDUP  V12.D[0], V12.D2           // V12 = [tr0,tr1,tr0,tr1]
+    FMOVD (R3), F13
+    VDUP  V13.D[0], V13.D2           // V13 = [ti0,ti1,ti0,ti1]
+
+    LSR  $1, R5, R23                 // R23 = blocks/2 = 2-block iterations
+    CBZ  R23, bfstage_neon_span2_tail_pre
+
+bfstage_neon_span2_vec:
+    VLD1 (R0), [V0.S4]               // block0 re = [u0,u1,l0,l1]
+    ADD  $16, R0, R6
+    VLD1 (R6), [V1.S4]               // block1 re
+    VLD1 (R1), [V4.S4]               // block0 im
+    ADD  $16, R1, R7
+    VLD1 (R7), [V5.S4]               // block1 im
+
+    WORD $0x4EC11802                 // UZP1 V2.2D, V0.2D, V1.2D -> upperRe [u0,u1,u0',u1']
+    WORD $0x4EC15803                 // UZP2 V3.2D, V0.2D, V1.2D -> lowerRe [l0,l1,l0',l1']
+    WORD $0x4EC51886                 // UZP1 V6.2D, V4.2D, V5.2D -> upperIm
+    WORD $0x4EC55887                 // UZP2 V7.2D, V4.2D, V5.2D -> lowerIm
+
+    // tempRe = lowerRe*twRe - lowerIm*twIm
+    WORD $0x6E2CDC68                 // FMUL V8.4S, V3.4S, V12.4S
+    WORD $0x4EADCCE8                 // FMLS V8.4S, V7.4S, V13.4S
+    // tempIm = lowerRe*twIm + lowerIm*twRe
+    WORD $0x6E2DDC69                 // FMUL V9.4S, V3.4S, V13.4S
+    WORD $0x4E2CCCE9                 // FMLA V9.4S, V7.4S, V12.4S
+
+    WORD $0x4E28D44A                 // FADD V10.4S, V2.4S, V8.4S  (new upperRe)
+    WORD $0x4EA8D44B                 // FSUB V11.4S, V2.4S, V8.4S  (new lowerRe)
+    WORD $0x4E29D4CE                 // FADD V14.4S, V6.4S, V9.4S  (new upperIm)
+    WORD $0x4EA9D4CF                 // FSUB V15.4S, V6.4S, V9.4S  (new lowerIm)
+
+    WORD $0x4ECB3940                 // ZIP1 V0.2D, V10.2D, V11.2D -> [u0,u1,l0,l1] block0 re
+    WORD $0x4ECB7941                 // ZIP2 V1.2D, V10.2D, V11.2D -> block1 re
+    WORD $0x4ECF39C4                 // ZIP1 V4.2D, V14.2D, V15.2D -> block0 im
+    WORD $0x4ECF79C5                 // ZIP2 V5.2D, V14.2D, V15.2D -> block1 im
+
+    VST1.P [V0.S4], 16(R0)
+    VST1.P [V1.S4], 16(R0)
+    VST1.P [V4.S4], 16(R1)
+    VST1.P [V5.S4], 16(R1)
+
+    SUB  $1, R23
+    CBNZ R23, bfstage_neon_span2_vec
+
+bfstage_neon_span2_tail_pre:
+    AND  $1, R5, R23                 // one leftover block at most
+    CBZ  R23, bfstage_neon_done
+
+    // Single block: two scalar butterflies at j = 0 and j = 1. R4 == span == 2.
+    MOVD R0, R6                      // upper re
+    MOVD R1, R7                      // upper im
+    ADD  $8, R0, R19                 // lower re = upper + span*4
+    ADD  $8, R1, R20                 // lower im
+    MOVD R2, R21                     // twRe
+    MOVD R3, R22                     // twIm
+    MOVD R4, R23                     // span = 2 butterflies
+
+bfstage_neon_span2_tail_loop:
+    FMOVS (R19), F2                  // lowerRe
+    FMOVS (R20), F3                  // lowerIm
+    FMOVS (R21), F4                  // twRe
+    FMOVS (R22), F5                  // twIm
+    FMULS F2, F4, F6
+    FMULS F3, F5, F7
+    FSUBS F7, F6, F6                 // tempRe
+    FMULS F2, F5, F7
+    FMULS F3, F4, F8
+    FADDS F7, F8, F7                 // tempIm
+    FMOVS (R6), F0                   // upperRe
+    FMOVS (R7), F1                   // upperIm
+    FADDS F0, F6, F8
+    FSUBS F6, F0, F9
+    FADDS F1, F7, F10
+    FSUBS F7, F1, F11
+    FMOVS F8, (R6)
+    FMOVS F10, (R7)
+    FMOVS F9, (R19)
+    FMOVS F11, (R20)
+    ADD  $4, R6
+    ADD  $4, R7
+    ADD  $4, R19
+    ADD  $4, R20
+    ADD  $4, R21
+    ADD  $4, R22
+    SUB  $1, R23
+    CBNZ R23, bfstage_neon_span2_tail_loop
+
+bfstage_neon_done:
+    RET
+
 // ============================================================================
 // REAL FFT UNPACK - UNPACKING STEP FOR REAL-VALUED FFT
 // ============================================================================

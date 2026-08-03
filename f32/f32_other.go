@@ -92,6 +92,9 @@ func absSqComplex32(dst, aRe, aIm []float32) { absSqComplex32Go(dst, aRe, aIm) }
 func butterflyComplex32(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
 	butterflyComplex32Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
 }
+func butterflyComplexStage32(re, im []float32, span, blocks int, twRe, twIm []float32) {
+	butterflyComplexStage32Go(re, im, span, blocks, twRe, twIm)
+}
 func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	realFFTUnpack32Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }
