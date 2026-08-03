@@ -124,6 +124,43 @@ func TestSTFTAgainstDFTF32(t *testing.T) {
 	}
 }
 
+// TestSTFTStageTwiddles pins the per-stage contiguous twiddle layout that
+// fftHalf and ButterflyComplexStage share: the table holds max(half-1, 0)
+// entries, and stage m in {2,4,...,half} keeps its span=m/2 factors
+// W_m^j = (cos(2*pi*j/m), -sin(2*pi*j/m)) at offset span-1. An off-by-one in the
+// offset or a wrong table length would put the wrong factor at [off+j] and fail
+// here, localized, rather than only surfacing as a spectrum mismatch downstream.
+// The f32 sibling of f64's TestSTFTStageTwiddles; the tolerance is float32-scale
+// (the factors are stored as float32 rounded once from a float64 sincos).
+func TestSTFTStageTwiddles(t *testing.T) {
+	for _, nfft := range []int{2, 4, 8, 16, 256, 1024} {
+		p, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatalf("nfft=%d: NewSTFTPlan: %v", nfft, err)
+		}
+		half := nfft >> 1
+		wantLen := max(half-1, 0)
+		if len(p.stageTwRe) != wantLen || len(p.stageTwIm) != wantLen {
+			t.Fatalf("nfft=%d: twiddle table len = (%d,%d), want %d",
+				nfft, len(p.stageTwRe), len(p.stageTwIm), wantLen)
+		}
+		for m := 2; m <= half; m <<= 1 {
+			span := m >> 1
+			off := span - 1
+			for j := range span {
+				ang := 2 * math.Pi * float64(j) / float64(m)
+				s, c := math.Sincos(ang)
+				if d := math.Abs(float64(p.stageTwRe[off+j]) - c); d > 1e-6 {
+					t.Errorf("nfft=%d m=%d j=%d: stageTwRe=%g want %g", nfft, m, j, p.stageTwRe[off+j], c)
+				}
+				if d := math.Abs(float64(p.stageTwIm[off+j]) - (-s)); d > 1e-6 {
+					t.Errorf("nfft=%d m=%d j=%d: stageTwIm=%g want %g", nfft, m, j, p.stageTwIm[off+j], -s)
+				}
+			}
+		}
+	}
+}
+
 // TestSTFTPowerMatchesSTFTF32 verifies STFTPower equals |STFT|^2 bin-for-bin
 // (both derive from the same unravel, so the agreement is essentially exact).
 func TestSTFTPowerMatchesSTFTF32(t *testing.T) {
