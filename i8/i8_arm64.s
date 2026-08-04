@@ -803,3 +803,253 @@ sad_scalar:
 sad_done:
     MOVW R5, ret+48(FP)
     RET
+
+// -----------------------------------------------------------------------------
+// Quantization kernels (Part of #132). All three are baseline NEON (ASIMD) and
+// gate on hasNEON; the dispatch guards the minimum length, so each runs at least
+// one full vector block and absorbs the (n mod block) tail with an overlapping
+// final block (dst and src have distinct element types and cannot alias, so the
+// re-store of identical values is safe). Every new vector op is hand-encoded as
+// WORD with its decoded GNU mnemonic; TestArm64WordEncodings cross-checks each.
+// -----------------------------------------------------------------------------
+
+// func quantizeNEON(dst []int8, src []float32, scale float32, zeroPoint int8)
+// dst[i] = clamp(rne(src[i]/scale) + zeroPoint, -128, 127), 16 lanes/iteration.
+// The clamp bounds lo=-128-zp and hi=127-zp are built as int32 then converted to
+// float32 (SCVTF, exact); FMAX/FMIN propagate NaN so FCVTNS(NaN)=0 lands on
+// zeroPoint, and they map +Inf to hi (=127 after +zp) and -Inf to lo (=-128).
+// FCVTNS rounds to nearest even. The int32 lanes are narrowed to int8 with
+// SQXTN/SQXTN2 (saturation is a no-op since they are already in range).
+TEXT ·quantizeNEON(SB), NOSPLIT, $0-53
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+
+    MOVWU scale+48(FP), R5
+    WORD $0x4E040CA4              // DUP V4.4S, W5    (scale x4)
+    MOVB zeroPoint+52(FP), R6
+    WORD $0x4E040CC7              // DUP V7.4S, W6    (zeroPoint int32 x4)
+    MOVD $-128, R7
+    SUB  R6, R7, R7              // R7 = -128 - zp
+    WORD $0x4E040CE5              // DUP V5.4S, W7    (lo int32 x4)
+    WORD $0x4E21D8A5              // SCVTF V5.4S, V5.4S  (lo -> float32)
+    MOVD $127, R8
+    SUB  R6, R8, R8             // R8 = 127 - zp
+    WORD $0x4E040D06             // DUP V6.4S, W8    (hi int32 x4)
+    WORD $0x4E21D8C6             // SCVTF V6.4S, V6.4S  (hi -> float32)
+
+    LSR  $4, R3, R4             // R4 = n / 16
+    CBZ  R4, quant_tail
+
+quant_loop16:
+    VLD1.P 64(R1), [V0.S4, V1.S4, V2.S4, V3.S4]  // 16 float32
+    WORD $0x6E24FC00             // FDIV V0.4S, V0.4S, V4.4S
+    WORD $0x6E24FC21             // FDIV V1.4S, V1.4S, V4.4S
+    WORD $0x6E24FC42             // FDIV V2.4S, V2.4S, V4.4S
+    WORD $0x6E24FC63             // FDIV V3.4S, V3.4S, V4.4S
+    WORD $0x4E25F400             // FMAX V0.4S, V0.4S, V5.4S
+    WORD $0x4E25F421             // FMAX V1.4S, V1.4S, V5.4S
+    WORD $0x4E25F442             // FMAX V2.4S, V2.4S, V5.4S
+    WORD $0x4E25F463             // FMAX V3.4S, V3.4S, V5.4S
+    WORD $0x4EA6F400             // FMIN V0.4S, V0.4S, V6.4S
+    WORD $0x4EA6F421             // FMIN V1.4S, V1.4S, V6.4S
+    WORD $0x4EA6F442             // FMIN V2.4S, V2.4S, V6.4S
+    WORD $0x4EA6F463             // FMIN V3.4S, V3.4S, V6.4S
+    WORD $0x4E21A800             // FCVTNS V0.4S, V0.4S
+    WORD $0x4E21A821             // FCVTNS V1.4S, V1.4S
+    WORD $0x4E21A842             // FCVTNS V2.4S, V2.4S
+    WORD $0x4E21A863             // FCVTNS V3.4S, V3.4S
+    WORD $0x4EA78400             // ADD V0.4S, V0.4S, V7.4S
+    WORD $0x4EA78421             // ADD V1.4S, V1.4S, V7.4S
+    WORD $0x4EA78442             // ADD V2.4S, V2.4S, V7.4S
+    WORD $0x4EA78463             // ADD V3.4S, V3.4S, V7.4S
+    WORD $0x0E614800             // SQXTN V0.4H, V0.4S
+    WORD $0x4E614820             // SQXTN2 V0.8H, V1.4S
+    WORD $0x0E614841             // SQXTN V1.4H, V2.4S
+    WORD $0x4E614861             // SQXTN2 V1.8H, V3.4S
+    WORD $0x0E214800             // SQXTN V0.8B, V0.8H
+    WORD $0x4E214820             // SQXTN2 V0.16B, V1.8H
+    VST1.P [V0.B16], 16(R0)     // 16 int8
+    SUB  $1, R4
+    CBNZ R4, quant_loop16
+
+quant_tail:
+    AND  $15, R3, R5           // n % 16
+    CBZ  R5, quant_done
+    SUB  $16, R3, R6           // n - 16
+    LSL  $2, R6, R7            // (n-16) * 4 src bytes
+    MOVD src_base+24(FP), R1
+    ADD  R7, R1, R1           // &src[n-16]
+    MOVD dst_base+0(FP), R0
+    ADD  R6, R0, R0           // &dst[n-16]
+    VLD1.P 64(R1), [V0.S4, V1.S4, V2.S4, V3.S4]
+    WORD $0x6E24FC00             // FDIV V0.4S, V0.4S, V4.4S
+    WORD $0x6E24FC21             // FDIV V1.4S, V1.4S, V4.4S
+    WORD $0x6E24FC42             // FDIV V2.4S, V2.4S, V4.4S
+    WORD $0x6E24FC63             // FDIV V3.4S, V3.4S, V4.4S
+    WORD $0x4E25F400             // FMAX V0.4S, V0.4S, V5.4S
+    WORD $0x4E25F421             // FMAX V1.4S, V1.4S, V5.4S
+    WORD $0x4E25F442             // FMAX V2.4S, V2.4S, V5.4S
+    WORD $0x4E25F463             // FMAX V3.4S, V3.4S, V5.4S
+    WORD $0x4EA6F400             // FMIN V0.4S, V0.4S, V6.4S
+    WORD $0x4EA6F421             // FMIN V1.4S, V1.4S, V6.4S
+    WORD $0x4EA6F442             // FMIN V2.4S, V2.4S, V6.4S
+    WORD $0x4EA6F463             // FMIN V3.4S, V3.4S, V6.4S
+    WORD $0x4E21A800             // FCVTNS V0.4S, V0.4S
+    WORD $0x4E21A821             // FCVTNS V1.4S, V1.4S
+    WORD $0x4E21A842             // FCVTNS V2.4S, V2.4S
+    WORD $0x4E21A863             // FCVTNS V3.4S, V3.4S
+    WORD $0x4EA78400             // ADD V0.4S, V0.4S, V7.4S
+    WORD $0x4EA78421             // ADD V1.4S, V1.4S, V7.4S
+    WORD $0x4EA78442             // ADD V2.4S, V2.4S, V7.4S
+    WORD $0x4EA78463             // ADD V3.4S, V3.4S, V7.4S
+    WORD $0x0E614800             // SQXTN V0.4H, V0.4S
+    WORD $0x4E614820             // SQXTN2 V0.8H, V1.4S
+    WORD $0x0E614841             // SQXTN V1.4H, V2.4S
+    WORD $0x4E614861             // SQXTN2 V1.8H, V3.4S
+    WORD $0x0E214800             // SQXTN V0.8B, V0.8H
+    WORD $0x4E214820             // SQXTN2 V0.16B, V1.8H
+    VST1 [V0.B16], (R0)
+
+quant_done:
+    RET
+
+// func dequantizeNEON(dst []float32, src []int8, scale float32, zeroPoint int8)
+// dst[i] = float32(int32(src[i]) - zeroPoint) * scale, 8 lanes/iteration. SXTL
+// widens int8 -> int16 -> int32; the subtract is exact and SCVTF is exact
+// (|x-zp| <= 255), so the single FMUL is the only rounding.
+TEXT ·dequantizeNEON(SB), NOSPLIT, $0-53
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3    // n (== len(src); the two kernels agree with quantize/requantize)
+    MOVD src_base+24(FP), R1
+
+    MOVWU scale+48(FP), R5
+    WORD $0x4E040CA4              // DUP V4.4S, W5    (scale x4)
+    MOVB zeroPoint+52(FP), R6
+    WORD $0x4E040CC5              // DUP V5.4S, W6    (zeroPoint int32 x4)
+
+    LSR  $3, R3, R4             // R4 = n / 8
+    CBZ  R4, dequant_tail
+
+dequant_loop8:
+    VLD1.P 8(R1), [V0.B8]       // 8 int8
+    WORD $0x0F08A400             // SXTL V0.8H, V0.8B   (8 int8 -> 8 int16)
+    WORD $0x0F10A401             // SXTL V1.4S, V0.4H   (low 4 -> int32)
+    WORD $0x4F10A402             // SXTL2 V2.4S, V0.8H  (high 4 -> int32)
+    WORD $0x6EA58421             // SUB V1.4S, V1.4S, V5.4S   (- zeroPoint)
+    WORD $0x6EA58442             // SUB V2.4S, V2.4S, V5.4S
+    WORD $0x4E21D821             // SCVTF V1.4S, V1.4S  (-> float32)
+    WORD $0x4E21D842             // SCVTF V2.4S, V2.4S
+    WORD $0x6E24DC21             // FMUL V1.4S, V1.4S, V4.4S  (* scale)
+    WORD $0x6E24DC42             // FMUL V2.4S, V2.4S, V4.4S
+    VST1.P [V1.S4, V2.S4], 32(R0)  // 8 float32
+    SUB  $1, R4
+    CBNZ R4, dequant_loop8
+
+dequant_tail:
+    AND  $7, R3, R5            // n % 8
+    CBZ  R5, dequant_done
+    SUB  $8, R3, R6           // n - 8
+    MOVD src_base+24(FP), R1
+    ADD  R6, R1, R1          // &src[n-8]
+    LSL  $2, R6, R7          // (n-8) * 4 dst bytes
+    MOVD dst_base+0(FP), R0
+    ADD  R7, R0, R0         // &dst[n-8]
+    VLD1 (R1), [V0.B8]
+    WORD $0x0F08A400             // SXTL V0.8H, V0.8B
+    WORD $0x0F10A401             // SXTL V1.4S, V0.4H
+    WORD $0x4F10A402             // SXTL2 V2.4S, V0.8H
+    WORD $0x6EA58421             // SUB V1.4S, V1.4S, V5.4S
+    WORD $0x6EA58442             // SUB V2.4S, V2.4S, V5.4S
+    WORD $0x4E21D821             // SCVTF V1.4S, V1.4S
+    WORD $0x4E21D842             // SCVTF V2.4S, V2.4S
+    WORD $0x6E24DC21             // FMUL V1.4S, V1.4S, V4.4S
+    WORD $0x6E24DC42             // FMUL V2.4S, V2.4S, V4.4S
+    VST1 [V1.S4, V2.S4], (R0)
+
+dequant_done:
+    RET
+
+// func requantizeNEON(dst []int8, acc []int32, multiplier int32, shift int, zeroPoint int8)
+// The gemmlowp double-rounding epilogue, 8 lanes/iteration. left = max(shift,0)
+// feeds SSHL; -right = min(shift,0) feeds SRSHL. SQRDMULH is exactly SRDHM
+// (including the saturation guard). RoundingDivideByPOT is the gemmlowp NEON
+// trick: fixup = (y & shiftVec) >> 31 (SSHR), which is -1 for negative y only
+// when right > 0 (shiftVec = -right is 0 at right==0, so the AND zeroes the
+// fixup and the divide is an exact identity, per caution A); then SQADD the
+// fixup and SRSHL by -right. The zeroPoint SQADD plus the SQXTN/SQXTN2
+// narrow-saturate is the clamp to int8.
+TEXT ·requantizeNEON(SB), NOSPLIT, $0-65
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD acc_base+24(FP), R1
+
+    MOVW multiplier+48(FP), R5
+    WORD $0x4E040CA4              // DUP V4.4S, W5    (multiplier x4)
+    MOVD shift+56(FP), R6
+    MOVD $0, R7
+    CMP  $0, R6
+    CSEL GT, R6, R7, R8          // R8 = max(shift, 0) = left
+    CSEL LT, R6, R7, R11         // R11 = min(shift, 0) = -right
+    MOVB zeroPoint+64(FP), R12
+    WORD $0x4E040D05             // DUP V5.4S, W8    (left x4)
+    WORD $0x4E040D66             // DUP V6.4S, W11   (-right x4)
+    WORD $0x4E040D87             // DUP V7.4S, W12   (zeroPoint int32 x4)
+
+    LSR  $3, R3, R4             // R4 = n / 8
+    CBZ  R4, requant_tail
+
+requant_loop8:
+    VLD1.P 32(R1), [V0.S4, V1.S4]  // 8 int32
+    WORD $0x4EA54400             // SSHL V0.4S, V0.4S, V5.4S    (x = acc << left)
+    WORD $0x4EA54421             // SSHL V1.4S, V1.4S, V5.4S
+    WORD $0x6EA4B400             // SQRDMULH V0.4S, V0.4S, V4.4S  (y = SRDHM)
+    WORD $0x6EA4B421             // SQRDMULH V1.4S, V1.4S, V4.4S
+    WORD $0x4E261C10             // AND V16.16B, V0.16B, V6.16B   (y & shiftVec)
+    WORD $0x4E261C31             // AND V17.16B, V1.16B, V6.16B
+    WORD $0x4F210610             // SSHR V16.4S, V16.4S, #31      (fixup)
+    WORD $0x4F210631             // SSHR V17.4S, V17.4S, #31
+    WORD $0x4EB00C00             // SQADD V0.4S, V0.4S, V16.4S    (y + fixup)
+    WORD $0x4EB10C21             // SQADD V1.4S, V1.4S, V17.4S
+    WORD $0x4EA65400             // SRSHL V0.4S, V0.4S, V6.4S     (rounding >> right)
+    WORD $0x4EA65421             // SRSHL V1.4S, V1.4S, V6.4S
+    WORD $0x4EA70C00             // SQADD V0.4S, V0.4S, V7.4S     (+ zeroPoint)
+    WORD $0x4EA70C21             // SQADD V1.4S, V1.4S, V7.4S
+    WORD $0x0E614800             // SQXTN V0.4H, V0.4S            (narrow-saturate)
+    WORD $0x4E614820             // SQXTN2 V0.8H, V1.4S
+    WORD $0x0E214800             // SQXTN V0.8B, V0.8H
+    VST1.P [V0.B8], 8(R0)       // 8 int8
+    SUB  $1, R4
+    CBNZ R4, requant_loop8
+
+requant_tail:
+    AND  $7, R3, R5            // n % 8
+    CBZ  R5, requant_done
+    SUB  $8, R3, R6           // n - 8
+    LSL  $2, R6, R7           // (n-8) * 4 acc bytes
+    MOVD acc_base+24(FP), R1
+    ADD  R7, R1, R1          // &acc[n-8]
+    MOVD dst_base+0(FP), R0
+    ADD  R6, R0, R0         // &dst[n-8]
+    VLD1 (R1), [V0.S4, V1.S4]
+    WORD $0x4EA54400             // SSHL V0.4S, V0.4S, V5.4S
+    WORD $0x4EA54421             // SSHL V1.4S, V1.4S, V5.4S
+    WORD $0x6EA4B400             // SQRDMULH V0.4S, V0.4S, V4.4S
+    WORD $0x6EA4B421             // SQRDMULH V1.4S, V1.4S, V4.4S
+    WORD $0x4E261C10             // AND V16.16B, V0.16B, V6.16B
+    WORD $0x4E261C31             // AND V17.16B, V1.16B, V6.16B
+    WORD $0x4F210610             // SSHR V16.4S, V16.4S, #31
+    WORD $0x4F210631             // SSHR V17.4S, V17.4S, #31
+    WORD $0x4EB00C00             // SQADD V0.4S, V0.4S, V16.4S
+    WORD $0x4EB10C21             // SQADD V1.4S, V1.4S, V17.4S
+    WORD $0x4EA65400             // SRSHL V0.4S, V0.4S, V6.4S
+    WORD $0x4EA65421             // SRSHL V1.4S, V1.4S, V6.4S
+    WORD $0x4EA70C00             // SQADD V0.4S, V0.4S, V7.4S
+    WORD $0x4EA70C21             // SQADD V1.4S, V1.4S, V7.4S
+    WORD $0x0E614800             // SQXTN V0.4H, V0.4S
+    WORD $0x4E614820             // SQXTN2 V0.8H, V1.4S
+    WORD $0x0E214800             // SQXTN V0.8B, V0.8H
+    VST1 [V0.B8], (R0)
+
+requant_done:
+    RET

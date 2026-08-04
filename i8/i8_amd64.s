@@ -1230,3 +1230,291 @@ sad_done:
     MOVL AX, ret+48(FP)
     VZEROUPPER
     RET
+
+// -----------------------------------------------------------------------------
+// Quantization kernels (Part of #132). All three are AVX2 and gate on hasAVX2
+// in i8_amd64.go; the dispatch guards the minimum length, so each runs at least
+// one full vector block and absorbs the (n mod block) tail with an overlapping
+// final block (dst and src have distinct element types and cannot alias, so the
+// re-store of identical values is safe). The Go assembler's 3-operand AVX order
+// is dst-last. No hand-encoded directives; every mnemonic is assembler-native.
+// -----------------------------------------------------------------------------
+
+// func quantizeAVX2(dst []int8, src []float32, scale float32, zeroPoint int8)
+// dst[i] = clamp(rne(src[i]/scale) + zeroPoint, -128, 127), 16 lanes/iteration.
+// The clamp bounds lo=-128-zp and hi=127-zp are built as int32 then converted to
+// float32 (exact, both in [-255,255]); clamping the float before VCVTPS2DQ is
+// equivalent to rounding then clamping because RNE is monotone and the bounds are
+// exactly representable integers. NaN is scrubbed to 0.0 (self-compare + AND) so
+// it lands on zeroPoint; +Inf clamps to hi (=127 after +zp), -Inf to lo (=-128).
+// The int8 pack is written fresh (not reused from f32's int16 packer): VPACKSSDW
+// then VPERMQ linearizes the int16, VPACKSSWB then VPERMQ linearizes the int8, so
+// the 16 output bytes are in source order (proven by the caution-B ramp test).
+TEXT ·quantizeAVX2(SB), NOSPLIT, $0-53
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    VBROADCASTSS scale+48(FP), Y3   // scale x8
+    MOVBLSX zeroPoint+52(FP), BX    // zp (sign-extended int32)
+    MOVL $-128, AX
+    SUBL BX, AX                     // AX = -128 - zp = lo (int32)
+    VMOVD AX, X4
+    VPBROADCASTD X4, Y4
+    VCVTDQ2PS Y4, Y4                // loVec (float32)
+    MOVL $127, AX
+    SUBL BX, AX                     // AX = 127 - zp = hi (int32)
+    VMOVD AX, X5
+    VPBROADCASTD X5, Y5
+    VCVTDQ2PS Y5, Y5                // hiVec (float32)
+    VMOVD BX, X6
+    VPBROADCASTD X6, Y6             // zpVec (int32)
+
+    MOVQ CX, AX
+    SHRQ $4, AX                     // AX = n / 16
+    JZ   quant_tail
+
+quant_loop16:
+    VMOVUPS (SI), Y0                // src[0..7]
+    VMOVUPS 32(SI), Y1             // src[8..15]
+    VDIVPS Y3, Y0, Y0              // src / scale
+    VDIVPS Y3, Y1, Y1
+    VCMPPS $0, Y0, Y0, Y7         // EQ_OQ self: 0 for NaN lanes
+    VANDPS Y7, Y0, Y0             // NaN -> 0.0
+    VCMPPS $0, Y1, Y1, Y7
+    VANDPS Y7, Y1, Y1
+    VMAXPS Y4, Y0, Y0             // max(x, lo)
+    VMINPS Y5, Y0, Y0             // min(., hi)
+    VMAXPS Y4, Y1, Y1
+    VMINPS Y5, Y1, Y1
+    VCVTPS2DQ Y0, Y0              // round nearest-even -> int32
+    VCVTPS2DQ Y1, Y1
+    VPADDD Y6, Y0, Y0            // + zeroPoint
+    VPADDD Y6, Y1, Y1
+    VPACKSSDW Y1, Y0, Y2         // int32 -> int16 (lane-interleaved)
+    VPERMQ $0xD8, Y2, Y2         // linearize int16
+    VPACKSSWB Y2, Y2, Y2         // int16 -> int8
+    VPERMQ $0xD8, Y2, Y2         // linearize: low 128 = 16 int8 in order
+    VMOVDQU X2, (DX)
+    ADDQ $64, SI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ  quant_loop16
+
+quant_tail:
+    ANDQ $15, CX                  // n % 16
+    JZ   quant_done
+    MOVQ src_base+24(FP), SI      // reload bases
+    MOVQ dst_len+8(FP), AX        // n
+    LEAQ -16(AX), BX              // n - 16
+    LEAQ (SI)(BX*4), SI          // &src[n-16]
+    MOVQ dst_base+0(FP), DX
+    ADDQ BX, DX                  // &dst[n-16]
+    VMOVUPS (SI), Y0
+    VMOVUPS 32(SI), Y1
+    VDIVPS Y3, Y0, Y0
+    VDIVPS Y3, Y1, Y1
+    VCMPPS $0, Y0, Y0, Y7
+    VANDPS Y7, Y0, Y0
+    VCMPPS $0, Y1, Y1, Y7
+    VANDPS Y7, Y1, Y1
+    VMAXPS Y4, Y0, Y0
+    VMINPS Y5, Y0, Y0
+    VMAXPS Y4, Y1, Y1
+    VMINPS Y5, Y1, Y1
+    VCVTPS2DQ Y0, Y0
+    VCVTPS2DQ Y1, Y1
+    VPADDD Y6, Y0, Y0
+    VPADDD Y6, Y1, Y1
+    VPACKSSDW Y1, Y0, Y2
+    VPERMQ $0xD8, Y2, Y2
+    VPACKSSWB Y2, Y2, Y2
+    VPERMQ $0xD8, Y2, Y2
+    VMOVDQU X2, (DX)
+
+quant_done:
+    VZEROUPPER
+    RET
+
+// func dequantizeAVX2(dst []float32, src []int8, scale float32, zeroPoint int8)
+// dst[i] = float32(int32(src[i]) - zeroPoint) * scale, 8 lanes/iteration. The
+// subtraction is exact and the int->float convert is exact (|x-zp| <= 255), so
+// the single VMULPS is the only rounding.
+TEXT ·dequantizeAVX2(SB), NOSPLIT, $0-53
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    VBROADCASTSS scale+48(FP), Y3   // scale x8
+    MOVBLSX zeroPoint+52(FP), BX
+    VMOVD BX, X4
+    VPBROADCASTD X4, Y4             // zpVec (int32)
+
+    MOVQ CX, AX
+    SHRQ $3, AX                     // AX = n / 8
+    JZ   dequant_tail
+
+dequant_loop8:
+    VPMOVSXBD (SI), Y0             // 8 int8 -> 8 int32
+    VPSUBD Y4, Y0, Y0             // - zeroPoint
+    VCVTDQ2PS Y0, Y0             // -> float32
+    VMULPS Y3, Y0, Y0           // * scale
+    VMOVUPS Y0, (DX)
+    ADDQ $8, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  dequant_loop8
+
+dequant_tail:
+    ANDQ $7, CX                   // n % 8
+    JZ   dequant_done
+    MOVQ src_base+24(FP), SI
+    MOVQ dst_len+8(FP), AX        // n
+    LEAQ -8(AX), BX              // n - 8
+    ADDQ BX, SI                 // &src[n-8]
+    MOVQ dst_base+0(FP), DX
+    LEAQ (DX)(BX*4), DX         // &dst[n-8]
+    VPMOVSXBD (SI), Y0
+    VPSUBD Y4, Y0, Y0
+    VCVTDQ2PS Y0, Y0
+    VMULPS Y3, Y0, Y0
+    VMOVUPS Y0, (DX)
+
+dequant_done:
+    VZEROUPPER
+    RET
+
+// func requantizeAVX2(dst []int8, acc []int32, multiplier int32, shift int, zeroPoint int8)
+// The gemmlowp double-rounding epilogue, 8 lanes/iteration. left = max(shift,0)
+// and right = max(-shift,0); the out-of-contract reroute in i8_amd64.go keeps
+// multiplier != MinInt32 and shift in [-31,30], so the SRDHM saturation guard is
+// never needed and the products cannot wrap. SRDHM reuses i32 scaleQ31AVX2's
+// VPMULDQ even/odd recipe with a (1<<30) nudge added before VPSRLQ $31 (the low
+// 32 bits of the logical shift equal the arithmetic shift at shift 31).
+// RoundingDivideByPOT is done branch-free: q = y>>right (VPSRAVD), and the
+// round-half-away increment is q - ((y&mask) > (mask>>1) - sign(y)). At right==0
+// the mask is 0 so the remainder is 0 and no increment fires, giving the exact
+// identity. The clamp is applied BEFORE the +zp (VPADDD wraps, so z+zp could
+// overflow int32); the bounds are -128-zp and 127-zp.
+TEXT ·requantizeAVX2(SB), NOSPLIT, $0-65
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), DI          // n
+    MOVQ acc_base+24(FP), SI
+
+    MOVL multiplier+48(FP), AX
+    VMOVD AX, X0
+    VPBROADCASTD X0, Y6            // multiplier x8 (int32)
+
+    MOVQ shift+56(FP), BX          // shift (int64)
+    XORQ CX, CX
+    MOVQ BX, R9
+    CMPQ R9, CX
+    CMOVQLT CX, R9                // R9 = max(shift, 0) = left
+    MOVQ CX, R10
+    SUBQ BX, R10                  // -shift
+    CMPQ R10, CX
+    CMOVQLT CX, R10               // R10 = max(-shift, 0) = right
+
+    VMOVD R9, X1
+    VPBROADCASTD X1, Y7           // leftVec (int32, all lanes = left)
+    VMOVD R10, X2
+    VPBROADCASTD X2, Y8           // rightVec (int32, all lanes = right)
+
+    MOVQ $0x40000000, AX          // 1<<30 nudge
+    VMOVQ AX, X3
+    VPBROADCASTQ X3, Y9           // nudgeVec (int64 x4)
+
+    MOVL $1, AX
+    MOVQ R10, CX                  // CX = right (shift count in CL)
+    SHLL CX, AX                   // 1 << right
+    DECL AX                       // mask = (1<<right) - 1
+    MOVL AX, BX
+    SARL $1, BX                   // halfmask = mask >> 1
+    VMOVD AX, X4
+    VPBROADCASTD X4, Y10          // maskVec (int32)
+    VMOVD BX, X5
+    VPBROADCASTD X5, Y11          // halfVec (int32)
+
+    MOVBLSX zeroPoint+64(FP), BX  // zp (int32)
+    MOVL $-128, AX
+    SUBL BX, AX
+    VMOVD AX, X0
+    VPBROADCASTD X0, Y12          // loVec = -128 - zp
+    MOVL $127, AX
+    SUBL BX, AX
+    VMOVD AX, X1
+    VPBROADCASTD X1, Y13          // hiVec = 127 - zp
+    VMOVD BX, X2
+    VPBROADCASTD X2, Y14          // zpVec
+
+    MOVQ DI, AX
+    SHRQ $3, AX                   // AX = n / 8
+    JZ   requant_tail
+
+requant_loop8:
+    VMOVDQU (SI), Y0              // acc[0..7]
+    VPSLLVD Y7, Y0, Y0           // x = acc << left
+    VPMULDQ Y6, Y0, Y1          // even-lane products (int64)
+    VPSRLQ $32, Y0, Y2          // slide odd lanes into even positions
+    VPMULDQ Y6, Y2, Y2          // odd-lane products (int64)
+    VPADDQ Y9, Y1, Y1           // + nudge (even)
+    VPADDQ Y9, Y2, Y2           // + nudge (odd)
+    VPSRLQ $31, Y1, Y1          // low 32 = even SRDHM results
+    VPSRLQ $31, Y2, Y2          // low 32 = odd SRDHM results
+    VPSLLQ $32, Y2, Y2          // lift odd results to positions 1,3,5,7
+    VPBLENDD $0xAA, Y2, Y1, Y0  // y = merge even/odd
+    VPSRAVD Y8, Y0, Y1          // q = y >> right (arithmetic)
+    VPAND Y10, Y0, Y2           // rem = y & mask
+    VPSRAD $31, Y0, Y3          // sign = y >> 31 (all ones if negative)
+    VPSUBD Y3, Y11, Y3          // thr = halfmask - sign  (+1 when y<0)
+    VPCMPGTD Y3, Y2, Y2         // cmp = (rem > thr) ? -1 : 0
+    VPSUBD Y2, Y1, Y0           // z = q - cmp  (+1 when rem>thr)
+    VPMAXSD Y12, Y0, Y0         // clamp low  (>= -128-zp)
+    VPMINSD Y13, Y0, Y0         // clamp high (<= 127-zp)
+    VPADDD Y14, Y0, Y0          // + zeroPoint -> [-128,127]
+    VPACKSSDW Y0, Y0, Y0        // int32 -> int16
+    VPERMQ $0x08, Y0, Y0        // low 128 = [z0..z7] int16
+    VPACKSSWB Y0, Y0, Y0        // low 64 = [z0..z7] int8
+    VMOVQ X0, (DX)
+    ADDQ $32, SI
+    ADDQ $8, DX
+    DECQ AX
+    JNZ  requant_loop8
+
+requant_tail:
+    MOVQ DI, AX
+    ANDQ $7, AX                  // n % 8
+    JZ   requant_done
+    MOVQ acc_base+24(FP), SI
+    MOVQ dst_base+0(FP), DX
+    LEAQ -8(DI), BX             // n - 8
+    LEAQ (SI)(BX*4), SI        // &acc[n-8]
+    ADDQ BX, DX                // &dst[n-8]
+    VMOVDQU (SI), Y0
+    VPSLLVD Y7, Y0, Y0
+    VPMULDQ Y6, Y0, Y1
+    VPSRLQ $32, Y0, Y2
+    VPMULDQ Y6, Y2, Y2
+    VPADDQ Y9, Y1, Y1
+    VPADDQ Y9, Y2, Y2
+    VPSRLQ $31, Y1, Y1
+    VPSRLQ $31, Y2, Y2
+    VPSLLQ $32, Y2, Y2
+    VPBLENDD $0xAA, Y2, Y1, Y0
+    VPSRAVD Y8, Y0, Y1
+    VPAND Y10, Y0, Y2
+    VPSRAD $31, Y0, Y3
+    VPSUBD Y3, Y11, Y3
+    VPCMPGTD Y3, Y2, Y2
+    VPSUBD Y2, Y1, Y0
+    VPMAXSD Y12, Y0, Y0
+    VPMINSD Y13, Y0, Y0
+    VPADDD Y14, Y0, Y0
+    VPACKSSDW Y0, Y0, Y0
+    VPERMQ $0x08, Y0, Y0
+    VPACKSSWB Y0, Y0, Y0
+    VMOVQ X0, (DX)
+
+requant_done:
+    VZEROUPPER
+    RET

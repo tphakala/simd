@@ -173,3 +173,119 @@ func minMaxGo(a []int8) (minVal, maxVal int8) {
 	}
 	return lo, hi
 }
+
+// -----------------------------------------------------------------------------
+// Quantization references (Part of #132).
+//
+// These pure-Go implementations are the source of truth for the Quantize,
+// Dequantize and Requantize kernels; every SIMD path is validated bit-exact
+// against them. The semantics follow the ONNX / PyTorch / TFLite per-tensor
+// affine convention: a real value r maps to a quantized value q via
+// q = clamp(round(r/scale) + zeroPoint, -128, 127), and back via
+// r = (q - zeroPoint) * scale.
+// -----------------------------------------------------------------------------
+
+// srdhmNudge is the rounding constant added before the Q31 shift in
+// SaturatingRoundingDoublingHighMul: it rounds the doubled high-multiply to
+// nearest, ties toward +infinity (gemmlowp semantics).
+const srdhmNudge = 1 << 30
+
+// srdhmShift is the Q31 fixed-point position: the doubled 64-bit product is
+// shifted right by 31 to land its high half back in int32 range.
+const srdhmShift = 31
+
+// srdhm is gemmlowp's SaturatingRoundingDoublingHighMul: the high 32 bits of
+// 2*x*multiplier, rounded to nearest with ties toward +infinity. The only
+// saturating case is x == multiplier == math.MinInt32, whose true value 2^31
+// saturates to math.MaxInt32. For every other input the doubled product fits in
+// int64, and the Go arithmetic shift computes the floor gemmlowp specifies.
+func srdhm(x, multiplier int32) int32 {
+	if x == math.MinInt32 && multiplier == math.MinInt32 {
+		return math.MaxInt32
+	}
+	return int32((int64(x)*int64(multiplier) + srdhmNudge) >> srdhmShift)
+}
+
+// rdbpot is gemmlowp's RoundingDivideByPOT: x divided by 2^exponent, rounded to
+// nearest with ties AWAY from zero. exponent is in [0, 31]. At exponent == 0 it
+// is the identity (the SIMD kernels depend on this being an exact pass-through,
+// including for negative x; see the NEON rounding-shift fixup).
+func rdbpot(x int32, exponent int) int32 {
+	if exponent == 0 {
+		return x
+	}
+	mask := int32(1)<<uint(exponent) - 1
+	remainder := x & mask
+	threshold := mask >> 1
+	if x < 0 {
+		threshold++
+	}
+	q := x >> uint(exponent)
+	if remainder > threshold {
+		q++
+	}
+	return q
+}
+
+// requantizeOutOfContract reports whether (multiplier, shift) fall outside the
+// domain the SIMD kernels support. multiplier == math.MinInt32 would trip the
+// srdhm saturation guard the kernels omit. shift is restricted to [-31, 30]: the
+// vector shift instructions leave a count of 32 or more undefined, and the upper
+// bound is held at 30, one step below the largest count (31) they still accept,
+// as a conservative margin rather than a hard hardware requirement. Out-of-domain
+// inputs route to requantizeGo, which handles them with full-width Go arithmetic.
+func requantizeOutOfContract(multiplier int32, shift int) bool {
+	return multiplier == math.MinInt32 || shift < -31 || shift > 30
+}
+
+// quantizeGo is the source of truth for Quantize: divide by scale, round to
+// nearest even, add the zero point and saturate to int8. NaN maps to zeroPoint;
+// +Inf saturates to 127 and -Inf to -128. Rounding then clamping is equivalent
+// to the kernels' clamp-then-round because round-to-even is monotone and the
+// bounds are exactly representable integers.
+func quantizeGo(dst []int8, src []float32, scale float32, zeroPoint int8) {
+	zp := int(zeroPoint)
+	lo, hi := float64(math.MinInt8-zp), float64(math.MaxInt8-zp)
+	for i := range dst {
+		q := src[i] / scale
+		if q != q { // NaN
+			dst[i] = zeroPoint
+			continue
+		}
+		r := math.RoundToEven(float64(q))
+		dst[i] = int8(int(min(max(r, lo), hi)) + zp)
+	}
+}
+
+// dequantizeGo is the source of truth for Dequantize: subtract the zero point
+// (exact int) then multiply by scale (the single rounding). |q - zeroPoint| is
+// at most 255, so the int-to-float conversion is exact.
+func dequantizeGo(dst []float32, src []int8, scale float32, zeroPoint int8) {
+	zp := int32(zeroPoint)
+	for i := range dst {
+		dst[i] = float32(int32(src[i])-zp) * scale
+	}
+}
+
+// requantizeGo is the source of truth for Requantize: the gemmlowp
+// double-rounding epilogue (left shift, SaturatingRoundingDoublingHighMul,
+// RoundingDivideByPOT), then add the zero point and saturate to int8. shift > 0
+// left-shifts the accumulator before the multiply; shift < 0 rounding-divides
+// after it.
+func requantizeGo(dst []int8, acc []int32, multiplier int32, shift int, zeroPoint int8) {
+	left := uint(0)
+	if shift > 0 {
+		left = uint(shift)
+	}
+	right := 0
+	if shift < 0 {
+		right = -shift
+	}
+	zp := int(zeroPoint)
+	for i := range dst {
+		x := acc[i] << left // wrapping int32 left shift
+		y := srdhm(x, multiplier)
+		z := rdbpot(y, right)
+		dst[i] = clampI8(int(z) + zp)
+	}
+}

@@ -683,7 +683,7 @@ The interleave kernels are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plu
 
 ### `i8` - int8 Operations
 
-SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-128..127` range makes element-wise arithmetic overflow almost immediately, so this package does not mirror the wrapping arithmetic of `i16`/`i32`. It ships the operations that are genuinely high-impact and well-defined at 8-bit width: saturating arithmetic, element-wise min/max/clamp and saturating abs/neg/abs-diff, int32-accumulated reductions, signed min/max, the per-tensor abs-max for dynamic quantization, and sign-extending widening.
+SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-128..127` range makes element-wise arithmetic overflow almost immediately, so this package does not mirror the wrapping arithmetic of `i16`/`i32`. It ships the operations that are genuinely high-impact and well-defined at 8-bit width: saturating arithmetic, element-wise min/max/clamp and saturating abs/neg/abs-diff, int32-accumulated reductions, signed min/max, the per-tensor abs-max for dynamic quantization, sign-extending widening, and the `float32 <-> int8` affine quantization boundary (`Quantize`/`Dequantize`/`Requantize`).
 
 | Category       | Function                   | Description                                                    | SIMD Width             |
 | -------------- | -------------------------- | -------------------------------------------------------------- | ---------------------- |
@@ -705,6 +705,9 @@ SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-1
 |                | `MaxAbs(a) int`            | Per-tensor abs-max (dynamic-quantization scale), range `[0,128]`| 32x (AVX2) / 16x (NEON)|
 |                | `SumAbs(a) int32`          | Sum of absolute values (L1 norm)                               | 32x (AVX2) / 16x (NEON)|
 |                | `SAD(a, b) int32`          | Sum of absolute differences (block matching / feature distance)| 32x (AVX2) / 16x (NEON)|
+| **Quantization**| `Quantize(dst, src, scale, zp)` | `float32 -> int8`: `clamp(rne(src/scale) + zp, -128, 127)` | 16x (AVX2) / 16x (NEON)|
+|                | `Dequantize(dst, src, scale, zp)`| `int8 -> float32`: `float32(src - zp) * scale`             | 8x (AVX2) / 8x (NEON)  |
+|                | `Requantize(dst, acc, mul, shift, zp)`| `int32 -> int8`: gemmlowp fixed-point rescale (Q31 multiplier + shift)| 8x (AVX2) / 8x (NEON)  |
 
 ```go
 import "github.com/tphakala/simd/i8"
@@ -734,11 +737,23 @@ dist := i8.SAD(a, b)       // sum of absolute differences |a[i]-b[i]|
 
 w16 := make([]int16, len(a))
 i8.ToInt16(w16, a) // sign-extend to int16 (exact)
+
+// Per-tensor affine quantization (ONNX / PyTorch / TFLite convention).
+f := []float32{ /* ... */ }
+acc := []int32{ /* matmul/conv accumulators */ }
+q := make([]int8, len(f))
+i8.Quantize(q, f, 0.05, -3)      // float32 -> int8: round(f/scale) + zeroPoint
+back := make([]float32, len(q))
+i8.Dequantize(back, q, 0.05, -3) // int8 -> float32: (q - zeroPoint) * scale
+out := make([]int8, len(acc))
+i8.Requantize(out, acc, 0x40000000, -2, 0) // int32 accumulator -> int8
 ```
 
 `AddSaturate`/`SubSaturate` (and the scalar-broadcast `AddScalarSaturate`/`SubScalarSaturate`) use single saturating instructions (`VPADDSB`/`VPSUBSB` on AVX2, `SQADD`/`SQSUB` on NEON) and clamp instead of wrapping, which is what 8-bit arithmetic almost always wants. The element-wise group is single-instruction too: `Min`/`Max` map to `VPMINSB`/`VPMAXSB` (`SMIN`/`SMAX` on NEON), `Clamp` broadcasts the bounds and applies max-then-min, and `Abs`/`Neg` saturate so `-128` maps to `127` (`SQABS`/`SQNEG` on NEON; `max(a, saturating(0-a))` and `saturating(0-a)` on AVX2). `AbsDiff` saturates `|a - b|` to `[0, 127]` (`SABD` then an unsigned min with 127 on NEON; `max(saturating(a-b), saturating(b-a))` on AVX2), and `MaxAbs` returns the per-tensor abs-max as `int` (range `[0, 128]`, since `|-128| = 128` does not fit `int8`) via `PABSB`+unsigned `PMAXUB` on AVX2 and `ABS`+`UMAXV` on NEON, which is the scale a dynamic quantizer needs. `SumAbs` (L1 norm) and `SAD` (sum of absolute differences, the block-matching reduction) accumulate in int32 via `PSADBW` on AVX2 (`SAD` offsets both operands by 128 so the unsigned `PSADBW` yields the true signed `|a-b|`) and `ABS`/`SABD` + `UADDLP`/`UADALP` on NEON. `Sum` and `DotProduct` accumulate in int32 with two's-complement wraparound; since int32 wrapping addition is associative, the lane-parallel SIMD reductions are bit-identical to the scalar reference regardless of summation order, and the int8 products never overflow their lane (`|int8 * int8| <= 16384`). `DotProduct` is the inner loop of quantized matmul/convolution: on AVX2 it widens with `VPMOVSXBW` and reduces with `VPMADDWD`; on ARM64 with `FEAT_DotProd` it uses `SDOT` (16 multiply-accumulates per instruction), falling back to a `SMULL`/`SADALP` base-NEON path on cores without it. All operations are zero-allocation and bit-exact against the pure-Go reference.
 
-> **Planned follow-ups:** `float32 <-> int8` affine `Quantize`/`Dequantize` (scale + zero-point), an AVX-512 VNNI (`VPDPBUSD`) `DotProduct` fast path, and 8-bit channel `Interleave2`/`Deinterleave2`.
+`Quantize`/`Dequantize`/`Requantize` are the signed per-tensor affine boundary of a quantized pipeline (the ONNX / PyTorch / TFLite convention `q = round(r/scale) + zeroPoint`, `r = (q - zeroPoint) * scale`). `Quantize` uses a genuine IEEE-754 float32 divide (not a reciprocal multiply) and round-half-to-even, so the documented formula is literally true and the result is bit-identical across Go, AVX2 (`VDIVPS` + `VCVTPS2DQ`) and NEON (`FDIV` + `FCVTNS`); NaN maps to the zero point, `+Inf` saturates to `127` and `-Inf` to `-128`. `Dequantize` is an exact int subtract plus a single multiply (the only rounding), also bit-identical across all three. `Requantize` rescales an int32 accumulator with the gemmlowp / TFLite double-rounding epilogue: a left shift, `SaturatingRoundingDoublingHighMul` against a Q31 multiplier (`SQRDMULH` on NEON; the `i32` `VPMULDQ` high-mul recipe with a rounding nudge on AVX2), then `RoundingDivideByPOT` with ties away from zero, and a final clamp to int8. Out-of-contract inputs (`multiplier == math.MinInt32`, or a shift outside `[-31, 30]`) fall back to the full-width Go path. All three are validated bit-exact against their pure-Go references by parity sweeps, known-answer tables and differential fuzzing on both architectures.
+
+> **Planned follow-ups:** per-channel `Quantize`/`Dequantize` (per-axis scale + zero-point) and a fused `DotProduct`-plus-`Requantize` matmul epilogue, an AVX-512 VNNI (`VPDPBUSD`) `DotProduct` fast path, and 8-bit channel `Interleave2`/`Deinterleave2`.
 
 ## Performance
 

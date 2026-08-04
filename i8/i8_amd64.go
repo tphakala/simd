@@ -211,3 +211,46 @@ func sumAbsAVX2(a []int8) int32
 
 //go:noescape
 func sadAVX2(a, b []int8) int32
+
+// Quantization dispatch (Part of #132). The AVX2 kernels process 16/8/8 lanes
+// per iteration; shorter slices use the pure-Go reference. Requantize also
+// routes out-of-contract inputs (multiplier == math.MinInt32, or shift outside
+// [-31, 30]) to Go, since the kernel assumes the sane domain.
+const (
+	blockQuant   = 16 // quantizeAVX2 packs 16 int8 per iteration
+	blockDequant = 8  // dequantizeAVX2 widens 8 int8 per iteration
+	blockRequant = 8  // requantizeAVX2 processes 8 int32 per iteration
+)
+
+func quantizeI8(dst []int8, src []float32, scale float32, zeroPoint int8) {
+	if hasAVX2 && len(dst) >= blockQuant {
+		quantizeAVX2(dst, src, scale, zeroPoint)
+		return
+	}
+	quantizeGo(dst, src, scale, zeroPoint)
+}
+
+func dequantizeI8(dst []float32, src []int8, scale float32, zeroPoint int8) {
+	if hasAVX2 && len(dst) >= blockDequant {
+		dequantizeAVX2(dst, src, scale, zeroPoint)
+		return
+	}
+	dequantizeGo(dst, src, scale, zeroPoint)
+}
+
+func requantizeI8(dst []int8, acc []int32, multiplier int32, shift int, zeroPoint int8) {
+	if hasAVX2 && !requantizeOutOfContract(multiplier, shift) && len(dst) >= blockRequant {
+		requantizeAVX2(dst, acc, multiplier, shift, zeroPoint)
+		return
+	}
+	requantizeGo(dst, acc, multiplier, shift, zeroPoint)
+}
+
+//go:noescape
+func quantizeAVX2(dst []int8, src []float32, scale float32, zeroPoint int8)
+
+//go:noescape
+func dequantizeAVX2(dst []float32, src []int8, scale float32, zeroPoint int8)
+
+//go:noescape
+func requantizeAVX2(dst []int8, acc []int32, multiplier int32, shift int, zeroPoint int8)

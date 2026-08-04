@@ -214,3 +214,46 @@ func sumAbsNEON(a []int8) int32
 
 //go:noescape
 func sadNEON(a, b []int8) int32
+
+// Quantization dispatch (Part of #132). NEON processes 16/8/8 lanes per
+// iteration; shorter slices use the pure-Go reference. Requantize also routes
+// out-of-contract inputs (multiplier == math.MinInt32, or shift outside
+// [-31, 30]) to Go, since the kernel assumes the sane domain.
+const (
+	minNEONQuant   = 16 // quantizeNEON packs 16 int8 per iteration
+	minNEONDequant = 8  // dequantizeNEON widens 8 int8 per iteration
+	minNEONRequant = 8  // requantizeNEON processes 8 int32 per iteration
+)
+
+func quantizeI8(dst []int8, src []float32, scale float32, zeroPoint int8) {
+	if hasNEON && len(dst) >= minNEONQuant {
+		quantizeNEON(dst, src, scale, zeroPoint)
+		return
+	}
+	quantizeGo(dst, src, scale, zeroPoint)
+}
+
+func dequantizeI8(dst []float32, src []int8, scale float32, zeroPoint int8) {
+	if hasNEON && len(dst) >= minNEONDequant {
+		dequantizeNEON(dst, src, scale, zeroPoint)
+		return
+	}
+	dequantizeGo(dst, src, scale, zeroPoint)
+}
+
+func requantizeI8(dst []int8, acc []int32, multiplier int32, shift int, zeroPoint int8) {
+	if hasNEON && !requantizeOutOfContract(multiplier, shift) && len(dst) >= minNEONRequant {
+		requantizeNEON(dst, acc, multiplier, shift, zeroPoint)
+		return
+	}
+	requantizeGo(dst, acc, multiplier, shift, zeroPoint)
+}
+
+//go:noescape
+func quantizeNEON(dst []int8, src []float32, scale float32, zeroPoint int8)
+
+//go:noescape
+func dequantizeNEON(dst []float32, src []int8, scale float32, zeroPoint int8)
+
+//go:noescape
+func requantizeNEON(dst []int8, acc []int32, multiplier int32, shift int, zeroPoint int8)
