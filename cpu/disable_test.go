@@ -113,11 +113,27 @@ func TestHelperInfo(t *testing.T) {
 	fmt.Printf("CPUINFO=%s\n", Info())
 }
 
+// subprocessTimeout bounds the SIMD_DISABLE=all re-exec below. Natively the
+// helper finishes in a few milliseconds, so 30s is a generous ceiling that
+// still trips on a genuine hang. Under whole-program CPU emulation the child's
+// runtime init and CPUID probe are interpreted instruction by instruction,
+// inflating wall time by orders of magnitude; the AVX-512 (Intel SDE) and
+// cross-isa (qemu-user) CI legs occasionally blew the fixed 30s budget for
+// exactly this reason (#237). Those legs export SIMD_TEST_EMULATED=1, so key a
+// larger budget off that one signal. The native path never sets it and keeps
+// the tight 30s bound, so a real native hang is still caught quickly.
+func subprocessTimeout() time.Duration {
+	if os.Getenv("SIMD_TEST_EMULATED") == "1" {
+		return 5 * time.Minute
+	}
+	return 30 * time.Second
+}
+
 // TestSIMDDisableAllIntegration re-execs the test binary with SIMD_DISABLE=all
 // and asserts cpu.Info() reports the no-SIMD string for this architecture, which
 // proves the env var is read and applied during package init.
 func TestSIMDDisableAllIntegration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), subprocessTimeout())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHelperInfo$", "-test.v")
 	cmd.Env = append(os.Environ(), "SIMD_DISABLE_HELPER=1", "SIMD_DISABLE=all")

@@ -322,6 +322,12 @@ jobs:
       - name: Run amd64 tests under the qemu CPU model
         env:
           MODEL: ${{ matrix.model }}
+          # See the SDE leg below: cpu.TestSIMDDisableAllIntegration re-execs the
+          # test binary and waits on the child, which qemu-user emulates far
+          # slower than native. Signal the emulated environment so the test
+          # widens its subprocess timeout rather than blowing the native 30s
+          # bound (#237).
+          SIMD_TEST_EMULATED: '1'
         run: |
           set -uo pipefail
           fail=0
@@ -465,6 +471,14 @@ jobs:
           rm -f /tmp/cpu.test
 
       - name: Run the test suite under SDE with AVX-512 enabled
+        env:
+          # cpu.TestSIMDDisableAllIntegration re-execs the test binary and waits
+          # on it under a context timeout. Whole-instruction SDE emulation runs
+          # that child two orders of magnitude slower than native, so the test
+          # widens its budget when this flag is set instead of blowing the native
+          # 30s bound (#237). Only the emulated legs export it; the native legs
+          # keep the tight bound so a real hang is still caught quickly.
+          SIMD_TEST_EMULATED: '1'
         run: |
           set -uo pipefail
           fail=0
