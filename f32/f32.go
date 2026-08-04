@@ -53,9 +53,9 @@
 //   - AddScaled and AccumulateAdd read and rewrite dst in place (they are
 //     accumulators); their source slice must be disjoint from the destination
 //     window, except that AddScaled also permits s==dst exactly.
-//   - ButterflyComplex and ButterflyComplexStage update their data slices in
-//     place; those slices must not overlap one another, and the twiddles must not
-//     overlap them.
+//   - ButterflyComplex, ButterflyComplexStage and ButterflyComplexStage4 update
+//     their data slices in place; those slices must not overlap one another, and
+//     the twiddles must not overlap them.
 //   - The mirror, window, stride, interleave, batch and resample operations
 //     (Interleave2/N, Deinterleave2/N, ConvolveValid and ConvolveValidMulti,
 //     ConvolveDecimate, DotProductBatch, DotProductIndexed, DotProductStrided,
@@ -1505,6 +1505,89 @@ func ButterflyComplexStage(re, im []float32, span int, twRe, twIm []float32) {
 	}
 	used := blocks * blockLen
 	butterflyComplexStage32(re[:used], im[:used], span, blocks, twRe[:span], twIm[:span])
+}
+
+// butterflyStage4Radix is the radix of the radix-4 decimation-in-time stage:
+// every block holds four span-length sub-vectors x0..x3, so a block is
+// butterflyStage4Radix*span elements wide.
+const butterflyStage4Radix = 4
+
+// ButterflyComplexStage4 applies one complete radix-4 decimation-in-time stage in
+// place over split-complex data. For every block k in steps of 4*span, and every
+// j in [0, span), it combines the four sub-vectors x0..x3 at (k+j, k+span+j,
+// k+2*span+j, k+3*span+j) using the three twiddles (tw1[j], tw2[j], tw3[j]):
+//
+//	t1 = x1*tw1[j]; t2 = x2*tw2[j]; t3 = x3*tw3[j]   (full complex multiplies)
+//	a = x0 + t1; b = x0 - t1; c = t2 + t3; d = t2 - t3
+//	re[k+j]        = a.re + c.re; im[k+j]        = a.im + c.im
+//	re[k+span+j]   = b.re + d.im; im[k+span+j]   = b.im - d.re
+//	re[k+2*span+j] = a.re - c.re; im[k+2*span+j] = a.im - c.im
+//	re[k+3*span+j] = b.re - d.im; im[k+3*span+j] = b.im + d.re
+//
+// It is the radix-4 counterpart of [ButterflyComplexStage]: one radix-4 stage at
+// span s does the work of two radix-2 stages, first at span s then at 2*s, in a
+// single pass over the data. Folding two stages into one halves the passes over
+// the array and lets the implementation combine all four points while they are
+// still in registers, which is where a radix-4 core wins over a radix-2 one on a
+// memory-bound transform.
+//
+// # Twiddle convention
+//
+// The three twiddle slices are the powers of w = exp(-2*pi*i/(4*span)):
+//
+//	tw1[j] = w^(2j)   (applied to x1)
+//	tw2[j] = w^j      (applied to x2)
+//	tw3[j] = w^(3j)   (applied to x3)
+//
+// The kernel itself is value-agnostic; those are the values a Cooley-Tukey
+// transform must supply. Two properties are load-bearing and intentional, not
+// mistakes to "fix":
+//
+//   - x1 carries w^(2j), not w^j. The input to a decimation-in-time stage is
+//     radix-2 bit-reversed, which swaps sub-vectors 1 and 2 relative to a plain
+//     radix-4 layout, so x1 takes the square of the base twiddle. With this
+//     convention tw1 is exactly the radix-2 span-s twiddle table (exp(-i*pi*j/s))
+//     and tw2 is the first s entries of the radix-2 span-2s table, so a caller
+//     already holding the radix-2 tables reuses them verbatim.
+//   - The -i and +i cross-adds on the (k+span+j) and (k+3*span+j) outputs
+//     hard-code the FORWARD (negative-exponent) DFT direction. An inverse
+//     transform is a forward pass wrapped in conjugation of the input and output.
+//
+// The stage is a no-op unless span > 0 and all six twiddle slices have length at
+// least span, and it is also a no-op when no complete block fits. Blocks are
+// processed while k+4*span <= n, where n = min(len(re), len(im)); a trailing
+// partial block is left untouched. The span-2 case is never reached by a radix-4
+// Cooley-Tukey schedule (spans run 1, 4, 16, ...), so this stage does not carry a
+// dedicated span-2 or span-3 vector path; such a caller still gets a correct
+// result from the general j-axis path, which for these spans is the per-element
+// scalar tail on both the 8-wide AVX and 4-wide NEON kernels (span/8 and span/4
+// are both zero there, so neither vector loop runs).
+//
+// Aliasing: like ButterflyComplexStage, the stage updates re and im in place; re
+// and im must not overlap each other, and none of the six twiddle slices may
+// overlap them.
+//
+// Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
+// [ButterflyComplexStage], results are not guaranteed bit-identical between the
+// vector and fallback paths, so do not depend on exact equality across build
+// targets or across spans.
+func ButterflyComplexStage4(re, im []float32, span int,
+	tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float32) {
+	if span <= 0 ||
+		len(tw1Re) < span || len(tw1Im) < span ||
+		len(tw2Re) < span || len(tw2Im) < span ||
+		len(tw3Re) < span || len(tw3Im) < span {
+		return
+	}
+	n := min(len(re), len(im))
+	blockLen := butterflyStage4Radix * span
+	blocks := n / blockLen
+	if blocks == 0 {
+		return
+	}
+	used := blocks * blockLen
+	butterflyComplexStage4x32(re[:used], im[:used], span, blocks,
+		tw1Re[:span], tw1Im[:span], tw2Re[:span], tw2Im[:span], tw3Re[:span], tw3Im[:span])
 }
 
 // RealFFTUnpack performs the unpacking step of a real-valued FFT.

@@ -5878,6 +5878,678 @@ bfstage_done:
     VZEROUPPER
     RET
 
+// func butterflyComplexStage4AVX(re, im []float32, span, blocks int, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float32)
+// One complete radix-4 decimation-in-time stage, in place over split-complex
+// float32. For every block k in steps of 4*span and every j in [0, span), the
+// four sub-vectors x0..x3 at (k+j, k+span+j, k+2*span+j, k+3*span+j) are combined
+// with twiddles tw1[j], tw2[j], tw3[j]:
+//   t1 = x1*tw1; t2 = x2*tw2; t3 = x3*tw3
+//   a = x0+t1; b = x0-t1; c = t2+t3; d = t2-t3
+//   y0 = a+c; y1 = b - i*d; y2 = a-c; y3 = b + i*d
+// where -i*(dr,di) = (di,-dr) and +i*(dr,di) = (-di,dr). Each complex multiply is
+// VMULPS/VMULPS/VSUBPS for the real part and VMULPS/VFMADD231PS for the imaginary
+// part, the same sequence butterflyComplexStageAVX uses. It is the float32 sibling
+// of f64.butterflyComplexStage4AVX.
+//
+// Two vectorization axes, picked by span. span >= 2 vectorizes across j: span/8
+// full 8-wide YMM iterations over each block, THEN one 4-wide XMM (VEX-128)
+// sub-iteration when 4..7 elements remain, then a scalar tail for the final 0..3.
+// The XMM sub-iteration is the one deliberate divergence from the f64 kernel: a
+// radix-4 Cooley-Tukey schedule runs spans 1, 4, 16, ..., and the 8-wide j-axis
+// does not fill at span 4, so without it span 4 (and the 4..7 remainders of spans
+// 5, 6, 7, 12) would run entirely scalar. span == 4 itself takes a dedicated
+// block-axis path instead of that XMM pass: each block's four sub-vectors are one
+// 128-bit lane, so two blocks pair into a full YMM via VPERM2F128, doubling the
+// span-4 throughput a radix-4 schedule leans on (measured on #242's FullCore1024,
+// this block-axis path is what carries the amd64 stage over the two-radix-2 bar).
+// span == 1 has one butterfly per block,
+// so it vectorizes across blocks: eight blocks (32 float32) per iteration are
+// transposed 8x4 -> 4x8 with VUNPCKLPS/VUNPCKHPS then VUNPCKLPD/VUNPCKHPD so that
+// x0..x3 of the eight blocks land one-per-lane (in the permuted block order
+// [0,2,4,6,1,3,5,7], consistent across the four rows and both sides, harmless
+// because the twiddles are scalar broadcasts), the butterfly runs with the three
+// twiddles splatted by memory-source VBROADCASTSS, and a separate unpack sequence
+// (NOT self-inverse, unlike the f64 4x4 transpose) scatters the results back in
+// block order. A radix-4 Cooley-Tukey schedule never lands on span 2 or 3, so
+// there is no dedicated path for them; both are correct through the j-axis scalar
+// tail.
+//
+// AVX+FMA only, no AVX2: the shuffles are VUNPCKLPS/VUNPCKHPS/VUNPCKLPD/VUNPCKHPD,
+// the splats are the memory-source form of VBROADCASTSS, and every arithmetic op
+// is floating point in 256-bit, 128-bit or scalar width. The VFMADD231PS/SS in the
+// complex multiplies is the FMA dependency the dispatch guard carries.
+//
+// Registers, span >= 2 path: DX/R8 re+im block cursors (they walk x0 and so advance
+// by span*4 per block, then +3*span*4 to the next block), R9 span*4 stride (x1/x2/x3
+// reached by R9*1/R9*2/R9*2+R9*1), AX address scratch, CX inner j counter, BX block
+// count, R10-R13/SI/DI the six twiddle cursors (reset from the frame each block). The
+// span == 1 path reuses DX/R8 as the running re+im cursors, R9 as the 8-block group
+// counter, BX as the leftover-block counter, and R10-R13/SI/DI as the twiddle
+// broadcast sources. Neither path touches R14/R15/BP.
+// Frame: re(24)+im(24)+span(8)+blocks(8)+tw1Re(24)+tw1Im(24)+tw2Re(24)+tw2Im(24)
+// +tw3Re(24)+tw3Im(24) = 208 bytes.
+TEXT ·butterflyComplexStage4AVX(SB), NOSPLIT, $0-208
+    MOVQ re_base+0(FP), DX           // DX = re block base
+    MOVQ im_base+24(FP), R8          // R8 = im block base
+    MOVQ span+48(FP), CX             // CX = span
+    MOVQ blocks+56(FP), BX           // BX = block count
+    MOVQ tw1Re_base+64(FP), R10
+    MOVQ tw1Im_base+88(FP), R11
+    MOVQ tw2Re_base+112(FP), R12
+    MOVQ tw2Im_base+136(FP), R13
+    MOVQ tw3Re_base+160(FP), SI
+    MOVQ tw3Im_base+184(FP), DI
+
+    TESTQ BX, BX
+    JZ    bfstage4_done
+    CMPQ  CX, $1
+    JEQ   bfstage4_span1
+    CMPQ  CX, $4
+    JEQ   bfstage4_span4
+
+// ---------------------------------------------------------------------------
+// span >= 2: vectorize across j. DX/R8 walk x0 of the current block; x1/x2/x3 are
+// reached at +span*4, +2*span*4, +3*span*4. Twiddles restart at j=0 every block.
+// span/8 YMM iterations, then one XMM iteration when 4..7 remain, then a scalar
+// tail. Spans 2 and 3 (< 4) fall straight through to the scalar tail.
+// ---------------------------------------------------------------------------
+    MOVQ CX, R9
+    SHLQ $2, R9                      // R9 = span*4
+
+bfstage4_block:
+    MOVQ R9, CX
+    SHRQ $2, CX                      // CX = span = inner counter
+    MOVQ tw1Re_base+64(FP), R10      // reset twiddle cursors for this block
+    MOVQ tw1Im_base+88(FP), R11
+    MOVQ tw2Re_base+112(FP), R12
+    MOVQ tw2Im_base+136(FP), R13
+    MOVQ tw3Re_base+160(FP), SI
+    MOVQ tw3Im_base+184(FP), DI
+    CMPQ CX, $8
+    JLT  bfstage4_xmm_pre
+
+bfstage4_vec:
+    VMOVUPS (DX), Y0                 // x0re[j:j+8]
+    VMOVUPS (DX)(R9*1), Y1           // x1re
+    VMOVUPS (DX)(R9*2), Y2           // x2re
+    LEAQ (DX)(R9*2), AX
+    VMOVUPS (AX)(R9*1), Y3           // x3re = DX + 3*span*4
+    VMOVUPS (R8), Y4                 // x0im
+    VMOVUPS (R8)(R9*1), Y5           // x1im
+    VMOVUPS (R8)(R9*2), Y6           // x2im
+    LEAQ (R8)(R9*2), AX
+    VMOVUPS (AX)(R9*1), Y7           // x3im
+
+    VMOVUPS (R10), Y8                // tw1re
+    VMOVUPS (R11), Y9                // tw1im
+    VMULPS Y1, Y8, Y10
+    VMULPS Y5, Y9, Y11
+    VSUBPS Y11, Y10, Y10             // t1re = x1re*tw1re - x1im*tw1im
+    VMULPS Y1, Y9, Y11
+    VFMADD231PS Y5, Y8, Y11          // t1im = x1re*tw1im + x1im*tw1re
+
+    VMOVUPS (R12), Y8                // tw2re
+    VMOVUPS (R13), Y9                // tw2im
+    VMULPS Y2, Y8, Y1
+    VMULPS Y6, Y9, Y5
+    VSUBPS Y5, Y1, Y1                // t2re
+    VMULPS Y2, Y9, Y5
+    VFMADD231PS Y6, Y8, Y5           // t2im
+
+    VMOVUPS (SI), Y8                 // tw3re
+    VMOVUPS (DI), Y9                 // tw3im
+    VMULPS Y3, Y8, Y2
+    VMULPS Y7, Y9, Y6
+    VSUBPS Y6, Y2, Y2                // t3re
+    VMULPS Y3, Y9, Y6
+    VFMADD231PS Y7, Y8, Y6           // t3im
+
+    VADDPS Y1, Y2, Y3                // cre = t2re+t3re
+    VADDPS Y5, Y6, Y7                // cim = t2im+t3im
+    VSUBPS Y2, Y1, Y8                // dre = t2re-t3re
+    VSUBPS Y6, Y5, Y9                // dim = t2im-t3im
+
+    VADDPS Y0, Y10, Y1               // are = x0re+t1re
+    VSUBPS Y10, Y0, Y2               // bre = x0re-t1re
+    VADDPS Y4, Y11, Y5               // aim = x0im+t1im
+    VSUBPS Y11, Y4, Y6               // bim = x0im-t1im
+
+    VADDPS Y1, Y3, Y0                // y0re = are+cre
+    VADDPS Y5, Y7, Y4                // y0im = aim+cim
+    VMOVUPS Y0, (DX)
+    VMOVUPS Y4, (R8)
+    VSUBPS Y3, Y1, Y0                // y2re = are-cre
+    VSUBPS Y7, Y5, Y4                // y2im = aim-cim
+    VMOVUPS Y0, (DX)(R9*2)
+    VMOVUPS Y4, (R8)(R9*2)
+    VADDPS Y2, Y9, Y0                // y1re = bre+dim
+    VSUBPS Y8, Y6, Y4                // y1im = bim-dre
+    VMOVUPS Y0, (DX)(R9*1)
+    VMOVUPS Y4, (R8)(R9*1)
+    VSUBPS Y9, Y2, Y0                // y3re = bre-dim
+    VADDPS Y8, Y6, Y4                // y3im = bim+dre
+    LEAQ (DX)(R9*2), AX
+    VMOVUPS Y0, (AX)(R9*1)
+    LEAQ (R8)(R9*2), AX
+    VMOVUPS Y4, (AX)(R9*1)
+
+    ADDQ $32, DX
+    ADDQ $32, R8
+    ADDQ $32, R10
+    ADDQ $32, R11
+    ADDQ $32, R12
+    ADDQ $32, R13
+    ADDQ $32, SI
+    ADDQ $32, DI
+    SUBQ $8, CX
+    CMPQ CX, $8
+    JGE  bfstage4_vec
+
+bfstage4_xmm_pre:
+    // One 4-wide XMM (VEX-128) iteration when 4..7 j remain. This closes the span-4
+    // gap: the 8-wide loop above skips span 4 entirely, so span 4 becomes a single
+    // XMM pass with zero shuffles. Same op sequence as the YMM body, X registers.
+    CMPQ CX, $4
+    JLT  bfstage4_tail_pre
+
+    VMOVUPS (DX), X0                 // x0re[j:j+4]
+    VMOVUPS (DX)(R9*1), X1           // x1re
+    VMOVUPS (DX)(R9*2), X2           // x2re
+    LEAQ (DX)(R9*2), AX
+    VMOVUPS (AX)(R9*1), X3           // x3re
+    VMOVUPS (R8), X4                 // x0im
+    VMOVUPS (R8)(R9*1), X5           // x1im
+    VMOVUPS (R8)(R9*2), X6           // x2im
+    LEAQ (R8)(R9*2), AX
+    VMOVUPS (AX)(R9*1), X7           // x3im
+
+    VMOVUPS (R10), X8                // tw1re
+    VMOVUPS (R11), X9                // tw1im
+    VMULPS X1, X8, X10
+    VMULPS X5, X9, X11
+    VSUBPS X11, X10, X10             // t1re
+    VMULPS X1, X9, X11
+    VFMADD231PS X5, X8, X11          // t1im
+
+    VMOVUPS (R12), X8                // tw2re
+    VMOVUPS (R13), X9                // tw2im
+    VMULPS X2, X8, X1
+    VMULPS X6, X9, X5
+    VSUBPS X5, X1, X1                // t2re
+    VMULPS X2, X9, X5
+    VFMADD231PS X6, X8, X5           // t2im
+
+    VMOVUPS (SI), X8                 // tw3re
+    VMOVUPS (DI), X9                 // tw3im
+    VMULPS X3, X8, X2
+    VMULPS X7, X9, X6
+    VSUBPS X6, X2, X2                // t3re
+    VMULPS X3, X9, X6
+    VFMADD231PS X7, X8, X6           // t3im
+
+    VADDPS X1, X2, X3                // cre
+    VADDPS X5, X6, X7                // cim
+    VSUBPS X2, X1, X8                // dre
+    VSUBPS X6, X5, X9                // dim
+
+    VADDPS X0, X10, X1               // are
+    VSUBPS X10, X0, X2               // bre
+    VADDPS X4, X11, X5               // aim
+    VSUBPS X11, X4, X6               // bim
+
+    VADDPS X1, X3, X0                // y0re
+    VADDPS X5, X7, X4                // y0im
+    VMOVUPS X0, (DX)
+    VMOVUPS X4, (R8)
+    VSUBPS X3, X1, X0                // y2re
+    VSUBPS X7, X5, X4                // y2im
+    VMOVUPS X0, (DX)(R9*2)
+    VMOVUPS X4, (R8)(R9*2)
+    VADDPS X2, X9, X0                // y1re = bre+dim
+    VSUBPS X8, X6, X4                // y1im = bim-dre
+    VMOVUPS X0, (DX)(R9*1)
+    VMOVUPS X4, (R8)(R9*1)
+    VSUBPS X9, X2, X0                // y3re = bre-dim
+    VADDPS X8, X6, X4                // y3im = bim+dre
+    LEAQ (DX)(R9*2), AX
+    VMOVUPS X0, (AX)(R9*1)
+    LEAQ (R8)(R9*2), AX
+    VMOVUPS X4, (AX)(R9*1)
+
+    ADDQ $16, DX
+    ADDQ $16, R8
+    ADDQ $16, R10
+    ADDQ $16, R11
+    ADDQ $16, R12
+    ADDQ $16, R13
+    ADDQ $16, SI
+    ADDQ $16, DI
+    SUBQ $4, CX
+
+bfstage4_tail_pre:
+    TESTQ CX, CX
+    JZ   bfstage4_next
+
+bfstage4_tail:
+    LEAQ (DX)(R9*2), AX
+    VMOVSS (DX), X0                  // x0re
+    VMOVSS (DX)(R9*1), X1            // x1re
+    VMOVSS (DX)(R9*2), X2            // x2re
+    VMOVSS (AX)(R9*1), X3            // x3re
+    LEAQ (R8)(R9*2), AX
+    VMOVSS (R8), X4                  // x0im
+    VMOVSS (R8)(R9*1), X5            // x1im
+    VMOVSS (R8)(R9*2), X6            // x2im
+    VMOVSS (AX)(R9*1), X7            // x3im
+
+    VMOVSS (R10), X8
+    VMOVSS (R11), X9
+    VMULSS X1, X8, X10
+    VMULSS X5, X9, X11
+    VSUBSS X11, X10, X10             // t1re
+    VMULSS X1, X9, X11
+    VFMADD231SS X5, X8, X11          // t1im
+    VMOVSS (R12), X8
+    VMOVSS (R13), X9
+    VMULSS X2, X8, X1
+    VMULSS X6, X9, X5
+    VSUBSS X5, X1, X1                // t2re
+    VMULSS X2, X9, X5
+    VFMADD231SS X6, X8, X5           // t2im
+    VMOVSS (SI), X8
+    VMOVSS (DI), X9
+    VMULSS X3, X8, X2
+    VMULSS X7, X9, X6
+    VSUBSS X6, X2, X2                // t3re
+    VMULSS X3, X9, X6
+    VFMADD231SS X7, X8, X6           // t3im
+
+    VADDSS X1, X2, X3                // cre
+    VADDSS X5, X6, X7                // cim
+    VSUBSS X2, X1, X8                // dre
+    VSUBSS X6, X5, X9                // dim
+    VADDSS X0, X10, X1               // are
+    VSUBSS X10, X0, X2               // bre
+    VADDSS X4, X11, X5               // aim
+    VSUBSS X11, X4, X6               // bim
+
+    VADDSS X1, X3, X0                // y0re
+    VMOVSS X0, (DX)
+    VADDSS X5, X7, X0                // y0im
+    VMOVSS X0, (R8)
+    VSUBSS X3, X1, X0                // y2re
+    VMOVSS X0, (DX)(R9*2)
+    VSUBSS X7, X5, X0                // y2im
+    VMOVSS X0, (R8)(R9*2)
+    VADDSS X2, X9, X0                // y1re = bre+dim
+    VMOVSS X0, (DX)(R9*1)
+    VSUBSS X8, X6, X0                // y1im = bim-dre
+    VMOVSS X0, (R8)(R9*1)
+    LEAQ (DX)(R9*2), AX
+    VSUBSS X9, X2, X0                // y3re = bre-dim
+    VMOVSS X0, (AX)(R9*1)
+    LEAQ (R8)(R9*2), AX
+    VADDSS X8, X6, X0                // y3im = bim+dre
+    VMOVSS X0, (AX)(R9*1)
+
+    ADDQ $4, DX
+    ADDQ $4, R8
+    ADDQ $4, R10
+    ADDQ $4, R11
+    ADDQ $4, R12
+    ADDQ $4, R13
+    ADDQ $4, SI
+    ADDQ $4, DI
+    DECQ CX
+    JNZ  bfstage4_tail
+
+bfstage4_next:
+    LEAQ (R9)(R9*2), AX              // AX = 3*span*4 = step to next block
+    ADDQ AX, DX
+    ADDQ AX, R8
+    DECQ BX
+    JNZ  bfstage4_block
+    JMP  bfstage4_done
+
+// ---------------------------------------------------------------------------
+// span == 1: one butterfly per block, so re/im are fully interleaved as
+// [x0,x1,x2,x3] per block. Take eight blocks (32 float32) per iteration, transpose
+// 8x4 -> 4x8 so x0..x3 of the eight blocks land one-per-lane, run the butterfly
+// with the three twiddles splatted, then scatter the results back. Unlike the f64
+// 4x4 transpose the scatter is NOT the load-side sequence; it is its own unpack
+// chain, derived and spot-checked against the Go reference.
+// ---------------------------------------------------------------------------
+bfstage4_span1:
+    MOVQ BX, R9
+    SHRQ $3, R9                      // R9 = blocks/8 = 8-block iterations
+    JZ   bfstage4_span1_tail_pre
+
+bfstage4_span1_vec:
+    VMOVUPS (DX), Y0                 // re: blocks {0,1}, each [x0,x1,x2,x3]
+    VMOVUPS 32(DX), Y1               // blocks {2,3}
+    VMOVUPS 64(DX), Y2               // blocks {4,5}
+    VMOVUPS 96(DX), Y3               // blocks {6,7}
+    VUNPCKLPS Y1, Y0, Y4
+    VUNPCKHPS Y1, Y0, Y5
+    VUNPCKLPS Y3, Y2, Y6
+    VUNPCKHPS Y3, Y2, Y7
+    VUNPCKLPD Y6, Y4, Y0            // X0re = x0 of the eight blocks, order [0,2,4,6,1,3,5,7]
+    VUNPCKHPD Y6, Y4, Y1            // X1re
+    VUNPCKLPD Y7, Y5, Y2            // X2re
+    VUNPCKHPD Y7, Y5, Y3            // X3re
+
+    VMOVUPS (R8), Y4                 // im rows
+    VMOVUPS 32(R8), Y5
+    VMOVUPS 64(R8), Y6
+    VMOVUPS 96(R8), Y7
+    VUNPCKLPS Y5, Y4, Y8
+    VUNPCKHPS Y5, Y4, Y9
+    VUNPCKLPS Y7, Y6, Y10
+    VUNPCKHPS Y7, Y6, Y11
+    VUNPCKLPD Y10, Y8, Y4           // X0im
+    VUNPCKHPD Y10, Y8, Y5           // X1im
+    VUNPCKLPD Y11, Y9, Y6           // X2im
+    VUNPCKHPD Y11, Y9, Y7           // X3im
+
+    VBROADCASTSS (R10), Y8           // tw1re[0]
+    VBROADCASTSS (R11), Y9           // tw1im[0]
+    VMULPS Y1, Y8, Y10
+    VMULPS Y5, Y9, Y11
+    VSUBPS Y11, Y10, Y10             // t1re
+    VMULPS Y1, Y9, Y11
+    VFMADD231PS Y5, Y8, Y11          // t1im
+    VBROADCASTSS (R12), Y8           // tw2re[0]
+    VBROADCASTSS (R13), Y9           // tw2im[0]
+    VMULPS Y2, Y8, Y1
+    VMULPS Y6, Y9, Y5
+    VSUBPS Y5, Y1, Y1                // t2re
+    VMULPS Y2, Y9, Y5
+    VFMADD231PS Y6, Y8, Y5           // t2im
+    VBROADCASTSS (SI), Y8            // tw3re[0]
+    VBROADCASTSS (DI), Y9            // tw3im[0]
+    VMULPS Y3, Y8, Y2
+    VMULPS Y7, Y9, Y6
+    VSUBPS Y6, Y2, Y2                // t3re
+    VMULPS Y3, Y9, Y6
+    VFMADD231PS Y7, Y8, Y6           // t3im
+
+    VADDPS Y1, Y2, Y3                // cre
+    VADDPS Y5, Y6, Y7                // cim
+    VSUBPS Y2, Y1, Y8                // dre
+    VSUBPS Y6, Y5, Y9                // dim
+    VADDPS Y0, Y10, Y1               // are
+    VSUBPS Y10, Y0, Y2               // bre
+    VADDPS Y4, Y11, Y5               // aim
+    VSUBPS Y11, Y4, Y6               // bim
+
+    VADDPS Y1, Y3, Y0                // col0re = y0re
+    VSUBPS Y3, Y1, Y10               // col2re = y2re
+    VADDPS Y2, Y9, Y12               // col1re = y1re = bre+dim
+    VSUBPS Y9, Y2, Y13               // col3re = y3re = bre-dim
+    VADDPS Y5, Y7, Y4                // col0im = y0im
+    VSUBPS Y7, Y5, Y11               // col2im = y2im
+    VSUBPS Y8, Y6, Y14               // col1im = y1im = bim-dre
+    VADDPS Y8, Y6, Y15               // col3im = y3im = bim+dre
+
+    VUNPCKLPS Y12, Y0, Y1            // scatter re: A = [y0,y1] pairs
+    VUNPCKHPS Y12, Y0, Y2            // C
+    VUNPCKLPS Y13, Y10, Y3           // B = [y2,y3] pairs
+    VUNPCKHPS Y13, Y10, Y5           // D
+    VUNPCKLPD Y3, Y1, Y0             // blocks 0,1  [y0,y1,y2,y3]|[...]
+    VUNPCKHPD Y3, Y1, Y12            // blocks 2,3
+    VUNPCKLPD Y5, Y2, Y10            // blocks 4,5
+    VUNPCKHPD Y5, Y2, Y13            // blocks 6,7
+    VMOVUPS Y0, (DX)
+    VMOVUPS Y12, 32(DX)
+    VMOVUPS Y10, 64(DX)
+    VMOVUPS Y13, 96(DX)
+
+    VUNPCKLPS Y14, Y4, Y1            // scatter im
+    VUNPCKHPS Y14, Y4, Y2
+    VUNPCKLPS Y15, Y11, Y3
+    VUNPCKHPS Y15, Y11, Y5
+    VUNPCKLPD Y3, Y1, Y4             // blocks 0,1
+    VUNPCKHPD Y3, Y1, Y14            // blocks 2,3
+    VUNPCKLPD Y5, Y2, Y11            // blocks 4,5
+    VUNPCKHPD Y5, Y2, Y15            // blocks 6,7
+    VMOVUPS Y4, (R8)
+    VMOVUPS Y14, 32(R8)
+    VMOVUPS Y11, 64(R8)
+    VMOVUPS Y15, 96(R8)
+
+    ADDQ $128, DX
+    ADDQ $128, R8
+    DECQ R9
+    JNZ  bfstage4_span1_vec
+
+bfstage4_span1_tail_pre:
+    ANDQ $7, BX                      // leftover blocks (0..7)
+    JZ   bfstage4_done
+
+bfstage4_span1_tail:
+    VMOVSS (DX), X0                  // x0re
+    VMOVSS 4(DX), X1                 // x1re
+    VMOVSS 8(DX), X2                 // x2re
+    VMOVSS 12(DX), X3                // x3re
+    VMOVSS (R8), X4                  // x0im
+    VMOVSS 4(R8), X5                 // x1im
+    VMOVSS 8(R8), X6                 // x2im
+    VMOVSS 12(R8), X7                // x3im
+
+    VMOVSS (R10), X8
+    VMOVSS (R11), X9
+    VMULSS X1, X8, X10
+    VMULSS X5, X9, X11
+    VSUBSS X11, X10, X10             // t1re
+    VMULSS X1, X9, X11
+    VFMADD231SS X5, X8, X11          // t1im
+    VMOVSS (R12), X8
+    VMOVSS (R13), X9
+    VMULSS X2, X8, X1
+    VMULSS X6, X9, X5
+    VSUBSS X5, X1, X1                // t2re
+    VMULSS X2, X9, X5
+    VFMADD231SS X6, X8, X5           // t2im
+    VMOVSS (SI), X8
+    VMOVSS (DI), X9
+    VMULSS X3, X8, X2
+    VMULSS X7, X9, X6
+    VSUBSS X6, X2, X2                // t3re
+    VMULSS X3, X9, X6
+    VFMADD231SS X7, X8, X6           // t3im
+
+    VADDSS X1, X2, X3                // cre
+    VADDSS X5, X6, X7                // cim
+    VSUBSS X2, X1, X8                // dre
+    VSUBSS X6, X5, X9                // dim
+    VADDSS X0, X10, X1               // are
+    VSUBSS X10, X0, X2               // bre
+    VADDSS X4, X11, X5               // aim
+    VSUBSS X11, X4, X6               // bim
+
+    VADDSS X1, X3, X0                // y0re
+    VMOVSS X0, (DX)
+    VADDSS X5, X7, X0                // y0im
+    VMOVSS X0, (R8)
+    VSUBSS X3, X1, X0                // y2re
+    VMOVSS X0, 8(DX)
+    VSUBSS X7, X5, X0                // y2im
+    VMOVSS X0, 8(R8)
+    VADDSS X2, X9, X0                // y1re = bre+dim
+    VMOVSS X0, 4(DX)
+    VSUBSS X8, X6, X0                // y1im = bim-dre
+    VMOVSS X0, 4(R8)
+    VSUBSS X9, X2, X0                // y3re = bre-dim
+    VMOVSS X0, 12(DX)
+    VADDSS X8, X6, X0                // y3im = bim+dre
+    VMOVSS X0, 12(R8)
+
+    ADDQ $16, DX
+    ADDQ $16, R8
+    DECQ BX
+    JNZ  bfstage4_span1_tail
+    JMP  bfstage4_done
+
+// ---------------------------------------------------------------------------
+// span == 4: the block-axis contingency. The 8-wide j-axis cannot fill at span 4,
+// so the j-axis path would run span 4 through the 4-wide XMM sub-iteration, one
+// block per pass. Here instead each block's four sub-vectors x0..x3 are exactly one
+// 128-bit lane, so two blocks pair into a full YMM: VPERM2F128 collects sub-vector
+// xK of two consecutive blocks into one YMM (block0 in the low half, block1 in the
+// high half), the radix-4 butterfly runs 8-wide (two blocks x four j) with the
+// twiddle quads splatted by memory-source VBROADCASTF128, and VPERM2F128 scatters
+// the four outputs back to block layout. The butterfly is the span-1 sequence.
+// VPERM2F128 and VBROADCASTF128 are AVX1, so this stays AVX+FMA. One leftover block
+// (odd block count) runs a single 4-wide XMM pass.
+// ---------------------------------------------------------------------------
+bfstage4_span4:
+    MOVQ BX, R9
+    SHRQ $1, R9                      // R9 = blocks/2 = 2-block iterations
+    JZ   bfstage4_span4_tail_pre
+
+bfstage4_span4_vec:
+    VMOVUPS (DX), Y8                 // block0 re [x0|x1]
+    VMOVUPS 32(DX), Y9               // block0 re [x2|x3]
+    VMOVUPS 64(DX), Y10              // block1 re [x0|x1]
+    VMOVUPS 96(DX), Y11             // block1 re [x2|x3]
+    VPERM2F128 $0x20, Y10, Y8, Y0    // x0re = [b0.x0|b1.x0]
+    VPERM2F128 $0x31, Y10, Y8, Y1    // x1re = [b0.x1|b1.x1]
+    VPERM2F128 $0x20, Y11, Y9, Y2    // x2re
+    VPERM2F128 $0x31, Y11, Y9, Y3    // x3re
+    VMOVUPS (R8), Y8                 // block0 im [x0|x1]
+    VMOVUPS 32(R8), Y9               // block0 im [x2|x3]
+    VMOVUPS 64(R8), Y10              // block1 im [x0|x1]
+    VMOVUPS 96(R8), Y11             // block1 im [x2|x3]
+    VPERM2F128 $0x20, Y10, Y8, Y4    // x0im
+    VPERM2F128 $0x31, Y10, Y8, Y5    // x1im
+    VPERM2F128 $0x20, Y11, Y9, Y6    // x2im
+    VPERM2F128 $0x31, Y11, Y9, Y7    // x3im
+
+    VBROADCASTF128 (R10), Y8         // tw1re[0..3] in both halves
+    VBROADCASTF128 (R11), Y9         // tw1im[0..3]
+    VMULPS Y1, Y8, Y10
+    VMULPS Y5, Y9, Y11
+    VSUBPS Y11, Y10, Y10             // t1re
+    VMULPS Y1, Y9, Y11
+    VFMADD231PS Y5, Y8, Y11          // t1im
+    VBROADCASTF128 (R12), Y8         // tw2re
+    VBROADCASTF128 (R13), Y9         // tw2im
+    VMULPS Y2, Y8, Y1
+    VMULPS Y6, Y9, Y5
+    VSUBPS Y5, Y1, Y1                // t2re
+    VMULPS Y2, Y9, Y5
+    VFMADD231PS Y6, Y8, Y5           // t2im
+    VBROADCASTF128 (SI), Y8          // tw3re
+    VBROADCASTF128 (DI), Y9          // tw3im
+    VMULPS Y3, Y8, Y2
+    VMULPS Y7, Y9, Y6
+    VSUBPS Y6, Y2, Y2                // t3re
+    VMULPS Y3, Y9, Y6
+    VFMADD231PS Y7, Y8, Y6           // t3im
+
+    VADDPS Y1, Y2, Y3                // cre
+    VADDPS Y5, Y6, Y7                // cim
+    VSUBPS Y2, Y1, Y8                // dre
+    VSUBPS Y6, Y5, Y9                // dim
+    VADDPS Y0, Y10, Y1               // are
+    VSUBPS Y10, Y0, Y2               // bre
+    VADDPS Y4, Y11, Y5               // aim
+    VSUBPS Y11, Y4, Y6               // bim
+
+    VADDPS Y1, Y3, Y0                // y0re
+    VSUBPS Y3, Y1, Y10               // y2re
+    VADDPS Y2, Y9, Y12               // y1re = bre+dim
+    VSUBPS Y9, Y2, Y13               // y3re = bre-dim
+    VADDPS Y5, Y7, Y4                // y0im
+    VSUBPS Y7, Y5, Y11               // y2im
+    VSUBPS Y8, Y6, Y14               // y1im = bim-dre
+    VADDPS Y8, Y6, Y15               // y3im = bim+dre
+
+    VPERM2F128 $0x20, Y12, Y0, Y1    // block0 re [x0|x1] = [y0re.lo|y1re.lo]
+    VPERM2F128 $0x20, Y13, Y10, Y2   // block0 re [x2|x3] = [y2re.lo|y3re.lo]
+    VPERM2F128 $0x31, Y12, Y0, Y3    // block1 re [x0|x1]
+    VPERM2F128 $0x31, Y13, Y10, Y5   // block1 re [x2|x3]
+    VMOVUPS Y1, (DX)
+    VMOVUPS Y2, 32(DX)
+    VMOVUPS Y3, 64(DX)
+    VMOVUPS Y5, 96(DX)
+    VPERM2F128 $0x20, Y14, Y4, Y1    // block0 im [x0|x1] = [y0im.lo|y1im.lo]
+    VPERM2F128 $0x20, Y15, Y11, Y2   // block0 im [x2|x3]
+    VPERM2F128 $0x31, Y14, Y4, Y3    // block1 im [x0|x1]
+    VPERM2F128 $0x31, Y15, Y11, Y5   // block1 im [x2|x3]
+    VMOVUPS Y1, (R8)
+    VMOVUPS Y2, 32(R8)
+    VMOVUPS Y3, 64(R8)
+    VMOVUPS Y5, 96(R8)
+
+    ADDQ $128, DX
+    ADDQ $128, R8
+    DECQ R9
+    JNZ  bfstage4_span4_vec
+
+bfstage4_span4_tail_pre:
+    ANDQ $1, BX                      // one leftover block at most
+    JZ   bfstage4_done
+
+    // Single block, 4 lanes wide: XMM butterfly with directly loaded twiddle quads.
+    VMOVUPS (DX), X0                 // x0re[0..3]
+    VMOVUPS 16(DX), X1               // x1re
+    VMOVUPS 32(DX), X2               // x2re
+    VMOVUPS 48(DX), X3               // x3re
+    VMOVUPS (R8), X4                 // x0im
+    VMOVUPS 16(R8), X5               // x1im
+    VMOVUPS 32(R8), X6               // x2im
+    VMOVUPS 48(R8), X7               // x3im
+    VMOVUPS (R10), X8                // tw1re[0..3]
+    VMOVUPS (R11), X9                // tw1im
+    VMULPS X1, X8, X10
+    VMULPS X5, X9, X11
+    VSUBPS X11, X10, X10             // t1re
+    VMULPS X1, X9, X11
+    VFMADD231PS X5, X8, X11          // t1im
+    VMOVUPS (R12), X8                // tw2re
+    VMOVUPS (R13), X9                // tw2im
+    VMULPS X2, X8, X1
+    VMULPS X6, X9, X5
+    VSUBPS X5, X1, X1                // t2re
+    VMULPS X2, X9, X5
+    VFMADD231PS X6, X8, X5           // t2im
+    VMOVUPS (SI), X8                 // tw3re
+    VMOVUPS (DI), X9                 // tw3im
+    VMULPS X3, X8, X2
+    VMULPS X7, X9, X6
+    VSUBPS X6, X2, X2                // t3re
+    VMULPS X3, X9, X6
+    VFMADD231PS X7, X8, X6           // t3im
+    VADDPS X1, X2, X3                // cre
+    VADDPS X5, X6, X7                // cim
+    VSUBPS X2, X1, X8                // dre
+    VSUBPS X6, X5, X9                // dim
+    VADDPS X0, X10, X1               // are
+    VSUBPS X10, X0, X2               // bre
+    VADDPS X4, X11, X5               // aim
+    VSUBPS X11, X4, X6               // bim
+    VADDPS X1, X3, X0                // y0re
+    VMOVUPS X0, (DX)
+    VADDPS X5, X7, X0                // y0im
+    VMOVUPS X0, (R8)
+    VSUBPS X3, X1, X0                // y2re
+    VMOVUPS X0, 32(DX)
+    VSUBPS X7, X5, X0                // y2im
+    VMOVUPS X0, 32(R8)
+    VADDPS X2, X9, X0                // y1re = bre+dim
+    VMOVUPS X0, 16(DX)
+    VSUBPS X8, X6, X0                // y1im = bim-dre
+    VMOVUPS X0, 16(R8)
+    VSUBPS X9, X2, X0                // y3re = bre-dim
+    VMOVUPS X0, 48(DX)
+    VADDPS X8, X6, X0                // y3im = bim+dre
+    VMOVUPS X0, 48(R8)
+
+bfstage4_done:
+    VZEROUPPER
+    RET
+
 // ============================================================================
 // REAL FFT UNPACK - UNPACKING STEP FOR REAL-VALUED FFT
 // ============================================================================

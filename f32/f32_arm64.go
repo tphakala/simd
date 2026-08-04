@@ -917,6 +917,19 @@ func butterflyComplexStage32(re, im []float32, span, blocks int, twRe, twIm []fl
 	butterflyComplexStage32Go(re, im, span, blocks, twRe, twIm)
 }
 
+func butterflyComplexStage4x32(re, im []float32, span, blocks int,
+	tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float32) {
+	// butterflyComplexStage4NEON vectorizes across j for span >= 2 (4-wide .4S, span
+	// 4 filling it exactly, spans 2 and 3 running the scalar tail) and across blocks
+	// for span 1. One 4-wide iteration needs 4 lanes, so anything below 4 total
+	// radix-4 groups falls to Go.
+	if hasNEON && blocks*span >= 4 {
+		butterflyComplexStage4NEON(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+		return
+	}
+	butterflyComplexStage4x32Go(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+}
+
 func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	// Use NEON if available and have enough elements
 	// Need at least 5 elements: process k=1..n-1 where n>=5 gives 4+ iterations
@@ -947,6 +960,18 @@ func butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float
 //
 //go:noescape
 func butterflyComplexStageNEON(re, im []float32, span, blocks int, twRe, twIm []float32)
+
+// ButterflyComplexStage4 assembly function declaration.
+//
+// Callers MUST satisfy len(re) == len(im) == 4*span*blocks and
+// len(tw1Re) == len(tw1Im) == len(tw2Re) == len(tw2Im) == len(tw3Re) ==
+// len(tw3Im) >= span, with span >= 1 and blocks >= 1. Every address the kernel
+// forms is derived from span and blocks, never from the slice headers, so a
+// violated precondition reads and writes out of bounds silently rather than
+// panicking the way the Go fallback would. ButterflyComplexStage4 establishes it.
+//
+//go:noescape
+func butterflyComplexStage4NEON(re, im []float32, span, blocks int, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float32)
 
 //go:noescape
 func realFFTUnpackNEON(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int)

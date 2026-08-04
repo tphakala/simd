@@ -1357,6 +1357,31 @@ func butterflyComplexStage32(re, im []float32, span, blocks int, twRe, twIm []fl
 	butterflyComplexStage32Go(re, im, span, blocks, twRe, twIm)
 }
 
+func butterflyComplexStage4x32(re, im []float32, span, blocks int,
+	tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float32) {
+	// butterflyComplexStage4AVX handles every span: across j when span fills an
+	// 8-wide YMM, then a 4-wide XMM (VEX-128) sub-iteration for the 4..7 remainder,
+	// then a scalar tail; across blocks for span 1. span 4, which a radix-4 schedule
+	// hits every stage (spans run 1, 4, 16, ...) but the 8-wide j-axis cannot fill,
+	// takes a dedicated block-axis path pairing two blocks per YMM with VPERM2F128.
+	// Spans 2 and 3 run the j-axis scalar tail.
+	//
+	// AVX+FMA is the whole requirement, no AVX2: the span-1 block-axis path
+	// transposes an 8x4 float32 tile with VUNPCKLPS/VUNPCKHPS + VUNPCKLPD/VUNPCKHPD
+	// and splats its twiddles with the memory-source form of VBROADCASTSS, and the
+	// complex multiplies use VFMADD231PS. The register-source VBROADCASTSS would be
+	// AVX2, the trap TestAmd64KernelISALevel sweeps for.
+	//
+	// The guard is about total work, not span: a stage carrying fewer than
+	// minAVXElements radix-4 groups goes to Go regardless of its span, matching the
+	// radix-2 stage above.
+	if cpu.X86.AVX && cpu.X86.FMA && blocks*span >= minAVXElements {
+		butterflyComplexStage4AVX(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+		return
+	}
+	butterflyComplexStage4x32Go(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+}
+
 func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	// Use AVX+FMA if available and have enough elements. realFFTUnpackAVX needs
 	// nothing above AVX1+FMA3; TestAmd64KernelISALevel enforces the AVX2 half of
@@ -1392,6 +1417,18 @@ func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float3
 //
 //go:noescape
 func butterflyComplexStageAVX(re, im []float32, span, blocks int, twRe, twIm []float32)
+
+// ButterflyComplexStage4 assembly function declaration.
+//
+// Callers MUST satisfy len(re) == len(im) == 4*span*blocks and
+// len(tw1Re) == len(tw1Im) == len(tw2Re) == len(tw2Im) == len(tw3Re) ==
+// len(tw3Im) >= span, with span >= 1 and blocks >= 1. Every address the kernel
+// forms is derived from span and blocks, never from the slice headers, so a
+// violated precondition reads and writes out of bounds silently rather than
+// panicking the way the Go fallback would. ButterflyComplexStage4 establishes it.
+//
+//go:noescape
+func butterflyComplexStage4AVX(re, im []float32, span, blocks int, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float32)
 
 //go:noescape
 func realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int)
