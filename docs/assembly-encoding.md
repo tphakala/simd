@@ -88,6 +88,40 @@ way in.
 - `PADDD`/`PADDL` and `PSRLDQ`/`PSRLO` are accepted as aliases.
 - `PSHUFD`, `MOVWLSX`, `CMOVQLT` all assemble under their familiar names.
 
+## AMD64: ISA-level and dispatch checks on kernels
+
+Beyond spelling, an amd64 kernel is machine-checked against the CPU features its
+name claims and its dispatch actually guards. All three checks below are pure
+source analysis, so they run on any host and fail the suite with an actionable
+message rather than letting a mis-gated kernel SIGILL on hardware CI does not own.
+The authoritative write-up is the `CLAUDE.md` section "AMD64: the dispatch guard is
+machine-checked, on two axes", and the enforcing tests named below are the source
+of truth for the exact encodings and tiers each one covers. This is the short
+pointer version, so a contributor adding a kernel meets the constraints here in the
+assembly guide and follows the reference for the full rationale:
+
+- **Name versus body** (`TestAmd64KernelISALevel`, `asmcheck_amd64_isa_test.go`,
+  #200). A kernel named `...AVX` may not contain an AVX2-only encoding. The traps
+  are register-source `VBROADCASTSS`/`VBROADCASTSD` and any 256-bit integer op,
+  since AVX1's YMM support is float-only. A kernel that genuinely needs AVX2 under
+  an `...AVX` name goes in `avx2GatedAVXKernels` alongside the gate that protects
+  it; renaming it to `...AVX2` is the better fix.
+- **Dispatch versus body, AVX2** (`TestAmd64KernelDispatchRequiresAVX2`,
+  `asmcheck_amd64_gate_test.go`, #200). The Go guard selecting an AVX2 kernel must
+  actually require AVX2, checked by dominance over the dispatch rather than by the
+  word appearing somewhere in the function.
+- **Dispatch versus body, FMA3** (`TestAmd64InitTierFMA` and
+  `TestAmd64KernelDispatchRequiresFMA`, `asmcheck_amd64_fma_test.go`, #201).
+  `cpu.X86.FMA` is a CPUID bit separate from AVX, so a `VFMADD`-family instruction
+  needs its own conjunct in the guard. A kernel using one may not be assigned by
+  `initAVXNoFMA`, `initSSE`, `initSSE2` or `initGo`, nor dispatched from a branch
+  testing only `cpu.X86.AVX`.
+
+`TestNoFMAContract` is unrelated despite the name. It forbids fusing in the kernels
+listed in `singleRoundingKernels`, which is the #156 contract about where rounding
+happens, not a CPU-feature check, and it applies to both architectures (it is the
+same test flagged in the ARM64 FMA caveat above).
+
 ## Verifying a new WORD encoding without aarch64 binutils
 
 `aarch64-linux-gnu-as` / `objdump` are not installed on every dev box. The working
