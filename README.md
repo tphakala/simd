@@ -157,7 +157,8 @@ sum := crc.Checksum16(p) // bit-identical to the scalar reference, zero-alloc
 **Scope:** `f64` carries the FLAC/LPC and scientific double-precision surface,
 including `Autocorrelate` (lag-vectorized LPC autocorrelation) and the split-format
 FFT butterfly building blocks (`ButterflyComplex`, `ButterflyComplexStage`,
-`RealFFTUnpack`, `RealFFTPower`) that a double-precision FFT/STFT path needs. The broader
+`ButterflyComplexStage4`, `RealFFTUnpack`, `RealFFTPower`) that a
+double-precision FFT/STFT path needs. The broader
 audio/ML helpers (PCM conversions, the general split-format complex ops such as
 `MulComplex` / `AbsSqComplex`, indexed/strided dot products) live in `f32`
 instead, so the two float surfaces remain intentionally asymmetric.
@@ -220,6 +221,7 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 |                 | `Autocorrelate(autoc, x, maxLag)`   | LPC autocorrelation Σ x[i]·x[i-lag] (bit-exact) | 4x (AVX2) / 2x (NEON)     |
 | **Complex/FFT** | `ButterflyComplex(uRe,uIm,lRe,lIm,twRe,twIm)` | FFT butterfly with twiddle multiply | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `ButterflyComplexStage(re,im,span,twRe,twIm)` | One whole radix-2 DIT stage (any span) | 4x (AVX+FMA) / 2x (NEON)   |
+|                 | `ButterflyComplexStage4(re,im,span,tw1..tw3)` | One whole radix-4 DIT stage (two radix-2 stages in one pass) | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real-FFT even/odd unpack step | 4x (AVX2+FMA) / 2x (NEON)   |
 |                 | `RealFFTPower(dst,zRe,zIm,twRe,twIm)`         | Fused real-FFT power spectrum \|X_k\|^2 (single pass) | 4x (AVX2+FMA) / 2x (NEON)   |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |

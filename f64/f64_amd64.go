@@ -691,6 +691,27 @@ func butterflyComplexStage64(re, im []float64, span, blocks int, twRe, twIm []fl
 	butterflyComplexStage64Go(re, im, span, blocks, twRe, twIm)
 }
 
+func butterflyComplexStage4x64(re, im []float64, span, blocks int,
+	tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float64) {
+	// butterflyComplexStage4AVX handles every span: across j when span fills a
+	// 4-wide YMM (spans 2 and 3 run its scalar tail), across blocks for span 1.
+	//
+	// AVX+FMA is the whole requirement, no AVX2: the span-1 block-axis path
+	// transposes a 4x4 float64 tile with VUNPCKLPD/VUNPCKHPD and VPERM2F128 and
+	// splats its twiddles with the memory-source form of VBROADCASTSD, and the
+	// complex multiplies use VFMADD231PD. The register-source VBROADCASTSD would be
+	// AVX2, the trap #196/#197 swept for.
+	//
+	// The guard is about total work, not span: a stage carrying fewer than
+	// minAVXElements radix-4 groups goes to Go regardless of its span, matching the
+	// radix-2 stage above.
+	if cpu.X86.AVX && cpu.X86.FMA && blocks*span >= minAVXElements {
+		butterflyComplexStage4AVX(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+		return
+	}
+	butterflyComplexStage4x64Go(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+}
+
 func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	// realFFTUnpackAVX needs AVX2, not just AVX+FMA: the reversed load uses VPERMPD
 	// and the constants use register-source VBROADCASTSD plus VPCMPEQD/VPSLLQ on
@@ -1123,6 +1144,18 @@ func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float6
 //
 //go:noescape
 func butterflyComplexStageAVX(re, im []float64, span, blocks int, twRe, twIm []float64)
+
+// ButterflyComplexStage4 assembly function declaration.
+//
+// Callers MUST satisfy len(re) == len(im) == 4*span*blocks and
+// len(tw1Re) == len(tw1Im) == len(tw2Re) == len(tw2Im) == len(tw3Re) ==
+// len(tw3Im) >= span, with span >= 1 and blocks >= 1. Every address the kernel
+// forms is derived from span and blocks, never from the slice headers, so a
+// violated precondition reads and writes out of bounds silently rather than
+// panicking the way the Go fallback would. ButterflyComplexStage4 establishes it.
+//
+//go:noescape
+func butterflyComplexStage4AVX(re, im []float64, span, blocks int, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float64)
 
 // RealFFTUnpack assembly function declaration
 //

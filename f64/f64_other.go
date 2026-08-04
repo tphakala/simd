@@ -77,6 +77,11 @@ func butterflyComplexStage64(re, im []float64, span, blocks int, twRe, twIm []fl
 	butterflyComplexStage64Go(re, im, span, blocks, twRe, twIm)
 }
 
+func butterflyComplexStage4x64(re, im []float64, span, blocks int,
+	tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float64) {
+	butterflyComplexStage4x64Go(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+}
+
 func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }

@@ -532,6 +532,29 @@ func butterflyComplexStage64(re, im []float64, span, blocks int, twRe, twIm []fl
 //go:noescape
 func butterflyComplexStageNEON(re, im []float64, span, blocks int, twRe, twIm []float64)
 
+func butterflyComplexStage4x64(re, im []float64, span, blocks int,
+	tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float64) {
+	// butterflyComplexStage4NEON vectorizes across j for span >= 2 and across
+	// blocks for span == 1, so every span has a vector path. One iteration needs
+	// 2 float64 lanes, so anything below 2 total radix-4 groups falls to Go.
+	if hasNEON && blocks*span >= 2 {
+		butterflyComplexStage4NEON(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+		return
+	}
+	butterflyComplexStage4x64Go(re, im, span, blocks, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im)
+}
+
+// ButterflyComplexStage4 assembly function declaration.
+//
+// Callers MUST satisfy len(re) == len(im) == 4*span*blocks and all six twiddle
+// slices >= span, with span >= 1 and blocks >= 1. Every address the kernel forms
+// is derived from span and blocks, never from the slice headers, so a violated
+// precondition reads and writes out of bounds silently rather than panicking the
+// way the Go fallback would. ButterflyComplexStage4 establishes it.
+//
+//go:noescape
+func butterflyComplexStage4NEON(re, im []float64, span, blocks int, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float64)
+
 func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	// One NEON iteration needs 2 float64 lanes; n > 2 means (n-1) >= 2.
 	if hasNEON && n > 2 {
