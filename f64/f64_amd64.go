@@ -705,6 +705,19 @@ func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }
 
+func realFFTPower64(dst, zRe, zIm, twRe, twIm []float64, n int) {
+	// realFFTPowerAVX shares realFFTUnpackAVX's reversed mirror load (VPERMPD plus
+	// register-source constants), so it needs AVX2, not just AVX+FMA, for the same
+	// reason; see the realFFTUnpack64 comment above. It also uses VFMADD for both
+	// the odd term and the fused magnitude-squared, so cpu.X86.FMA is required.
+	// n > minAVXElements means n >= 5, so (n-1) >= 4 = one full 4-wide AVX pass.
+	if hasAVX2 && cpu.X86.FMA && n > minAVXElements {
+		realFFTPowerAVX(dst, zRe, zIm, twRe, twIm, n)
+		return
+	}
+	realFFTPower64Go(dst, zRe, zIm, twRe, twIm, n)
+}
+
 func sigmoid64(dst, src []float64) {
 	// Requires AVX2: sigmoidAVX reconstructs 2^k with 256-bit YMM integer ops
 	// (VCVTTPD2DQ/VPMOVSXDQ/VPSLLQ/VPADDQ) that do not exist on AVX1-only CPUs.
@@ -1115,3 +1128,8 @@ func butterflyComplexStageAVX(re, im []float64, span, blocks int, twRe, twIm []f
 //
 //go:noescape
 func realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int)
+
+// RealFFTPower assembly function declaration
+//
+//go:noescape
+func realFFTPowerAVX(dst, zRe, zIm, twRe, twIm []float64, n int)

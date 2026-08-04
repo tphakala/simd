@@ -454,3 +454,49 @@ func FuzzF64Pow(f *testing.F) {
 		}
 	})
 }
+
+// FuzzF64RealFFTPower differentially tests the fused power kernel at every length,
+// on bounded [-1,1) inputs so the power stays O(1) and the tolerance is robust
+// against cancellation. Two checks run per input: (1) the pure-Go reference
+// realFFTPower64Go matches an independent unpack-then-square (realFFTUnpack64Go
+// squared) to within rounding, pinning the reference's bin math; (2) the dispatched
+// kernel (AVX/NEON, fused magnitude-squared) matches the Go reference to within
+// rounding, stressing the SIMD tail/remainder at random n. The comparisons are
+// tolerance-based, not bit-for-bit, because the Go compiler contracts the
+// reference's multiply-adds into hardware FMAs on some architectures (arm64) and
+// not others (amd64), so the last bit of the pure-Go path is not portable.
+func FuzzF64RealFFTPower(f *testing.F) {
+	addByteLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		u := f64sUnit(raw) // bounded to [-1, 1)
+		n := len(u) / 2
+		if n < realFFTUnpackMinN {
+			return
+		}
+		zRe := u[:n]
+		zIm := u[n : 2*n]
+		twRe := make([]float64, n-1)
+		twIm := make([]float64, n-1)
+		makePowerTwiddles(twRe, twIm, n)
+
+		dst := make([]float64, n)
+		refGo := make([]float64, n)
+		outRe := make([]float64, n)
+		outIm := make([]float64, n)
+		RealFFTPower(dst, zRe, zIm, twRe, twIm)
+		realFFTPower64Go(refGo, zRe, zIm, twRe, twIm, n)
+		realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
+
+		for k := 1; k < n; k++ {
+			unpackSq := outRe[k]*outRe[k] + outIm[k]*outIm[k]
+			if !realFFTPowerClose(refGo[k], unpackSq) {
+				t.Fatalf("realFFTPower64Go bin %d (n=%d) = %v, unpack-square = %v, diff=%g",
+					k, n, refGo[k], unpackSq, refGo[k]-unpackSq)
+			}
+			if !realFFTPowerClose(dst[k], refGo[k]) {
+				t.Fatalf("RealFFTPower bin %d (n=%d) = %v, Go ref = %v, diff=%g",
+					k, n, dst[k], refGo[k], dst[k]-refGo[k])
+			}
+		}
+	})
+}
