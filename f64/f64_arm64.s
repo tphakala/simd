@@ -3046,6 +3046,354 @@ bfstage_neon_span1_tail_pre:
 bfstage_neon_done:
     RET
 
+// func butterflyComplexStage4NEON(re, im []float64, span, blocks int, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float64)
+// One complete radix-4 decimation-in-time stage, in place over split-complex
+// float64. For every block k in steps of 4*span and every j in [0, span), the
+// four sub-vectors x0..x3 at (k+j, k+span+j, k+2*span+j, k+3*span+j) are combined
+// with twiddles tw1[j], tw2[j], tw3[j]:
+//   t1 = x1*tw1; t2 = x2*tw2; t3 = x3*tw3    (FMUL+FMLS for re, FMUL+FMLA for im)
+//   a = x0+t1; b = x0-t1; c = t2+t3; d = t2-t3
+//   y0 = a+c; y1 = b - i*d; y2 = a-c; y3 = b + i*d
+// where -i*(dr,di) = (di,-dr) and +i*(dr,di) = (-di,dr). Same arithmetic sequence
+// as butterflyComplexStageNEON, extended from a radix-2 pair to a radix-4 group.
+//
+// Two vectorization axes, picked by span. span >= 2 vectorizes across j, two lanes
+// (.2D) per iteration with a scalar tail for odd span; the four sub-vector cursors
+// (R6..R13) and six twiddle cursors (R19..R24) walk their runs, the block bases
+// R0/R1 advance by 4*span*8 per block. span == 1 has one butterfly per block, so
+// it vectorizes across blocks: UZP1/UZP2 split two interleaved [x0,x1,x2,x3] blocks
+// into x0..x3 rows, the butterfly runs with the three twiddles splatted (VDUP),
+// and ZIP1/ZIP2 re-interleave the results. A radix-4 Cooley-Tukey schedule never
+// lands on span 2, so there is no dedicated span-2 path; span 2 is correct through
+// the j-axis path (a single 2-lane iteration, with no scalar tail since span is
+// even).
+//
+// The .2D FMUL/FADD/FSUB/FMLA/FMLS and the UZP1/UZP2/ZIP1/ZIP2 permutes are
+// hand-encoded WORDs (Go's assembler has no mnemonics for them); the trailing
+// comment on each is cross-checked against arm64asm by asmcheck_test.go. VLD1/VST1,
+// VDUP and the scalar F-register tail use native mnemonics.
+//
+// Registers: R0/R1 re+im block bases, R2 span, R3 block count, R4 span*8, R5 inner
+// counter, R6..R9 x0..x3 re cursors, R10..R13 x0..x3 im cursors, R19..R24 the six
+// twiddle cursors, R25 block stride (4*span*8). The span == 1 path reuses R0/R1 as
+// running cursors, R5 as the block-pair counter, R6/R7 as the second block's
+// addresses, and V16..V21 as the splatted twiddles. Neither path touches R16/R17/
+// R18/R27/R28. Frame: re(24)+im(24)+span(8)+blocks(8)+tw1Re(24)+tw1Im(24)+tw2Re(24)
+// +tw2Im(24)+tw3Re(24)+tw3Im(24) = 208 bytes.
+TEXT ·butterflyComplexStage4NEON(SB), NOSPLIT, $0-208
+    MOVD re_base+0(FP), R0
+    MOVD im_base+24(FP), R1
+    MOVD span+48(FP), R2
+    MOVD blocks+56(FP), R3
+    MOVD tw1Re_base+64(FP), R19
+    MOVD tw1Im_base+88(FP), R20
+    MOVD tw2Re_base+112(FP), R21
+    MOVD tw2Im_base+136(FP), R22
+    MOVD tw3Re_base+160(FP), R23
+    MOVD tw3Im_base+184(FP), R24
+
+    CBZ  R3, bfstage4_neon_done
+    CMP  $1, R2
+    BEQ  bfstage4_neon_span1
+
+    // ----------------------------------------------------------------------
+    // span >= 2: vectorize across j, two lanes per iteration, scalar tail when
+    // span is odd. The four re/im sub-vector cursors are reset from the block
+    // bases every block; the twiddle cursors are reloaded from the frame.
+    // ----------------------------------------------------------------------
+    LSL  $3, R2, R4                  // R4 = span*8
+    LSL  $5, R2, R25                 // R25 = span*32 = 4*span*8 block stride
+
+bfstage4_neon_block:
+    MOVD R0, R6                      // x0re
+    ADD  R4, R0, R7                  // x1re
+    ADD  R4, R7, R8                  // x2re
+    ADD  R4, R8, R9                  // x3re
+    MOVD R1, R10                     // x0im
+    ADD  R4, R1, R11                 // x1im
+    ADD  R4, R11, R12                // x2im
+    ADD  R4, R12, R13                // x3im
+    MOVD tw1Re_base+64(FP), R19
+    MOVD tw1Im_base+88(FP), R20
+    MOVD tw2Re_base+112(FP), R21
+    MOVD tw2Im_base+136(FP), R22
+    MOVD tw3Re_base+160(FP), R23
+    MOVD tw3Im_base+184(FP), R24
+    LSR  $1, R2, R5                  // R5 = span/2 vector iterations
+    CBZ  R5, bfstage4_neon_tail_pre
+
+bfstage4_neon_vec:
+    VLD1 (R6), [V0.D2]               // x0re[j:j+2]
+    VLD1 (R7), [V1.D2]               // x1re
+    VLD1 (R8), [V2.D2]               // x2re
+    VLD1 (R9), [V3.D2]               // x3re
+    VLD1 (R10), [V4.D2]              // x0im
+    VLD1 (R11), [V5.D2]              // x1im
+    VLD1 (R12), [V6.D2]              // x2im
+    VLD1 (R13), [V7.D2]              // x3im
+    VLD1.P 16(R19), [V16.D2]         // tw1re
+    VLD1.P 16(R20), [V17.D2]         // tw1im
+    VLD1.P 16(R21), [V18.D2]         // tw2re
+    VLD1.P 16(R22), [V19.D2]         // tw2im
+    VLD1.P 16(R23), [V20.D2]         // tw3re
+    VLD1.P 16(R24), [V21.D2]         // tw3im
+
+    WORD $0x6E70DC36                 // FMUL V22.2D, V1.2D, V16.2D   t1re = x1re*tw1re
+    WORD $0x4EF1CCB6                 // FMLS V22.2D, V5.2D, V17.2D        - x1im*tw1im
+    WORD $0x6E71DC37                 // FMUL V23.2D, V1.2D, V17.2D   t1im = x1re*tw1im
+    WORD $0x4E70CCB7                 // FMLA V23.2D, V5.2D, V16.2D        + x1im*tw1re
+    WORD $0x6E72DC58                 // FMUL V24.2D, V2.2D, V18.2D   t2re
+    WORD $0x4EF3CCD8                 // FMLS V24.2D, V6.2D, V19.2D
+    WORD $0x6E73DC59                 // FMUL V25.2D, V2.2D, V19.2D   t2im
+    WORD $0x4E72CCD9                 // FMLA V25.2D, V6.2D, V18.2D
+    WORD $0x6E74DC7A                 // FMUL V26.2D, V3.2D, V20.2D   t3re
+    WORD $0x4EF5CCFA                 // FMLS V26.2D, V7.2D, V21.2D
+    WORD $0x6E75DC7B                 // FMUL V27.2D, V3.2D, V21.2D   t3im
+    WORD $0x4E74CCFB                 // FMLA V27.2D, V7.2D, V20.2D
+    WORD $0x4E7AD71C                 // FADD V28.2D, V24.2D, V26.2D  cre = t2re+t3re
+    WORD $0x4E7BD73D                 // FADD V29.2D, V25.2D, V27.2D  cim
+    WORD $0x4EFAD71E                 // FSUB V30.2D, V24.2D, V26.2D  dre = t2re-t3re
+    WORD $0x4EFBD73F                 // FSUB V31.2D, V25.2D, V27.2D  dim
+    WORD $0x4E76D408                 // FADD V8.2D, V0.2D, V22.2D    are = x0re+t1re
+    WORD $0x4EF6D409                 // FSUB V9.2D, V0.2D, V22.2D    bre = x0re-t1re
+    WORD $0x4E77D48A                 // FADD V10.2D, V4.2D, V23.2D   aim
+    WORD $0x4EF7D48B                 // FSUB V11.2D, V4.2D, V23.2D   bim
+
+    WORD $0x4E7CD50C                 // FADD V12.2D, V8.2D, V28.2D   y0re = are+cre
+    WORD $0x4E7DD54D                 // FADD V13.2D, V10.2D, V29.2D  y0im = aim+cim
+    VST1.P [V12.D2], 16(R6)
+    VST1.P [V13.D2], 16(R10)
+    WORD $0x4EFCD50C                 // FSUB V12.2D, V8.2D, V28.2D   y2re = are-cre
+    WORD $0x4EFDD54D                 // FSUB V13.2D, V10.2D, V29.2D  y2im = aim-cim
+    VST1.P [V12.D2], 16(R8)
+    VST1.P [V13.D2], 16(R12)
+    WORD $0x4E7FD52C                 // FADD V12.2D, V9.2D, V31.2D   y1re = bre+dim
+    WORD $0x4EFED56D                 // FSUB V13.2D, V11.2D, V30.2D  y1im = bim-dre
+    VST1.P [V12.D2], 16(R7)
+    VST1.P [V13.D2], 16(R11)
+    WORD $0x4EFFD52C                 // FSUB V12.2D, V9.2D, V31.2D   y3re = bre-dim
+    WORD $0x4E7ED56D                 // FADD V13.2D, V11.2D, V30.2D  y3im = bim+dre
+    VST1.P [V12.D2], 16(R9)
+    VST1.P [V13.D2], 16(R13)
+
+    SUB  $1, R5
+    CBNZ R5, bfstage4_neon_vec
+
+bfstage4_neon_tail_pre:
+    AND  $1, R2, R5                  // R5 = span & 1
+    CBZ  R5, bfstage4_neon_next
+
+    FMOVD (R6), F0                   // x0re
+    FMOVD (R7), F1                   // x1re
+    FMOVD (R8), F2                   // x2re
+    FMOVD (R9), F3                   // x3re
+    FMOVD (R10), F4                  // x0im
+    FMOVD (R11), F5                  // x1im
+    FMOVD (R12), F6                  // x2im
+    FMOVD (R13), F7                  // x3im
+    FMOVD (R19), F16                 // tw1re
+    FMOVD (R20), F17                 // tw1im
+    FMOVD (R21), F18                 // tw2re
+    FMOVD (R22), F19                 // tw2im
+    FMOVD (R23), F20                 // tw3re
+    FMOVD (R24), F21                 // tw3im
+
+    FMULD F1, F16, F22
+    FMULD F5, F17, F23
+    FSUBD F23, F22, F22              // t1re
+    FMULD F1, F17, F23
+    FMULD F5, F16, F24
+    FADDD F23, F24, F23              // t1im
+    FMULD F2, F18, F24
+    FMULD F6, F19, F25
+    FSUBD F25, F24, F24              // t2re
+    FMULD F2, F19, F25
+    FMULD F6, F18, F26
+    FADDD F25, F26, F25              // t2im
+    FMULD F3, F20, F26
+    FMULD F7, F21, F27
+    FSUBD F27, F26, F26              // t3re
+    FMULD F3, F21, F27
+    FMULD F7, F20, F28
+    FADDD F27, F28, F27              // t3im
+    FADDD F24, F26, F28              // cre
+    FADDD F25, F27, F29              // cim
+    FSUBD F26, F24, F30              // dre
+    FSUBD F27, F25, F31              // dim
+    FADDD F0, F22, F1                // are
+    FSUBD F22, F0, F2                // bre
+    FADDD F4, F23, F5                // aim
+    FSUBD F23, F4, F6                // bim
+    FADDD F1, F28, F0                // y0re
+    FMOVD F0, (R6)
+    FADDD F5, F29, F0                // y0im
+    FMOVD F0, (R10)
+    FSUBD F28, F1, F0                // y2re
+    FMOVD F0, (R8)
+    FSUBD F29, F5, F0                // y2im
+    FMOVD F0, (R12)
+    FADDD F2, F31, F0                // y1re = bre+dim
+    FMOVD F0, (R7)
+    FSUBD F30, F6, F0                // y1im = bim-dre
+    FMOVD F0, (R11)
+    FSUBD F31, F2, F0                // y3re = bre-dim
+    FMOVD F0, (R9)
+    FADDD F30, F6, F0                // y3im = bim+dre
+    FMOVD F0, (R13)
+
+bfstage4_neon_next:
+    ADD  R25, R0, R0
+    ADD  R25, R1, R1
+    SUB  $1, R3
+    CBNZ R3, bfstage4_neon_block
+    RET
+
+    // ----------------------------------------------------------------------
+    // span == 1: each block is [x0,x1,x2,x3] contiguous. Take two blocks per
+    // iteration; UZP1/UZP2 gather x0..x3 one-per-lane, the butterfly runs with the
+    // three twiddles splatted, ZIP1/ZIP2 re-interleave. One leftover block scalar.
+    // ----------------------------------------------------------------------
+bfstage4_neon_span1:
+    FMOVD (R19), F16
+    VDUP  V16.D[0], V16.D2           // tw1re[0] in both lanes
+    FMOVD (R20), F17
+    VDUP  V17.D[0], V17.D2           // tw1im[0]
+    FMOVD (R21), F18
+    VDUP  V18.D[0], V18.D2           // tw2re[0]
+    FMOVD (R22), F19
+    VDUP  V19.D[0], V19.D2           // tw2im[0]
+    FMOVD (R23), F20
+    VDUP  V20.D[0], V20.D2           // tw3re[0]
+    FMOVD (R24), F21
+    VDUP  V21.D[0], V21.D2           // tw3im[0]
+
+    LSR  $1, R3, R5                  // R5 = blocks/2 = 2-block iterations
+    CBZ  R5, bfstage4_neon_span1_tail_pre
+
+bfstage4_neon_span1_vec:
+    ADD  $32, R0, R6
+    ADD  $32, R1, R7
+    VLD1 (R0), [V0.D2, V1.D2]        // block0 re = [x0,x1],[x2,x3]
+    VLD1 (R6), [V2.D2, V3.D2]        // block1 re
+    VLD1 (R1), [V4.D2, V5.D2]        // block0 im
+    VLD1 (R7), [V6.D2, V7.D2]        // block1 im
+
+    WORD $0x4EC21808                 // UZP1 V8.2D, V0.2D, V2.2D     X0re = [x0_b0,x0_b1]
+    WORD $0x4EC25809                 // UZP2 V9.2D, V0.2D, V2.2D     X1re
+    WORD $0x4EC3182A                 // UZP1 V10.2D, V1.2D, V3.2D    X2re
+    WORD $0x4EC3582B                 // UZP2 V11.2D, V1.2D, V3.2D    X3re
+    WORD $0x4EC6188C                 // UZP1 V12.2D, V4.2D, V6.2D    X0im
+    WORD $0x4EC6588D                 // UZP2 V13.2D, V4.2D, V6.2D    X1im
+    WORD $0x4EC718AE                 // UZP1 V14.2D, V5.2D, V7.2D    X2im
+    WORD $0x4EC758AF                 // UZP2 V15.2D, V5.2D, V7.2D    X3im
+
+    WORD $0x6E70DD36                 // FMUL V22.2D, V9.2D, V16.2D   t1re
+    WORD $0x4EF1CDB6                 // FMLS V22.2D, V13.2D, V17.2D
+    WORD $0x6E71DD37                 // FMUL V23.2D, V9.2D, V17.2D   t1im
+    WORD $0x4E70CDB7                 // FMLA V23.2D, V13.2D, V16.2D
+    WORD $0x6E72DD58                 // FMUL V24.2D, V10.2D, V18.2D  t2re
+    WORD $0x4EF3CDD8                 // FMLS V24.2D, V14.2D, V19.2D
+    WORD $0x6E73DD59                 // FMUL V25.2D, V10.2D, V19.2D  t2im
+    WORD $0x4E72CDD9                 // FMLA V25.2D, V14.2D, V18.2D
+    WORD $0x6E74DD7A                 // FMUL V26.2D, V11.2D, V20.2D  t3re
+    WORD $0x4EF5CDFA                 // FMLS V26.2D, V15.2D, V21.2D
+    WORD $0x6E75DD7B                 // FMUL V27.2D, V11.2D, V21.2D  t3im
+    WORD $0x4E74CDFB                 // FMLA V27.2D, V15.2D, V20.2D
+    WORD $0x4E7AD71C                 // FADD V28.2D, V24.2D, V26.2D  cre
+    WORD $0x4E7BD73D                 // FADD V29.2D, V25.2D, V27.2D  cim
+    WORD $0x4EFAD71E                 // FSUB V30.2D, V24.2D, V26.2D  dre
+    WORD $0x4EFBD73F                 // FSUB V31.2D, V25.2D, V27.2D  dim
+    WORD $0x4E76D500                 // FADD V0.2D, V8.2D, V22.2D    are
+    WORD $0x4EF6D501                 // FSUB V1.2D, V8.2D, V22.2D    bre
+    WORD $0x4E77D582                 // FADD V2.2D, V12.2D, V23.2D   aim
+    WORD $0x4EF7D583                 // FSUB V3.2D, V12.2D, V23.2D   bim
+    WORD $0x4E7CD404                 // FADD V4.2D, V0.2D, V28.2D    X0re' = are+cre
+    WORD $0x4EFCD406                 // FSUB V6.2D, V0.2D, V28.2D    X2re' = are-cre
+    WORD $0x4E7FD425                 // FADD V5.2D, V1.2D, V31.2D    X1re' = bre+dim
+    WORD $0x4EFFD427                 // FSUB V7.2D, V1.2D, V31.2D    X3re' = bre-dim
+    WORD $0x4E7DD448                 // FADD V8.2D, V2.2D, V29.2D    X0im' = aim+cim
+    WORD $0x4EFDD44A                 // FSUB V10.2D, V2.2D, V29.2D   X2im' = aim-cim
+    WORD $0x4EFED469                 // FSUB V9.2D, V3.2D, V30.2D    X1im' = bim-dre
+    WORD $0x4E7ED46B                 // FADD V11.2D, V3.2D, V30.2D   X3im' = bim+dre
+
+    WORD $0x4EC53880                 // ZIP1 V0.2D, V4.2D, V5.2D     block0 re [x0',x1']
+    WORD $0x4EC738C1                 // ZIP1 V1.2D, V6.2D, V7.2D     block0 re [x2',x3']
+    WORD $0x4EC57882                 // ZIP2 V2.2D, V4.2D, V5.2D     block1 re [x0',x1']
+    WORD $0x4EC778C3                 // ZIP2 V3.2D, V6.2D, V7.2D     block1 re [x2',x3']
+    VST1 [V0.D2, V1.D2], (R0)        // block0 re
+    VST1 [V2.D2, V3.D2], (R6)        // block1 re
+    WORD $0x4EC93900                 // ZIP1 V0.2D, V8.2D, V9.2D     block0 im [x0',x1']
+    WORD $0x4ECB3941                 // ZIP1 V1.2D, V10.2D, V11.2D   block0 im [x2',x3']
+    WORD $0x4EC97902                 // ZIP2 V2.2D, V8.2D, V9.2D     block1 im [x0',x1']
+    WORD $0x4ECB7943                 // ZIP2 V3.2D, V10.2D, V11.2D   block1 im [x2',x3']
+    VST1 [V0.D2, V1.D2], (R1)        // block0 im
+    VST1 [V2.D2, V3.D2], (R7)        // block1 im
+
+    ADD  $64, R0, R0
+    ADD  $64, R1, R1
+    SUB  $1, R5
+    CBNZ R5, bfstage4_neon_span1_vec
+
+bfstage4_neon_span1_tail_pre:
+    AND  $1, R3, R5                  // one leftover block at most
+    CBZ  R5, bfstage4_neon_done
+
+    FMOVD (R0), F0                   // x0re
+    FMOVD 8(R0), F1                  // x1re
+    FMOVD 16(R0), F2                 // x2re
+    FMOVD 24(R0), F3                 // x3re
+    FMOVD (R1), F4                   // x0im
+    FMOVD 8(R1), F5                  // x1im
+    FMOVD 16(R1), F6                 // x2im
+    FMOVD 24(R1), F7                 // x3im
+    // F16..F21 still hold the splatted twiddles (lane 0 of V16..V21, only read
+    // by the vector loop above), so no reload is needed.
+    FMULD F1, F16, F22
+    FMULD F5, F17, F23
+    FSUBD F23, F22, F22              // t1re
+    FMULD F1, F17, F23
+    FMULD F5, F16, F24
+    FADDD F23, F24, F23              // t1im
+    FMULD F2, F18, F24
+    FMULD F6, F19, F25
+    FSUBD F25, F24, F24              // t2re
+    FMULD F2, F19, F25
+    FMULD F6, F18, F26
+    FADDD F25, F26, F25              // t2im
+    FMULD F3, F20, F26
+    FMULD F7, F21, F27
+    FSUBD F27, F26, F26              // t3re
+    FMULD F3, F21, F27
+    FMULD F7, F20, F28
+    FADDD F27, F28, F27              // t3im
+    FADDD F24, F26, F28              // cre
+    FADDD F25, F27, F29              // cim
+    FSUBD F26, F24, F30              // dre
+    FSUBD F27, F25, F31              // dim
+    FADDD F0, F22, F1                // are
+    FSUBD F22, F0, F2                // bre
+    FADDD F4, F23, F5                // aim
+    FSUBD F23, F4, F6                // bim
+    FADDD F1, F28, F0                // y0re
+    FMOVD F0, (R0)
+    FADDD F5, F29, F0                // y0im
+    FMOVD F0, (R1)
+    FSUBD F28, F1, F0                // y2re
+    FMOVD F0, 16(R0)
+    FSUBD F29, F5, F0                // y2im
+    FMOVD F0, 16(R1)
+    FADDD F2, F31, F0                // y1re = bre+dim
+    FMOVD F0, 8(R0)
+    FSUBD F30, F6, F0                // y1im = bim-dre
+    FMOVD F0, 8(R1)
+    FSUBD F31, F2, F0                // y3re = bre-dim
+    FMOVD F0, 24(R0)
+    FADDD F30, F6, F0                // y3im = bim+dre
+    FMOVD F0, 24(R1)
+
+bfstage4_neon_done:
+    RET
+
 // func realFFTUnpackNEON(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int)
 // Real-FFT unpack step, 2 float64 lanes (.2D) per vector register, the float64
 // counterpart of f32's realFFTUnpackNEON: 2 lanes/iter instead of 4, so the
