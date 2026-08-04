@@ -1,0 +1,24 @@
+//go:build amd64
+
+package c128
+
+import (
+	"testing"
+
+	"github.com/tphakala/simd/cpu"
+	"github.com/tphakala/simd/internal/aliastest"
+)
+
+// forTiers runs the aliasing sweep under every forceable amd64 tier, including
+// the AVX-without-FMA tier (#201). The list is in descending priority so
+// aliastest.ForTiers re-binds the host default on cleanup.
+func forTiers(t *testing.T, run func(t *testing.T)) {
+	t.Helper()
+	aliastest.ForTiers(t, []aliastest.Tier{
+		{Name: "AVX512", Bind: initAVX512, Supported: cpu.X86.AVX512F && cpu.X86.AVX512VL},
+		{Name: "AVX", Bind: initAVX, Supported: cpu.X86.AVX && cpu.X86.FMA},
+		{Name: "AVXNoFMA", Bind: initAVXNoFMA, Supported: cpu.X86.AVX},
+		{Name: "SSE2", Bind: initSSE2, Supported: cpu.X86.SSE2},
+		{Name: "Go", Bind: initGo, Supported: true},
+	}, run)
+}

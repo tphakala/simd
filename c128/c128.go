@@ -14,6 +14,26 @@
 //
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
+//
+// # Aliasing
+//
+// The element-wise operations may be used fully in place: the destination may
+// alias an input exactly, element for element. Add, Sub, Mul and MulConj accept
+// dst equal to a, to b, or to both; Scale and Conj accept dst equal to a. Each
+// SIMD block reads its whole block of complex inputs into registers before
+// storing any output lane, and the remainder reads each complex element before it
+// writes that element, so an exact overlay is well defined lane by lane on every
+// dispatch path (amd64 SSE2, AVX with and without FMA, AVX-512, arm64 NEON, and
+// the pure-Go fallback).
+//
+// A destination must not overlap an input at a shifted offset: a SIMD load pulls
+// a whole block of an input ahead of the stores, so a shifted overlay clobbers
+// input lanes a later iteration has not yet read; the resulting corruption
+// pattern is undefined and varies with kernel width and length.
+//
+// Abs, AbsSq and FromReal convert between complex128 and float64, so their input
+// and output have distinct element types and cannot alias in safe Go. DotProduct
+// and DotProductConj write no output slice, so aliasing does not apply to them.
 package c128
 
 // Mul computes element-wise complex multiplication: dst[i] = a[i] * b[i].

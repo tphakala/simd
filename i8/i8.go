@@ -42,6 +42,31 @@
 //
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
+//
+// # Aliasing
+//
+// The element-wise operations may be used fully in place: the destination may
+// alias an input exactly, byte for byte. Abs and Neg accept dst equal to a;
+// AddSaturate, SubSaturate, AbsDiff, Max and Min accept dst equal to a, to b, or
+// to both; AddScalarSaturate, SubScalarSaturate and Clamp accept dst equal to the
+// source. Each SIMD block reads its whole block of inputs into registers before
+// storing any output byte, and the scalar tail reads each byte before it writes
+// that byte. The element-wise kernels absorb their sub-block remainder with
+// forward blocks that read then write each byte once, not the idempotent
+// overlapping-final-block trick the reductions and the widening conversions use,
+// so an exact overlay is well defined byte by byte on the AVX2 and NEON kernels
+// and the pure-Go fallback.
+//
+// A destination must not overlap an input at a shifted offset: a SIMD load pulls
+// a whole block of an input ahead of the stores, so a shifted overlay clobbers
+// input bytes a later iteration has not yet read; the resulting corruption
+// pattern is undefined and varies with kernel width and length.
+//
+// Quantize, Dequantize, Requantize, ToInt16 and ToInt32 convert between int8 and
+// float32 or a wider integer, so their input and output have distinct element
+// types and cannot alias in safe Go (see the note on the quantization group). The
+// reductions (DotProduct, Sum, SumAbs, SAD, MaxAbs, MinMax) write no output slice,
+// so aliasing does not apply to them.
 package i8
 
 // AddSaturate writes dst[i] = clamp(int(a[i]) + int(b[i]), -128, 127) for i in

@@ -21,6 +21,58 @@
 // asmcheck-enforced for the primitives that actually perform a multiply followed
 // by an add (see TestNoFMAContract in the module root); a future optimization
 // that fuses one of them fails that test rather than silently changing bits.
+//
+// # Aliasing
+//
+// The element-wise maps may be used fully in place: the destination may alias an
+// input exactly, element for element. This holds for the unary maps (Abs, Neg,
+// Round, Sqrt, Reciprocal, Exp, Log, Log2, Log10, ReLU, Sigmoid, Tanh, AbsPow34,
+// Scale, AddScalar, SubFromScalar, Clamp, ClampScale, Pow), for the two-pass
+// CumulativeSum and Normalize (dst==a), for the binary maps (Add, Sub, Mul, Div,
+// PowElem, CopySign, AbsSqComplex, where dst may alias any input, or all of them
+// at once), for the fused multiply-add FMA (dst may alias a, b or c), and for the
+// split-complex products MulComplex and MulConjComplex, whose result may
+// overwrite either input vector (dstRe==aRe with dstIm==aIm, or dstRe==bRe with
+// dstIm==bIm). The guarantee is mechanical: each SIMD block reads its whole block
+// of inputs into registers before storing any output lane, and the scalar tail
+// reads each lane before it writes that lane, so an exact overlay is well defined
+// lane by lane on every dispatch path (amd64 SSE, AVX and AVX-512, arm64 NEON, and
+// the pure-Go fallback).
+//
+// A destination must not overlap an input at a shifted offset. A SIMD load pulls
+// a whole block of an input ahead of the stores, so a shifted overlay clobbers
+// input lanes a later iteration has not yet read; the resulting corruption
+// pattern is undefined and varies with kernel width and length.
+//
+// The departures from this default are documented on the functions themselves:
+//   - Reverse reverses in place when dst==src; it must not otherwise overlap src.
+//   - MulComplex and MulConjComplex write two outputs that must be distinct:
+//     dstRe and dstIm may not overlap each other.
+//   - AddSub writes two outputs and supports no output-over-input overlay at all;
+//     pass sumDst and diffDst distinct from a, b and each other.
+//   - AddScaled and AccumulateAdd read and rewrite dst in place (they are
+//     accumulators); their source slice must be disjoint from the destination
+//     window, except that AddScaled also permits s==dst exactly.
+//   - ButterflyComplex and ButterflyComplexStage update their data slices in
+//     place; those slices must be distinct from one another, and the twiddles
+//     must not overlap them.
+//   - The mirror, window, stride, interleave and batch operations (Interleave2/N,
+//     Deinterleave2/N, ConvolveValid and ConvolveValidMulti, ConvolveDecimate,
+//     DotProductBatch, DotProductIndexed, DotProductStrided, MinIdxOfSumRows and
+//     RealFFTUnpack) index inputs and outputs at different positions, so their
+//     outputs must not overlap any input.
+//
+// The float-to-fixed and fixed-to-float conversions (Float32ToInt16Scale,
+// Float32ToInt32ScaleClamp and its Signed form, Int16ToFloat32Scale,
+// Int32ToFloat32Scale) have distinct input and output element types and so cannot
+// alias in safe Go. The reductions (DotProduct, WeightedSum, SumOfSquares, Sum,
+// Mean, Max, Min, MaxAbs, MaxIdx, MinIdx, MinIdxOfSum, Variance, StdDev,
+// EuclideanDistance, ConvolveValidMaxAbs and ConvolveValidMaxAbsMulti,
+// CubicInterpDot) write no output slice, so aliasing does not apply to them. The
+// in-place transcendental variants (ExpInPlace, LogInPlace, PowInPlace,
+// ReLUInPlace, SigmoidInPlace, TanhInPlace) operate on a single slice, so
+// aliasing does not arise, and the Unsafe variants follow the aliasing rules of
+// the checked form they mirror.
 package f32
 
 import "math"
@@ -360,6 +412,10 @@ func ConvolveDecimate(dst, signal, kernel []float32, factor, phase int) {
 // AccumulateAdd adds src to dst starting at offset: dst[offset:offset+len(src)] += src.
 // This is a key primitive for overlap-add in FFT-based convolution.
 //
+// The destination window dst[offset:offset+len(src)] is a read-modify-write
+// accumulator; src must not overlap that window. An overlap-add caller passes a
+// src region disjoint from the destination window, so this is the natural usage.
+//
 // Panics if offset+len(src) > len(dst) or if offset < 0.
 func AccumulateAdd(dst, src []float32, offset int) {
 	if offset < 0 {
@@ -571,6 +627,10 @@ func MaxIdx(a []float32) int {
 // AddScaled adds scaled values to dst: dst[i] += alpha * s[i].
 // This is the AXPY operation from BLAS Level 1.
 // Processes min(len(dst), len(s)) elements.
+//
+// dst is a read-modify-write accumulator. s may overlay dst exactly (the
+// self-scaling dst[i] += alpha*dst[i], since each lane is read before it is
+// rewritten), but s must not overlap dst at a shifted offset.
 func AddScaled(dst []float32, alpha float32, s []float32) {
 	n := min(len(dst), len(s))
 	if n == 0 {
@@ -1309,6 +1369,12 @@ func Float32ToInt32ScaleClampSignedUnsafe(dst []int32, mag, sign []float32, scal
 //
 // This is the core operation for FFT-based convolution in frequency domain.
 // Split format allows direct SIMD loads without deinterleaving overhead.
+//
+// Aliasing: the product may overwrite either input vector in place (dstRe==aRe
+// with dstIm==aIm, or dstRe==bRe with dstIm==bIm); every path reads a full block
+// of all four inputs before storing either output. The two output components
+// must be distinct, though: dstRe and dstIm may not overlap each other, and
+// neither may shift-overlap an input.
 func MulComplex(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 	n := minLen6(len(dstRe), len(dstIm), len(aRe), len(aIm), len(bRe), len(bIm))
 	if n == 0 {
@@ -1325,6 +1391,10 @@ func MulComplex(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 // Processes min(len(dstRe), len(dstIm), len(aRe), len(aIm), len(bRe), len(bIm)) elements.
 //
 // This is used for cross-correlation in frequency domain.
+//
+// Aliasing: the same in-place rule as MulComplex. The product may overwrite
+// either input vector (dstRe==aRe with dstIm==aIm, or dstRe==bRe with dstIm==bIm),
+// but dstRe and dstIm must be distinct and must not shift-overlap an input.
 func MulConjComplex(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 	n := minLen6(len(dstRe), len(dstIm), len(aRe), len(aIm), len(bRe), len(bIm))
 	if n == 0 {
@@ -1341,6 +1411,9 @@ func MulConjComplex(dstRe, dstIm, aRe, aIm, bRe, bIm []float32) {
 //
 // This is faster than computing the full magnitude (no sqrt) and is the
 // core operation for power spectrum computation in spectrograms.
+//
+// dst may alias aRe or aIm exactly (each output depends only on its own index),
+// so the power spectrum can be written over an input in place.
 func AbsSqComplex(dst, aRe, aIm []float32) {
 	n := minLen(len(dst), len(aRe), len(aIm))
 	if n == 0 {
@@ -1365,6 +1438,10 @@ func minLen6(a, b, c, d, e, f int) int {
 //
 // Processes min(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm)) elements.
 // All slices are modified in-place: upper receives upper+temp, lower receives upper-temp.
+//
+// Aliasing: each butterfly reads its inputs before writing either output, so the
+// four data slices are updated in place. They must be four distinct slices, and
+// the twiddles twRe/twIm must not overlap any of them.
 func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
 	n := minLen6(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm))
 	if n == 0 {
@@ -1402,6 +1479,9 @@ const butterflyStageRadix = 2
 // and it is also a no-op when no complete block fits. Blocks are processed while
 // k+2*span <= n, where n = min(len(re), len(im)); a trailing partial block is
 // left untouched.
+//
+// Aliasing: the stage updates re and im in place; they must be distinct buffers,
+// and the twiddles twRe/twIm must not overlap either.
 //
 // Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
 // [ButterflyComplex], results are not guaranteed bit-identical between the
@@ -1491,7 +1571,10 @@ func RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm []float32) {
 //   - Signal processing algorithms requiring time reversal
 //   - General array manipulation
 //
-// In-place operation (dst == src) is supported.
+// Aliasing: in-place reversal (dst == src) is supported. The kernels detect exact
+// data-pointer aliasing at entry and reverse by swapping from both ends, loading
+// each pair before it overwrites either lane. dst must not otherwise overlap src
+// (a shifted overlay is not supported).
 //
 // Uses AVX on AMD64 (8x float32), NEON on ARM64 (4x float32), with pure Go fallback.
 func Reverse(dst, src []float32) {
@@ -1511,6 +1594,11 @@ func Reverse(dst, src []float32) {
 // compared to calling Add and Sub separately.
 //
 // Processes min(len(sumDst), len(diffDst), len(a), len(b)) elements.
+//
+// Aliasing: unlike the plain element-wise maps, AddSub does not support an output
+// overlaid on an input. Its pure-Go tail writes sumDst[i] before reading the
+// input again for diffDst[i], so a sumDst overlaid on a or b is corrupted at the
+// tail lanes. Pass sumDst and diffDst distinct from a, b and from each other.
 //
 // Uses AVX on AMD64 (8x float32), NEON on ARM64 (4x float32), with pure Go fallback.
 func AddSub(sumDst, diffDst, a, b []float32) {
