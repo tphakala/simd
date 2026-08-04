@@ -2,8 +2,78 @@ package i8
 
 import (
 	"math"
+	"math/rand"
 	"testing"
 )
+
+// TestQuantizeRandomizedDifferential runs many random cases through the public
+// path and the Go reference and asserts bit-exact agreement. It gives the active
+// SIMD kernel (AVX2 or NEON) broad differential coverage beyond the deterministic
+// parity sweep; on the rpi5 it is the on-device stress for the NEON kernels.
+func TestQuantizeRandomizedDifferential(t *testing.T) {
+	r := rand.New(rand.NewSource(0x132))
+	for iter := range 4000 {
+		n := r.Intn(200)
+
+		// Quantize: random float32 bit patterns (NaN/Inf/subnormal included).
+		fsrc := make([]float32, n)
+		for i := range fsrc {
+			fsrc[i] = math.Float32frombits(r.Uint32())
+		}
+		fscale := math.Float32frombits(r.Uint32())
+		fzp := int8(r.Intn(256) - 128)
+		gq := make([]int8, n)
+		wq := make([]int8, n)
+		Quantize(gq, fsrc, fscale, fzp)
+		quantizeGo(wq, fsrc, fscale, fzp)
+		for i := range fsrc {
+			if gq[i] != wq[i] {
+				t.Fatalf("Quantize[%d]=%d want %d (src=%v scale=%v zp=%d n=%d iter=%d)",
+					i, gq[i], wq[i], fsrc[i], fscale, fzp, n, iter)
+			}
+		}
+
+		// Dequantize.
+		isrc := make([]int8, n)
+		for i := range isrc {
+			isrc[i] = int8(r.Intn(256) - 128)
+		}
+		dscale := math.Float32frombits(r.Uint32())
+		dzp := int8(r.Intn(256) - 128)
+		gd := make([]float32, n)
+		wd := make([]float32, n)
+		Dequantize(gd, isrc, dscale, dzp)
+		dequantizeGo(wd, isrc, dscale, dzp)
+		assertF32Bits(t, "Dequantize", n, gd, wd)
+
+		// Requantize: random accumulators (with extremes), Q31-ish multipliers
+		// and shifts spanning the in-domain and reroute ranges.
+		acc := make([]int32, n)
+		for i := range acc {
+			switch r.Intn(8) {
+			case 0:
+				acc[i] = math.MaxInt32
+			case 1:
+				acc[i] = math.MinInt32
+			default:
+				acc[i] = int32(r.Uint32())
+			}
+		}
+		mul := int32(r.Uint32())
+		shift := r.Intn(80) - 40 // covers [-31,30] plus reroute on both ends
+		rzp := int8(r.Intn(256) - 128)
+		gr := make([]int8, n)
+		wr := make([]int8, n)
+		Requantize(gr, acc, mul, shift, rzp)
+		requantizeGo(wr, acc, mul, shift, rzp)
+		for i := range acc {
+			if gr[i] != wr[i] {
+				t.Fatalf("Requantize[%d]=%d want %d (acc=%d mul=%d shift=%d zp=%d n=%d iter=%d)",
+					i, gr[i], wr[i], acc[i], mul, shift, rzp, n, iter)
+			}
+		}
+	}
+}
 
 // Tests for the Part-of-#132 quantization vertical (Quantize, Dequantize,
 // Requantize). The pure-Go references in i8_go.go are the source of truth; the
