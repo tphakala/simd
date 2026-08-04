@@ -30,9 +30,9 @@
 //   - AddScaled and AccumulateAdd read and rewrite dst in place (they are
 //     accumulators); their source slice must be disjoint from the destination
 //     window, except that AddScaled also permits s==dst exactly.
-//   - ButterflyComplex and ButterflyComplexStage update their data slices in
-//     place; those slices must not overlap one another, and the twiddles must not
-//     overlap them.
+//   - ButterflyComplex, ButterflyComplexStage and ButterflyComplexStage4 update
+//     their data slices in place; those slices must not overlap one another, and
+//     the twiddles must not overlap them.
 //   - The mirror, window, stride, interleave and batch operations (Interleave2/N,
 //     Deinterleave2/N, ConvolveValid and ConvolveValidMulti, ConvolveDecimate,
 //     DotProductBatch, Autocorrelate, RealFFTUnpack and RealFFTPower) index inputs
@@ -1158,6 +1158,10 @@ const butterflyStage4Radix = 4
 // dedicated span-2 vector path; a span-2 caller still gets a correct result from
 // the general j-axis path (a 2-wide NEON iteration, or the scalar tail of the
 // 4-wide AVX path).
+//
+// Aliasing: like ButterflyComplexStage, the stage updates re and im in place; re
+// and im must not overlap each other, and none of the six twiddle slices may
+// overlap them.
 //
 // Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
 // [ButterflyComplexStage], results are not guaranteed bit-identical between the
