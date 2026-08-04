@@ -220,8 +220,8 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 |                 | `Autocorrelate(autoc, x, maxLag)`   | LPC autocorrelation Σ x[i]·x[i-lag] (bit-exact) | 4x (AVX2) / 2x (NEON)     |
 | **Complex/FFT** | `ButterflyComplex(uRe,uIm,lRe,lIm,twRe,twIm)` | FFT butterfly with twiddle multiply | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `ButterflyComplexStage(re,im,span,twRe,twIm)` | One whole radix-2 DIT stage (any span) | 4x (AVX+FMA) / 2x (NEON)   |
-|                 | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real-FFT even/odd unpack step | 4x (AVX2) / 2x (NEON)       |
-|                 | `RealFFTPower(dst,zRe,zIm,twRe,twIm)`         | Fused real-FFT power spectrum \|X_k\|^2 (single pass) | 4x (AVX2) / 2x (NEON)       |
+|                 | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real-FFT even/odd unpack step | 4x (AVX2+FMA) / 2x (NEON)   |
+|                 | `RealFFTPower(dst,zRe,zIm,twRe,twIm)`         | Fused real-FFT power spectrum \|X_k\|^2 (single pass) | 4x (AVX2+FMA) / 2x (NEON)   |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
 |                 | `Deinterleave2(a, b, src)`          | Unpack stereo to channels     | 4x / 2x                             |
 |                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |

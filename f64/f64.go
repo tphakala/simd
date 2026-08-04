@@ -969,8 +969,8 @@ const realFFTUnpackMinN = 2
 //	evenIm = 0.5 * (zIm[k] - zIm[n-k])
 //	diffRe = zRe[k] - zRe[n-k]
 //	diffIm = zIm[k] + zIm[n-k]
-//	oddRe  = 0.5 * (twRe[k]*diffIm + twIm[k]*diffRe)
-//	oddIm  = 0.5 * (twIm[k]*diffIm - twRe[k]*diffRe)
+//	oddRe  = 0.5 * (twRe[k-1]*diffIm + twIm[k-1]*diffRe)
+//	oddIm  = 0.5 * (twIm[k-1]*diffIm - twRe[k-1]*diffRe)
 //	outRe[k] = evenRe + oddRe
 //	outIm[k] = evenIm + oddIm
 //
@@ -1024,8 +1024,8 @@ func RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm []float64) {
 //
 //	evenRe = 0.5*(zRe[k] + zRe[n-k]); evenIm = 0.5*(zIm[k] - zIm[n-k])
 //	diffRe = zRe[k] - zRe[n-k];       diffIm = zIm[k] + zIm[n-k]
-//	oddRe  = 0.5*(twRe[k]*diffIm + twIm[k]*diffRe)
-//	oddIm  = 0.5*(twIm[k]*diffIm - twRe[k]*diffRe)
+//	oddRe  = 0.5*(twRe[k-1]*diffIm + twIm[k-1]*diffRe)
+//	oddIm  = 0.5*(twIm[k-1]*diffIm - twRe[k-1]*diffRe)
 //	X[k].re = evenRe + oddRe; X[k].im = evenIm + oddIm
 //	dst[k]  = X[k].re^2 + X[k].im^2
 //

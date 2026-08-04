@@ -350,6 +350,61 @@ func TestRequantizeSRDHMSaturation(t *testing.T) {
 	}
 }
 
+// TestRequantizeClampAdd exercises the int32-space clamp-then-add epilogue helper
+// directly, independent of the platform int width. On 32-bit-int targets (386,
+// 32-bit ARM) the old clampI8(int(z)+zeroPoint) overflowed when z was near
+// MaxInt32 and zeroPoint was positive: int(z)+zeroPoint wrapped negative and
+// clamped to -128 instead of +127. requantizeClampAdd clamps z in int32 space
+// first, so it saturates correctly on every platform. The int64 oracle is the
+// wrap-free reference: it computes clamp(z+zeroPoint, -128, 127) in a width that
+// never overflows, and the helper must match it for every case.
+func TestRequantizeClampAdd(t *testing.T) {
+	oracle := func(z int32, zp int8) int8 {
+		v := int64(z) + int64(zp) // wide enough to never wrap
+		switch {
+		case v > math.MaxInt8:
+			return math.MaxInt8
+		case v < math.MinInt8:
+			return math.MinInt8
+		default:
+			return int8(v)
+		}
+	}
+
+	zeroPoints := []int8{math.MinInt8, -100, -1, 0, 1, 100, math.MaxInt8}
+	for _, zp := range zeroPoints {
+		lo := int32(math.MinInt8) - int32(zp)
+		hi := int32(math.MaxInt8) - int32(zp)
+		zs := []int32{
+			math.MinInt32, math.MinInt32 + 1,
+			lo - 1, lo, lo + 1,
+			-1, 0, 1,
+			hi - 1, hi, hi + 1,
+			math.MaxInt32 - 1, math.MaxInt32,
+		}
+		for _, z := range zs {
+			// The oracle returns a value clamped to [-128, 127] computed in int64
+			// (never wraps), so matching it proves the helper saturates without
+			// overflow. The int8 return type makes an explicit range assertion
+			// redundant (staticcheck SA4003).
+			got := requantizeClampAdd(z, zp)
+			if want := oracle(z, zp); got != want {
+				t.Errorf("requantizeClampAdd(%d, %d) = %d, want %d", z, zp, got, want)
+			}
+		}
+	}
+
+	// The exact overflow case the fix targets: z at MaxInt32 with a positive
+	// zeroPoint must saturate to +127, and z at MinInt32 to -128, with no wrap.
+	// The old int()+zeroPoint form wrapped these on a 32-bit int.
+	if got := requantizeClampAdd(math.MaxInt32, math.MaxInt8); got != math.MaxInt8 {
+		t.Errorf("requantizeClampAdd(MaxInt32, 127) = %d, want 127 (no wrap)", got)
+	}
+	if got := requantizeClampAdd(math.MinInt32, math.MinInt8); got != math.MinInt8 {
+		t.Errorf("requantizeClampAdd(MinInt32, -128) = %d, want -128 (no wrap)", got)
+	}
+}
+
 // TestQuantizeCautionB proves the int8 pack keeps lane order: a distinct,
 // in-range ascending ramp must come out in the same order. A cross-lane
 // permutation bug in the AVX2 VPACKSSDW/VPERMQ/VPACKSSWB sequence would scramble
