@@ -33,17 +33,19 @@ var Sizes = []int{
 	63, 64, 65, 127, 128, 129, 255, 256, 257, 1000, 1024, 1031,
 }
 
-// Case pairs an operation name with a closure that runs its full aliasing check
-// at one length.
+// Case pairs an operation name with the closures that run its aliasing check and
+// its allocation check.
 type Case struct {
 	// Name is the sub-test name (the operation under test).
 	Name string
 	// Check runs the operation's want-vs-overlay comparison at length n.
 	Check func(t *testing.T, n int)
+	// Alloc asserts the in-place overlay call allocates nothing.
+	Alloc func(t *testing.T)
 }
 
-// Sweep runs every case over every length in Sizes under the currently bound
-// kernel tier.
+// Sweep runs every case's overlay comparison over every length in Sizes under the
+// currently bound kernel tier.
 func Sweep(t *testing.T, cases []Case) {
 	t.Helper()
 	for _, c := range cases {
@@ -52,6 +54,35 @@ func Sweep(t *testing.T, cases []Case) {
 				c.Check(t, n)
 			}
 		})
+	}
+}
+
+// SweepAlloc runs every case's allocation check under the currently bound kernel
+// tier, enforcing the package's zero-allocation contract on the in-place overlay
+// path (a kernel that allocates only when dst aliases an input would pass the
+// value comparison but fail here).
+func SweepAlloc(t *testing.T, cases []Case) {
+	t.Helper()
+	for _, c := range cases {
+		if c.Alloc != nil {
+			t.Run(c.Name, c.Alloc)
+		}
+	}
+}
+
+// zeroAllocRuns is the sample count for the AllocsPerRun measurements. A small
+// count is enough: an allocating call allocates on every invocation.
+const zeroAllocRuns = 4
+
+// allocSize is the fixed length used for allocation checks; it clears every
+// vector width so the measured call runs a real SIMD body, not only a tail.
+const allocSize = 64
+
+// ZeroAlloc asserts run allocates nothing, labelling a failure with name.
+func ZeroAlloc(t *testing.T, name string, run func()) {
+	t.Helper()
+	if a := testing.AllocsPerRun(zeroAllocRuns, run); a != 0 {
+		t.Errorf("%s: %.0f allocs/op on the overlay path, want 0", name, a)
 	}
 }
 
@@ -75,6 +106,10 @@ func clone[T any](s []T) []T {
 // model (the split-format complex products and the AXPY accumulator).
 func Report[T any](t *testing.T, n int, mode string, eq func(x, y T) bool, want, got []T) {
 	t.Helper()
+	if len(want) != len(got) {
+		t.Errorf("n=%d overlay %s: length mismatch: want %d, got %d", n, mode, len(want), len(got))
+		return
+	}
 	for i := range want {
 		if !eq(want[i], got[i]) {
 			t.Errorf("n=%d overlay %s: index %d differs: want %v got %v",
@@ -205,17 +240,47 @@ func ForTiers(t *testing.T, tiers []Tier, run func(t *testing.T)) {
 	}
 }
 
-// UnaryCase builds a Case that runs Unary for op(dst, a).
+// UnaryCase builds a Case that runs Unary for op(dst, a). Its Alloc check runs the
+// dst==a overlay through AllocsPerRun.
 func UnaryCase[T any](name string, eq func(x, y T) bool, gen func(i int) T, op func(dst, a []T)) Case {
-	return Case{Name: name, Check: func(t *testing.T, n int) { t.Helper(); Unary(t, n, eq, gen, op) }}
+	return Case{
+		Name:  name,
+		Check: func(t *testing.T, n int) { t.Helper(); Unary(t, n, eq, gen, op) },
+		Alloc: func(t *testing.T) {
+			t.Helper()
+			a := buildOff(allocSize, gen, 0)
+			ZeroAlloc(t, name+" dst=a", func() { op(a, a) })
+		},
+	}
 }
 
-// BinaryCase builds a Case that runs Binary for op(dst, a, b).
+// BinaryCase builds a Case that runs Binary for op(dst, a, b). Its Alloc check runs
+// the dst==a overlay through AllocsPerRun.
 func BinaryCase[T any](name string, eq func(x, y T) bool, gen func(i int) T, op func(dst, a, b []T)) Case {
-	return Case{Name: name, Check: func(t *testing.T, n int) { t.Helper(); Binary(t, n, eq, gen, op) }}
+	return Case{
+		Name:  name,
+		Check: func(t *testing.T, n int) { t.Helper(); Binary(t, n, eq, gen, op) },
+		Alloc: func(t *testing.T) {
+			t.Helper()
+			a := buildOff(allocSize, gen, 0)
+			b := buildOff(allocSize, gen, offB)
+			ZeroAlloc(t, name+" dst=a", func() { op(a, a, b) })
+		},
+	}
 }
 
-// TernaryCase builds a Case that runs Ternary for op(dst, a, b, c).
+// TernaryCase builds a Case that runs Ternary for op(dst, a, b, c). Its Alloc check
+// runs the dst==a overlay through AllocsPerRun.
 func TernaryCase[T any](name string, eq func(x, y T) bool, gen func(i int) T, op func(dst, a, b, c []T)) Case {
-	return Case{Name: name, Check: func(t *testing.T, n int) { t.Helper(); Ternary(t, n, eq, gen, op) }}
+	return Case{
+		Name:  name,
+		Check: func(t *testing.T, n int) { t.Helper(); Ternary(t, n, eq, gen, op) },
+		Alloc: func(t *testing.T) {
+			t.Helper()
+			a := buildOff(allocSize, gen, 0)
+			b := buildOff(allocSize, gen, offB)
+			c := buildOff(allocSize, gen, offC)
+			ZeroAlloc(t, name+" dst=a", func() { op(a, a, b, c) })
+		},
+	}
 }

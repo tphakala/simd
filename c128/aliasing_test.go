@@ -10,8 +10,9 @@ import (
 // Aliasing sweep for the c128 exact-overlay contract (issue #221). Each element-
 // wise op is run once into a separate destination and once with the destination
 // overlaid on an input, then bit-compared (real and imaginary parts) under every
-// bound kernel tier. It asserts nothing about the corruption pattern of a
-// non-overlapping op, which is undefined.
+// bound kernel tier. It asserts nothing about how a shifted overlay (dst offset
+// from an input) corrupts: that pattern is undefined and varies with kernel
+// width and length.
 
 func aliasEqC128(x, y complex128) bool {
 	return math.Float64bits(real(x)) == math.Float64bits(real(y)) &&
@@ -19,8 +20,11 @@ func aliasEqC128(x, y complex128) bool {
 }
 
 func aliasHashF64(i int) float64 {
-	u := uint64(i)*2654435761 + 1013904223
-	return float64(u)/float64(1<<64)*8 - 4
+	// A full-width 64-bit mix (the golden-ratio multiplier) so small indices
+	// still spread across [-4,4); a 32-bit step over uint64 would cluster every
+	// practical index near -4.
+	u := uint64(i)*0x9e3779b97f4a7c15 + 1013904223
+	return float64(u>>11)/float64(1<<53)*8 - 4
 }
 
 // aliasGenC128 builds a deterministic complex128 with independent real and
@@ -47,5 +51,14 @@ func TestAliasingSweep(t *testing.T) {
 	forTiers(t, func(t *testing.T) {
 		t.Helper()
 		aliastest.Sweep(t, c128AliasCases())
+	})
+}
+
+// TestAliasingZeroAlloc asserts the in-place overlay path is allocation-free for
+// every swept op under each bound tier.
+func TestAliasingZeroAlloc(t *testing.T) {
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		aliastest.SweepAlloc(t, c128AliasCases())
 	})
 }

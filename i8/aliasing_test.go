@@ -10,8 +10,8 @@ import (
 // wise op is run once into a separate destination and once with the destination
 // overlaid on an input, then compared under both the Go and SIMD kernels. The
 // cross-type conversions (Quantize/Dequantize/Requantize/ToInt16/ToInt32) cannot
-// alias in safe Go and are not swept here. It asserts nothing about the
-// corruption pattern of a non-overlapping op, which is undefined.
+// alias in safe Go and are not swept here. It asserts nothing about how a shifted
+// overlay (dst offset from an input) corrupts, which is undefined.
 
 func aliasEqI8(x, y int8) bool { return x == y }
 
@@ -50,5 +50,14 @@ func TestAliasingSweep(t *testing.T) {
 	forTiers(t, func(t *testing.T) {
 		t.Helper()
 		aliastest.Sweep(t, i8AliasCases())
+	})
+}
+
+// TestAliasingZeroAlloc asserts the in-place overlay path is allocation-free for
+// every swept op under both the Go and SIMD kernels.
+func TestAliasingZeroAlloc(t *testing.T) {
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		aliastest.SweepAlloc(t, i8AliasCases())
 	})
 }

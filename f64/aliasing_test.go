@@ -14,13 +14,16 @@ import (
 // arm64 paths). The transcendentals dispatch through an inline CPU-feature branch
 // the harness cannot rebind, but they have no distinct SSE kernel, so the size
 // sweep still runs both their Go and native-SIMD kernels. It asserts nothing about
-// the corruption pattern of a non-overlapping op, which is undefined.
+// how a shifted overlay (dst offset from an input) corrupts, which is undefined.
 
 func aliasEqF64(x, y float64) bool { return math.Float64bits(x) == math.Float64bits(y) }
 
 func aliasHashF64(i int) float64 {
-	u := uint64(i)*2654435761 + 1013904223
-	return float64(u) / float64(1<<64)
+	// A full-width 64-bit mix (the golden-ratio multiplier), so small indices
+	// still spread across the whole [0,1) range. A 32-bit step over uint64 would
+	// leave every practical index near 0, clustering aliasGenF64 around -4.
+	u := uint64(i)*0x9e3779b97f4a7c15 + 1013904223
+	return float64(u>>11) / float64(1<<53)
 }
 
 // aliasGenF64 spreads values over [-4,4), including negatives and near-zero.
@@ -80,6 +83,23 @@ func TestAliasingSweep(t *testing.T) {
 		t.Helper()
 		aliastest.Sweep(t, f64AliasCases())
 		t.Run("AddScaled", sweepAddScaled)
+	})
+}
+
+// TestAliasingZeroAlloc asserts the in-place overlay path is allocation-free for
+// every swept op under each bound tier, enforcing the package zero-allocation
+// contract on the aliasing path.
+func TestAliasingZeroAlloc(t *testing.T) {
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		aliastest.SweepAlloc(t, f64AliasCases())
+		t.Run("AddScaled", func(t *testing.T) {
+			a := make([]float64, 64)
+			for i := range a {
+				a[i] = aliasGenF64(i)
+			}
+			aliastest.ZeroAlloc(t, "AddScaled s==dst", func() { AddScaled(a, 1.5, a) })
+		})
 	})
 }
 

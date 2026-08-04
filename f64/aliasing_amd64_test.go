@@ -12,7 +12,10 @@ import (
 // forTiers runs the aliasing sweep under every forceable amd64 tier, including
 // the AVX-without-FMA tier (#201) that never runs on FMA-capable CI. The list is
 // in descending priority so aliastest.ForTiers re-binds the host default on
-// cleanup.
+// cleanup. Forcing a tier only redirects the function-pointer-dispatched ops; the
+// transcendentals select inline from cpu.X86 and length, so they are not forced
+// per tier (they have no distinct SSE kernel, so the size sweep covers their Go
+// and native-SIMD kernels; see the note in aliasing_test.go).
 func forTiers(t *testing.T, run func(t *testing.T)) {
 	t.Helper()
 	aliastest.ForTiers(t, []aliastest.Tier{

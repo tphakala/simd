@@ -20,8 +20,8 @@ import (
 // exercises the CopySign and AbsPow34 SSE and Go kernels that an AVX host would
 // otherwise never reach.
 //
-// It asserts nothing about how a non-overlapping op corrupts a shifted overlay:
-// that pattern is undefined and varies with kernel width and length.
+// It asserts nothing about how a shifted overlay (dst offset from an input)
+// corrupts: that pattern is undefined and varies with kernel width and length.
 
 func aliasEqF32(x, y float32) bool { return math.Float32bits(x) == math.Float32bits(y) }
 
@@ -99,6 +99,34 @@ func TestAliasingSweep(t *testing.T) {
 		t.Run("MulConjComplex", func(t *testing.T) { sweepSplitComplex(t, MulConjComplex) })
 		t.Run("AddScaled", sweepAddScaled)
 	})
+}
+
+// TestAliasingZeroAlloc asserts the in-place overlay path is allocation-free for
+// every swept op under each bound tier, enforcing the package zero-allocation
+// contract on the aliasing path specifically (not only the separate-dst path the
+// existing primitive tests cover).
+func TestAliasingZeroAlloc(t *testing.T) {
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		aliastest.SweepAlloc(t, f32AliasCases())
+		t.Run("AddScaled", func(t *testing.T) {
+			a := make([]float32, 64)
+			for i := range a {
+				a[i] = genF32(i)
+			}
+			aliastest.ZeroAlloc(t, "AddScaled s==dst", func() { AddScaled(a, 1.5, a) })
+		})
+		t.Run("MulComplex", func(t *testing.T) { allocSplitComplex(t, "MulComplex", MulComplex) })
+		t.Run("MulConjComplex", func(t *testing.T) { allocSplitComplex(t, "MulConjComplex", MulConjComplex) })
+	})
+}
+
+// allocSplitComplex asserts the in-place-over-a overlay of a split-complex product
+// allocates nothing.
+func allocSplitComplex(t *testing.T, name string, op func(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)) {
+	t.Helper()
+	aRe, aIm, bRe, bIm := splitInputs(64)
+	aliastest.ZeroAlloc(t, name+" dstRe=aRe,dstIm=aIm", func() { op(aRe, aIm, aRe, aIm, bRe, bIm) })
 }
 
 // sweepAddScaled checks AddScaled's documented in-place overlay: s may equal dst

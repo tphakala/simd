@@ -54,8 +54,8 @@
 //     accumulators); their source slice must be disjoint from the destination
 //     window, except that AddScaled also permits s==dst exactly.
 //   - ButterflyComplex and ButterflyComplexStage update their data slices in
-//     place; those slices must be distinct from one another, and the twiddles
-//     must not overlap them.
+//     place; those slices must not overlap one another, and the twiddles must not
+//     overlap them.
 //   - The mirror, window, stride, interleave and batch operations (Interleave2/N,
 //     Deinterleave2/N, ConvolveValid and ConvolveValidMulti, ConvolveDecimate,
 //     DotProductBatch, DotProductIndexed, DotProductStrided, MinIdxOfSumRows and
@@ -1440,8 +1440,9 @@ func minLen6(a, b, c, d, e, f int) int {
 // All slices are modified in-place: upper receives upper+temp, lower receives upper-temp.
 //
 // Aliasing: each butterfly reads its inputs before writing either output, so the
-// four data slices are updated in place. They must be four distinct slices, and
-// the twiddles twRe/twIm must not overlap any of them.
+// four data slices are updated in place. They must be pairwise non-overlapping
+// (distinct headers are not enough; a shifted sub-slice of one array corrupts),
+// and the twiddles twRe/twIm must not overlap any of them.
 func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float32) {
 	n := minLen6(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm))
 	if n == 0 {
@@ -1480,8 +1481,8 @@ const butterflyStageRadix = 2
 // k+2*span <= n, where n = min(len(re), len(im)); a trailing partial block is
 // left untouched.
 //
-// Aliasing: the stage updates re and im in place; they must be distinct buffers,
-// and the twiddles twRe/twIm must not overlap either.
+// Aliasing: the stage updates re and im in place; re and im must not overlap
+// each other, and the twiddles twRe/twIm must not overlap either.
 //
 // Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
 // [ButterflyComplex], results are not guaranteed bit-identical between the

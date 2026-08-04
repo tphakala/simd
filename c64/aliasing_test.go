@@ -10,8 +10,9 @@ import (
 // Aliasing sweep for the c64 exact-overlay contract (issue #221). Each element-
 // wise op is run once into a separate destination and once with the destination
 // overlaid on an input, then bit-compared (real and imaginary parts) under every
-// bound kernel tier. It asserts nothing about the corruption pattern of a
-// non-overlapping op, which is undefined.
+// bound kernel tier. It asserts nothing about how a shifted overlay (dst offset
+// from an input) corrupts: that pattern is undefined and varies with kernel
+// width and length.
 
 func aliasEqC64(x, y complex64) bool {
 	return math.Float32bits(real(x)) == math.Float32bits(real(y)) &&
@@ -47,5 +48,14 @@ func TestAliasingSweep(t *testing.T) {
 	forTiers(t, func(t *testing.T) {
 		t.Helper()
 		aliastest.Sweep(t, c64AliasCases())
+	})
+}
+
+// TestAliasingZeroAlloc asserts the in-place overlay path is allocation-free for
+// every swept op under each bound tier.
+func TestAliasingZeroAlloc(t *testing.T) {
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		aliastest.SweepAlloc(t, c64AliasCases())
 	})
 }
