@@ -455,58 +455,47 @@ func FuzzF64Pow(f *testing.F) {
 	})
 }
 
-// FuzzF64RealFFTPower differentially tests the fused power kernel at every length.
-// Two checks run per input. First, the pure-Go reference realFFTPower64Go must
-// equal squaring realFFTUnpack64Go's X[k] bit-for-bit on every bin, since both use
-// separate multiply and add; this runs on arbitrary finite inputs (f64sFinite
-// strips NaN/Inf, so the two routes always see identical finite operands). Second,
-// the dispatched kernel (AVX/NEON with a fused magnitude-squared) must agree with
-// the Go reference to within a fixed absolute tolerance on bounded [-1,1] inputs,
-// where the power and its FMA rounding error are both O(1); this is the arm that
-// stresses the SIMD tail/remainder at random n.
+// FuzzF64RealFFTPower differentially tests the fused power kernel at every length,
+// on bounded [-1,1) inputs so the power stays O(1) and the tolerance is robust
+// against cancellation. Two checks run per input: (1) the pure-Go reference
+// realFFTPower64Go matches an independent unpack-then-square (realFFTUnpack64Go
+// squared) to within rounding, pinning the reference's bin math; (2) the dispatched
+// kernel (AVX/NEON, fused magnitude-squared) matches the Go reference to within
+// rounding, stressing the SIMD tail/remainder at random n. The comparisons are
+// tolerance-based, not bit-for-bit, because the Go compiler contracts the
+// reference's multiply-adds into hardware FMAs on some architectures (arm64) and
+// not others (amd64), so the last bit of the pure-Go path is not portable.
 func FuzzF64RealFFTPower(f *testing.F) {
 	addByteLenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {
-		v := f64sFinite(raw)
-		n := len(v) / 2
+		u := f64sUnit(raw) // bounded to [-1, 1)
+		n := len(u) / 2
 		if n < realFFTUnpackMinN {
 			return
 		}
-		zRe := v[:n]
-		zIm := v[n : 2*n]
+		zRe := u[:n]
+		zIm := u[n : 2*n]
 		twRe := make([]float64, n-1)
 		twIm := make([]float64, n-1)
 		makePowerTwiddles(twRe, twIm, n)
 
-		// Go reference vs an independent unpack-then-square, bit-for-bit on all bins.
+		dst := make([]float64, n)
 		refGo := make([]float64, n)
 		outRe := make([]float64, n)
 		outIm := make([]float64, n)
+		RealFFTPower(dst, zRe, zIm, twRe, twIm)
 		realFFTPower64Go(refGo, zRe, zIm, twRe, twIm, n)
 		realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
-		for k := 1; k < n; k++ {
-			want := outRe[k]*outRe[k] + outIm[k]*outIm[k]
-			if !eqF64(refGo[k], want) {
-				t.Fatalf("realFFTPower64Go bin %d (n=%d) got %x want %x", k, n, math.Float64bits(refGo[k]), math.Float64bits(want))
-			}
-		}
 
-		// Dispatched kernel vs the Go reference, tolerance on bounded inputs. With
-		// |z| <= 1 the power is O(1) and the fused-vs-separate rounding gap is a few
-		// ULP (< 1e-15), so 1e-12 absolute is a safe, cancellation-proof bound.
-		bRe := f64sUnit(raw)[:n]
-		bIm := make([]float64, n)
-		for i := range n {
-			bIm[i] = bRe[n-1-i] // a second bounded stream, decorrelated from bRe
-		}
-		dst := make([]float64, n)
-		refB := make([]float64, n)
-		RealFFTPower(dst, bRe, bIm, twRe, twIm)
-		realFFTPower64Go(refB, bRe, bIm, twRe, twIm, n)
-		const powTol = 1e-12
 		for k := 1; k < n; k++ {
-			if d := math.Abs(dst[k] - refB[k]); d > powTol {
-				t.Fatalf("RealFFTPower bin %d (n=%d) got %v want %v |diff|=%g tol=%g", k, n, dst[k], refB[k], d, powTol)
+			unpackSq := outRe[k]*outRe[k] + outIm[k]*outIm[k]
+			if !realFFTPowerClose(refGo[k], unpackSq) {
+				t.Fatalf("realFFTPower64Go bin %d (n=%d) = %v, unpack-square = %v, diff=%g",
+					k, n, refGo[k], unpackSq, refGo[k]-unpackSq)
+			}
+			if !realFFTPowerClose(dst[k], refGo[k]) {
+				t.Fatalf("RealFFTPower bin %d (n=%d) = %v, Go ref = %v, diff=%g",
+					k, n, dst[k], refGo[k], dst[k]-refGo[k])
 			}
 		}
 	})

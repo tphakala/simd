@@ -135,13 +135,16 @@ func TestRealFFTPower_GoVsSIMD(t *testing.T) {
 	}
 }
 
-// TestRealFFTPower_GoBitExact pins the pure-Go reference against the documented
-// unpack math with NO tolerance: realFFTPower64Go must equal squaring
-// realFFTUnpack64Go's X[k] bit-for-bit on every bin, because both use separate
-// multiply and add (no FMA). A stray fusion or a reordered even/odd in the Go
-// reference would break this. It holds on every tier since it never touches the
+// TestRealFFTPower_GoMatchesUnpackSquare pins the pure-Go reference against the
+// documented unpack math: realFFTPower64Go must match squaring realFFTUnpack64Go's
+// X[k] on every bin. The comparison is tolerance-based rather than bit-for-bit: the
+// Go compiler contracts the reference's multiply-adds into hardware FMAs on some
+// architectures (arm64) and not others (amd64), so the last bit of dst[k] is not
+// portable, though the value is always |X[k]|^2 to within rounding. A gross error
+// (a wrong index, a dropped 0.5, a swapped even/odd) moves the result well outside
+// tolerance and is still caught. It holds on every tier since it never touches the
 // dispatched kernel.
-func TestRealFFTPower_GoBitExact(t *testing.T) {
+func TestRealFFTPower_GoMatchesUnpackSquare(t *testing.T) {
 	sizes := []int{2, 3, 4, 5, 6, 7, 8, 9, 16, 17, 32, 33, 64, 65, 128, 256, 511, 512}
 
 	for _, n := range sizes {
@@ -165,9 +168,9 @@ func TestRealFFTPower_GoBitExact(t *testing.T) {
 
 			for k := 1; k < n; k++ {
 				want := outRe[k]*outRe[k] + outIm[k]*outIm[k]
-				if math.Float64bits(dst[k]) != math.Float64bits(want) {
-					t.Errorf("k=%d dst = %v (%#016x), unpack-square = %v (%#016x)",
-						k, dst[k], math.Float64bits(dst[k]), want, math.Float64bits(want))
+				if !realFFTPowerClose(dst[k], want) {
+					t.Errorf("k=%d dst = %v, unpack-square = %v, diff=%v",
+						k, dst[k], want, dst[k]-want)
 				}
 			}
 		})

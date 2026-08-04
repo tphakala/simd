@@ -1047,11 +1047,12 @@ func RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm []float64) {
 //	|X[0]|^2 = (Z[0].real + Z[0].imag)^2  (DC)
 //	|X[n]|^2 = (Z[0].real - Z[0].imag)^2  (Nyquist)
 //
-// The SIMD kernels fuse the magnitude-squared with an FMA on their vector lanes
-// (single rounding), while the pure-Go path uses a separate multiply and add, so
-// the two agree only to within rounding, exactly as the RealFFTUnpack odd-term FMA
-// already does. (The arm64 NEON scalar-remainder element uses separate ops, like
-// the Go path.)
+// The SIMD kernels fuse the magnitude-squared with a hardware FMA on their vector
+// lanes (single rounding). The pure-Go path writes a separate multiply and add,
+// but the Go compiler contracts that into an FMA on some architectures (arm64) and
+// not others (amd64). So the results agree only to within rounding, not
+// bit-for-bit, and the exact bits can differ across architectures, exactly as the
+// RealFFTUnpack odd-term FMA already does.
 //
 // # Aliasing
 //

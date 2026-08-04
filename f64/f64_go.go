@@ -783,11 +783,14 @@ func realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 // realFFTPower64Go writes dst[k] = |X[k]|^2 for k in [1, n-1] from the half-size
 // complex spectrum Z: it unpacks bin X[k] exactly as realFFTUnpack64Go does, then
 // squares and sums in place so the complex bins are never materialised. It is the
-// source of truth for RealFFTPower; the SIMD kernels compute the same values, with
-// the magnitude-squared fused (FMA) so they agree only to within rounding.
+// source of truth for RealFFTPower.
 //
-// The squaring uses separate multiply and add (no FMA), so dst[k] is bit-for-bit
-// equal to squaring realFFTUnpack64Go's X[k] on the pure-Go path.
+// The magnitude-squared and odd-term multiply-adds are written as separate
+// multiply and add, but the Go compiler may contract them into hardware FMAs on
+// architectures that have one (it does on arm64, not on amd64), so the exact
+// rounding of the pure-Go path is architecture-dependent. RealFFTPower therefore
+// agrees with an independent unpack-then-square only to within rounding, not
+// bit-for-bit, on every path.
 func realFFTPower64Go(dst, zRe, zIm, twRe, twIm []float64, n int) {
 	if n < realFFTUnpackMinN {
 		return
