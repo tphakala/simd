@@ -920,8 +920,8 @@ quant_done:
 // (|x-zp| <= 255), so the single FMUL is the only rounding.
 TEXT ·dequantizeNEON(SB), NOSPLIT, $0-53
     MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3    // n (== len(src); the two kernels agree with quantize/requantize)
     MOVD src_base+24(FP), R1
-    MOVD src_len+32(FP), R3
 
     MOVWU scale+48(FP), R5
     WORD $0x4E040CA4              // DUP V4.4S, W5    (scale x4)

@@ -246,8 +246,9 @@ func TestDequantizeSemantics(t *testing.T) {
 }
 
 // TestRequantizeSemantics is the known-answer table for Requantize, including
-// the SRDHM saturation extremes and the round-half-up identity at multiplier =
-// 1<<30, shift = 0.
+// the accumulator extremes (output saturation) and the round-half-up identity at
+// multiplier = 1<<30, shift = 0. The SRDHM internal saturation extreme
+// (multiplier == math.MinInt32) is covered by TestRequantizeSRDHMSaturation.
 func TestRequantizeSemantics(t *testing.T) {
 	const half = int32(1) << 30 // 0.5 in Q31
 	cases := []struct {
@@ -313,6 +314,39 @@ func TestRequantizeCautionA(t *testing.T) {
 		Requantize(g, big, half, 0, 3)
 		requantizeGo(w, big, half, 0, 3)
 		assertI8Eq(t, "Requantize/cautionA-sweep", n, g, w)
+	}
+}
+
+// TestRequantizeSRDHMSaturation covers the single saturating case of SRDHM
+// (x == multiplier == math.MinInt32 -> math.MaxInt32), the one branch of the
+// source of truth the broad sweeps never reach, and it guards the
+// multiplier == math.MinInt32 reroute at a length above the SIMD dispatch
+// threshold. Without the reroute the AVX2 kernel (VPMULDQ has no saturation)
+// would wrap MinInt32*MinInt32 and clamp to -128 instead of +127, so on amd64
+// this discriminates a dropped reroute; NEON's SQRDMULH saturates on its own, but
+// the reroute is the guarantee on both. This asserts the exact +127 answer.
+func TestRequantizeSRDHMSaturation(t *testing.T) {
+	// Reference branch coverage plus the hand-computed answer.
+	if got := srdhm(math.MinInt32, math.MinInt32); got != math.MaxInt32 {
+		t.Fatalf("srdhm(MinInt32, MinInt32) = %d, want MaxInt32", got)
+	}
+
+	// Above the dispatch threshold so every element would hit a SIMD kernel were
+	// the multiplier == MinInt32 reroute missing.
+	const n = 20
+	acc := make([]int32, n)
+	for i := range acc {
+		acc[i] = math.MinInt32
+	}
+	got := make([]int8, n)
+	want := make([]int8, n)
+	Requantize(got, acc, math.MinInt32, 0, 0)
+	requantizeGo(want, acc, math.MinInt32, 0, 0)
+	assertI8Eq(t, "Requantize/srdhmSat", n, got, want)
+	for i := range want {
+		if want[i] != 127 { // MinInt32*MinInt32 -> MaxInt32 -> clamp to 127
+			t.Fatalf("Requantize/srdhmSat[%d] = %d, want 127", i, want[i])
+		}
 	}
 }
 

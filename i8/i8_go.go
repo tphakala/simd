@@ -228,10 +228,12 @@ func rdbpot(x int32, exponent int) int32 {
 }
 
 // requantizeOutOfContract reports whether (multiplier, shift) fall outside the
-// domain the SIMD kernels assume. multiplier == math.MinInt32 would trip the
-// srdhm saturation guard, and a shift outside [-31, 30] would need a vector
-// shift count >= 32 (undefined for the shift instructions). Such inputs route to
-// requantizeGo, which handles them with full-width Go arithmetic.
+// domain the SIMD kernels support. multiplier == math.MinInt32 would trip the
+// srdhm saturation guard the kernels omit. shift is restricted to [-31, 30]: the
+// vector shift instructions leave a count of 32 or more undefined, and the upper
+// bound is held at 30, one step below the largest count (31) they still accept,
+// as a conservative margin rather than a hard hardware requirement. Out-of-domain
+// inputs route to requantizeGo, which handles them with full-width Go arithmetic.
 func requantizeOutOfContract(multiplier int32, shift int) bool {
 	return multiplier == math.MinInt32 || shift < -31 || shift > 30
 }
