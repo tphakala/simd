@@ -3265,3 +3265,214 @@ realfft64_neon_scalar:
 
 realfft64_neon_done:
     RET
+
+// func realFFTPowerNEON(dst, zRe, zIm, twRe, twIm []float64, n int)
+// Real-FFT power step, 2 float64 lanes (.2D). It unpacks bin X[k] exactly as
+// realFFTUnpackNEON does, then writes dst[k] = X[k].re^2 + X[k].im^2 with a fused
+// multiply-add, so the complex bins are never stored. For k in [1, n-1] with
+// nk = n-k:
+//   znk    = conj(Z[nk]) = (zRe[nk], -zIm[nk])
+//   even   = 0.5*(Z[k] + znk) ; diff = Z[k] - znk
+//   oddRe  = 0.5*(wr*diffIm + wi*diffRe) ; oddIm = 0.5*(wi*diffIm - wr*diffRe)
+//   X[k]   = even + odd ; dst[k] = X[k].re^2 + X[k].im^2
+// The mirror slice is read in reverse; EXT #8 swaps the two f64 lanes.
+// Frame: dst(24)+zRe(24)+zIm(24)+twRe(24)+twIm(24)+n(8) = 128 bytes.
+TEXT ·realFFTPowerNEON(SB), NOSPLIT, $0-128
+    // Load parameters
+    MOVD dst_base+0(FP), R0          // R0 = dst pointer
+    MOVD zRe_base+24(FP), R2         // R2 = zRe pointer (forward)
+    MOVD zIm_base+48(FP), R3         // R3 = zIm pointer (forward)
+    MOVD twRe_base+72(FP), R4        // R4 = twRe pointer
+    MOVD twIm_base+96(FP), R5        // R5 = twIm pointer
+    MOVD n+120(FP), R6               // R6 = n
+
+    // Calculate number of iterations: (n-1) / 2
+    SUB $1, R6, R7                   // R7 = n - 1
+    MOVD R7, R14                     // R14 = n - 1 (save for remainder; R14 is a temp on arm64, g is R28)
+    LSR $1, R7                       // R7 = (n-1) / 2 = number of SIMD iterations
+    CBZ R7, realfftpow64_neon_remainder // Skip SIMD loop if < 2 elements
+
+    // Set up reverse pointers: zRe[n-2], zIm[n-2]
+    SUB $2, R6, R8                   // R8 = n - 2
+    LSL $3, R8                       // R8 = (n-2) * 8 = byte offset
+    MOVD zRe_base+24(FP), R9
+    ADD R8, R9                       // R9 = &zRe[n-2]
+    MOVD zIm_base+48(FP), R10
+    ADD R8, R10                      // R10 = &zIm[n-2]
+
+    // Offset forward and output pointers to start at index 1
+    ADD $8, R2                       // R2 = &zRe[1]
+    ADD $8, R3                       // R3 = &zIm[1]
+    ADD $8, R0                       // R0 = &dst[1]
+
+    // Load 0.5 constant into V30
+    MOVD $0x3FE0000000000000, R11    // 0.5 in IEEE 754 double
+    FMOVD R11, F30
+    WORD $0x4E0807DE                 // DUP V30.2D, V30.D[0]
+
+realfftpow64_neon_loop2:
+    // Load forward Z[k:k+2]
+    VLD1.P 16(R2), [V0.D2]           // V0 = zRe[k:k+2] (forward)
+    VLD1.P 16(R3), [V1.D2]           // V1 = zIm[k:k+2] (forward)
+
+    // Load reverse Z[n-k-1:n-k+1] and reverse the order
+    VLD1 (R9), [V2.D2]               // V2 = zRe[n-k-1:n-k+1] (to be reversed)
+    VLD1 (R10), [V3.D2]              // V3 = zIm[n-k-1:n-k+1] (to be reversed)
+
+    // Reverse V2 and V3: swap the two f64 lanes ([0,1] -> [1,0]) via EXT #8
+    WORD $0x6E024042                 // EXT V2.16B, V2.16B, V2.16B, #8
+    WORD $0x6E034063                 // EXT V3.16B, V3.16B, V3.16B, #8
+
+    // For conjugate: znkIm = -zIm[n-k]
+    WORD $0x6EE0F863                 // FNEG V3.2D, V3.2D  (negate for conjugate)
+
+    // Compute even = 0.5 * (Z[k] + conj(Z[n-k]))
+    WORD $0x4E62D404                 // FADD V4.2D, V0.2D, V2.2D  (zkRe + znkRe)
+    WORD $0x6E7EDC84                 // FMUL V4.2D, V4.2D, V30.2D  (evenRe)
+    WORD $0x4E63D425                 // FADD V5.2D, V1.2D, V3.2D  (zkIm + znkIm)
+    WORD $0x6E7EDCA5                 // FMUL V5.2D, V5.2D, V30.2D  (evenIm)
+
+    // Compute diff = Z[k] - conj(Z[n-k])
+    WORD $0x4EE2D406                 // FSUB V6.2D, V0.2D, V2.2D  (diffRe)
+    WORD $0x4EE3D427                 // FSUB V7.2D, V1.2D, V3.2D  (diffIm)
+
+    // Load twiddles W[k]
+    VLD1.P 16(R4), [V8.D2]           // V8 = twRe (wr)
+    VLD1.P 16(R5), [V9.D2]           // V9 = twIm (wi)
+
+    // oddRe = 0.5 * (wr*diffIm + wi*diffRe)
+    WORD $0x6E67DD0A                 // FMUL V10.2D, V8.2D, V7.2D   (wr * diffIm)
+    WORD $0x4E66CD2A                 // FMLA V10.2D, V9.2D, V6.2D   (V10 += wi * diffRe)
+    WORD $0x6E7EDD4A                 // FMUL V10.2D, V10.2D, V30.2D (oddRe)
+
+    // oddIm = 0.5 * (wi*diffIm - wr*diffRe)
+    WORD $0x6E67DD2B                 // FMUL V11.2D, V9.2D, V7.2D   (wi * diffIm)
+    WORD $0x4EE6CD0B                 // FMLS V11.2D, V8.2D, V6.2D   (V11 -= wr * diffRe)
+    WORD $0x6E7EDD6B                 // FMUL V11.2D, V11.2D, V30.2D (oddIm)
+
+    // Compute output X[k] = even + odd
+    WORD $0x4E6AD480                 // FADD V0.2D, V4.2D, V10.2D  (outRe)
+    WORD $0x4E6BD4A1                 // FADD V1.2D, V5.2D, V11.2D  (outIm)
+
+    // dst[k] = outRe^2 + outIm^2 (fused magnitude-squared)
+    WORD $0x6E60DC0C                 // FMUL V12.2D, V0.2D, V0.2D  (outRe^2)
+    WORD $0x4E61CC2C                 // FMLA V12.2D, V1.2D, V1.2D  (V12 += outIm^2)
+    VST1.P [V12.D2], 16(R0)          // Store power[k:k+2]
+
+    // Move reverse pointers backward
+    SUB $16, R9                      // reverse zRe -= 2
+    SUB $16, R10                     // reverse zIm -= 2
+
+    SUB $1, R7
+    CBNZ R7, realfftpow64_neon_loop2
+
+realfftpow64_neon_remainder:
+    // Handle remaining element (n-1) % 2
+    AND $1, R14
+    CBZ R14, realfftpow64_neon_done
+
+    // Reload base pointers for remainder
+    MOVD dst_base+0(FP), R0
+    MOVD zRe_base+24(FP), R2
+    MOVD zIm_base+48(FP), R3
+    MOVD twRe_base+72(FP), R4
+    MOVD twIm_base+96(FP), R5
+    MOVD n+120(FP), R6
+
+    // Calculate starting k for remainder: 1 + 2 * num_full_iterations
+    SUB $1, R6, R7                   // R7 = n - 1
+    LSR $1, R7                       // R7 = num_full_iterations
+    LSL $1, R7                       // R7 = 2 * num_full_iterations
+    ADD $1, R7                       // R7 = starting k
+
+    // Offset pointers to starting k
+    LSL $3, R7, R8                   // R8 = k * 8 bytes
+    ADD R8, R0                       // R0 = &dst[k]
+    ADD R8, R2                       // R2 = &zRe[k]
+    ADD R8, R3                       // R3 = &zIm[k]
+
+    // Twiddle offset is (k-1)
+    SUB $1, R7
+    LSL $3, R7, R8
+    ADD R8, R4                       // R4 = &twRe[k-1]
+    ADD R8, R5                       // R5 = &twIm[k-1]
+    ADD $1, R7                       // Restore R7 = k
+
+realfftpow64_neon_scalar:
+    // Calculate mirror index: nk = n - k
+    SUB R7, R6, R8                   // R8 = n - k = nk
+
+    // Load Z[k]
+    FMOVD (R2), F0                   // F0 = zRe[k]
+    FMOVD (R3), F1                   // F1 = zIm[k]
+
+    // Load conj(Z[n-k])
+    MOVD zRe_base+24(FP), R9
+    LSL $3, R8, R10
+    ADD R10, R9
+    FMOVD (R9), F2                   // F2 = zRe[nk]
+
+    MOVD zIm_base+48(FP), R9
+    ADD R10, R9
+    FMOVD (R9), F3                   // F3 = zIm[nk]
+
+    // Negate F3 for conjugate: znkIm = -zIm[nk]
+    FNEGD F3, F3                     // F3 = -zIm[nk] = znkIm
+
+    // Load 0.5 constant
+    MOVD $0x3FE0000000000000, R11
+    FMOVD R11, F13                   // F13 = 0.5
+
+    // evenRe = 0.5 * (zkRe + znkRe)
+    FADDD F0, F2, F4                 // F4 = zkRe + znkRe
+    FMULD F4, F13, F4                // F4 = evenRe
+
+    // evenIm = 0.5 * (zkIm + znkIm)
+    FADDD F1, F3, F5                 // F5 = zkIm + znkIm
+    FMULD F5, F13, F5                // F5 = evenIm
+
+    // diffRe = zkRe - znkRe
+    FSUBD F2, F0, F6                 // F6 = diffRe
+
+    // diffIm = zkIm - znkIm
+    FSUBD F3, F1, F7                 // F7 = diffIm
+
+    // Load twiddles
+    FMOVD (R4), F8                   // F8 = wr
+    FMOVD (R5), F9                   // F9 = wi
+
+    // oddRe = 0.5 * (wr*diffIm + wi*diffRe)
+    FMULD F8, F7, F10                // F10 = wr * diffIm
+    FMULD F9, F6, F11                // F11 = wi * diffRe
+    FADDD F10, F11, F10              // F10 = wr*diffIm + wi*diffRe
+    FMULD F10, F13, F10              // F10 = oddRe
+
+    // oddIm = 0.5 * (wi*diffIm - wr*diffRe)
+    FMULD F9, F7, F11                // F11 = wi * diffIm
+    FMULD F8, F6, F12                // F12 = wr * diffRe
+    FSUBD F12, F11, F11              // F11 = wi*diffIm - wr*diffRe
+    FMULD F11, F13, F11              // F11 = oddIm
+
+    // output = even + odd
+    FADDD F4, F10, F0                // F0 = outRe
+    FADDD F5, F11, F1                // F1 = outIm
+
+    // dst[k] = outRe^2 + outIm^2 (separate multiply and add on the scalar tail)
+    FMULD F0, F0, F12                // F12 = outRe^2
+    FMULD F1, F1, F14                // F14 = outIm^2
+    FADDD F12, F14, F12              // F12 = power
+    FMOVD F12, (R0)
+
+    // Advance pointers
+    ADD $8, R2
+    ADD $8, R3
+    ADD $8, R4
+    ADD $8, R5
+    ADD $8, R0
+    ADD $1, R7                       // k++
+
+    SUB $1, R14
+    CBNZ R14, realfftpow64_neon_scalar
+
+realfftpow64_neon_done:
+    RET

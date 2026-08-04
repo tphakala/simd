@@ -779,3 +779,44 @@ func realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 		outIm[k] = evenIm + oddIm
 	}
 }
+
+// realFFTPower64Go writes dst[k] = |X[k]|^2 for k in [1, n-1] from the half-size
+// complex spectrum Z: it unpacks bin X[k] exactly as realFFTUnpack64Go does, then
+// squares and sums in place so the complex bins are never materialised. It is the
+// source of truth for RealFFTPower; the SIMD kernels compute the same values, with
+// the magnitude-squared fused (FMA) so they agree only to within rounding.
+//
+// The squaring uses separate multiply and add (no FMA), so dst[k] is bit-for-bit
+// equal to squaring realFFTUnpack64Go's X[k] on the pure-Go path.
+func realFFTPower64Go(dst, zRe, zIm, twRe, twIm []float64, n int) {
+	if n < realFFTUnpackMinN {
+		return
+	}
+	// Reslice to the exact ranges the loop touches so the prover can discharge the
+	// bounds checks from the loop condition alone; the mirror index n-k otherwise
+	// defeats it, the same way realFFTUnpack64Go handles it. The caller has already
+	// validated these lengths, so the reslices cannot panic.
+	zRe, zIm = zRe[:n], zIm[:n]
+	dst = dst[:n]
+	twRe, twIm = twRe[:n-1], twIm[:n-1]
+
+	for k := 1; k < n; k++ {
+		nk := n - k // Mirror index
+
+		zkRe, zkIm := zRe[k], zIm[k]
+		znkRe, znkIm := zRe[nk], -zIm[nk] // conj(Z[n-k])
+
+		evenRe := realFFTUnpackHalf * (zkRe + znkRe)
+		evenIm := realFFTUnpackHalf * (zkIm + znkIm)
+		diffRe := zkRe - znkRe
+		diffIm := zkIm - znkIm
+
+		wr, wi := twRe[k-1], twIm[k-1]
+		oddRe := realFFTUnpackHalf * (wr*diffIm + wi*diffRe)
+		oddIm := realFFTUnpackHalf * (wi*diffIm - wr*diffRe)
+
+		xRe := evenRe + oddRe
+		xIm := evenIm + oddIm
+		dst[k] = xRe*xRe + xIm*xIm
+	}
+}

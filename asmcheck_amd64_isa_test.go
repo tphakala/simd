@@ -79,6 +79,7 @@ var avx2GatedAVXKernels = map[string]string{
 	"f64/f64_amd64.s:powElemAVX":       f64LogGate,
 	"f64/f64_amd64.s:autocorrStep4AVX": "f64_amd64.go autocorrelate64: hasAVX2 early-out",
 	"f64/f64_amd64.s:realFFTUnpackAVX": "f64_amd64.go realFFTUnpack64: hasAVX2 && cpu.X86.FMA",
+	"f64/f64_amd64.s:realFFTPowerAVX":  "f64_amd64.go realFFTPower64: hasAVX2 && cpu.X86.FMA",
 }
 
 // TestAmd64KernelISALevel asserts that no AMD64 kernel uses an instruction above

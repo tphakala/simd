@@ -80,3 +80,7 @@ func butterflyComplexStage64(re, im []float64, span, blocks int, twRe, twIm []fl
 func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }
+
+func realFFTPower64(dst, zRe, zIm, twRe, twIm []float64, n int) {
+	realFFTPower64Go(dst, zRe, zIm, twRe, twIm, n)
+}

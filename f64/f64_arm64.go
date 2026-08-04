@@ -541,8 +541,20 @@ func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 	realFFTUnpack64Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }
 
+func realFFTPower64(dst, zRe, zIm, twRe, twIm []float64, n int) {
+	// One NEON iteration needs 2 float64 lanes; n > 2 means (n-1) >= 2.
+	if hasNEON && n > 2 {
+		realFFTPowerNEON(dst, zRe, zIm, twRe, twIm, n)
+		return
+	}
+	realFFTPower64Go(dst, zRe, zIm, twRe, twIm, n)
+}
+
 //go:noescape
 func realFFTUnpackNEON(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int)
+
+//go:noescape
+func realFFTPowerNEON(dst, zRe, zIm, twRe, twIm []float64, n int)
 
 func sigmoid64(dst, src []float64) {
 	// Assumes len(src) >= len(dst); caller ensures this via public API
