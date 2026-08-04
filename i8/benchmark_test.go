@@ -245,3 +245,33 @@ func BenchmarkSAD_N(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkQuantize(b *testing.B) {
+	src := genF32(benchN, 1)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN * 4) // float32 input
+	b.ResetTimer()
+	for b.Loop() {
+		Quantize(dst, src, 0.05, -3)
+	}
+}
+
+func BenchmarkDequantize(b *testing.B) {
+	src := genI8(benchN, 1)
+	dst := make([]float32, benchN)
+	b.SetBytes(benchN) // int8 input
+	b.ResetTimer()
+	for b.Loop() {
+		Dequantize(dst, src, 0.05, -3)
+	}
+}
+
+func BenchmarkRequantize(b *testing.B) {
+	acc := genI32(benchN, 1)
+	dst := make([]int8, benchN)
+	b.SetBytes(benchN * 4) // int32 input
+	b.ResetTimer()
+	for b.Loop() {
+		Requantize(dst, acc, 0x40000000, -2, 0)
+	}
+}

@@ -22,6 +22,12 @@
 //     abs-max for dynamic quantization, returned as int because |-128| = 128).
 //   - Sign-extending widening (ToInt16, ToInt32) to hand off to the wider
 //     integer or float packages.
+//   - Per-tensor affine quantization (Quantize, Dequantize, Requantize): the
+//     float32<->int8 boundary of a quantized pipeline, following the ONNX /
+//     PyTorch / TFLite convention. Quantize is a true float32 divide plus
+//     round-to-nearest-even; Dequantize is an exact subtract and single
+//     multiply; Requantize is the gemmlowp fixed-point rescale (Q31 multiplier
+//     and shift) that turns an int32 accumulator back into int8.
 //
 // Sum and DotProduct accumulate in int32 with two's-complement wraparound,
 // exactly like their pure-Go references. int32 wrapping addition is associative
