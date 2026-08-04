@@ -11,10 +11,15 @@ const (
 	batchDotMinDims = 64
 
 	// SIMD-vs-fallback gate. Above these dim/row sizes the batched kernel stops
-	// beating the per-row fallback on the hardware measured so far, so very
-	// large shapes stay on the scalar path. These are deliberately conservative
-	// monotone thresholds, not per-machine tuned cliffs; re-tune against a
-	// benchmark matrix before enabling more shapes.
+	// beating the per-row fallback, so very large shapes stay on the scalar path.
+	// These are deliberately conservative monotone thresholds, not per-machine
+	// tuned cliffs. Validated on AVX2 (i7-1260P) and NEON (Cortex-A76) by the
+	// benchmark matrix in issue #66: the only genuine SIMD loss (dims 768, rows
+	// 256 on AVX2) is already excluded, and the contiguous-vs-padded distinction
+	// measured within noise, so no stride rule is warranted. The AVX-512 tier is
+	// left conservative and untuned pending native AVX-512 hardware: both the
+	// batched kernel and the per-row fallback have AVX-512 variants, so both sides
+	// of the crossover shift there and it needs its own measurement (see #66).
 	batchDotLargeDims    = 768
 	batchDotLargeMaxRows = 256
 	batchDotHugeDims     = 2048
