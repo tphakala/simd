@@ -677,6 +677,25 @@ func cubicInterpDot32(hist, a, b, c, d []float32, x float32) float32 {
 //go:noescape
 func cubicInterpDotNEON(hist, a, b, c, d []float32, x float32) float32
 
+// polyphaseResampleCubic32 dispatches the fused polyphase cubic resampler. The
+// NEON guard matches cubicInterpDot32 (hasNEON && tapsPerPhase >= 4) so the fused
+// kernel's per-output dot selects the same tier as a standalone CubicInterpDot at
+// the same tap count, making the fused result bit-identical to the per-output
+// form.
+func polyphaseResampleCubic32(out, hist []float32, a, b, c, d [][]float32, at, step int64, numPhases, tapsPerPhase, fracBits int) int {
+	if hasNEON && tapsPerPhase >= 4 {
+		return polyphaseResampleCubicNEON(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
+	}
+	return polyphaseResampleCubicGo(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
+}
+
+// polyphaseResampleCubicNEON runs the whole output block in one fused NEON pass,
+// reusing cubicInterpDotNEON's inner dot body per output. Returns the number of
+// outputs written. See f32_arm64.s.
+//
+//go:noescape
+func polyphaseResampleCubicNEON(out, hist []float32, a, b, c, d [][]float32, at, step int64, numPhases, tapsPerPhase, fracBits int) int
+
 func sigmoid32(dst, src []float32) {
 	// Assumes len(src) >= len(dst); caller ensures this via public API
 	if hasNEON && len(dst) >= 4 {

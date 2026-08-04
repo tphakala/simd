@@ -60,6 +60,9 @@ func euclideanDistance32(a, b []float32) float32   { return euclideanDistance32G
 func cubicInterpDot32(hist, a, b, c, d []float32, x float32) float32 {
 	return cubicInterpDotGo(hist, a, b, c, d, x)
 }
+func polyphaseResampleCubic32(out, hist []float32, a, b, c, d [][]float32, at, step int64, numPhases, tapsPerPhase, fracBits int) int {
+	return polyphaseResampleCubicGo(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
+}
 func sigmoid32(dst, src []float32) { sigmoid32Go(dst, src) }
 func relu32(dst, src []float32)    { relu32Go(dst, src) }
 func clampScale32(dst, src []float32, minVal, maxVal, scale float32) {

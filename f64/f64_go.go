@@ -459,6 +459,64 @@ func cubicInterpDotGo(hist, a, b, c, d []float64, x float64) float64 {
 	return sum
 }
 
+// polyphaseResampleCubicGo is the pure-Go reference for PolyphaseResampleCubic.
+// It runs the incremental phase-stepping state machine (soxr-style fixed-point
+// accumulator) and evaluates every output with the scalar cubic dot
+// (cubicInterpDotGo), so its result is bit-identical to a per-sample loop that
+// calls the Go-tier cubic dot at any tap count. Callers guarantee the inputs are
+// valid; the public wrapper does the validation and this function does none. It
+// returns the number of outputs written to out.
+//
+// State machine, verified invariant ((div*numPhases+phase)<<fracBits)+frac ==
+// at+k*step at the top of iteration k. The one-time divisions seed the
+// incremental deltas; per output only adds and at most two conditional
+// subtracts run. The frac carry folds into phase BEFORE the single phase
+// normalize; one conditional subtract suffices because
+// phase(<=numPhases-1) + carry(<=1) + sPhase(<=numPhases-1) <= 2*numPhases-1.
+func polyphaseResampleCubicGo(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) int {
+	numPhases64 := int64(numPhases)
+	fracMask := int64(1)<<uint(fracBits) - 1
+	fracScale := 1.0 / float64(int64(1)<<uint(fracBits))
+
+	full := at >> uint(fracBits)
+	div := int(full / numPhases64)
+	phase := int(full - int64(div)*numPhases64)
+	frac := at & fracMask
+
+	sFull := step >> uint(fracBits)
+	sDiv := int(sFull / numPhases64)
+	sPhase := int(sFull - int64(sDiv)*numPhases64)
+	sFrac := step & fracMask
+
+	histLen := len(hist)
+	outLen := len(out)
+	k := 0
+	for k < outLen {
+		if div+tapsPerPhase > histLen {
+			break
+		}
+		x := float64(frac) * fracScale
+		out[k] = cubicInterpDotGo(
+			hist[div:div+tapsPerPhase],
+			a[phase][:tapsPerPhase], b[phase][:tapsPerPhase],
+			c[phase][:tapsPerPhase], d[phase][:tapsPerPhase], x)
+		k++
+
+		frac += sFrac
+		if frac > fracMask {
+			frac -= fracMask + 1
+			phase++
+		}
+		phase += sPhase
+		div += sDiv
+		if phase >= numPhases {
+			phase -= numPhases
+			div++
+		}
+	}
+	return k
+}
+
 func convolveValidMultiGo(dsts [][]float64, signal []float64, kernels [][]float64, n, _ int) {
 	// Kernel-major loop order: each kernel stays hot in cache for entire signal pass
 	for k, kernel := range kernels {

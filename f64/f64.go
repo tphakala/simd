@@ -592,6 +592,105 @@ func minLen5(a, b, c, d, e int) int {
 	return min(a, b, c, d, e)
 }
 
+// polyphaseMaxFracBits64 is the largest sub-phase fractional width for which
+// float64(frac) is exact for every frac in [0, 1<<fracBits). float64 has a 53-bit
+// significand, so every integer below 2^53 round-trips exactly; at fracBits == 53
+// the largest frac is 2^53-1, still below 2^53 and so still exact. Above 53 the
+// frac-to-float conversion would round and x = float64(frac) * fracScale would
+// stop matching the consumer bit-for-bit, so PolyphaseResampleCubic rejects it.
+// This mirrors f32's polyphaseMaxFracBits32 == 24: both use the full significand
+// width p (24 for float32, 53 for float64).
+const polyphaseMaxFracBits64 = 53
+
+// PolyphaseResampleCubic resamples hist into out with soxr-style polyphase FIR
+// filtering and cubic sub-phase coefficient interpolation, running the whole
+// output block in one fused pass. It is the fused form of a per-output loop that
+// calls [CubicInterpDot]: for each output it derives the input window and the
+// interpolation phase from a fixed-point accumulator, evaluates
+//
+//	out[k] = Σ hist[div+i] * (a[phase][i] + x*(b[phase][i] + x*(c[phase][i] + x*d[phase][i])))
+//
+// over tapsPerPhase taps, then advances the accumulator by step. The coefficient
+// banks a, b, c, d are indexed [phase][tap] and hold the Catmull-Rom cubic
+// interpolation coefficients (base, linear, quadratic, cubic); they match
+// go-audio-resampler's bank layout directly. Only the first numPhases rows are
+// read, and only the first tapsPerPhase taps of each; longer rows are fine.
+//
+// The accumulator is fixed-point: at = (inputIndex*numPhases + phase) <<
+// fracBits + frac, and step is the per-output increment in the same units. fracBits
+// is the sub-phase fractional width (soxr uses 16). x = float64(frac) * 2^-fracBits
+// is the sub-phase position in [0, 1). numPhases is soxr's L. Output k is produced
+// only while k < len(out) and div+tapsPerPhase <= len(hist); the first output not
+// satisfying the window bound ends the block.
+//
+// It returns n, the number of outputs written to out[:n], and atOut, the
+// accumulator after n outputs. atOut == at + int64(n)*step exactly, so streaming
+// callers carry atOut into the next call as the new at (rebasing at by
+// consumed*numPhases<<fracBits when they drop consumed input samples from hist, as
+// go-audio-resampler does). The internal (div, phase, frac) are re-derived from
+// the single int64 accumulator on the next call and are never exposed.
+//
+// PolyphaseResampleCubic validates its inputs and is a no-op returning (0, at)
+// (never an error, never a panic) if any of these do not hold: numPhases >= 1,
+// tapsPerPhase >= 1, step >= 1, at >= 0, 0 <= fracBits <= 53, len(a|b|c|d) >=
+// numPhases, every one of the first numPhases rows of each bank has length >=
+// tapsPerPhase, and at + int64(len(out))*step does not overflow int64.
+// Degenerate but valid inputs (len(out) == 0, len(hist) <
+// tapsPerPhase, or an initial window already past the end of hist) also yield
+// (0, at) because no output satisfies the window bound.
+//
+// Uses AVX+FMA on AMD64 and NEON on ARM64 for tapsPerPhase past the vector width,
+// gated on the same CPU features and tap threshold as [CubicInterpDot] so the
+// fused result is bit-identical to the per-output form on every CPU; below the
+// threshold it uses the pure-Go path. It allocates nothing.
+func PolyphaseResampleCubic(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) (n int, atOut int64) {
+	if numPhases < 1 || tapsPerPhase < 1 || step < 1 || at < 0 ||
+		fracBits < 0 || fracBits > polyphaseMaxFracBits64 {
+		return 0, at
+	}
+	if len(a) < numPhases || len(b) < numPhases || len(c) < numPhases || len(d) < numPhases {
+		return 0, at
+	}
+	for p := range numPhases {
+		if len(a[p]) < tapsPerPhase || len(b[p]) < tapsPerPhase ||
+			len(c[p]) < tapsPerPhase || len(d[p]) < tapsPerPhase {
+			return 0, at
+		}
+	}
+	// Reject inputs whose block accumulator could overflow int64. The loop runs
+	// at most len(out) times, so at+len(out)*step bounds every accumulator value;
+	// if that product would overflow, the internal div wraps negative and defeats
+	// the window guard (a panic on the Go path, an out-of-range read on the SIMD
+	// paths), and atOut would no longer equal at+n*step. Real resamplers keep step
+	// and at far below this, so no legitimate input is rejected.
+	if outLen := int64(len(out)); outLen > 0 && step > (math.MaxInt64-at)/outLen {
+		return 0, at
+	}
+	n = polyphaseResampleCubic64(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
+	return n, at + int64(n)*step
+}
+
+// PolyphaseResampleCubicUnsafe is [PolyphaseResampleCubic] without input
+// validation, for performance-critical callers that have already checked their
+// arguments.
+//
+// PRECONDITIONS (caller must ensure):
+//   - numPhases >= 1, tapsPerPhase >= 1, step >= 1, at >= 0
+//   - 0 <= fracBits <= 53
+//   - len(a), len(b), len(c), len(d) each >= numPhases
+//   - each of the first numPhases rows of a, b, c, d has length >= tapsPerPhase
+//   - at + int64(len(out))*step does not overflow int64
+//
+// Violating these preconditions results in undefined behavior. Unlike the safe
+// form, this variant does not reject an overflowing at/step, so a caller that
+// breaks the last precondition can drive the internal accumulator to wrap and
+// read out of range. When the preconditions hold it returns the same (n, atOut)
+// as the safe form.
+func PolyphaseResampleCubicUnsafe(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) (n int, atOut int64) {
+	n = polyphaseResampleCubic64(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
+	return n, at + int64(n)*step
+}
+
 // ConvolveValidMulti applies multiple kernels to the same signal.
 // dsts[k][i] = sum(signal[i+j] * kernels[k][j]) for each kernel k.
 // All kernels must have the same length.

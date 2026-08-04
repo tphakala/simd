@@ -229,6 +229,7 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 |                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
 |                 | `DeinterleaveN(dsts, src)`          | Unpack N interleaved streams (any N) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
 |                 | `CubicInterpDot(hist,a,b,c,d,x)`    | Fused cubic interp dot product| 4x / 2x                             |
+|                 | `PolyphaseResampleCubic(out,hist,a,b,c,d,at,step,L,taps,fracBits)` | Fused polyphase cubic resampler (whole block in one call) | 4x / 2x |
 
 `DotProductBatch` scores its `[][]float64` rows in groups of four, keeping the
 query vector resident in registers across each group via a fused 4-row kernel on
@@ -886,6 +887,27 @@ a Raspberry Pi 5):
 | 64 taps, 2x decimate  | **2.0x** | **1.9x** | **1.7x** | **1.3x** |
 | 241 taps, 2x decimate | **1.6x** | **1.2x** | **1.2x** | **1.1x** |
 | 241 taps, 4x decimate | **1.3x** | **1.2x** | **1.2x** | **1.1x** |
+
+#### PolyphaseResampleCubic (fused polyphase cubic resampler)
+
+`PolyphaseResampleCubic` runs a whole block of soxr-style polyphase resampling
+with cubic sub-phase coefficient interpolation in one call. Issue #52 required
+measuring it first: the honest baseline is not the naive per-output loop but the
+best pure-Go resampler-side fix, an incremental phase-stepping accumulator (no
+per-output integer division) that calls the already-SIMD `CubicInterpDot` once
+per output. The fused kernel keeps the div/phase/frac state machine in registers
+across the block and removes the per-output Go-to-asm call, dispatch and
+slice-header overhead, so the win is largest at the short tap counts a real
+resampler runs at. Both paths are bit-identical (the fused dot reuses
+`CubicInterpDot`'s inner body verbatim under the same feature gate). numPhases 80,
+1024-output block, allocation-free, measured against the pure-Go StepLoop (AVX+FMA
+on x86-64, NEON on a Raspberry Pi 5):
+
+| Config             | f32 x86 | f32 NEON |
+| ------------------ | ------- | -------- |
+| 16 taps            | **2.3x** | **2.1x** |
+| 20 taps            | **1.7x** | **2.0x** |
+| 32 taps            | **1.9x** | **1.8x** |
 
 #### ConvolveValidMaxAbs (fused valid convolution + abs-max peak)
 
