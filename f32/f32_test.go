@@ -3267,7 +3267,11 @@ func realFFTUnpackRef(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 }
 
 func TestRealFFTUnpack(t *testing.T) {
-	sizes := []int{2, 3, 4, 5, 8, 9, 16, 17, 31, 32, 33, 63, 64, 65, 128, 256, 512, 1000}
+	// 6 and 7 sit between 5 and 8 to cover the 4-wide NEON overlapping remainder
+	// block (#225) at its smallest anchors: n = 6 is the lone-leftover case
+	// ((n-1)%4 == 1), n = 7 is (n-1)%4 == 2. Both re-anchor the block at k = n-4
+	// and recompute the last bins, so a mis-anchored block shows up here.
+	sizes := []int{2, 3, 4, 5, 6, 7, 8, 9, 16, 17, 31, 32, 33, 63, 64, 65, 128, 256, 512, 1000}
 
 	for _, n := range sizes {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
@@ -3512,15 +3516,19 @@ func realFFTUnpack32Close(got, want float32) bool {
 func TestRealFFTUnpack_OverRead(t *testing.T) {
 	const pad = 16 // two 8-wide AVX blocks of NaN guard band on each side of z
 	// n > minAVXElements (8) is what dispatches to AVX. 9 to 16 sweeps (n-1)%8
-	// through all of 0..7, so the 8-wide AVX path is hit at every remainder
-	// length and at its minimum reverse index; that range also covers (n-1)%4 for
-	// the 4-wide NEON path. The larger sizes add multi-iteration reverse walks.
+	// through all of 0..7, so the 8-wide AVX path is hit at every remainder length
+	// and at its minimum reverse index. n = 5..8 does the same for the 4-wide NEON
+	// path: n > 4 is what dispatches to NEON, and that range sweeps (n-1)%4 through
+	// 0..3. The larger sizes add multi-iteration reverse walks.
 	//
-	// This is the test that bounds the overlapping remainder block (#215). That
-	// block re-anchors at k = n-8 and mirror-reads zRe[1..8] whatever n is, so at
-	// n = 9 its forward and mirror windows are the same 8 elements and both sit
-	// hard against the ends of z; a guard band violation would show up here first.
-	for _, n := range []int{9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 31, 32, 33, 64, 65} {
+	// This is the test that bounds the overlapping remainder blocks. On amd64 the
+	// AVX block (#215) re-anchors at k = n-8 and mirror-reads zRe[1..8] whatever n
+	// is, so at n = 9 its forward and mirror windows are the same 8 elements and
+	// both sit hard against the ends of z. On arm64 the NEON block (#225)
+	// re-anchors at k = n-4 and mirror-reads zRe[1..4], so n = 6..8 puts its
+	// windows hard against the ends the same way; a guard band violation on either
+	// path shows up here first.
+	for _, n := range []int{5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 31, 32, 33, 64, 65} {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
 			nan := float32(math.NaN())
 			zReBack := make([]float32, pad+n+pad)
@@ -3789,18 +3797,23 @@ func BenchmarkRealFFTUnpack(b *testing.B) {
 	}
 }
 
-// BenchmarkRealFFTUnpackTail sweeps one full remainder cycle at the smallest
+// BenchmarkRealFFTUnpackTail sweeps full remainder cycles at the smallest
 // dispatched sizes, so the per-tail-length cost is visible as a slope across
-// adjacent rows. n = 9 is the first size the AVX kernel takes (the guard is
-// n > minAVXElements with minAVXElements == 8) and has an empty remainder,
-// (n-1)%8 == 0; n = 16 has the longest one, (n-1)%8 == 7. The shipped size list
-// in BenchmarkRealFFTUnpack holds only those two extremes and nothing between,
-// which is what makes a change in remainder handling hard to read there.
+// adjacent rows. The range starts at n = 5, the first size the 4-wide NEON
+// kernel takes (its guard is n > 4), and n = 5..8 is one full (n-1)%4 cycle
+// through 0..3. n = 9 is the first size the 8-wide AVX kernel takes (its guard
+// is n > minAVXElements with minAVXElements == 8), and n = 9..16 is one full
+// (n-1)%8 cycle. The shipped size list in BenchmarkRealFFTUnpack holds only the
+// empty and maximal remainders and nothing between, which is what makes a change
+// in remainder handling hard to read there.
 //
-// The NEON kernel is 4 wide, so this range covers two of its cycles rather than
-// one; the same slope reading applies per group of four.
+// Which kernel a row measures is arch-dependent: on arm64 every row from n = 5
+// up dispatches to NEON; on amd64 the SIMD_5..8 rows fall to the Go path (AVX
+// needs n > 8), so they read the same as their Go_ siblings there. Reading the
+// NEON tail slope wants the arm64 numbers at n = 5..8, the amd64 AVX slope the
+// n = 9..16 rows.
 func BenchmarkRealFFTUnpackTail(b *testing.B) {
-	for n := 9; n <= 16; n++ {
+	for n := 5; n <= 16; n++ {
 		b.Run(fmt.Sprintf("SIMD_%d", n), func(b *testing.B) {
 			benchRealFFTUnpack32(b, n, benchRealFFTUnpack32Dispatched)
 		})
