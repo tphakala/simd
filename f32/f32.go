@@ -1341,8 +1341,8 @@ func ButterflyComplexStage(re, im []float32, span int, twRe, twIm []float32) {
 //	evenIm = 0.5 * (zIm[k] - zIm[n-k])
 //	diffRe = zRe[k] - zRe[n-k]
 //	diffIm = zIm[k] + zIm[n-k]
-//	oddRe  = 0.5 * (twRe[k]*diffIm + twIm[k]*diffRe)
-//	oddIm  = 0.5 * (twIm[k]*diffIm - twRe[k]*diffRe)
+//	oddRe  = 0.5 * (twRe[k-1]*diffIm + twIm[k-1]*diffRe)
+//	oddIm  = 0.5 * (twIm[k-1]*diffIm - twRe[k-1]*diffRe)
 //	outRe[k] = evenRe + oddRe
 //	outIm[k] = evenIm + oddIm
 //

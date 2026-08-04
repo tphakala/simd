@@ -437,8 +437,27 @@ func TestRealFFTPower_SignedZero(t *testing.T) {
 	}
 }
 
-// benchRealFFTPower64 runs fn at size n over freshly built inputs.
-func benchRealFFTPower64(b *testing.B, n int, fn func(dst, zRe, zIm, twRe, twIm []float64, n int)) {
+// Per-arm byte accounting for SetBytes, counting the distinct length-n float64
+// slices each arm touches. This is a working-set proxy, not a full multi-pass
+// traffic count: the baseline re-reads its outRe/outIm scratch across the Mul and
+// FMA passes, so its real memory traffic is higher than the count implies. The
+// point is only to stop charging both arms the same bytes; ns/op stays the
+// apples-to-apples fused-vs-baseline comparison, since the per-arm byte counts
+// make the derived MB/s figures non-comparable across arms.
+const (
+	// fusedSlicesTouched is what the fused RealFFTPower touches per call: it reads
+	// zRe, zIm, twRe, twIm and writes dst (5 distinct slices).
+	fusedSlicesTouched = 5
+	// baselineSlicesTouched is what the unpack+Mul+FMA baseline touches per call:
+	// the same five plus the outRe/outIm scratch RealFFTUnpack writes and the
+	// following Mul/FMA passes re-read (7 distinct slices).
+	baselineSlicesTouched = 7
+)
+
+// benchRealFFTPower64 runs fn at size n over freshly built inputs. slicesTouched
+// is how many length-n float64 slices this arm moves through memory per call, so
+// each arm's reported MB/s reflects its own traffic instead of a shared count.
+func benchRealFFTPower64(b *testing.B, n int, slicesTouched int64, fn func(dst, zRe, zIm, twRe, twIm []float64, n int)) {
 	b.Helper()
 	zRe := make([]float64, n)
 	zIm := make([]float64, n)
@@ -453,7 +472,7 @@ func benchRealFFTPower64(b *testing.B, n int, fn func(dst, zRe, zIm, twRe, twIm 
 	makePowerTwiddles(twRe, twIm, n)
 
 	b.ResetTimer()
-	b.SetBytes(int64(n * 8 * 5)) // 5 float64 slices touched (z re/im, tw re/im, dst)
+	b.SetBytes(int64(n*8) * slicesTouched) // 8 bytes per float64 across slicesTouched slices
 
 	for range b.N {
 		fn(dst, zRe, zIm, twRe, twIm, n)
@@ -489,11 +508,11 @@ func BenchmarkRealFFTPower(b *testing.B) {
 	for _, n := range sizes {
 		nfft := 2 * n
 		b.Run(fmt.Sprintf("Fused_nfft%d", nfft), func(b *testing.B) {
-			benchRealFFTPower64(b, n, realFFTPowerDispatched)
+			benchRealFFTPower64(b, n, fusedSlicesTouched, realFFTPowerDispatched)
 		})
 		b.Run(fmt.Sprintf("UnpackMulFMA_nfft%d", nfft), func(b *testing.B) {
 			base := &realFFTPowerBaseline{outRe: make([]float64, n), outIm: make([]float64, n)}
-			benchRealFFTPower64(b, n, base.run)
+			benchRealFFTPower64(b, n, baselineSlicesTouched, base.run)
 		})
 	}
 }

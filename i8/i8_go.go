@@ -267,6 +267,29 @@ func dequantizeGo(dst []float32, src []int8, scale float32, zeroPoint int8) {
 	}
 }
 
+// requantizeClampAdd finishes the requantize epilogue in int32 space: it clamps
+// the rounded accumulator z to [MinInt8-zeroPoint, MaxInt8-zeroPoint] and only
+// then adds zeroPoint, so the result lands in [-128, 127] with no wraparound.
+// The whole computation stays in int32 and is bit-identical to the SIMD kernels,
+// which reach the same int8 by different routes: the AVX2 kernel clamps z to
+// [MinInt8-zeroPoint, MaxInt8-zeroPoint] then adds (VPMAXSD/VPMINSD then VPADDD),
+// while the NEON kernel adds with a saturating SQADD then narrow-saturates in
+// SQXTN. Adding first in a platform int (as clampI8(int(z)+zp) did) overflows on
+// 32-bit-int targets (386, 32-bit ARM) when z is near MaxInt32 and zeroPoint is
+// positive: the sum wraps negative and clamps to -128 instead of +127. Doing the
+// arithmetic in int32 keeps every intermediate in range on every platform, so the
+// Go reference stays bit-exact with the kernels.
+func requantizeClampAdd(z int32, zeroPoint int8) int8 {
+	lo := int32(math.MinInt8) - int32(zeroPoint)
+	hi := int32(math.MaxInt8) - int32(zeroPoint)
+	if z < lo {
+		z = lo
+	} else if z > hi {
+		z = hi
+	}
+	return int8(z + int32(zeroPoint))
+}
+
 // requantizeGo is the source of truth for Requantize: the gemmlowp
 // double-rounding epilogue (left shift, SaturatingRoundingDoublingHighMul,
 // RoundingDivideByPOT), then add the zero point and saturate to int8. shift > 0
@@ -281,11 +304,10 @@ func requantizeGo(dst []int8, acc []int32, multiplier int32, shift int, zeroPoin
 	if shift < 0 {
 		right = -shift
 	}
-	zp := int(zeroPoint)
 	for i := range dst {
 		x := acc[i] << left // wrapping int32 left shift
 		y := srdhm(x, multiplier)
 		z := rdbpot(y, right)
-		dst[i] = clampI8(int(z) + zp)
+		dst[i] = requantizeClampAdd(z, zeroPoint)
 	}
 }
