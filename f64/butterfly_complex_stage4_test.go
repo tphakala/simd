@@ -3,6 +3,7 @@ package f64
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"math/rand/v2"
 	"testing"
 )
@@ -312,15 +313,15 @@ func TestButterflyComplexStage4_FullFFT(t *testing.T) {
 			// Bit-reversal permutation into the working buffers.
 			re := make([]float64, n)
 			im := make([]float64, n)
-			bits := 0
-			for 1<<bits < n {
-				bits++
+			nbits := 0
+			for 1<<nbits < n {
+				nbits++
 			}
 			for i := range n {
 				r := 0
-				for b := range bits {
+				for b := range nbits {
 					if i&(1<<b) != 0 {
-						r |= 1 << (bits - 1 - b)
+						r |= 1 << (nbits - 1 - b)
 					}
 				}
 				re[r] = srcRe[i]
@@ -599,7 +600,8 @@ type radix2TwSet struct {
 // buildStage4Schedule returns the radix-4 stage schedule for an n-point transform:
 // spans 1, 4, 16, ... while a full 4*span block fits.
 func buildStage4Schedule(n int) []*stage4TwSet {
-	var sched []*stage4TwSet
+	// bits.Len(n) (about log2 n) is a safe upper bound on the stage count.
+	sched := make([]*stage4TwSet, 0, bits.Len(uint(n)))
 	for span := 1; butterflyStage4Radix*span <= n; span *= butterflyStage4Radix {
 		t1r, t1i, t2r, t2i, t3r, t3i := stage4Twiddles(span)
 		sched = append(sched, &stage4TwSet{span, t1r, t1i, t2r, t2i, t3r, t3i})
@@ -610,7 +612,7 @@ func buildStage4Schedule(n int) []*stage4TwSet {
 // buildRadix2Schedule returns the radix-2 stage schedule for an n-point transform:
 // spans 1, 2, 4, ... up to n/2.
 func buildRadix2Schedule(n int) []*radix2TwSet {
-	var sched []*radix2TwSet
+	sched := make([]*radix2TwSet, 0, bits.Len(uint(n)))
 	for span := 1; span < n; span *= 2 {
 		twRe := make([]float64, span)
 		twIm := make([]float64, span)
