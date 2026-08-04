@@ -88,7 +88,7 @@
 // Transcendental (f32/f64): Log, Log2, Log10, Pow, PowElem (plus LogInPlace, PowInPlace),
 // SIMD-accelerated on AVX2+FMA and NEON
 //
-// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
+// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, PolyphaseResampleCubic, Int32ToFloat32Scale, Int16ToFloat32Scale, Float32ToInt16Scale
 //
 // Sliding-window argmin (f32): MinIdxOfSum, MinIdxOfSumRows (batched sliding-window argmin of a[i]+k[base+r*slide+i], first-index-wins ties, bit-exact across all paths)
 //
