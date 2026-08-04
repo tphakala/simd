@@ -214,3 +214,18 @@ func sumAbsNEON(a []int8) int32
 
 //go:noescape
 func sadNEON(a, b []int8) int32
+
+// Quantization dispatch (Part of #132). Go-only for now; the NEON kernels are
+// wired in a later step.
+
+func quantizeI8(dst []int8, src []float32, scale float32, zeroPoint int8) {
+	quantizeGo(dst, src, scale, zeroPoint)
+}
+
+func dequantizeI8(dst []float32, src []int8, scale float32, zeroPoint int8) {
+	dequantizeGo(dst, src, scale, zeroPoint)
+}
+
+func requantizeI8(dst []int8, acc []int32, multiplier int32, shift int, zeroPoint int8) {
+	requantizeGo(dst, acc, multiplier, shift, zeroPoint)
+}
