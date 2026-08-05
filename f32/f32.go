@@ -56,11 +56,11 @@
 //   - ButterflyComplex and ButterflyComplexStage update their data slices in
 //     place; those slices must not overlap one another, and the twiddles must not
 //     overlap them.
-//   - The mirror, window, stride, interleave and batch operations (Interleave2/N,
-//     Deinterleave2/N, ConvolveValid and ConvolveValidMulti, ConvolveDecimate,
-//     DotProductBatch, DotProductIndexed, DotProductStrided, MinIdxOfSumRows and
-//     RealFFTUnpack) index inputs and outputs at different positions, so their
-//     outputs must not overlap any input.
+//   - The mirror, window, stride, interleave, batch and resample operations
+//     (Interleave2/N, Deinterleave2/N, ConvolveValid and ConvolveValidMulti,
+//     ConvolveDecimate, DotProductBatch, DotProductIndexed, DotProductStrided,
+//     MinIdxOfSumRows, RealFFTUnpack and PolyphaseResampleCubic) index inputs and
+//     outputs at different positions, so their outputs must not overlap any input.
 //
 // The float-to-fixed and fixed-to-float conversions (Float32ToInt16Scale,
 // Float32ToInt32ScaleClamp and its Signed form, Int16ToFloat32Scale,
@@ -801,6 +801,10 @@ const polyphaseMaxFracBits32 = 24
 // tapsPerPhase, or an initial window already past the end of hist) also yield
 // (0, at) because no output satisfies the window bound.
 //
+// Aliasing: out and hist are indexed differently (each output reads a sliding
+// window of hist chosen by the accumulator), so out must not overlap hist, nor
+// any of the coefficient banks a, b, c or d.
+//
 // Uses AVX+FMA on AMD64 and NEON on ARM64 for tapsPerPhase past the vector width,
 // gated on the same CPU features and tap threshold as [CubicInterpDot] so the
 // fused result is bit-identical to the per-output form on every CPU; below the
@@ -847,7 +851,8 @@ func PolyphaseResampleCubic(out, hist []float32, a, b, c, d [][]float32, at, ste
 // form, this variant does not reject an overflowing at/step, so a caller that
 // breaks the last precondition can drive the internal accumulator to wrap and
 // read out of range. When the preconditions hold it returns the same (n, atOut)
-// as the safe form.
+// as the safe form. The same aliasing rule applies: out must not overlap hist or
+// the coefficient banks.
 func PolyphaseResampleCubicUnsafe(out, hist []float32, a, b, c, d [][]float32, at, step int64, numPhases, tapsPerPhase, fracBits int) (n int, atOut int64) {
 	n = polyphaseResampleCubic32(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
 	return n, at + int64(n)*step
