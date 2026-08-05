@@ -1129,25 +1129,6 @@ func deinterleave2SSE2(a, b, src []float64)
 //go:noescape
 func cubicInterpDotAVX(hist, a, b, c, d []float64, x float64) float64
 
-// polyphaseResampleCubic64 dispatches the fused polyphase cubic resampler. The
-// guard matches cubicInterpDot64 exactly (cpu.X86.AVX && cpu.X86.FMA &&
-// tapsPerPhase >= minAVXElements) so the fused kernel's per-output dot always
-// selects the same tier as a standalone CubicInterpDot at the same tap count,
-// making the fused result bit-identical to the per-output form on every CPU.
-func polyphaseResampleCubic64(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) int {
-	if cpu.X86.AVX && cpu.X86.FMA && tapsPerPhase >= minAVXElements {
-		return polyphaseResampleCubicAVX(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
-	}
-	return polyphaseResampleCubicGo(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
-}
-
-// polyphaseResampleCubicAVX runs the whole output block in one fused AVX+FMA pass,
-// reusing cubicInterpDotAVX's inner dot body per output. Returns the number of
-// outputs written. See f64_amd64.s.
-//
-//go:noescape
-func polyphaseResampleCubicAVX(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) int
-
 // ButterflyComplex assembly function declaration
 //
 //go:noescape

@@ -1083,25 +1083,6 @@ func cubicInterpDot32(hist, a, b, c, d []float32, x float32) float32 {
 //go:noescape
 func cubicInterpDotAVX(hist, a, b, c, d []float32, x float32) float32
 
-// polyphaseResampleCubic32 dispatches the fused polyphase cubic resampler. The
-// guard matches cubicInterpDot32 exactly (cpu.X86.AVX && cpu.X86.FMA &&
-// tapsPerPhase >= minAVXElements) so the fused kernel's per-output dot always
-// selects the same tier as a standalone CubicInterpDot at the same tap count,
-// making the fused result bit-identical to the per-output form on every CPU.
-func polyphaseResampleCubic32(out, hist []float32, a, b, c, d [][]float32, at, step int64, numPhases, tapsPerPhase, fracBits int) int {
-	if cpu.X86.AVX && cpu.X86.FMA && tapsPerPhase >= minAVXElements {
-		return polyphaseResampleCubicAVX(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
-	}
-	return polyphaseResampleCubicGo(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
-}
-
-// polyphaseResampleCubicAVX runs the whole output block in one fused AVX+FMA pass,
-// reusing cubicInterpDotAVX's inner dot body per output. Returns the number of
-// outputs written. See f32_amd64.s.
-//
-//go:noescape
-func polyphaseResampleCubicAVX(out, hist []float32, a, b, c, d [][]float32, at, step int64, numPhases, tapsPerPhase, fracBits int) int
-
 func sigmoid32(dst, src []float32) {
 	// Requires AVX2: sigmoidAVX reconstructs 2^k with 256-bit YMM integer ops
 	// (VCVTPS2DQ/VPSLLD/VPADDD) that do not exist on AVX1-only CPUs. Gating on
