@@ -30,9 +30,11 @@ package i32
 //     adds no bias and leaves the value unchanged. The bias addition is int32 and
 //     wraps, exactly as libopus PSHR32 does.
 //
-// preShift and postShift must each be in [0, 31]; g, preShift and postShift are
-// per-call scalar constants. Any trailing capacity in dst past n is left
-// untouched.
+// preShift and postShift must each be in [0, 31]; GainQ31 panics otherwise, since
+// an out-of-range count would otherwise diverge across backends (the NEON SSHL
+// reads it as a signed per-lane shift, the amd64 scalar tail masks it to 5 bits,
+// and the vector VPSLLD saturates to zero). g, preShift and postShift are per-call
+// scalar constants. Any trailing capacity in dst past n is left untouched.
 //
 // dst may alias a exactly (element for element): each lane reads a[i] before its
 // own dst[i] store and the forward iteration never revisits a written lane, so
@@ -41,6 +43,9 @@ package i32
 // shifted dst/a overlay could clobber input lanes a later iteration has not read
 // yet. This is the same aliasing rule and caveat as [ScaleQ31].
 func GainQ31(dst, a []int32, g int32, preShift, postShift int) {
+	if preShift < 0 || preShift > gainShiftMax || postShift < 0 || postShift > gainShiftMax {
+		panic("i32.GainQ31: preShift and postShift must be in [0, 31]")
+	}
 	n := min(len(dst), len(a))
 	if n == 0 {
 		return

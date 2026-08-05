@@ -180,11 +180,12 @@ func scaleQ15Go(dst, a []int32, k int16) {
 	}
 }
 
-// gainShiftMask reduces a runtime shift count to GainQ31's documented [0,31]
-// precondition. Within that range the mask is a no-op; it exists so the compiler
-// can prove gainQ31Go's per-element variable shifts take a count in [0,31] and drop
-// the runtime.panicshift and range-clamp guards from the hot loop.
-const gainShiftMask = 31
+// gainShiftMax is the largest valid preShift/postShift for GainQ31: a 32-bit lane
+// admits shift counts 0..31. Public GainQ31 rejects anything outside [0, gainShiftMax];
+// gainQ31Go reuses it as the low-5-bit mask (31 == 2^5-1) so the compiler can prove
+// the per-element variable shifts take a count in [0,31] and drop the
+// runtime.panicshift and range-clamp guards from the hot loop.
+const gainShiftMax = 31
 
 // gainQ31Go writes the fused Q31 gain that is GainQ31's source of truth:
 // dst[i] = PSHR32(MULT32_32_Q31(SHL32(a[i], preShift), gain), postShift), the
@@ -214,8 +215,8 @@ func gainQ31Go(dst, a []int32, gain int32, preShift, postShift int) {
 	// shifts cannot take a negative count, lifting runtime.panicshift and the gain
 	// spill out of the hot loop (~1.6x). Out-of-range counts are unspecified either
 	// way (the SIMD kernels do not fault on them either).
-	ps := uint(preShift) & gainShiftMask
-	qs := uint(postShift) & gainShiftMask
+	ps := uint(preShift) & gainShiftMax
+	qs := uint(postShift) & gainShiftMax
 	bias := (int32(1) << qs) >> 1
 	for i := range dst {
 		x := int32(uint32(a[i]) << ps)

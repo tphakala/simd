@@ -248,6 +248,46 @@ func TestGainQ31_Clamp(t *testing.T) {
 	}
 }
 
+// TestGainQ31_ShiftRange asserts the public entry point rejects out-of-range shift
+// counts (which would otherwise diverge across backends) and accepts the [0,31]
+// endpoints. Validation runs before the length check, so it fires even on empty
+// slices.
+func TestGainQ31_ShiftRange(t *testing.T) {
+	dst := make([]int32, 4)
+	a := make([]int32, 4)
+
+	bad := []struct {
+		name                string
+		preShift, postShift int
+	}{
+		{"preShift<0", -1, 0},
+		{"preShift>31", 32, 0},
+		{"postShift<0", 0, -1},
+		{"postShift>31", 0, 32},
+		{"both invalid", -5, 40},
+		{"invalid on empty", 32, 0},
+	}
+	for _, c := range bad {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("GainQ31(pre=%d post=%d) did not panic", c.preShift, c.postShift)
+				}
+			}()
+			in := dst
+			if c.name == "invalid on empty" {
+				in = nil // validation must precede the n==0 short-circuit
+			}
+			GainQ31(in, a, 1, c.preShift, c.postShift)
+		})
+	}
+
+	// The [0,31] endpoints are valid and must not panic.
+	for _, s := range []struct{ pre, post int }{{0, 0}, {0, 31}, {31, 0}, {31, 31}} {
+		GainQ31(dst, a, 0x2BADF00D, s.pre, s.post)
+	}
+}
+
 // TestGainQ31_Aliasing processes the samples in place (dst == a) and confirms every
 // lane matches the oracle computed from the saved originals. The kernel reads each
 // a lane before its own store, so the in-place overlay is well defined lane by
