@@ -500,25 +500,6 @@ func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 //go:noescape
 func cubicInterpDotNEON(hist, a, b, c, d []float64, x float64) float64
 
-// polyphaseResampleCubic64 dispatches the fused polyphase cubic resampler. The
-// NEON guard matches cubicInterpDot64 (hasNEON && tapsPerPhase >= 2) so the fused
-// kernel's per-output dot selects the same tier as a standalone CubicInterpDot at
-// the same tap count, making the fused result bit-identical to the per-output
-// form.
-func polyphaseResampleCubic64(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) int {
-	if hasNEON && tapsPerPhase >= 2 {
-		return polyphaseResampleCubicNEON(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
-	}
-	return polyphaseResampleCubicGo(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
-}
-
-// polyphaseResampleCubicNEON runs the whole output block in one fused NEON pass,
-// reusing cubicInterpDotNEON's inner dot body per output. Returns the number of
-// outputs written. See f64_arm64.s.
-//
-//go:noescape
-func polyphaseResampleCubicNEON(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) int
-
 func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64) {
 	// One NEON iteration needs 2 float64 lanes; anything shorter falls to Go.
 	if hasNEON && len(upperRe) >= 2 {

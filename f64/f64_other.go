@@ -57,9 +57,6 @@ func addScaled64(dst []float64, alpha float64, s []float64) { addScaledGo64(dst,
 func cubicInterpDot64(hist, a, b, c, d []float64, x float64) float64 {
 	return cubicInterpDotGo(hist, a, b, c, d, x)
 }
-func polyphaseResampleCubic64(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) int {
-	return polyphaseResampleCubicGo(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
-}
 func sigmoid64(dst, src []float64) { sigmoid64Go(dst, src) }
 func relu64(dst, src []float64)    { relu64Go(dst, src) }
 func clampScale64(dst, src []float64, minVal, maxVal, scale float64) {
