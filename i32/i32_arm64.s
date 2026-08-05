@@ -441,6 +441,83 @@ scaleq15_neon_scalar:
 scaleq15_neon_done:
     RET
 
+// func gainQ31NEON(dst, a []int32, gain int32, preShift, postShift int)
+// Fused Q31 gain: dst[i] = PSHR32(MULT32_32_Q31(SHL32(a[i], preShift), gain), postShift).
+// The MULT32_32_Q31 core is scaleQ31NEON verbatim (SMULL/SMULL2 widen to int64,
+// SSHR #31, XTN/XTN2 narrow to the low 32 bits); this kernel wraps it in a pre-shift
+// and a rounding post-shift, all with runtime-broadcast counts:
+//   - SSHL V0.4S,V0.4S,V5.4S applies SHL32 (V5 = preShift in every lane) to the
+//     int32 lanes BEFORE the widen, so the shifted value stays in int32 range and
+//     |x*gain| <= 2^62; SSHL with a non-negative count is a plain wrapping left
+//     shift (overflow bits discarded), matching int32(uint32(a)<<preShift).
+//   - ADD V4.4S,V4.4S,V7.4S adds the rounding bias (V7 = (int32(1)<<postShift)>>1),
+//     wrapping in int32 lanes exactly like libopus PSHR32; bias is 0 at postShift==0.
+//   - SSHL V4.4S,V4.4S,V6.4S with V6 = -postShift is the arithmetic right shift:
+//     a NEGATIVE SSHL count is a signed (sign-preserving) shift right that truncates
+//     toward -inf, and the bias already supplied the round-half-up, so this is PSHR32
+//     without double rounding (SRSHL would double-round). bias uses a 32-bit LSLW +
+//     arithmetic ASRW $1 so postShift==31 sign-extends to 0xC0000000, matching
+//     (int32(1)<<31)>>1. The scalar tail LSLW/MOVW-resign/MUL/ASR #31/ADDW/ASRW
+//     closes out lengths that are not a multiple of 4. New WORDs (SSHL x2, the pre/
+//     post/bias DUPs, ADD .4S) plus the reused scaleQ31NEON encodings are all
+//     cross-checked against arm64asm by TestArm64WordEncodings. Registers: R0=dst,
+//     R1=a, R2=gain, R3=n, R4=blocks, R5=tail sample, R6=preShift, R7=postShift,
+//     R8=-postShift, R9=bias; none are R16/R17/R18/R27/R28. preShift and postShift
+//     must be in [0, 31]. Frame: dst+0, a+24, gain+48, preShift+56, postShift+64.
+TEXT ·gainQ31NEON(SB), NOSPLIT, $0-72
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD a_base+24(FP), R1
+    MOVW gain+48(FP), R2          // R2 = int64(gain), sign-extended int32 (also tail gain)
+    WORD $0x4E040C41              // DUP V1.4S, W2   (gain in all 4 int32 lanes)
+
+    MOVD preShift+56(FP), R6      // preShift in [0,31]
+    MOVD postShift+64(FP), R7     // postShift in [0,31]
+    WORD $0x4E040CC5             // DUP V5.4S, W6   (preShift x4, SSHL left count)
+    NEG  R7, R8                   // R8 = -postShift (negative SSHL count = arithmetic >>)
+    WORD $0x4E040D06            // DUP V6.4S, W8   (-postShift x4, SSHL right count)
+    MOVD $1, R9                   // bias = (int32(1)<<postShift)>>1
+    LSLW R7, R9, R9              // 1 << postShift (32-bit, wraps to 0x80000000 at 31)
+    ASRW $1, R9, R9             // arithmetic >>1: 0xC0000000 at 31, else 1<<(postShift-1)
+    WORD $0x4E040D27           // DUP V7.4S, W9   (bias x4)
+
+    LSR  $2, R3, R4              // R4 = n / 4
+    CBZ  R4, gainq31_neon_remainder
+
+gainq31_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]       // a[i..i+3]
+    WORD $0x4EA54400            // SSHL V0.4S, V0.4S, V5.4S   (x = a << preShift, wrapping)
+    WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
+    WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
+    WORD $0x4F610442           // SSHR V2.2D, V2.2D, #31
+    WORD $0x4F610463           // SSHR V3.2D, V3.2D, #31
+    WORD $0x0EA12844           // XTN V4.2S, V2.2D   (low 32 of results 0,1)
+    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    WORD $0x4EA78484           // ADD V4.4S, V4.4S, V7.4S    (+ bias, wrapping)
+    WORD $0x4EA64484           // SSHL V4.4S, V4.4S, V6.4S   (arithmetic >> postShift)
+    VST1.P [V4.S4], 16(R0)
+    SUB  $1, R4
+    CBNZ R4, gainq31_neon_loop4
+
+gainq31_neon_remainder:
+    AND  $3, R3
+    CBZ  R3, gainq31_neon_done
+
+gainq31_neon_scalar:
+    MOVW.P 4(R1), R5             // a[i], sign-extended
+    LSLW R6, R5, R5             // x = a << preShift, wraps in the W register
+    MOVW R5, R5                 // re-sign-extend the WRAPPED x to 64-bit
+    MUL  R2, R5, R5            // x * gain (|p| <= 2^62)
+    ASR  $31, R5, R5          // MULT32_32_Q31
+    ADDW R9, R5, R5           // + bias, wraps in 32 bits
+    ASRW R7, R5, R5          // arithmetic >> postShift in 32 bits
+    MOVW.P R5, 4(R0)           // store low 32 bits
+    SUB  $1, R3
+    CBNZ R3, gainq31_neon_scalar
+
+gainq31_neon_done:
+    RET
+
 // func butterflyNEON(lo, hi []int32)
 // In-place radix-2 butterfly, 4 int32 per iteration: each block loads lo and hi,
 // forms the wrapping sum (ADD .4S -> V2) and difference (SUB .4S -> V3) BEFORE

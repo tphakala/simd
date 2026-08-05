@@ -147,6 +147,24 @@ func scaleQ31AVX2(dst, a []int32, k int32)
 //go:noescape
 func scaleQ15AVX2(dst, a []int32, k int16)
 
+// minAVX2GainQ31 is one 8-wide (256-bit) block, an independent literal like the
+// scale thresholds above. The kernel is correct at any length (it falls through
+// to a scalar tail), so this is a performance cut only, never a safety
+// requirement. It gates on AVX2 because the VPMULDQ Q31 core plus the VPSLLD/
+// VPADDD/VPSRAD pre- and post-shift stages are all 256-bit integer ops.
+const minAVX2GainQ31 = 8
+
+func gainQ31I32(dst, a []int32, gain int32, preShift, postShift int) {
+	if hasAVX2 && len(dst) >= minAVX2GainQ31 {
+		gainQ31AVX2(dst, a, gain, preShift, postShift)
+		return
+	}
+	gainQ31Go(dst, a, gain, preShift, postShift)
+}
+
+//go:noescape
+func gainQ31AVX2(dst, a []int32, gain int32, preShift, postShift int)
+
 // minAVX2Butterfly is one 8-wide (256-bit) block, an independent literal like
 // the tier-3 thresholds above. The kernel is correct at any length (it falls
 // through to a scalar tail), so this is a performance cut only, never a safety
