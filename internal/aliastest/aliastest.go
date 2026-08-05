@@ -255,32 +255,45 @@ func UnaryCase[T any](name string, eq func(x, y T) bool, gen func(i int) T, op f
 }
 
 // BinaryCase builds a Case that runs Binary for op(dst, a, b). Its Alloc check runs
-// the dst==a overlay through AllocsPerRun.
+// every overlay Binary claims (dst==a, dst==b, dst==a==b), each on fresh inputs, so
+// an allocation reachable only in one overlay mode is still caught.
 func BinaryCase[T any](name string, eq func(x, y T) bool, gen func(i int) T, op func(dst, a, b []T)) Case {
 	return Case{
 		Name:  name,
 		Check: func(t *testing.T, n int) { t.Helper(); Binary(t, n, eq, gen, op) },
 		Alloc: func(t *testing.T) {
 			t.Helper()
-			a := buildOff(allocSize, gen, 0)
-			b := buildOff(allocSize, gen, offB)
+			fresh := func() (a, b []T) {
+				return buildOff(allocSize, gen, 0), buildOff(allocSize, gen, offB)
+			}
+			a, b := fresh()
 			ZeroAlloc(t, name+" dst=a", func() { op(a, a, b) })
+			a, b = fresh()
+			ZeroAlloc(t, name+" dst=b", func() { op(b, a, b) })
+			a, _ = fresh()
+			ZeroAlloc(t, name+" dst=a=b", func() { op(a, a, a) })
 		},
 	}
 }
 
 // TernaryCase builds a Case that runs Ternary for op(dst, a, b, c). Its Alloc check
-// runs the dst==a overlay through AllocsPerRun.
+// runs every overlay Ternary claims (dst==a, dst==b, dst==c), each on fresh inputs,
+// so an allocation reachable only in one overlay mode is still caught.
 func TernaryCase[T any](name string, eq func(x, y T) bool, gen func(i int) T, op func(dst, a, b, c []T)) Case {
 	return Case{
 		Name:  name,
 		Check: func(t *testing.T, n int) { t.Helper(); Ternary(t, n, eq, gen, op) },
 		Alloc: func(t *testing.T) {
 			t.Helper()
-			a := buildOff(allocSize, gen, 0)
-			b := buildOff(allocSize, gen, offB)
-			c := buildOff(allocSize, gen, offC)
+			fresh := func() (a, b, c []T) {
+				return buildOff(allocSize, gen, 0), buildOff(allocSize, gen, offB), buildOff(allocSize, gen, offC)
+			}
+			a, b, c := fresh()
 			ZeroAlloc(t, name+" dst=a", func() { op(a, a, b, c) })
+			a, b, c = fresh()
+			ZeroAlloc(t, name+" dst=b", func() { op(b, a, b, c) })
+			a, b, c = fresh()
+			ZeroAlloc(t, name+" dst=c", func() { op(c, a, b, c) })
 		},
 	}
 }

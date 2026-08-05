@@ -121,12 +121,15 @@ func TestAliasingZeroAlloc(t *testing.T) {
 	})
 }
 
-// allocSplitComplex asserts the in-place-over-a overlay of a split-complex product
-// allocates nothing.
+// allocSplitComplex asserts both claimed in-place overlays of a split-complex
+// product (result over a, and result over b) allocate nothing, each on fresh
+// inputs.
 func allocSplitComplex(t *testing.T, name string, op func(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)) {
 	t.Helper()
 	aRe, aIm, bRe, bIm := splitInputs(64)
 	aliastest.ZeroAlloc(t, name+" dstRe=aRe,dstIm=aIm", func() { op(aRe, aIm, aRe, aIm, bRe, bIm) })
+	aRe, aIm, bRe, bIm = splitInputs(64)
+	aliastest.ZeroAlloc(t, name+" dstRe=bRe,dstIm=bIm", func() { op(bRe, bIm, aRe, aIm, bRe, bIm) })
 }
 
 // sweepAddScaled checks AddScaled's documented in-place overlay: s may equal dst
