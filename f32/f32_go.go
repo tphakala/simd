@@ -993,6 +993,64 @@ func butterflyComplexStage32Go(re, im []float32, span, blocks int, twRe, twIm []
 	}
 }
 
+// butterflyComplexStage4x32Go applies one radix-4 decimation-in-time stage in
+// place over split-complex data. blocks is the number of complete 4*span blocks;
+// the caller has already reconciled it against len(re)/len(im). The six twiddle
+// slices carry w^(2j), w^j and w^(3j) with w = exp(-2*pi*i/(4*span)); see
+// ButterflyComplexStage4 for the convention. It is the source of truth for the
+// operation: the SIMD kernels reproduce this arithmetic within rounding. It is
+// the float32 counterpart of f64.butterflyComplexStage4x64Go.
+func butterflyComplexStage4x32Go(re, im []float32, span, blocks int,
+	tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float32) {
+	// Reslice the twiddles to exactly span so the bounds prover discharges the
+	// inner-loop index from the loop condition alone; the caller has validated
+	// these lengths.
+	t1r, t1i := tw1Re[:span], tw1Im[:span]
+	t2r, t2i := tw2Re[:span], tw2Im[:span]
+	t3r, t3i := tw3Re[:span], tw3Im[:span]
+	for b := range blocks {
+		k := b * butterflyStage4Radix * span
+		// Reslice the four sub-vectors to exactly span so the bounds prover
+		// discharges the inner-loop indices from the loop condition alone, the same
+		// per-block reslice the radix-2 butterflyComplexStage32Go uses. Each reslice
+		// costs one bounds check per block, amortised over span elements, versus
+		// eight per element without it.
+		e1 := k + span
+		e2 := e1 + span
+		e3 := e2 + span
+		e4 := e3 + span
+		x0re, x0im := re[k:e1:e1], im[k:e1:e1]
+		x1re, x1im := re[e1:e2:e2], im[e1:e2:e2]
+		x2re, x2im := re[e2:e3:e3], im[e2:e3:e3]
+		x3re, x3im := re[e3:e4:e4], im[e3:e4:e4]
+		for j := range span {
+			x0r, x0i := x0re[j], x0im[j]
+			x1r, x1i := x1re[j], x1im[j]
+			x2r, x2i := x2re[j], x2im[j]
+			x3r, x3i := x3re[j], x3im[j]
+
+			// Full complex multiplies against the three twiddle powers.
+			t1re := x1r*t1r[j] - x1i*t1i[j]
+			t1im := x1r*t1i[j] + x1i*t1r[j]
+			t2re := x2r*t2r[j] - x2i*t2i[j]
+			t2im := x2r*t2i[j] + x2i*t2r[j]
+			t3re := x3r*t3r[j] - x3i*t3i[j]
+			t3im := x3r*t3i[j] + x3i*t3r[j]
+
+			// Radix-4 butterfly combine.
+			ar, ai := x0r+t1re, x0i+t1im
+			br, bi := x0r-t1re, x0i-t1im
+			cr, ci := t2re+t3re, t2im+t3im
+			dr, di := t2re-t3re, t2im-t3im
+
+			x0re[j], x0im[j] = ar+cr, ai+ci
+			x1re[j], x1im[j] = br+di, bi-dr
+			x2re[j], x2im[j] = ar-cr, ai-ci
+			x3re[j], x3im[j] = br-di, bi+dr
+		}
+	}
+}
+
 // realFFTUnpackHalf is the constant 0.5 used in real FFT unpack computation.
 const realFFTUnpackHalf = 0.5
 
