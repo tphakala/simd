@@ -6,6 +6,47 @@
 //
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
+//
+// # Aliasing
+//
+// The element-wise maps may be used fully in place: the destination may alias an
+// input exactly, element for element. This holds for the unary maps (Abs, Neg,
+// Round, Sqrt, Reciprocal, Exp, Log, Log2, Log10, ReLU, Sigmoid, Tanh, Scale,
+// AddScalar, SubFromScalar, Clamp, ClampScale, Pow), for the two-pass
+// CumulativeSum and Normalize (dst==a), for the binary maps (Add, Sub, Mul, Div,
+// PowElem, where dst may alias any input, or both at once), and for the fused
+// multiply-add FMA (dst may alias a, b or c). The guarantee is mechanical: each
+// SIMD block reads its whole block of inputs into registers before storing any
+// output lane, and the scalar tail reads each lane before it writes that lane, so
+// an exact overlay is well defined lane by lane on every dispatch path (amd64 SSE,
+// AVX with and without FMA, AVX-512, arm64 NEON, and the pure-Go fallback).
+//
+// A destination must not overlap an input at a shifted offset. A SIMD load pulls
+// a whole block of an input ahead of the stores, so a shifted overlay clobbers
+// input lanes a later iteration has not yet read; the resulting corruption
+// pattern is undefined and varies with kernel width and length.
+//
+// The departures from this default are documented on the functions themselves:
+//   - AddScaled and AccumulateAdd read and rewrite dst in place (they are
+//     accumulators); their source slice must be disjoint from the destination
+//     window, except that AddScaled also permits s==dst exactly.
+//   - ButterflyComplex, ButterflyComplexStage and ButterflyComplexStage4 update
+//     their data slices in place; those slices must not overlap one another, and
+//     the twiddles must not overlap them.
+//   - The mirror, window, stride, interleave, batch and resample operations
+//     (Interleave2/N, Deinterleave2/N, ConvolveValid and ConvolveValidMulti,
+//     ConvolveDecimate, DotProductBatch, Autocorrelate, RealFFTUnpack, RealFFTPower
+//     and PolyphaseResampleCubic) index inputs and outputs at different positions,
+//     so their outputs must not overlap any input; RealFFTUnpack and RealFFTPower
+//     carry their own detailed notes.
+//
+// The reductions (DotProduct, WeightedSum, SumOfSquares, Sum, Mean, Max, Min,
+// MaxAbs, MaxIdx, MinIdx, Variance, StdDev, EuclideanDistance, ConvolveValidMaxAbs
+// and ConvolveValidMaxAbsMulti, CubicInterpDot) write no output slice, so aliasing
+// does not apply to them. The in-place transcendental variants (ExpInPlace,
+// LogInPlace, PowInPlace, ReLUInPlace, SigmoidInPlace, TanhInPlace) operate on a
+// single slice, so aliasing does not arise, and the Unsafe variants follow the
+// aliasing rules of the checked form they mirror.
 package f64
 
 import "math"
@@ -416,6 +457,10 @@ func ConvolveDecimate(dst, signal, kernel []float64, factor, phase int) {
 // AccumulateAdd adds src to dst starting at offset: dst[offset:offset+len(src)] += src.
 // This is a key primitive for overlap-add in FFT-based convolution.
 //
+// The destination window dst[offset:offset+len(src)] is a read-modify-write
+// accumulator; src must not overlap that window. An overlap-add caller passes a
+// src region disjoint from the destination window, so this is the natural usage.
+//
 // Panics if offset+len(src) > len(dst) or if offset < 0.
 func AccumulateAdd(dst, src []float64, offset int) {
 	if offset < 0 {
@@ -463,6 +508,10 @@ func MaxIdx(a []float64) int {
 // AddScaled adds scaled values to dst: dst[i] += alpha * s[i].
 // This is the AXPY operation from BLAS Level 1.
 // Processes min(len(dst), len(s)) elements.
+//
+// dst is a read-modify-write accumulator. s may overlay dst exactly (the
+// self-scaling dst[i] += alpha*dst[i], since each lane is read before it is
+// rewritten), but s must not overlap dst at a shifted offset.
 func AddScaled(dst []float64, alpha float64, s []float64) {
 	n := min(len(dst), len(s))
 	if n == 0 {
@@ -639,6 +688,10 @@ const polyphaseMaxFracBits64 = 53
 // tapsPerPhase, or an initial window already past the end of hist) also yield
 // (0, at) because no output satisfies the window bound.
 //
+// Aliasing: out and hist are indexed differently (each output reads a sliding
+// window of hist chosen by the accumulator), so out must not overlap hist, nor
+// any of the coefficient banks a, b, c or d.
+//
 // Uses AVX+FMA on AMD64 and NEON on ARM64 for tapsPerPhase past the vector width,
 // gated on the same CPU features and tap threshold as [CubicInterpDot] so the
 // fused result is bit-identical to the per-output form on every CPU; below the
@@ -685,7 +738,8 @@ func PolyphaseResampleCubic(out, hist []float64, a, b, c, d [][]float64, at, ste
 // form, this variant does not reject an overflowing at/step, so a caller that
 // breaks the last precondition can drive the internal accumulator to wrap and
 // read out of range. When the preconditions hold it returns the same (n, atOut)
-// as the safe form.
+// as the safe form. The same aliasing rule applies: out must not overlap hist or
+// the coefficient banks.
 func PolyphaseResampleCubicUnsafe(out, hist []float64, a, b, c, d [][]float64, at, step int64, numPhases, tapsPerPhase, fracBits int) (n int, atOut int64) {
 	n = polyphaseResampleCubic64(out, hist, a, b, c, d, at, step, numPhases, tapsPerPhase, fracBits)
 	return n, at + int64(n)*step
@@ -992,6 +1046,11 @@ func minLen6(a, b, c, d, e, f int) int {
 // Processes min(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm)) elements.
 // All slices are modified in-place: upper receives upper+temp, lower receives upper-temp.
 //
+// Aliasing: each butterfly reads its inputs before writing either output, so the
+// four data slices are updated in place. They must be pairwise non-overlapping
+// (distinct headers are not enough; a shifted sub-slice of one array corrupts),
+// and the twiddles twRe/twIm must not overlap any of them.
+//
 // Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback.
 func ButterflyComplex(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64) {
 	n := minLen6(len(upperRe), len(upperIm), len(lowerRe), len(lowerIm), len(twRe), len(twIm))
@@ -1029,6 +1088,9 @@ const butterflyStageRadix = 2
 // and it is also a no-op when no complete block fits. Blocks are processed while
 // k+2*span <= n, where n = min(len(re), len(im)); a trailing partial block is
 // left untouched.
+//
+// Aliasing: the stage updates re and im in place; re and im must not overlap
+// each other, and the twiddles twRe/twIm must not overlap either.
 //
 // Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
 // [ButterflyComplex], results are not guaranteed bit-identical between the
@@ -1102,6 +1164,10 @@ const butterflyStage4Radix = 4
 // dedicated span-2 vector path; a span-2 caller still gets a correct result from
 // the general j-axis path (a 2-wide NEON iteration, or the scalar tail of the
 // 4-wide AVX path).
+//
+// Aliasing: like ButterflyComplexStage, the stage updates re and im in place; re
+// and im must not overlap each other, and none of the six twiddle slices may
+// overlap them.
 //
 // Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
 // [ButterflyComplexStage], results are not guaranteed bit-identical between the
