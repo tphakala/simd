@@ -559,6 +559,93 @@ scaleq15_avx2_done:
     VZEROUPPER
     RET
 
+// func gainQ31AVX2(dst, a []int32, gain int32, preShift, postShift int)
+// Fused Q31 gain: dst[i] = PSHR32(MULT32_32_Q31(SHL32(a[i], preShift), gain), postShift).
+// The MULT32_32_Q31 core is scaleQ31AVX2 verbatim (VPMULDQ even/odd, VPSRLQ $31,
+// VPBLENDD recombine); this kernel wraps it in a pre-shift and a rounding post-shift:
+//   - VPSLLD by the runtime preShift count (an XMM operand) applies SHL32 to the
+//     8 int32 lanes BEFORE the widen, so the shifted value stays in int32 range and
+//     |x*gain| <= 2^62. The VPSRLQ $31 low-32 trick therefore still holds exactly as
+//     in scaleQ31AVX2 (bit i+31 <= 62 is a real product bit), and the odd-lane
+//     VPSRLQ $32 slide reads the already-shifted Y0.
+//   - VPADDD adds the broadcast rounding bias (int32(1)<<postShift)>>1, wrapping in
+//     int32 lanes exactly like libopus PSHR32; bias is 0 when postShift == 0.
+//   - VPSRAD by the runtime postShift count (an XMM operand) is the arithmetic
+//     (sign-preserving, truncating) right shift; the bias already gave round-half-up.
+// bias is formed in a 32-bit GPR (SHLL then arithmetic SARL $1) so postShift == 31
+// sign-extends to 0xC0000000, matching (int32(1)<<31)>>1. The scalar tail SHLL/
+// MOVLQSX (sign-extend AFTER the wrapping shift), IMULQ, SARQ $31, ADDL bias,
+// SARL to close out lengths that are not a multiple of 8. Registers: DX/SI/DI the
+// slices, BX=int64(gain), R8=preShift, R9=postShift, R10=bias, CX stages the CL
+// shift counts, Y3=gain, Y5=bias, X6/X7 the vector shift counts; no R14/R15/BP.
+// preShift and postShift must be in [0, 31]. Frame: dst+0, a+24, gain+48, preShift+56,
+// postShift+64.
+TEXT ·gainQ31AVX2(SB), NOSPLIT, $0-72
+    MOVQ    dst_base+0(FP), DX
+    MOVQ    a_base+24(FP), SI
+    MOVLQSX gain+48(FP), BX          // BX = int64(gain) for the scalar tail
+    MOVQ    preShift+56(FP), R8
+    MOVQ    postShift+64(FP), R9
+
+    MOVL    $1, R10                  // bias = (int32(1)<<postShift)>>1, in a 32-bit GPR
+    MOVQ    R9, CX
+    SHLL    CX, R10                  // 1 << postShift (wraps to 0x80000000 at 31)
+    SARL    $1, R10                  // arithmetic >>1: 0xC0000000 at 31, else 1<<(postShift-1)
+
+    VMOVD   BX, X3
+    VPBROADCASTD X3, Y3              // gain in all 8 int32 lanes
+    MOVQ    R8, X6                   // preShift count (VPSLLD, low 64 bits)
+    MOVQ    R9, X7                   // postShift count (VPSRAD, low 64 bits)
+    VMOVD   R10, X5
+    VPBROADCASTD X5, Y5              // bias in all 8 int32 lanes
+
+    MOVQ    dst_len+8(FP), CX
+    MOVQ    CX, DI                   // DI = n (for the tail)
+    SHRQ    $3, CX                   // CX = n / 8
+    JZ      gainq31_avx2_tail
+
+gainq31_avx2_loop8:
+    VMOVDQU  (SI), Y0                // a[i..i+7]
+    VPSLLD   X6, Y0, Y0             // SHL32: int32 lanes << preShift (wrapping)
+    VPMULDQ  Y3, Y0, Y4            // even-lane products x0,x2,x4,x6 * gain (4x int64)
+    VPSRLQ   $32, Y0, Y1           // slide shifted odd lanes into even positions
+    VPMULDQ  Y3, Y1, Y2           // odd-lane products x1,x3,x5,x7 * gain (4x int64)
+    VPSRLQ   $31, Y4, Y4          // low 32 = even MULT32_32_Q31 lanes
+    VPSRLQ   $31, Y2, Y2          // low 32 = odd MULT32_32_Q31 lanes
+    VPSLLQ   $32, Y2, Y2          // lift odd results to positions 1,3,5,7
+    VPBLENDD $0xAA, Y2, Y4, Y4    // recombine even/odd int32 lanes
+    VPADDD   Y5, Y4, Y4           // + bias (wrapping int32 lanes)
+    VPSRAD   X7, Y4, Y4           // arithmetic >> postShift per int32 lane
+    VMOVDQU  Y4, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ CX
+    JNZ  gainq31_avx2_loop8
+
+gainq31_avx2_tail:
+    ANDQ $7, DI
+    JZ   gainq31_avx2_done
+
+gainq31_avx2_scalar:
+    MOVL    (SI), AX                 // a[i]
+    MOVQ    R8, CX
+    SHLL    CX, AX                   // SHL32: wraps in 32 bits (count in CL)
+    MOVLQSX AX, AX                   // sign-extend the WRAPPED x to int64
+    IMULQ   BX, AX                   // x * gain (|p| <= 2^62)
+    SARQ    $31, AX                  // MULT32_32_Q31
+    ADDL    R10, AX                  // + bias, 32-bit wrapping add
+    MOVQ    R9, CX
+    SARL    CX, AX                   // arithmetic >> postShift in 32 bits
+    MOVL    AX, (DX)
+    ADDQ $4, SI
+    ADDQ $4, DX
+    DECQ DI
+    JNZ  gainq31_avx2_scalar
+
+gainq31_avx2_done:
+    VZEROUPPER
+    RET
+
 // func butterflyAVX2(lo, hi []int32)
 // In-place radix-2 butterfly, 8 int32 per iteration: each block loads lo and hi,
 // forms the wrapping sum (VPADDD) and difference (VPSUBD) into fresh registers

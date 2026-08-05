@@ -180,6 +180,51 @@ func scaleQ15Go(dst, a []int32, k int16) {
 	}
 }
 
+// gainShiftMax is the largest valid preShift/postShift for GainQ31: a 32-bit lane
+// admits shift counts 0..31. Public GainQ31 rejects anything outside [0, gainShiftMax];
+// gainQ31Go reuses it as the low-5-bit mask (31 == 2^5-1) so the compiler can prove
+// the per-element variable shifts take a count in [0,31] and drop the
+// runtime.panicshift and range-clamp guards from the hot loop.
+const gainShiftMax = 31
+
+// gainQ31Go writes the fused Q31 gain that is GainQ31's source of truth:
+// dst[i] = PSHR32(MULT32_32_Q31(SHL32(a[i], preShift), gain), postShift), the
+// gain-application inner loop of a fixed-point audio decoder in a single pass.
+// Each stage wraps in int32 exactly as the SIMD lanes do:
+//
+//   - SHL32:  x = int32(uint32(a[i]) << preShift), a wrapping left shift. It runs
+//     on the int32 sample before the widen, so |x| <= 2^31 and the product below
+//     never overflows int64, just like scaleQ31Go.
+//   - MULT32_32_Q31: p = int32(int64(x) * int64(gain) >> 31), the ScaleQ31 core:
+//     an arithmetic shift that truncates toward -inf, the int32 cast wrapping.
+//   - PSHR32: (p + bias) >> postShift with bias = (int32(1)<<postShift)>>1, a
+//     round-half-up arithmetic right shift. bias is 0 when postShift == 0 (no
+//     rounding), and the p+bias addition is int32 and is meant to wrap, exactly as
+//     libopus PSHR32 does.
+//
+// preShift and postShift must be in [0, 31]. dst may alias a exactly (each lane
+// reads a[i] before its own dst[i] store). dst may be empty; the len-0 guard
+// protects the len(dst)-1 BCE hint.
+func gainQ31Go(dst, a []int32, gain int32, preShift, postShift int) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1] // BCE hint: a is indexed [0, len(dst))
+	// Mask the shift counts into [0,31] once. Within the documented precondition
+	// this is a no-op, but it lets the compiler prove the per-element variable
+	// shifts cannot take a negative count, lifting runtime.panicshift and the gain
+	// spill out of the hot loop (~1.6x). Out-of-range counts are unspecified either
+	// way (the SIMD kernels do not fault on them either).
+	ps := uint(preShift) & gainShiftMax
+	qs := uint(postShift) & gainShiftMax
+	bias := (int32(1) << qs) >> 1
+	for i := range dst {
+		x := int32(uint32(a[i]) << ps)
+		p := int32(int64(x) * int64(gain) >> scaleQ31Shift)
+		dst[i] = (p + bias) >> qs
+	}
+}
+
 // firValidQ15Shift is the Q15 fixed-point position of each tap product: the
 // 64-bit int64(taps[j])*int64(x[i+j]) is arithmetically shifted right by 15 to
 // land the Q15 fractional scale back in int32 range, per product, before it is

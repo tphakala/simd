@@ -132,6 +132,23 @@ func scaleQ31NEON(dst, a []int32, k int32)
 //go:noescape
 func scaleQ15NEON(dst, a []int32, k int16)
 
+// minNEONGainQ31 is one 4-wide (.4S) block, an independent literal like the
+// scale thresholds above. The kernel is correct at any length (it falls through
+// to a scalar tail), so this is a performance cut only, never a safety
+// requirement.
+const minNEONGainQ31 = 4
+
+func gainQ31I32(dst, a []int32, gain int32, preShift, postShift int) {
+	if hasNEON && len(dst) >= minNEONGainQ31 {
+		gainQ31NEON(dst, a, gain, preShift, postShift)
+		return
+	}
+	gainQ31Go(dst, a, gain, preShift, postShift)
+}
+
+//go:noescape
+func gainQ31NEON(dst, a []int32, gain int32, preShift, postShift int)
+
 // minNEONButterfly is one 4-wide (.4S) block, an independent literal like the
 // tier-3 thresholds above. The kernel is correct at any length (it falls through
 // to a scalar tail), so this is a performance cut only, never a safety

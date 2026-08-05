@@ -234,6 +234,29 @@ func BenchmarkScaleQ15Go_25(b *testing.B)   { benchmarkScaleQ15(b, 25, scaleQ15G
 func BenchmarkScaleQ15Go_1000(b *testing.B) { benchmarkScaleQ15(b, 1000, scaleQ15Go) }
 func BenchmarkScaleQ15Go_1003(b *testing.B) { benchmarkScaleQ15(b, 1003, scaleQ15Go) }
 
+func benchmarkGainQ31(b *testing.B, n int, fn func(dst, a []int32, g int32, preShift, postShift int)) {
+	b.Helper()
+	a := make([]int32, n)
+	dst := make([]int32, n)
+	for i := range a {
+		a[i] = int32(i*7 - 3000)
+	}
+	const g = int32(0x40000000) // 0.5 in Q31
+	const preShift, postShift = 9, 12
+	b.SetBytes(int64(n) * 4 * 2)
+	for b.Loop() {
+		fn(dst, a, g, preShift, postShift)
+	}
+}
+
+func BenchmarkGainQ31_25(b *testing.B)   { benchmarkGainQ31(b, 25, GainQ31) }
+func BenchmarkGainQ31_1000(b *testing.B) { benchmarkGainQ31(b, 1000, GainQ31) }
+func BenchmarkGainQ31_1003(b *testing.B) { benchmarkGainQ31(b, 1003, GainQ31) }
+
+func BenchmarkGainQ31Go_25(b *testing.B)   { benchmarkGainQ31(b, 25, gainQ31Go) }
+func BenchmarkGainQ31Go_1000(b *testing.B) { benchmarkGainQ31(b, 1000, gainQ31Go) }
+func BenchmarkGainQ31Go_1003(b *testing.B) { benchmarkGainQ31(b, 1003, gainQ31Go) }
+
 // Butterfly is in-place, so each call rewrites both slices. Resetting them to a
 // fixed pattern between iterations is unnecessary for timing because the operation
 // is length-bound, not value-bound (no data-dependent branches). SetBytes counts

@@ -98,7 +98,7 @@
 //
 // Integer DSP (i16): Interleave2, Deinterleave2, DotProduct, DotProductUnsafe, XCorr (widening int16 x int16 -> wrapping int32; ARM64 SMLAL/SMLAL2, amd64 PMADDWD/VPMADDWD; XCorr evaluates 4 correlation lags per kernel call), Abs, MaxAbs, MulQ15 (wrapping 16-bit absolute value, widened abs-max, rounding Q15 multiply)
 //
-// Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, Abs, Sum, MinMax, MaxAbs, NegWhereNeg, ScaleQ31, ScaleQ15, Butterfly, FIRValidQ15
+// Integer DSP (i32): Interleave2, Deinterleave2, Add, Sub, Abs, Sum, MinMax, MaxAbs, NegWhereNeg, ScaleQ31, ScaleQ15, GainQ31, Butterfly, FIRValidQ15
 //
 // Integer DSP (i8): AddSaturate, SubSaturate, AddScalarSaturate, SubScalarSaturate, Min, Max, Clamp, Abs, Neg, AbsDiff, MaxAbs, SumAbs, SAD, ToInt16, ToInt32, Sum, MinMax, DotProduct (int32-accumulated; ARM64 SDOT / amd64 VPMADDWD)
 //
