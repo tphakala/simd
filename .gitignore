@@ -46,3 +46,18 @@ cache/
 
 # Local Python venv for librosa golden-file generation
 .venv-librosa/
+
+# Planning, design, and spec docs belong in the issue tracker, not in this public
+# repo. Reference docs under docs/ (e.g. assembly-encoding.md) stay tracked; only
+# planning material is ignored.
+PLAN.md
+*_PLAN.md
+*-plan.md
+SPEC.md
+*-spec.md
+*-design.md
+docs/plans/
+docs/specs/
+docs/design/
+docs/research/
+docs/superpowers/
