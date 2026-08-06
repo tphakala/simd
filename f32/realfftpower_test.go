@@ -79,6 +79,12 @@ func TestRealFFTPower(t *testing.T) {
 			twIm := make([]float32, n-1)
 			dst := make([]float32, n)
 			ref := make([]float32, n)
+			// Seed every output bin with NaN so a kernel that accumulated into
+			// dst[k] (instead of assigning the power) is caught: it would leave NaN,
+			// which realFFTPowerClose rejects. dst[0] is the caller's DC bin.
+			for k := 1; k < n; k++ {
+				dst[k] = float32(math.NaN())
+			}
 
 			for i := range n {
 				zRe[i] = float32(i+1) * 0.1
@@ -159,6 +165,10 @@ func TestRealFFTPower_GoMatchesUnpackSquare(t *testing.T) {
 			dst := make([]float32, n)
 			outRe := make([]float32, n)
 			outIm := make([]float32, n)
+			// Seed with NaN so an accumulating Go reference is caught (see TestRealFFTPower).
+			for k := 1; k < n; k++ {
+				dst[k] = float32(math.NaN())
+			}
 
 			for i := range n {
 				zRe[i] = float32(math.Sin(float64(i)*0.7) * 10)
