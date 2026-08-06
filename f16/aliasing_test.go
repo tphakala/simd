@@ -36,6 +36,64 @@ var (
 	aliasClampHiF16 = FromFloat32(1.5)
 )
 
+// aliasBuildF16 fills a length-n slice from the shared generator.
+func aliasBuildF16(n int) []Float16 {
+	s := make([]Float16, n)
+	for i := range s {
+		s[i] = aliasGenF16(i)
+	}
+	return s
+}
+
+// addScaledAliasCase covers AddScaled's dst==s overlay. AddScaled is a
+// read-modify-write accumulator (dst += alpha*s), which the write-only Unary
+// helper does not model, so it uses the exported aliastest.Report: the reference
+// run accumulates into a copy of s from a distinct s, the overlay run accumulates
+// into s aliased as both dst and source.
+func addScaledAliasCase() aliastest.Case {
+	alpha := FromFloat32(0.5)
+	return aliastest.Case{
+		Name: "AddScaled",
+		Check: func(t *testing.T, n int) {
+			t.Helper()
+			s := aliasBuildF16(n)
+			want := aliasBuildF16(n)
+			AddScaled(want, alpha, s)
+			got := aliasBuildF16(n)
+			AddScaled(got, alpha, got)
+			aliastest.Report(t, n, "dst=s", aliasEqF16, want, got)
+		},
+		Alloc: func(t *testing.T) {
+			t.Helper()
+			s := aliasBuildF16(64)
+			aliastest.ZeroAlloc(t, "AddScaled dst=s", func() { AddScaled(s, alpha, s) })
+		},
+	}
+}
+
+// accumulateAddAliasCase covers AccumulateAdd's dst==src overlay at offset 0.
+// AccumulateAdd is also an accumulator (dst[offset:] += src), so it uses Report
+// the same way, pinning the exact dst==src overlay.
+func accumulateAddAliasCase() aliastest.Case {
+	return aliastest.Case{
+		Name: "AccumulateAdd",
+		Check: func(t *testing.T, n int) {
+			t.Helper()
+			src := aliasBuildF16(n)
+			want := aliasBuildF16(n)
+			AccumulateAdd(want, src, 0)
+			got := aliasBuildF16(n)
+			AccumulateAdd(got, got, 0)
+			aliastest.Report(t, n, "dst=src", aliasEqF16, want, got)
+		},
+		Alloc: func(t *testing.T) {
+			t.Helper()
+			s := aliasBuildF16(64)
+			aliastest.ZeroAlloc(t, "AccumulateAdd dst=src", func() { AccumulateAdd(s, s, 0) })
+		},
+	}
+}
+
 func f16AliasCases() []aliastest.Case {
 	return []aliastest.Case{
 		aliastest.BinaryCase("Add", aliasEqF16, aliasGenF16, Add),
@@ -50,9 +108,15 @@ func f16AliasCases() []aliastest.Case {
 		aliastest.UnaryCase("Sqrt", aliasEqF16, aliasGenF16, Sqrt),
 		aliastest.UnaryCase("Reciprocal", aliasEqF16, aliasGenF16, Reciprocal),
 		aliastest.UnaryCase("Exp", aliasEqF16, aliasGenF16, Exp),
+		aliastest.UnaryCase("Tanh", aliasEqF16, aliasGenF16, Tanh),
+		aliastest.UnaryCase("Normalize", aliasEqF16, aliasGenF16, Normalize),
+		aliastest.UnaryCase("CumulativeSum", aliasEqF16, aliasGenF16, CumulativeSum),
 		aliastest.UnaryCase("Scale", aliasEqF16, aliasGenF16, func(dst, a []Float16) { Scale(dst, a, aliasScaleF16) }),
 		aliastest.UnaryCase("AddScalar", aliasEqF16, aliasGenF16, func(dst, a []Float16) { AddScalar(dst, a, aliasAddScalF16) }),
 		aliastest.UnaryCase("Clamp", aliasEqF16, aliasGenF16, func(dst, a []Float16) { Clamp(dst, a, aliasClampLoF16, aliasClampHiF16) }),
+		aliastest.UnaryCase("ClampScale", aliasEqF16, aliasGenF16, func(dst, a []Float16) { ClampScale(dst, a, aliasClampLoF16, aliasClampHiF16, aliasScaleF16) }),
+		addScaledAliasCase(),
+		accumulateAddAliasCase(),
 	}
 }
 
