@@ -1045,6 +1045,46 @@ func realFFTUnpack32Go(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	}
 }
 
+// realFFTPower32Go is the pure-Go reference for RealFFTPower: it unpacks each bin
+// exactly as realFFTUnpack32Go does and writes the power |X[k]|^2 for k in [1, n-1].
+// The magnitude-squared is a separate multiply and add here; the Go compiler may
+// contract it into an FMA on some architectures (arm64) and not others (amd64), so
+// dst[k] equals squaring realFFTUnpack32Go's output only to within rounding, and
+// the exact bits are not portable. The dispatched SIMD kernels fuse it with an FMA,
+// so they too agree with this reference only to within rounding. See RealFFTPower.
+func realFFTPower32Go(dst, zRe, zIm, twRe, twIm []float32, n int) {
+	if n < realFFTUnpackMinN {
+		return
+	}
+	// Reslice to exactly the range the loop touches so the prover can discharge the
+	// bounds checks from the loop condition alone; the mirror index n-k otherwise
+	// defeats it, the same way realFFTUnpack32Go handles it. The caller has already
+	// validated these lengths, so the reslices cannot panic.
+	zRe, zIm = zRe[:n], zIm[:n]
+	dst = dst[:n]
+	twRe, twIm = twRe[:n-1], twIm[:n-1]
+
+	for k := 1; k < n; k++ {
+		nk := n - k // Mirror index
+
+		zkRe, zkIm := zRe[k], zIm[k]
+		znkRe, znkIm := zRe[nk], -zIm[nk] // conj(Z[n-k])
+
+		evenRe := realFFTUnpackHalf * (zkRe + znkRe)
+		evenIm := realFFTUnpackHalf * (zkIm + znkIm)
+		diffRe := zkRe - znkRe
+		diffIm := zkIm - znkIm
+
+		wr, wi := twRe[k-1], twIm[k-1]
+		oddRe := realFFTUnpackHalf * (wr*diffIm + wi*diffRe)
+		oddIm := realFFTUnpackHalf * (wi*diffIm - wr*diffRe)
+
+		xRe := evenRe + oddRe
+		xIm := evenIm + oddIm
+		dst[k] = xRe*xRe + xIm*xIm
+	}
+}
+
 // reverse32Go reverses a slice in pure Go.
 // dst[i] = src[n-1-i] for i in [0, n)
 func reverse32Go(dst, src []float32) {

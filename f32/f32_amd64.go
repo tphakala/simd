@@ -1376,6 +1376,20 @@ func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	realFFTUnpack32Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }
 
+func realFFTPower32(dst, zRe, zIm, twRe, twIm []float32, n int) {
+	// realFFTPowerAVX shares realFFTUnpackAVX's reversed mirror load (VPERM2F128 +
+	// VPERMILPS) and its RODATA-sourced constants, so it stays on the plain AVX+FMA
+	// tier just like realFFTUnpackAVX; it needs nothing above AVX1+FMA3. It uses
+	// VFMADD for both the odd term and the fused magnitude-squared, so cpu.X86.FMA
+	// is required. n > minAVXElements means n >= 9, so (n-1) >= 8 = one full 8-wide
+	// AVX pass. See #202 and #196.
+	if cpu.X86.AVX && cpu.X86.FMA && n > minAVXElements {
+		realFFTPowerAVX(dst, zRe, zIm, twRe, twIm, n)
+		return
+	}
+	realFFTPower32Go(dst, zRe, zIm, twRe, twIm, n)
+}
+
 // Split-format complex assembly function declarations
 //
 //go:noescape
@@ -1413,6 +1427,9 @@ func butterflyComplexStage4AVX(re, im []float32, span, blocks int, tw1Re, tw1Im,
 
 //go:noescape
 func realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int)
+
+//go:noescape
+func realFFTPowerAVX(dst, zRe, zIm, twRe, twIm []float32, n int)
 
 func reverse32(dst, src []float32) {
 	// Use AVX if available and have enough elements

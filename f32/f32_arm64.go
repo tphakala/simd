@@ -921,6 +921,17 @@ func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	realFFTUnpack32Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }
 
+func realFFTPower32(dst, zRe, zIm, twRe, twIm []float32, n int) {
+	// realFFTPowerNEON processes 4 float32 lanes per pass and finishes with the same
+	// overlapping 4-wide remainder block realFFTUnpackNEON uses, so it needs n > 4
+	// (the block anchors at k = n-4 and mirror-reads z[1..4]).
+	if hasNEON && n > 4 {
+		realFFTPowerNEON(dst, zRe, zIm, twRe, twIm, n)
+		return
+	}
+	realFFTPower32Go(dst, zRe, zIm, twRe, twIm, n)
+}
+
 //go:noescape
 func mulComplexNEON(dstRe, dstIm, aRe, aIm, bRe, bIm []float32)
 
@@ -956,6 +967,9 @@ func butterflyComplexStage4NEON(re, im []float32, span, blocks int, tw1Re, tw1Im
 
 //go:noescape
 func realFFTUnpackNEON(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int)
+
+//go:noescape
+func realFFTPowerNEON(dst, zRe, zIm, twRe, twIm []float32, n int)
 
 func reverse32(dst, src []float32) {
 	if hasNEON && len(dst) >= 4 {

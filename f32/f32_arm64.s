@@ -3552,6 +3552,159 @@ realfft_neon_done:
     RET
 
 // ============================================================================
+// REALFFTPOWER - FUSED REAL-FFT POWER SPECTRUM (|X[k]|^2)
+// ============================================================================
+
+// func realFFTPowerNEON(dst, zRe, zIm, twRe, twIm []float32, n int)
+// Fused power-writing counterpart of realFFTUnpackNEON: unpacks each bin exactly as
+// that kernel does, then writes dst[k] = |X[k]|^2 instead of the complex X[k]. The
+// magnitude-squared is fused with FMLA. Processes 4 float32 bins per pass and
+// finishes with the same overlapping 4-wide remainder block, so it needs n > 4.
+// See #245 and the f64 realFFTPowerNEON in #233.
+// Frame: dst(24) + zRe(24) + zIm(24) + twRe(24) + twIm(24) + n(8) = 128 bytes.
+TEXT ·realFFTPowerNEON(SB), NOSPLIT, $0-128
+    // Load parameters
+    MOVD dst_base+0(FP), R0          // R0 = dst pointer
+    MOVD zRe_base+24(FP), R2         // R2 = zRe pointer (forward)
+    MOVD zIm_base+48(FP), R3         // R3 = zIm pointer (forward)
+    MOVD twRe_base+72(FP), R4        // R4 = twRe pointer
+    MOVD twIm_base+96(FP), R5        // R5 = twIm pointer
+    MOVD n+120(FP), R6               // R6 = n
+
+    // Calculate number of iterations: (n-1) / 4
+    SUB $1, R6, R7                   // R7 = n - 1
+    MOVD R7, R14                     // R14 = n - 1 (save for remainder; g is R28)
+    LSR $2, R7                       // R7 = (n-1) / 4 = number of SIMD iterations
+    // Dispatch guarantees n > 4, so R7 = (n-1)/4 >= 1 and the main loop always runs.
+    // A caller that ignores the threshold arrives with R7 = 0 (n <= 4), where the
+    // overlapping remainder below would anchor at k = n-4 <= 0 and over-read z while
+    // underflowing the twiddles; writing nothing is the memory-safe answer. Mirrors
+    // realFFTUnpackNEON (#220).
+    CBZ R7, realfftpow_neon_done     // n <= 4: nothing safe to do
+
+    // Set up reverse pointers: zRe[n-4], zIm[n-4]
+    SUB $4, R6, R8                   // R8 = n - 4
+    LSL $2, R8                       // R8 = (n-4) * 4 = byte offset
+    MOVD zRe_base+24(FP), R9
+    ADD R8, R9                       // R9 = &zRe[n-4]
+    MOVD zIm_base+48(FP), R10
+    ADD R8, R10                      // R10 = &zIm[n-4]
+
+    // Offset forward and output pointers to start at index 1
+    ADD $4, R2                       // R2 = &zRe[1]
+    ADD $4, R3                       // R3 = &zIm[1]
+    ADD $4, R0                       // R0 = &dst[1]
+
+    // Load 0.5 constant into V30
+    MOVW $0x3F000000, R11            // 0.5 in IEEE 754
+    FMOVS R11, F30
+    WORD $0x4E0407DE                 // DUP V30.4S, V30.S[0]
+
+realfftpow_neon_loop4:
+    // Load forward Z[k:k+4]
+    VLD1.P 16(R2), [V0.S4]           // V0 = zRe[k:k+4] (forward)
+    VLD1.P 16(R3), [V1.S4]           // V1 = zIm[k:k+4] (forward)
+
+    // Load reverse Z[n-k-3:n-k+1] and reverse the order
+    VLD1 (R9), [V2.S4]               // V2 = zRe[n-k-3:n-k+1] (to be reversed)
+    VLD1 (R10), [V3.S4]              // V3 = zIm[n-k-3:n-k+1] (to be reversed)
+    WORD $0x4EA00842                 // REV64 V2.4S, V2.4S  (swap pairs: [1,0,3,2])
+    WORD $0x6E024042                 // EXT V2.16B, V2.16B, V2.16B, #8  ([3,2,1,0])
+    WORD $0x4EA00863                 // REV64 V3.4S, V3.4S
+    WORD $0x6E034063                 // EXT V3.16B, V3.16B, V3.16B, #8
+
+    // For conjugate: znkIm = -zIm[n-k]
+    WORD $0x6EA0F863                 // FNEG V3.4S, V3.4S  (negate for conjugate)
+
+    // even = 0.5 * (Z[k] + conj(Z[n-k]))
+    WORD $0x4E22D404                 // FADD V4.4S, V0.4S, V2.4S  (zkRe + znkRe)
+    WORD $0x6E3EDC84                 // FMUL V4.4S, V4.4S, V30.4S  (evenRe)
+    WORD $0x4E23D425                 // FADD V5.4S, V1.4S, V3.4S  (zkIm + znkIm)
+    WORD $0x6E3EDCA5                 // FMUL V5.4S, V5.4S, V30.4S  (evenIm)
+
+    // diff = Z[k] - conj(Z[n-k])
+    WORD $0x4EA2D406                 // FSUB V6.4S, V0.4S, V2.4S  (diffRe)
+    WORD $0x4EA3D427                 // FSUB V7.4S, V1.4S, V3.4S  (diffIm)
+
+    // Load twiddles W[k]
+    VLD1.P 16(R4), [V8.S4]           // V8 = twRe (wr)
+    VLD1.P 16(R5), [V9.S4]           // V9 = twIm (wi)
+
+    // oddRe = 0.5 * (wr*diffIm + wi*diffRe)
+    WORD $0x6E27DD0A                 // FMUL V10.4S, V8.4S, V7.4S   (wr * diffIm)
+    WORD $0x4E26CD2A                 // FMLA V10.4S, V9.4S, V6.4S   (V10 += wi * diffRe)
+    WORD $0x6E3EDD4A                 // FMUL V10.4S, V10.4S, V30.4S (oddRe)
+
+    // oddIm = 0.5 * (wi*diffIm - wr*diffRe)
+    WORD $0x6E27DD2B                 // FMUL V11.4S, V9.4S, V7.4S   (wi * diffIm)
+    WORD $0x4EA6CD0B                 // FMLS V11.4S, V8.4S, V6.4S   (V11 -= wr * diffRe)
+    WORD $0x6E3EDD6B                 // FMUL V11.4S, V11.4S, V30.4S (oddIm)
+
+    // X[k] = even + odd
+    WORD $0x4E2AD480                 // FADD V0.4S, V4.4S, V10.4S  (outRe)
+    WORD $0x4E2BD4A1                 // FADD V1.4S, V5.4S, V11.4S  (outIm)
+
+    // dst[k] = outRe^2 + outIm^2 (fused magnitude-squared)
+    WORD $0x6E20DC0C                 // FMUL V12.4S, V0.4S, V0.4S  (outRe^2)
+    WORD $0x4E21CC2C                 // FMLA V12.4S, V1.4S, V1.4S  (V12 += outIm^2)
+    VST1.P [V12.S4], 16(R0)          // Store power[k:k+4]
+
+    // Move reverse pointers backward
+    SUB $16, R9                      // reverse zRe -= 4
+    SUB $16, R10                     // reverse zIm -= 4
+
+    SUB $1, R7
+    CBNZ R7, realfftpow_neon_loop4
+
+realfftpow_neon_remainder:
+    // Handle the remaining (n-1) % 4 bins with one more FULL 4-wide block anchored
+    // at k = n-4, overlapping the block just written. Bin k reads inputs only (z at
+    // k and the mirror n-k, twiddles at k-1) and nothing a previous bin produced, so
+    // recomputing the last 4 stores identical values; relies on dst not overlapping
+    // the inputs. Mirrors realFFTUnpackNEON (#220, #215).
+    AND $3, R14                      // R14 = leftover bins (0..3)
+    CBZ R14, realfftpow_neon_done
+
+    // Zero the leftover count before re-entering the loop: the block below ends on
+    // the loop's own SUB/CBNZ and falls through here a second time, where it must
+    // find nothing left to do.
+    MOVD ZR, R14
+
+    // Reload the five slice bases the main loop advanced. R6 still holds n.
+    MOVD dst_base+0(FP), R0
+    MOVD zRe_base+24(FP), R2
+    MOVD zIm_base+48(FP), R3
+    MOVD twRe_base+72(FP), R4
+    MOVD twIm_base+96(FP), R5
+    MOVD n+120(FP), R6
+
+    // Mirror pointers first, while R2/R3 still hold the bases. At k = n-4 the block
+    // reads z[n-k-3 .. n-k] = z[1 .. 4], one element in from the start. Index 4 is
+    // why the block needs n >= 5, which the n > 4 threshold gives.
+    ADD $4, R2, R9                   // R9 = &zRe[1]
+    ADD $4, R3, R10                  // R10 = &zIm[1]
+
+    // Forward and output pointers to the anchor k = n-4.
+    SUB $4, R6, R8                   // R8 = n - 4 = k
+    LSL $2, R8                       // R8 = k * 4 = byte offset
+    ADD R8, R2                       // R2 = &zRe[k]
+    ADD R8, R3                       // R3 = &zIm[k]
+    ADD R8, R0                       // R0 = &dst[k]
+
+    // Twiddles are indexed k-1, so they top out at n-2 against a length n-1 slice.
+    SUB $4, R8                       // R8 = (k-1) * 4
+    ADD R8, R4                       // R4 = &twRe[k-1]
+    ADD R8, R5                       // R5 = &twIm[k-1]
+
+    // V30 still holds 0.5: the main loop above always ran (dispatch needs n > 4) and
+    // its body reads V30 but never writes it, so no reload is needed.
+    MOVD $1, R7                      // exactly one more iteration
+    B    realfftpow_neon_loop4
+
+realfftpow_neon_done:
+    RET
+
+// ============================================================================
 // REVERSE - REVERSE SLICE ELEMENTS
 // ============================================================================
 
