@@ -70,7 +70,10 @@ func TestNewSTFTPlanErrors(t *testing.T) {
 // without a window.
 func TestSTFTAgainstDFT(t *testing.T) {
 	signal := testSignal(5000)
-	for _, nfft := range []int{2, 4, 8, 16, 64, 256, 1024} {
+	// The size list spans both radix-4 schedule shapes: even log2(half) runs only
+	// radix-4 stages (nfft 8/32/128 = 1/2/3 stages, no trailing), odd log2(half)
+	// finishes with one trailing radix-2 stage (nfft 4/16/64/256/1024).
+	for _, nfft := range []int{2, 4, 8, 16, 32, 64, 128, 256, 1024} {
 		for _, useWin := range []bool{false, true} {
 			plan, err := NewSTFTPlan(nfft)
 			if err != nil {

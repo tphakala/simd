@@ -81,6 +81,14 @@ type STFTPlan struct {
 	// occupies stageTwRe[s-1 : 2*s-1], and the tables total half-1 entries.
 	stageTwRe, stageTwIm []float64
 
+	// Extra twiddle for the radix-4 FFT core: the w^(3j) power ButterflyComplexStage4
+	// needs beyond the two it can slice from stageTwRe/stageTwIm (tw1 = w^(2j) is the
+	// span-s radix-2 table, tw2 = w^j is the first s entries of the span-2s table).
+	// The radix-4 stage with span s (s in {1,4,16,...}) occupies stage4Tw3Re[(s-1)/3 :
+	// (s-1)/3 + s]; the offset (s-1)/3 is exact because s is a power of four. Empty
+	// when half < 4 (no radix-4 stage runs).
+	stage4Tw3Re, stage4Tw3Im []float64
+
 	// Unravel twiddles W_N^k = exp(-i*2*pi*k/nfft) for k in [0, half], used to
 	// recombine the even/odd half-spectra into the real-input spectrum.
 	unRe, unIm []float64
@@ -104,16 +112,26 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 	}
 	half := nfft >> 1
 
+	// Size the radix-4 tw3 table: the radix-4 core runs stages at spans 1, 4, 16, ...
+	// while 4*span <= half, and stage span s holds s entries, so they sum to
+	// (4^numStages - 1)/3. Zero when half < 4.
+	stage4Tw3Len := 0
+	for s := 1; 4*s <= half; s *= 4 {
+		stage4Tw3Len += s
+	}
+
 	p := &STFTPlan{
-		nfft:      nfft,
-		half:      half,
-		bitrev:    make([]int, half),
-		stageTwRe: make([]float64, max(half-1, 0)),
-		stageTwIm: make([]float64, max(half-1, 0)),
-		unRe:      make([]float64, half+1),
-		unIm:      make([]float64, half+1),
-		re:        make([]float64, half),
-		im:        make([]float64, half),
+		nfft:        nfft,
+		half:        half,
+		bitrev:      make([]int, half),
+		stageTwRe:   make([]float64, max(half-1, 0)),
+		stageTwIm:   make([]float64, max(half-1, 0)),
+		stage4Tw3Re: make([]float64, stage4Tw3Len),
+		stage4Tw3Im: make([]float64, stage4Tw3Len),
+		unRe:        make([]float64, half+1),
+		unIm:        make([]float64, half+1),
+		re:          make([]float64, half),
+		im:          make([]float64, half),
 	}
 
 	// Bit-reversal permutation for a size-half FFT.
@@ -142,6 +160,19 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 		}
 	}
 
+	// Radix-4 tw3 = w^(3j) with w = exp(-i*2*pi/(4*span)), for each radix-4 stage
+	// span s in {1,4,16,...}. tw1 = w^(2j) and tw2 = w^j are the span-s and span-2s
+	// radix-2 tables above, sliced in fftHalf; only w^(3j) is not already present.
+	for s := 1; 4*s <= half; s *= 4 {
+		off := (s - 1) / 3
+		for j := range s {
+			ang := 2 * math.Pi * float64(3*j) / float64(4*s)
+			sin, cos := math.Sincos(ang)
+			p.stage4Tw3Re[off+j] = cos
+			p.stage4Tw3Im[off+j] = -sin
+		}
+	}
+
 	// Real-input unravel twiddles W_N^k.
 	for k := 0; k <= half; k++ {
 		ang := 2 * math.Pi * float64(k) / float64(nfft)
@@ -166,12 +197,25 @@ func (p *STFTPlan) fftHalf() {
 			im[i], im[j] = im[j], im[i]
 		}
 	}
-	// Butterfly stages. Stage m operates on span = m/2 with block stride m; its
-	// contiguous twiddles live at stageTwRe/stageTwIm[span-1 : 2*span-1].
-	for m := 2; m <= p.half; m <<= 1 {
-		span := m >> 1
-		off := span - 1
-		ButterflyComplexStage(re, im, span, p.stageTwRe[off:off+span], p.stageTwIm[off:off+span])
+	// Butterfly stages via the radix-4 core: a radix-4 stage at span s advances the
+	// transform two radix-2 stages at once (span s then span 2s), so it runs spans
+	// 1, 4, 16, ... while a full radix-4 block fits (4*s <= half). tw1 = w^(2j) is the
+	// span-s radix-2 table at stageTw[s-1 : 2s-1], tw2 = w^j is the first s entries of
+	// the span-2s table at stageTw[2s-1 : 3s-1], and tw3 = w^(3j) is the dedicated
+	// stage4Tw3 table at [(s-1)/3 : (s-1)/3 + s]. A single trailing radix-2 stage
+	// finishes the transform when half is not a power of four (odd log2(half)).
+	s := 1
+	for 4*s <= p.half {
+		o1, o2, o3 := s-1, 2*s-1, (s-1)/3
+		ButterflyComplexStage4(re, im, s,
+			p.stageTwRe[o1:o1+s], p.stageTwIm[o1:o1+s],
+			p.stageTwRe[o2:o2+s], p.stageTwIm[o2:o2+s],
+			p.stage4Tw3Re[o3:o3+s], p.stage4Tw3Im[o3:o3+s])
+		s *= 4
+	}
+	if s < p.half {
+		off := s - 1
+		ButterflyComplexStage(re, im, s, p.stageTwRe[off:off+s], p.stageTwIm[off:off+s])
 	}
 }
 
