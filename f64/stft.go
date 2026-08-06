@@ -104,6 +104,10 @@ func (p *STFTPlan) NumBins() int { return p.half + 1 }
 // NFFT returns the transform size the plan was built for.
 func (p *STFTPlan) NFFT() int { return p.nfft }
 
+// stage4Tw3Power is the twiddle power of the radix-4 stage's third factor: tw3 =
+// w^(3j) (tw1 = w^(2j) and tw2 = w^(1j) are sliced from the radix-2 tables).
+const stage4Tw3Power = 3
+
 // NewSTFTPlan builds a reusable plan for nfft-point real-input STFTs. nfft must
 // be a power of two and at least 2; otherwise ErrNotPowerOfTwo is returned.
 func NewSTFTPlan(nfft int) (*STFTPlan, error) {
@@ -116,7 +120,7 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 	// while 4*span <= half, and stage span s holds s entries, so they sum to
 	// (4^numStages - 1)/3. Zero when half < 4.
 	stage4Tw3Len := 0
-	for s := 1; 4*s <= half; s *= 4 {
+	for s := 1; butterflyStage4Radix*s <= half; s *= butterflyStage4Radix {
 		stage4Tw3Len += s
 	}
 
@@ -163,10 +167,12 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 	// Radix-4 tw3 = w^(3j) with w = exp(-i*2*pi/(4*span)), for each radix-4 stage
 	// span s in {1,4,16,...}. tw1 = w^(2j) and tw2 = w^j are the span-s and span-2s
 	// radix-2 tables above, sliced in fftHalf; only w^(3j) is not already present.
-	for s := 1; 4*s <= half; s *= 4 {
-		off := (s - 1) / 3
+	// The offset (s-1)/(radix4-1) is the exact running sum of the earlier stage
+	// lengths because each s is a power of butterflyStage4Radix.
+	for s := 1; butterflyStage4Radix*s <= half; s *= butterflyStage4Radix {
+		off := (s - 1) / (butterflyStage4Radix - 1)
 		for j := range s {
-			ang := 2 * math.Pi * float64(3*j) / float64(4*s)
+			ang := 2 * math.Pi * float64(stage4Tw3Power*j) / float64(butterflyStage4Radix*s)
 			sin, cos := math.Sincos(ang)
 			p.stage4Tw3Re[off+j] = cos
 			p.stage4Tw3Im[off+j] = -sin
@@ -205,13 +211,15 @@ func (p *STFTPlan) fftHalf() {
 	// stage4Tw3 table at [(s-1)/3 : (s-1)/3 + s]. A single trailing radix-2 stage
 	// finishes the transform when half is not a power of four (odd log2(half)).
 	s := 1
-	for 4*s <= p.half {
-		o1, o2, o3 := s-1, 2*s-1, (s-1)/3
+	for butterflyStage4Radix*s <= p.half {
+		o1 := s - 1                                 // span-s radix-2 table
+		o2 := butterflyStageRadix*s - 1             // span-2s radix-2 table, first s taken
+		o3 := (s - 1) / (butterflyStage4Radix - 1)  // dedicated w^(3j) table
 		ButterflyComplexStage4(re, im, s,
 			p.stageTwRe[o1:o1+s], p.stageTwIm[o1:o1+s],
 			p.stageTwRe[o2:o2+s], p.stageTwIm[o2:o2+s],
 			p.stage4Tw3Re[o3:o3+s], p.stage4Tw3Im[o3:o3+s])
-		s *= 4
+		s *= butterflyStage4Radix
 	}
 	if s < p.half {
 		off := s - 1
