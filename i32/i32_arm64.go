@@ -132,10 +132,16 @@ func scaleQ31NEON(dst, a []int32, k int32)
 //go:noescape
 func scaleQ15NEON(dst, a []int32, k int16)
 
-// minNEONGainQ31 is one 4-wide (.4S) block, an independent literal like the
-// scale thresholds above. The kernel is correct at any length (it falls through
-// to a scalar tail), so this is a performance cut only, never a safety
-// requirement.
+// minNEONGainQ31 is one 4-wide (.4S) block, an independent literal like the scale
+// thresholds above. The kernel is correct at any length (it falls through to a
+// scalar tail), so this is a performance cut only, never a safety requirement.
+//
+// This stays at one block, unlike the much larger amd64 minAVX2GainQ31: MEASURED on
+// a Raspberry Pi 5, the NEON GainQ31 kernel scales cleanly with n and already beats
+// gainQ31Go from the smallest sizes (n=8: ~15.8 vs 16.4 ns; n=16: ~20.4 vs 29.3),
+// with no fixed per-call cost. NEON has no analogue of the 256-bit AVX
+// transition/warmup penalty that pushes the amd64 crossover out to ~160, so one
+// block remains the right threshold here. See #251.
 const minNEONGainQ31 = 4
 
 func gainQ31I32(dst, a []int32, gain int32, preShift, postShift int) {

@@ -147,12 +147,26 @@ func scaleQ31AVX2(dst, a []int32, k int32)
 //go:noescape
 func scaleQ15AVX2(dst, a []int32, k int16)
 
-// minAVX2GainQ31 is one 8-wide (256-bit) block, an independent literal like the
-// scale thresholds above. The kernel is correct at any length (it falls through
-// to a scalar tail), so this is a performance cut only, never a safety
-// requirement. It gates on AVX2 because the VPMULDQ Q31 core plus the VPSLLD/
-// VPADDD/VPSRAD pre- and post-shift stages are all 256-bit integer ops.
-const minAVX2GainQ31 = 8
+// minAVX2GainQ31 gates the AVX2 GainQ31 kernel on total length. The kernel is
+// correct at any length (it falls through to a scalar tail), so this is a
+// performance cut only, never a safety requirement. It gates on AVX2 because the
+// VPMULDQ Q31 core plus the VPSLLD/VPADDD/VPSRAD pre- and post-shift stages are
+// all 256-bit integer ops.
+//
+// Unlike ScaleQ31 (whose single-broadcast prologue lets it win from one block),
+// the AVX2 GainQ31 path carries a large fixed per-call cost that dwarfs its
+// per-element work at small n: MEASURED as ~80-90 ns flat across n = 8..128 on two
+// amd64 hosts (an i7-class and a Xeon-class part), while gainQ31Go scales linearly
+// from ~6 ns (n=8). The kernel's own per-element work is cheap (~0.2 ns/elem vs Go's
+// ~0.75), so the crossover is set entirely by that fixed cost: gainQ31Go is faster
+// through n=144, the two are at parity near n=160, and the kernel pulls ahead from
+// n=176 (reaching ~2x by n=320). The arm64 NEON path shows no such fixed cost and
+// stays at minNEONGainQ31 = 4; the amd64-only gap is consistent with the 256-bit
+// AVX transition/warmup penalty each call pays after its closing VZEROUPPER (a
+// caller that keeps the upper YMM state warm would cross lower, so 160 is the
+// conservative crossover for a kernel invoked from scalar Go). See #251; the #250
+// masking speedup to gainQ31Go pushed the crossover out further still.
+const minAVX2GainQ31 = 160
 
 func gainQ31I32(dst, a []int32, gain int32, preShift, postShift int) {
 	if hasAVX2 && len(dst) >= minAVX2GainQ31 {
