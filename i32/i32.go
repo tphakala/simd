@@ -12,6 +12,31 @@
 //
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
+//
+// # Aliasing
+//
+// The element-wise operations may be used fully in place: the destination may
+// alias an input exactly, element for element. Abs, ScaleQ31, ScaleQ15 and
+// GainQ31 accept dst equal to their source; Add and Sub accept dst equal to a, to
+// b, or to both; NegWhereNeg accepts dst equal to mag (its sign input is a
+// separate float32 slice that cannot alias the int32 destination). Each SIMD
+// block reads its whole block of inputs into registers before storing any output
+// lane, and the scalar tail reads each element before it writes that element, so
+// an exact overlay is well defined on the AVX2 and NEON kernels and the pure-Go
+// fallback.
+//
+// A destination must not overlap an input at a shifted offset: a SIMD load pulls
+// a whole block of an input ahead of the stores, so a shifted overlay clobbers
+// input lanes a later iteration has not yet read; the resulting corruption is
+// undefined and varies with kernel width and length.
+//
+// Some operations do not take an element-for-element overlay. Interleave2 and
+// Deinterleave2 have a destination whose length differs from their inputs (twice,
+// or half). FIRValidQ15 writes a valid-convolution output shorter than its input
+// and reads a sliding window ahead of each output, so its dst must be distinct
+// from x. Butterfly rewrites its two operands in place, so lo and hi must not
+// overlap each other. The reductions (Sum, MaxAbs, MinMax) write no output slice,
+// so aliasing does not apply to them.
 package i32
 
 // interleave2Channels is the number of channels handled by Interleave2 and

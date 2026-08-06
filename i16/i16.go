@@ -31,6 +31,27 @@
 //
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
+//
+// # Aliasing
+//
+// The two element-wise operations may be used fully in place: the destination
+// may alias an input exactly, element for element. Abs accepts dst equal to a;
+// MulQ15 accepts dst equal to a, to b, or to both. Each SIMD block reads its
+// whole block of inputs into registers before storing any output lane, and the
+// scalar tail reads each element before it writes that element, so an exact
+// overlay is well defined on the AVX2 and NEON kernels and the pure-Go fallback.
+//
+// A destination must not overlap an input at a shifted offset: a SIMD load pulls
+// a whole block of an input ahead of the stores, so a shifted overlay clobbers
+// input lanes a later iteration has not yet read; the resulting corruption is
+// undefined and varies with kernel width and length.
+//
+// Interleave2 and Deinterleave2 have a destination whose length differs from
+// their inputs (twice the inputs, or half the source), so an element-for-element
+// overlay does not apply. XCorr writes an int32 result from int16 inputs, so its
+// output and inputs have distinct element types and cannot alias in safe Go. The
+// reductions DotProduct and MaxAbs write no output slice, so aliasing does not
+// apply to them.
 package i16
 
 // interleave2Channels is the number of channels handled by Interleave2 and

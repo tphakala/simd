@@ -17,6 +17,27 @@
 //
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
+//
+// # Aliasing
+//
+// The element-wise operations may be used fully in place: the destination may
+// alias an input exactly, element for element. Abs, Neg, ReLU, Sigmoid, Sqrt,
+// Reciprocal, Exp, Scale, AddScalar and Clamp accept dst equal to their source;
+// Add, Sub, Mul and Div accept dst equal to a, to b, or to both; FMA accepts dst
+// equal to a, b or c. Each SIMD block reads its whole block of inputs into
+// registers before storing any output lane, and the scalar tail reads each
+// element before it writes that element, so an exact overlay is well defined on
+// the F16C, FP16 and NEON kernels and the pure-Go fallback.
+//
+// A destination must not overlap an input at a shifted offset: a SIMD load pulls
+// a whole block of an input ahead of the stores, so a shifted overlay clobbers
+// input lanes a later iteration has not yet read; the resulting corruption is
+// undefined and varies with kernel width and length.
+//
+// ToFloat32Slice and FromFloat32Slice convert between Float16 and float32, so
+// their input and output have distinct element types and cannot alias in safe Go.
+// The reductions (Sum, Min, Max, Mean, DotProduct, DotProductF32) write no output
+// slice, so aliasing does not apply to them.
 package f16
 
 import "math"
