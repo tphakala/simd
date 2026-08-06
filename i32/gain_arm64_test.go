@@ -3,6 +3,7 @@
 package i32
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -93,5 +94,20 @@ func TestGainQ31Dispatch_ReachesNEON(t *testing.T) {
 	}
 	if minNEONGainQ31 > 8 {
 		t.Fatalf("minNEONGainQ31 = %d exceeds two vector blocks: GainQ31 would not vectorize at the lengths it was written for", minNEONGainQ31)
+	}
+}
+
+// BenchmarkGainQ31CrossoverNEON sweeps the NEON kernel directly against the Go
+// reference across small n so minNEONGainQ31 (#251) can be re-tuned on other
+// hardware. Unlike the amd64 AVX2 path, the NEON kernel has no large fixed per-call
+// cost, so it beats gainQ31Go from the smallest sizes and the threshold stays at one
+// block (4).
+func BenchmarkGainQ31CrossoverNEON(b *testing.B) {
+	if !cpu.ARM64.NEON {
+		b.Skip("NEON not available")
+	}
+	for _, n := range []int{4, 8, 12, 16, 24, 32, 64} {
+		b.Run(fmt.Sprintf("NEON_n%d", n), func(b *testing.B) { benchmarkGainQ31(b, n, gainQ31NEON) })
+		b.Run(fmt.Sprintf("Go_n%d", n), func(b *testing.B) { benchmarkGainQ31(b, n, gainQ31Go) })
 	}
 }
