@@ -1087,7 +1087,7 @@ func Int32ToFloat32ScaleUnsafe(dst []float32, src []int32, scale float32) {
 // The product float32(src[i])*scale is rounded to float32 before the add (two
 // roundings, never an FMA), so the result is bit-identical to Int32ToFloat32Scale
 // into a temporary followed by Add, on every dispatch path including the pure-Go
-// fallback. That single-rounding contract is the load-bearing property, in the same
+// fallback. That two-rounding contract is the load-bearing property, in the same
 // style Float32ToInt32ScaleClamp established.
 //
 // Processes min(len(dst), len(a), len(src)) elements.
