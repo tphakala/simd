@@ -102,6 +102,9 @@ func butterflyComplexStage4x32(re, im []float32, span, blocks int,
 func realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	realFFTUnpack32Go(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }
+func realFFTPower32(dst, zRe, zIm, twRe, twIm []float32, n int) {
+	realFFTPower32Go(dst, zRe, zIm, twRe, twIm, n)
+}
 func reverse32(dst, src []float32)             { reverse32Go(dst, src) }
 func addSub32(sumDst, diffDst, a, b []float32) { addSub32Go(sumDst, diffDst, a, b) }
 

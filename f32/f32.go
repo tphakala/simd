@@ -1548,6 +1548,67 @@ func RealFFTUnpack(outRe, outIm, zRe, zIm, twRe, twIm []float32) {
 	realFFTUnpack32(outRe, outIm, zRe, zIm, twRe, twIm, n)
 }
 
+// RealFFTPower is the fused, power-writing counterpart of RealFFTUnpack: for each
+// bin k in [1, n-1] it unpacks X[k] exactly as RealFFTUnpack does and writes the
+// power dst[k] = |X[k]|^2 in a single pass, without materialising the complex
+// half-spectrum. Given Z = FFT(packed real data of size 2n) and the same twiddles
+// RealFFTUnpack takes, each bin is
+//
+//	conj_z = conj(Z[n-k])
+//	even = 0.5 * (Z[k] + conj_z)
+//	diff = Z[k] - conj_z
+//	odd  = W[k] * (-0.5i) * diff
+//	X[k] = even + odd
+//	dst[k] = X[k].real^2 + X[k].imag^2
+//
+// so it makes a single pass over the spectrum with no intermediate complex bins. A
+// spectrogram, mel front end, or PSD consumer wants |X_k|^2, and computing it as
+// RealFFTUnpack + Mul + FMA is three passes over the bins that write and re-read
+// the complex half-spectrum; folding the magnitude-squared into the unpack drops
+// the two extra passes. f32 is the primary path for the audio ML front ends this
+// serves (mel-spectrogram and PCEN pipelines feeding CNN classifiers). See #245,
+// the f32 sibling of the f64 kernel in #233.
+//
+// Parameters:
+//   - dst: output power, dst[k] = |X[k]|^2 written for k in [1, n-1] (length >= n)
+//   - zRe, zIm: half-size complex spectrum Z, length n
+//   - twRe, twIm: twiddle factors W[k] at index k-1 (length n-1), where
+//     W[k] = exp(-i*pi*k/n) = cos(pi*k/n) - i*sin(pi*k/n)
+//
+// The DC bin (k=0) and Nyquist bin (k=n) are the caller's responsibility, exactly
+// as for RealFFTUnpack. Both are real, so their powers are:
+//
+//	|X[0]|^2 = (Z[0].real + Z[0].imag)^2  (DC)
+//	|X[n]|^2 = (Z[0].real - Z[0].imag)^2  (Nyquist)
+//
+// The SIMD kernels fuse the magnitude-squared with a hardware FMA on their vector
+// lanes (single rounding). The pure-Go path writes a separate multiply and add,
+// but the Go compiler contracts that into an FMA on some architectures (arm64) and
+// not others (amd64). So the results agree only to within rounding, not
+// bit-for-bit, and the exact bits can differ across architectures, exactly as the
+// RealFFTUnpack odd-term FMA already does.
+//
+// # Aliasing
+//
+// dst must not overlap zRe, zIm, twRe or twIm in any way, not even as an exact
+// element-for-element overlay. Bin k reads Z at both k and the mirror n-k plus the
+// twiddle at k-1 before it writes dst at k, and the SIMD kernels re-read the tail
+// input with an overlapping block, so any overlay lets a store land on an input a
+// later bin has not read yet. Same precondition as RealFFTUnpack.
+//
+// Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback.
+func RealFFTPower(dst, zRe, zIm, twRe, twIm []float32) {
+	n := len(zRe)
+	if n < realFFTUnpackMinN {
+		return
+	}
+	// Validate slice lengths.
+	if len(zIm) < n || len(dst) < n || len(twRe) < n-1 || len(twIm) < n-1 {
+		return
+	}
+	realFFTPower32(dst, zRe, zIm, twRe, twIm, n)
+}
+
 // Reverse reverses a slice: dst[i] = src[len(src)-1-i].
 //
 // Processes min(len(dst), len(src)) elements. The result is stored

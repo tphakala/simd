@@ -6515,6 +6515,169 @@ realfft_done:
     RET
 
 // ============================================================================
+// REALFFTPOWER - FUSED REAL-FFT POWER SPECTRUM (|X[k]|^2)
+// ============================================================================
+
+// func realFFTPowerAVX(dst, zRe, zIm, twRe, twIm []float32, n int)
+// Fused power-writing counterpart of realFFTUnpackAVX: unpacks each bin exactly as
+// that kernel does, then writes dst[k] = |X[k]|^2 instead of the complex X[k]. It
+// shares realFFTUnpackAVX's AVX+FMA tier (VPERM2F128 + VPERMILPS reversed load and
+// RODATA-sourced constants, no AVX2 encoding); the magnitude-squared is fused with
+// VFMADD231PS. Processes 8 float32 bins per pass. See #245 and f64 realFFTPowerAVX.
+// Frame: dst(24) + zRe(24) + zIm(24) + twRe(24) + twIm(24) + n(8) = 128 bytes.
+TEXT ·realFFTPowerAVX(SB), NOSPLIT, $0-128
+    // Load parameters
+    MOVQ dst_base+0(FP), DX          // DX = dst pointer
+    MOVQ zRe_base+24(FP), DI         // DI = zRe pointer (forward)
+    MOVQ zIm_base+48(FP), R8         // R8 = zIm pointer (forward)
+    MOVQ twRe_base+72(FP), R11       // R11 = twRe pointer
+    MOVQ twIm_base+96(FP), R12       // R12 = twIm pointer
+    MOVQ n+120(FP), CX               // CX = n
+
+    // Calculate number of iterations: (n-1) / 8
+    MOVQ CX, AX
+    DECQ AX                          // AX = n - 1
+    MOVQ AX, R13                     // R13 = n - 1 (save for remainder)
+    SHRQ $3, AX                      // AX = (n-1) / 8 = number of SIMD iterations
+    // Zero full blocks means n <= 8, which realFFTPower32 never dispatches: its
+    // guard is n > minAVXElements and minAVXElements is 8. The overlapping
+    // remainder block below anchors at k = n-8 and mirror-reads zRe[1..8], so it
+    // needs n >= 9; writing nothing is the memory-safe answer to a caller that
+    // ignores the threshold.
+    JZ   realfftpow_done
+
+    // Set up reverse pointers: R9 = &zRe[n-8], R10 = &zIm[n-8].
+    // BX (not R14) holds byte offsets: R14 is the goroutine g pointer on Go amd64.
+    MOVQ CX, BX                      // BX = n
+    SUBQ $8, BX                      // BX = n - 8
+    SHLQ $2, BX                      // BX = (n-8) * 4 = byte offset
+    MOVQ DI, R9
+    ADDQ BX, R9                      // R9 = &zRe[n-8]
+    MOVQ R8, R10
+    ADDQ BX, R10                     // R10 = &zIm[n-8]
+
+    // Offset forward and output pointers to start at index 1
+    ADDQ $4, DI                      // DI = &zRe[1]
+    ADDQ $4, R8                      // R8 = &zIm[1]
+    ADDQ $4, DX                      // DX = &dst[1]
+
+    // Load constants from RODATA. A register-source VBROADCASTSS and 256-bit integer
+    // ops are AVX2, and this kernel stays on the AVX+FMA tier. See #202.
+    VMOVUPS roundf32_half<>(SB), Y13     // Y13 = 0.5f x8
+    VMOVUPS roundf32_signmask<>(SB), Y14 // Y14 = 0x80000000 x8 (sign bit only)
+
+realfftpow_loop8:
+    // Load forward Z[k:k+8]
+    VMOVUPS (DI), Y0                 // Y0 = zRe[k:k+8] (forward)
+    VMOVUPS (R8), Y1                 // Y1 = zIm[k:k+8] (forward)
+
+    // Load reverse Z[n-k-7:n-k+1] and reverse the order
+    VMOVUPS (R9), Y2                 // Y2 = zRe[n-k-7:n-k+1] (to be reversed)
+    VMOVUPS (R10), Y3                // Y3 = zIm[n-k-7:n-k+1] (to be reversed)
+    VPERM2F128 $0x01, Y2, Y2, Y2     // Swap high/low 128-bit lanes
+    VPERM2F128 $0x01, Y3, Y3, Y3
+    VPERMILPS $0x1B, Y2, Y2          // 0x1B = [3,2,1,0] within each 128-bit lane
+    VPERMILPS $0x1B, Y3, Y3
+
+    // For conjugate: znkIm = -zIm[n-k]
+    VXORPS Y14, Y3, Y3               // Y3 = znkIm = -zIm[n-k]
+
+    // even = 0.5 * (Z[k] + conj(Z[n-k]))
+    VADDPS Y0, Y2, Y4                // Y4 = zkRe + znkRe
+    VMULPS Y4, Y13, Y4               // Y4 = evenRe
+    VADDPS Y1, Y3, Y5                // Y5 = zkIm + znkIm
+    VMULPS Y5, Y13, Y5               // Y5 = evenIm
+
+    // diff = Z[k] - conj(Z[n-k])
+    VSUBPS Y2, Y0, Y6                // Y6 = diffRe
+    VSUBPS Y3, Y1, Y7                // Y7 = diffIm
+
+    // Load twiddles W[k]
+    VMOVUPS (R11), Y8                // Y8 = wr
+    VMOVUPS (R12), Y9                // Y9 = wi
+
+    // oddRe = 0.5 * (wr*diffIm + wi*diffRe)
+    VMULPS Y8, Y7, Y10               // Y10 = wr * diffIm
+    VFMADD231PS Y9, Y6, Y10          // Y10 = wr*diffIm + wi*diffRe
+    VMULPS Y10, Y13, Y10             // Y10 = oddRe
+
+    // oddIm = 0.5 * (wi*diffIm - wr*diffRe)
+    VMULPS Y9, Y7, Y11               // Y11 = wi * diffIm
+    VFNMADD231PS Y8, Y6, Y11         // Y11 = wi*diffIm - wr*diffRe
+    VMULPS Y11, Y13, Y11             // Y11 = oddIm
+
+    // X[k] = even + odd
+    VADDPS Y4, Y10, Y0               // Y0 = outRe = evenRe + oddRe
+    VADDPS Y5, Y11, Y1               // Y1 = outIm = evenIm + oddIm
+
+    // dst[k] = outRe^2 + outIm^2 (fused magnitude-squared)
+    VMULPS Y0, Y0, Y2                // Y2 = outRe^2
+    VFMADD231PS Y1, Y1, Y2           // Y2 = outRe^2 + outIm^2
+    VMOVUPS Y2, (DX)                 // store power[k:k+8]
+
+    // Advance pointers
+    ADDQ $32, DI                     // forward zRe += 8
+    ADDQ $32, R8                     // forward zIm += 8
+    SUBQ $32, R9                     // reverse zRe -= 8
+    SUBQ $32, R10                    // reverse zIm -= 8
+    ADDQ $32, R11                    // twRe += 8
+    ADDQ $32, R12                    // twIm += 8
+    ADDQ $32, DX                     // dst += 8
+
+    DECQ AX
+    JNZ  realfftpow_loop8
+
+realfftpow_remainder:
+    // Handle the remaining (n-1) % 8 bins with one more FULL 8-wide block anchored
+    // at k = n-8, overlapping the block just written. Bin k reads inputs only (z at
+    // k and the mirror n-k, twiddles at k-1) and nothing a previous bin produced, so
+    // recomputing the last 8 stores identical values. Same idiom as realFFTUnpackAVX;
+    // it relies on dst not overlapping the inputs. See #215.
+    ANDQ $7, R13                     // R13 = remainder count
+    JZ   realfftpow_done
+
+    // Zero the remainder before re-entering: the block below ends on the loop's own
+    // DECQ/JNZ, falls through here a second time, and must find nothing left to do.
+    XORL R13, R13
+
+    // Reload the five slice bases the loop advanced. CX still holds n.
+    MOVQ dst_base+0(FP), DX
+    MOVQ zRe_base+24(FP), DI
+    MOVQ zIm_base+48(FP), R8
+    MOVQ twRe_base+72(FP), R11
+    MOVQ twIm_base+96(FP), R12
+    MOVQ n+120(FP), CX
+
+    // Mirror pointers first, while DI and R8 still hold the bases. At k = n-8 the
+    // block reads z[n-k-7 .. n-k] = z[1 .. 8], one element in from the start.
+    MOVQ DI, R9
+    ADDQ $4, R9                      // R9 = &zRe[1]
+    MOVQ R8, R10
+    ADDQ $4, R10                     // R10 = &zIm[1]
+
+    // Forward and output pointers to k = n-8.
+    MOVQ CX, BX
+    SUBQ $8, BX                      // BX = n - 8 = k
+    SHLQ $2, BX                      // BX = k * 4 = byte offset
+    ADDQ BX, DI                      // DI = &zRe[k]
+    ADDQ BX, R8                      // R8 = &zIm[k]
+    ADDQ BX, DX                      // DX = &dst[k]
+
+    // Twiddles are indexed k-1, so they top out at n-2 against a length n-1 slice.
+    SUBQ $4, BX                      // BX = (k-1) * 4
+    ADDQ BX, R11                     // R11 = &twRe[k-1]
+    ADDQ BX, R12                     // R12 = &twIm[k-1]
+
+    // Y13/Y14 still hold 0.5f and the sign mask, so the re-entered loop needs no
+    // fresh constant load.
+    MOVQ $1, AX                      // exactly one more iteration
+    JMP  realfftpow_loop8
+
+realfftpow_done:
+    VZEROUPPER
+    RET
+
+// ============================================================================
 // REVERSE - REVERSE SLICE ELEMENTS
 // ============================================================================
 
