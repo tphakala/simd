@@ -17,6 +17,36 @@
 //
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
+//
+// # Aliasing
+//
+// The element-wise operations may be used fully in place: the destination may
+// alias an input exactly, element for element. Abs, Neg, ReLU, Sigmoid, Sqrt,
+// Reciprocal, Exp, Tanh, Scale, AddScalar, Clamp, ClampScale, Normalize and
+// CumulativeSum accept dst equal to their source; Add, Sub, Mul and Div accept dst
+// equal to a, to b, or to both; FMA accepts dst equal to a, b or c. The
+// accumulators AddScaled and AccumulateAdd accept dst equal to their source slice
+// (AddScaled's dst == s; AccumulateAdd's dst == src at offset 0). Each SIMD block
+// reads its whole block of inputs into registers before storing any output lane,
+// and the scalar tail reads each element before it writes that element, so an
+// exact overlay is well defined on the F16C, FP16 and NEON kernels and the pure-Go
+// fallback. The in-place variants (ExpInPlace, TanhInPlace, ReLUInPlace,
+// SigmoidInPlace) operate on a single slice and so raise no aliasing question.
+//
+// A destination must not overlap an input at a shifted offset: a SIMD load pulls
+// a whole block of an input ahead of the stores, so a shifted overlay clobbers
+// input lanes a later iteration has not yet read; the resulting corruption is
+// undefined and varies with kernel width and length.
+//
+// Some operations do not take an element-for-element overlay. Interleave2 and
+// Deinterleave2 have a destination whose length differs from their inputs (twice,
+// or half). ConvolveValid writes a valid-convolution output shorter than its
+// signal and reads a sliding window, so its dst must be distinct from the signal.
+// ToFloat32Slice and FromFloat32Slice convert between Float16 and float32 (distinct
+// element types that cannot alias in safe Go), as does DotProductBatch (float32
+// results). The reductions (Sum, Min, Max, Mean, MinIdx, MaxIdx, DotProduct,
+// DotProductF32, EuclideanDistance, Variance, StdDev) write no output slice, so
+// aliasing does not apply to them.
 package f16
 
 import "math"

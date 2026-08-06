@@ -13,6 +13,11 @@
 // All functions are bit-identical to the scalar reference and allocation-free.
 //
 // Thread Safety: All functions are safe for concurrent use.
+//
+// # Aliasing
+//
+// Checksum16 reads its input byte slice and returns a scalar; it writes no output
+// slice, so aliasing does not apply.
 package crc
 
 import "encoding/binary"
