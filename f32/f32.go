@@ -1072,6 +1072,41 @@ func Int32ToFloat32ScaleUnsafe(dst []float32, src []int32, scale float32) {
 	int32ToFloat32Scale(dst[:len(src)], src, scale)
 }
 
+// Int32ToFloat32ScaleAdd converts, scales and accumulates in one pass:
+//
+//	dst[i] = a[i] + float32(src[i])*scale
+//
+// It is the fused single-pass form of the dequantize-accumulate shape that
+// otherwise needs a temporary: Int32ToFloat32Scale(tmp, src, scale) followed by
+// Add(dst, a, tmp). This mixed-precision AXPY whose increment is quantized integer
+// data appears wherever integer counts or quantized values feed a float
+// accumulation, such as rate-distortion cost curves (distortion plus lambda times
+// an integer bit count), dequantize-and-mix paths, and dequantization of quantized
+// tensors onto a float32 accumulator.
+//
+// The product float32(src[i])*scale is rounded to float32 before the add (two
+// roundings, never an FMA), so the result is bit-identical to Int32ToFloat32Scale
+// into a temporary followed by Add, on every dispatch path including the pure-Go
+// fallback. That two-rounding contract is the load-bearing property, in the same
+// style Float32ToInt32ScaleClamp established.
+//
+// Processes min(len(dst), len(a), len(src)) elements.
+//
+// # Aliasing
+//
+// dst may overlay a exactly (the in-place accumulate dst[i] += float32(src[i])*scale,
+// since each lane reads a[i] before it rewrites dst[i]), following the AddScaled
+// aliasing rule. dst must not overlap a at a shifted offset.
+//
+// Uses AVX on AMD64 (8x int32), NEON on ARM64 (4x int32), with a pure-Go fallback.
+func Int32ToFloat32ScaleAdd(dst, a []float32, src []int32, scale float32) {
+	n := min(len(dst), len(a), len(src))
+	if n == 0 {
+		return
+	}
+	int32ToFloat32ScaleAdd(dst[:n], a[:n], src[:n], scale)
+}
+
 // Int16ToFloat32Scale converts int16 samples to float32 and scales in one pass.
 // dst[i] = float32(src[i]) * scale
 //

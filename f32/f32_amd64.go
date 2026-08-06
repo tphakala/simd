@@ -1222,6 +1222,20 @@ func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 //go:noescape
 func int32ToFloat32ScaleAVX(dst []float32, src []int32, scale float32)
 
+func int32ToFloat32ScaleAdd(dst, a []float32, src []int32, scale float32) {
+	// Plain AVX, no FMA: the kernel keeps the multiply and add separate (VMULPS then
+	// VADDPS, two roundings) so it stays bit-identical to the Go reference and the
+	// two-pass Int32ToFloat32Scale + Add composition. See #248 and the #156 contract.
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
+		int32ToFloat32ScaleAddAVX(dst, a, src, scale)
+		return
+	}
+	int32ToFloat32ScaleAddGo(dst, a, src, scale)
+}
+
+//go:noescape
+func int32ToFloat32ScaleAddAVX(dst, a []float32, src []int32, scale float32)
+
 func int16ToFloat32Scale(dst []float32, src []int16, scale float32) {
 	// AVX2 is required because widening int16 to int32 uses VPMOVSXWD (ymm form).
 	if cpu.X86.AVX2 && len(dst) >= minAVXElements {

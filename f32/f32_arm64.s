@@ -2115,6 +2115,63 @@ i32tof32_neon_scalar_loop:
 i32tof32_neon_done:
     RET
 
+// func int32ToFloat32ScaleAddNEON(dst, a []float32, src []int32, scale float32)
+// Fused dequantize-accumulate: dst[i] = a[i] + float32(src[i])*scale.
+// NEON, no FMLA: the product (FMUL) rounds to float32 before the add (FADD) rounds
+// again, so the result is bit-identical to the Go reference and the two-pass
+// Int32ToFloat32Scale + Add composition. Keeping the multiply and add separate is
+// the #156 single-rounding contract (asserted by TestNoFMAContract). See #248.
+//
+// NEON opcodes (hand-encoded; the Go assembler lacks these vector forms):
+// SCVTF Vd.4S, Vn.4S:       signed int32 to float32
+// FMUL  Vd.4S, Vn.4S, Vm.4S: multiply
+// FADD  Vd.4S, Vn.4S, Vm.4S: add
+// DUP   Vd.4S, Vn.S[0]:      broadcast lane 0
+//
+// Frame: dst(24) + a(24) + src(24) + scale(4) = 76 bytes.
+TEXT ·int32ToFloat32ScaleAddNEON(SB), NOSPLIT, $0-76
+    MOVD dst_base+0(FP), R0        // R0 = dst pointer
+    MOVD dst_len+8(FP), R3         // R3 = length
+    MOVD a_base+24(FP), R2         // R2 = a pointer (accumulator input)
+    MOVD src_base+48(FP), R1       // R1 = src pointer
+    FMOVS scale+72(FP), F2         // F2 = scale
+
+    WORD $0x4E040442               // DUP V2.4S, V2.S[0]  (broadcast scale)
+
+    // Process 4 int32 elements per iteration
+    LSR $2, R3, R4                 // R4 = len / 4
+    CBZ R4, i32tof32add_neon_scalar
+
+i32tof32add_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]         // V0 = 4 x int32 from src
+    WORD $0x4E21D801               // SCVTF V1.4S, V0.4S  (int32 -> float32)
+    WORD $0x6E22DC21               // FMUL V1.4S, V1.4S, V2.4S  (product, first rounding)
+    VLD1.P 16(R2), [V3.S4]         // V3 = a[i:i+4]
+    WORD $0x4E23D421               // FADD V1.4S, V1.4S, V3.4S  (a + product, second rounding)
+    VST1.P [V1.S4], 16(R0)         // store 4 x float32
+    SUB $1, R4
+    CBNZ R4, i32tof32add_neon_loop4
+
+i32tof32add_neon_scalar:
+    AND $3, R3                     // remainder = len % 4
+    CBZ R3, i32tof32add_neon_done
+
+i32tof32add_neon_scalar_loop:
+    MOVW (R1), R5                  // Load int32
+    SCVTFWS R5, F0                 // Convert int32 to float32
+    FMULS F2, F0, F0               // F0 = product (first rounding)
+    FMOVS (R2), F3                 // F3 = a[i]
+    FADDS F3, F0, F0               // F0 = a + product (second rounding)
+    FMOVS F0, (R0)                 // Store float32
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R2
+    SUB $1, R3
+    CBNZ R3, i32tof32add_neon_scalar_loop
+
+i32tof32add_neon_done:
+    RET
+
 // func int16ToFloat32ScaleNEON(dst []float32, src []int16, scale float32)
 // Converts int16 samples to float32 and multiplies by scale in one pass.
 // dst[i] = float32(src[i]) * scale
