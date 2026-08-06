@@ -804,6 +804,19 @@ func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 //go:noescape
 func int32ToFloat32ScaleNEON(dst []float32, src []int32, scale float32)
 
+func int32ToFloat32ScaleAdd(dst, a []float32, src []int32, scale float32) {
+	// NEON keeps the multiply and add separate (FMUL then FADD, two roundings) so it
+	// stays bit-identical to the Go reference and the two-pass composition. See #248.
+	if hasNEON && len(dst) >= 4 {
+		int32ToFloat32ScaleAddNEON(dst, a, src, scale)
+		return
+	}
+	int32ToFloat32ScaleAddGo(dst, a, src, scale)
+}
+
+//go:noescape
+func int32ToFloat32ScaleAddNEON(dst, a []float32, src []int32, scale float32)
+
 func int16ToFloat32Scale(dst []float32, src []int16, scale float32) {
 	if hasNEON && len(dst) >= 4 {
 		int16ToFloat32ScaleNEON(dst, src, scale)

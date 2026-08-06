@@ -756,6 +756,26 @@ func int32ToFloat32ScaleGo(dst []float32, src []int32, scale float32) {
 	}
 }
 
+// int32ToFloat32ScaleAddGo is the pure-Go reference for Int32ToFloat32ScaleAdd:
+// dst[i] = a[i] + float32(src[i])*scale, with the product rounded to float32 before
+// the add (two roundings, never an FMA). The explicit float32() on the product is
+// load-bearing: without it the Go compiler may contract a[i] + float32(src[i])*scale
+// into a single fused multiply-add on architectures that have one (arm64), which
+// rounds once and would break bit-parity with the SIMD kernels and with the two-pass
+// Int32ToFloat32Scale + Add composition. Same contract as Float32ToInt32ScaleClamp
+// (#155/#156); see #248.
+func int32ToFloat32ScaleAddGo(dst, a []float32, src []int32, scale float32) {
+	n := len(dst)
+	if n == 0 {
+		return
+	}
+	a = a[:n] // hoist the a/src bounds checks out of the loop
+	src = src[:n]
+	for i := range dst {
+		dst[i] = a[i] + float32(float32(src[i])*scale)
+	}
+}
+
 // int16ToFloat32ScaleGo converts int16 samples to float32 and scales.
 // dst[i] = float32(src[i]) * scale
 // int16 values are exactly representable in float32, so this is a single

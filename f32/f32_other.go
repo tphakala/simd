@@ -68,6 +68,9 @@ func clampScale32(dst, src []float32, minVal, maxVal, scale float32) {
 func tanh32(dst, src []float32)                                 { tanh32Go(dst, src) }
 func exp32(dst, src []float32)                                  { exp32Go(dst, src) }
 func int32ToFloat32Scale(dst []float32, src []int32, s float32) { int32ToFloat32ScaleGo(dst, src, s) }
+func int32ToFloat32ScaleAdd(dst, a []float32, src []int32, s float32) {
+	int32ToFloat32ScaleAddGo(dst, a, src, s)
+}
 
 func int16ToFloat32Scale(dst []float32, src []int16, s float32) { int16ToFloat32ScaleGo(dst, src, s) }
 

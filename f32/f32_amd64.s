@@ -4651,6 +4651,60 @@ i32tof32_done:
     VZEROUPPER
     RET
 
+// func int32ToFloat32ScaleAddAVX(dst, a []float32, src []int32, scale float32)
+// Fused dequantize-accumulate: dst[i] = a[i] + float32(src[i])*scale.
+// Plain AVX, no FMA: the product (VMULPS) rounds to float32 before the add (VADDPS)
+// rounds again, so the result is bit-identical to the Go reference and the two-pass
+// Int32ToFloat32Scale + Add composition. Keeping the multiply and add separate is
+// the #156 single-rounding contract (asserted by TestNoFMAContract). See #248.
+// Frame: dst(24) + a(24) + src(24) + scale(4) = 76 bytes.
+TEXT ·int32ToFloat32ScaleAddAVX(SB), NOSPLIT, $0-76
+    MOVQ dst_base+0(FP), DX        // DX = dst pointer
+    MOVQ dst_len+8(FP), CX         // CX = length
+    MOVQ a_base+24(FP), BX         // BX = a pointer (accumulator input)
+    MOVQ src_base+48(FP), SI       // SI = src pointer
+
+    // Broadcast scale to all 8 lanes (memory source keeps this AVX1, not AVX2).
+    VBROADCASTSS scale+72(FP), Y2  // Y2 = {scale, ...}
+
+    // Process 8 int32 elements per iteration
+    MOVQ CX, AX
+    SHRQ $3, AX                    // len / 8
+    JZ   i32tof32add_remainder
+
+i32tof32add_loop8:
+    VMOVDQU (SI), Y0               // Y0 = 8 x int32
+    VCVTDQ2PS Y0, Y1              // Y1 = float32(src)
+    VMULPS Y2, Y1, Y1             // Y1 = float32(src)*scale (first rounding)
+    VMOVUPS (BX), Y3              // Y3 = a[i:i+8]
+    VADDPS Y3, Y1, Y1            // Y1 = a + product (second rounding, not an FMA)
+    VMOVUPS Y1, (DX)             // store 8 x float32
+    ADDQ $32, SI
+    ADDQ $32, BX
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  i32tof32add_loop8
+
+i32tof32add_remainder:
+    ANDQ $7, CX                    // remainder = len % 8
+    JZ   i32tof32add_done
+
+i32tof32add_scalar:
+    VCVTSI2SSL (SI), X0, X0        // convert single int32 to float32
+    VMULSS X2, X0, X0             // X0 = product (first rounding)
+    VMOVSS (BX), X3              // X3 = a[i]
+    VADDSS X3, X0, X0           // X0 = a + product (second rounding)
+    VMOVSS X0, (DX)             // store float32
+    ADDQ $4, SI
+    ADDQ $4, BX
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  i32tof32add_scalar
+
+i32tof32add_done:
+    VZEROUPPER
+    RET
+
 // func int16ToFloat32ScaleAVX(dst []float32, src []int16, scale float32)
 // Converts int16 samples to float32 and multiplies by scale in one pass.
 // dst[i] = float32(src[i]) * scale
