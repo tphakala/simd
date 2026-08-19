@@ -1,7 +1,7 @@
 # simd
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tphakala/simd.svg)](https://pkg.go.dev/github.com/tphakala/simd)
-[![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/simd)](https://goreportcard.com/report/github.com/tphakala/simd)
+[![codecov](https://codecov.io/gh/tphakala/simd/branch/main/graph/badge.svg)](https://codecov.io/gh/tphakala/simd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A high-performance SIMD (Single Instruction, Multiple Data) library for Go providing vectorized operations on float64, float32, float16, int32, int16, int8, complex128, and complex64 slices.

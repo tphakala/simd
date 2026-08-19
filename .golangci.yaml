@@ -58,6 +58,8 @@ linters:
   settings:
     gocognit:
       min-complexity: 50
+    goconst:
+      ignore-tests: true
     gocritic:
       disabled-checks:
         - commentFormatting
