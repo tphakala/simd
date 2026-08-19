@@ -588,3 +588,65 @@ func (p *STFTPlan) RFFT(dst []complex64, frame, window []float32) int {
 	}
 	return nb
 }
+
+// IRFFT computes the inverse of RFFT. It reads the NumBins() Hermitian
+// half-spectrum bins from spec (bins beyond len(spec) are taken as zero) and
+// writes min(len(dst), NFFT()) real samples to dst, scaled by 1/nfft, so that
+// IRFFT(RFFT(x, nil)) reproduces x within float32 tolerance. The imaginary
+// parts of the DC and Nyquist bins are ignored, as numpy.fft.irfft does,
+// because a real signal cannot carry them. It returns the number of samples
+// written, is allocation-free, and reuses the plan scratch.
+//
+// The inverse undoes unravelBin algebraically: with E = 0.5*(X[k] +
+// conj(X[half-k])) and O = 0.5*(X[k] - conj(X[half-k])) * conj(W_N^k), the
+// packed half-length spectrum is C[k] = E + i*O, whose inverse FFT c[j] =
+// x[2j] + i*x[2j+1] is computed as conj(FFT(conj(C)))/half on the existing
+// forward core.
+func (p *STFTPlan) IRFFT(dst []float32, spec []complex64) int {
+	ns := min(len(dst), p.nfft)
+	if ns == 0 {
+		return 0
+	}
+	half := p.half
+	re, im := p.re, p.im
+	for k := range half {
+		xr, xi := irfftBin(spec, k)
+		mr, mi := irfftBin(spec, half-k)
+		if k == 0 {
+			// DC and Nyquist are real for a real signal; drop any imaginary
+			// part rather than leaking it into the output.
+			xi, mi = 0, 0
+		}
+		er := rfftHalf * (xr + mr)
+		ei := rfftHalf * (xi - mi)
+		dr := rfftHalf * (xr - mr)
+		di := rfftHalf * (xi + mi)
+		// O = D * conj(W_N^k), with W_N^k = (unRe, unIm).
+		wr, wi := p.unRe[k], p.unIm[k]
+		or := dr*wr + di*wi
+		oi := di*wr - dr*wi
+		// Scratch holds conj(C) = conj(E + i*O).
+		re[k] = er - oi
+		im[k] = -(ei + or)
+	}
+	p.fftHalf()
+	scale := 1 / float32(half)
+	for j := range half {
+		i0, i1 := 2*j, 2*j+1
+		if i0 < ns {
+			dst[i0] = re[j] * scale
+		}
+		if i1 < ns {
+			dst[i1] = -im[j] * scale
+		}
+	}
+	return ns
+}
+
+// irfftBin reads spec[k] as (re, im), treating bins beyond len(spec) as zero.
+func irfftBin(spec []complex64, k int) (float32, float32) {
+	if k < len(spec) {
+		return real(spec[k]), imag(spec[k])
+	}
+	return 0, 0
+}

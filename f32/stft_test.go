@@ -1139,3 +1139,120 @@ func TestRFFTAllocFreeF32(t *testing.T) {
 		t.Errorf("RFFT allocated %v times per run, want 0", a)
 	}
 }
+
+// naiveIRFFTF32 is the reference inverse real DFT: x[n] = (1/N) * (Re X[0] +
+// Re X[N/2] * (-1)^n + 2 * sum_{k=1}^{N/2-1} Re(X[k] e^{+2 pi i k n / N})),
+// evaluated in float64. By construction it ignores the imaginary parts of the
+// DC and Nyquist bins, which is the numpy.fft.irfft convention IRFFT follows.
+func naiveIRFFTF32(spec []complex64, nfft int) []float64 {
+	half := nfft / 2
+	x := make([]float64, nfft)
+	for n := range nfft {
+		acc := float64(real(spec[0]))
+		if n%2 == 0 {
+			acc += float64(real(spec[half]))
+		} else {
+			acc -= float64(real(spec[half]))
+		}
+		for k := 1; k < half; k++ {
+			ang := 2 * math.Pi * float64(k) * float64(n) / float64(nfft)
+			s, c := math.Sincos(ang)
+			acc += 2 * (float64(real(spec[k]))*c - float64(imag(spec[k]))*s)
+		}
+		x[n] = acc / float64(nfft)
+	}
+	return x
+}
+
+// randomSpectrumF32 builds a deterministic complex half-spectrum with non-zero
+// imaginary parts everywhere, including DC and Nyquist.
+func randomSpectrumF32(bins int, seed float64) []complex64 {
+	s := make([]complex64, bins)
+	for k := range s {
+		a := float64(k) + seed
+		s[k] = complex(float32(math.Sin(0.7*a)+0.3*math.Cos(1.9*a)), float32(math.Cos(0.4*a)-0.5*math.Sin(2.3*a)))
+	}
+	return s
+}
+
+func TestIRFFTAgainstNaiveF32(t *testing.T) {
+	for _, nfft := range []int{2, 4, 8, 16, 64, 256, 1024, 4096} {
+		p, _ := NewSTFTPlan(nfft)
+		spec := randomSpectrumF32(p.NumBins(), 0.5)
+		want := naiveIRFFTF32(spec, nfft)
+		got := make([]float32, nfft)
+		if n := p.IRFFT(got, spec); n != nfft {
+			t.Fatalf("nfft=%d: IRFFT wrote %d samples, want %d", nfft, n, nfft)
+		}
+		// Bin magnitudes are O(1), so |x| is O(1) after the 1/N scale; the
+		// float32 transform error grows with log2(nfft).
+		tol := stftTolF32(nfft, 2)
+		for i := range got {
+			if d := math.Abs(float64(got[i]) - want[i]); d > tol {
+				t.Fatalf("nfft=%d sample %d: got %g want %g (|diff|=%g tol=%g)", nfft, i, got[i], want[i], d, tol)
+			}
+		}
+	}
+}
+
+func TestRFFTIRFFTRoundTripF32(t *testing.T) {
+	for _, nfft := range []int{2, 4, 8, 16, 64, 1024, 4096} {
+		p, _ := NewSTFTPlan(nfft)
+		x := testSignalF32(nfft)
+		spec := make([]complex64, p.NumBins())
+		y := make([]float32, nfft)
+		p.RFFT(spec, x, nil)
+		p.IRFFT(y, spec)
+		tol := stftTolF32(nfft, 2)
+		for i := range x {
+			if d := math.Abs(float64(y[i] - x[i])); d > tol {
+				t.Fatalf("nfft=%d sample %d: round trip %g != %g (|diff|=%g tol=%g)", nfft, i, y[i], x[i], d, tol)
+			}
+		}
+	}
+}
+
+// TestIRFFTShortInputsF32 covers the lenient edges: missing bins are zero, dst
+// is clamped, and an empty dst is a no-op.
+func TestIRFFTShortInputsF32(t *testing.T) {
+	const nfft = 32
+	p, _ := NewSTFTPlan(nfft)
+	spec := randomSpectrumF32(p.NumBins(), 1.5)
+
+	// Missing bins == zero bins.
+	zeroed := make([]complex64, len(spec))
+	copy(zeroed, spec[:10])
+	want := make([]float32, nfft)
+	got := make([]float32, nfft)
+	p.IRFFT(want, zeroed)
+	p.IRFFT(got, spec[:10])
+	for i := range want {
+		if want[i] != got[i] {
+			t.Fatalf("sample %d: short spec %g != zero-filled %g", i, got[i], want[i])
+		}
+	}
+
+	// dst clamp: the first 7 samples equal the full transform's first 7.
+	p.IRFFT(want, spec)
+	part := make([]float32, 7)
+	if n := p.IRFFT(part, spec); n != 7 {
+		t.Fatalf("IRFFT into 7 samples wrote %d", n)
+	}
+	for i := range part {
+		if part[i] != want[i] {
+			t.Fatalf("sample %d: clamped %g != full %g", i, part[i], want[i])
+		}
+	}
+	if n := p.IRFFT(nil, spec); n != 0 {
+		t.Fatalf("IRFFT into nil dst wrote %d", n)
+	}
+}
+
+func TestIRFFTAllocFreeF32(t *testing.T) {
+	p, _ := NewSTFTPlan(1024)
+	spec := randomSpectrumF32(p.NumBins(), 2.5)
+	dst := make([]float32, 1024)
+	if a := testing.AllocsPerRun(10, func() { p.IRFFT(dst, spec) }); a != 0 {
+		t.Errorf("IRFFT allocated %v times per run, want 0", a)
+	}
+}
