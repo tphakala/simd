@@ -279,9 +279,15 @@ frame with `nfft/2` of zero or reflect padding per side, matching librosa
 `center=True` (`pad_mode="constant"` / `"reflect"`). `NumFrames` reports the frame
 count for a given pad mode so you can size buffers. The centered output is pinned
 against a librosa golden vector in the tests. The plan is allocation-free across
-calls; a plan holds transform scratch, so use one plan per goroutine. This first
-cut is a correct scalar radix-2 transform (power-of-two `nfft`); vectorizing the
-inner butterfly is a profile-gated follow-up.
+calls; a plan holds transform scratch, so use one plan per goroutine. The
+transform is a power-of-two `nfft` rfft whose every arithmetic pass over the
+frame runs through the vector primitives: the frame is packed with
+`Deinterleave2` and `Mul`, the FFT core is radix-4 (`ButterflyComplexStage4`,
+with at most one trailing radix-2 `ButterflyComplexStage`), and the real-input
+unravel is `RealFFTUnpack` or, for the power spectrum, `RealFFTPower`; the
+bit-reversal reorder, padded edge frames and rows shorter than `NumBins` stay
+scalar. The output is tolerance-stable, not bit-stable, across CPU tiers and
+library versions.
 
 ### `f32` - float32 Operations
 
