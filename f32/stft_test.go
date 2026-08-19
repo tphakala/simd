@@ -599,6 +599,21 @@ func TestSTFTAllocFreeF32(t *testing.T) {
 	if a := testing.AllocsPerRun(5, func() { plan.STFT(cspec, signal, window, hop, PadReflect) }); a != 0 {
 		t.Errorf("centered STFT allocated %v times per run, want 0", a)
 	}
+
+	// Rows shorter than NumBins take the scalar unravel branch, which must also be
+	// allocation-free.
+	sspec := make([][]complex64, nf)
+	spow := make([][]float32, nf)
+	for f := range sspec {
+		sspec[f] = make([]complex64, 3)
+		spow[f] = make([]float32, 3)
+	}
+	if a := testing.AllocsPerRun(5, func() { plan.STFT(sspec, signal, window, hop, NoPad) }); a != 0 {
+		t.Errorf("short-row STFT allocated %v times per run, want 0", a)
+	}
+	if a := testing.AllocsPerRun(5, func() { plan.STFTPower(spow, signal, window, hop, NoPad) }); a != 0 {
+		t.Errorf("short-row STFTPower allocated %v times per run, want 0", a)
+	}
 }
 
 // FuzzSTFT is a differential fuzz target: every STFT bin must match a direct DFT
