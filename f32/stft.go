@@ -28,10 +28,15 @@ import (
 //
 // The transform runs in float32 to match the rest of the f32 package; the
 // twiddle and unravel tables are computed in float64 and rounded once to float32
-// so the resident constants carry full precision. It is a radix-2 rfft
-// (power-of-two nfft only); its butterfly stages run through ButterflyComplexStage,
-// so they take the AVX+FMA / NEON vector paths where the span and block count
-// justify them and fall back to scalar Go otherwise. See #108 and #205.
+// so the resident constants carry full precision. It is a power-of-two rfft whose
+// every arithmetic pass over the frame runs through the package's vector
+// primitives: the frame is packed with Deinterleave2 and Mul, the size-half FFT
+// core is radix-4 (ButterflyComplexStage4, with at most one trailing radix-2
+// ButterflyComplexStage), and the real-input unravel is RealFFTUnpack or, for the
+// power spectrum, RealFFTPower. Each takes the AVX+FMA / NEON vector path where
+// its size justifies it and falls back to scalar Go otherwise; the bit-reversal
+// reorder, padded edge frames and rows shorter than NumBins stay scalar. See
+// #108, #205, #243 and #257.
 
 // ErrSTFT* describe invalid STFTPlan configurations.
 var (
@@ -77,12 +82,21 @@ type STFTPlan struct {
 
 	bitrev []int // bit-reversal permutation for the size-half FFT
 
-	// Per-stage contiguous twiddles for the size-half radix-2 FFT, so each stage
-	// can be driven through ButterflyComplexStage (which reads its twiddles
-	// contiguous in j over [0, span)). Stage m in {2,4,...,half} uses span = m/2
-	// factors W_m^j = exp(-i*2*pi*j/m) for j in [0, span); the stage with span s
-	// occupies stageTwRe[s-1 : 2*s-1], and the tables total half-1 entries.
+	// Per-stage contiguous twiddles of the size-half FFT, laid out per radix-2
+	// stage: stage m in {2,4,...,half} uses span = m/2 factors W_m^j =
+	// exp(-i*2*pi*j/m) for j in [0, span); the stage with span s occupies
+	// stageTwRe[s-1 : 2*s-1], and the tables total half-1 entries. fftHalf slices
+	// them as the tw1/tw2 inputs of ButterflyComplexStage4 and as the twiddles of
+	// the trailing ButterflyComplexStage (both read contiguous j over [0, span)).
 	stageTwRe, stageTwIm []float32
+
+	// Extra twiddle for the radix-4 FFT core: the w^(3j) power ButterflyComplexStage4
+	// needs beyond the two it can slice from stageTwRe/stageTwIm (tw1 = w^(2j) is the
+	// span-s radix-2 table, tw2 = w^j is the first s entries of the span-2s table).
+	// The radix-4 stage with span s (s in {1,4,16,...}) occupies stage4Tw3Re[(s-1)/3 :
+	// (s-1)/3 + s]; the offset (s-1)/3 is exact because s is a power of four. Empty
+	// when half < 4 (no radix-4 stage runs).
+	stage4Tw3Re, stage4Tw3Im []float32
 
 	// Unravel twiddles W_N^k = exp(-i*2*pi*k/nfft) for k in [0, half], used to
 	// recombine the even/odd half-spectra into the real-input spectrum.
@@ -90,6 +104,17 @@ type STFTPlan struct {
 
 	// Per-transform scratch (the packed complex frame, FFT'd in place).
 	re, im []float32
+
+	// Unravel scratch for STFT: RealFFTUnpack writes the split-complex bins
+	// X[1..half-1] here before they are interleaved into the caller's complex64
+	// row. Length half; index 0 is unused (DC and Nyquist are computed directly).
+	outRe, outIm []float32
+
+	// Window halves for the vector pack: winRe holds the even window samples
+	// w[2j] and winIm the odd samples w[2j+1], split by prepareWindow once per
+	// public call and handed to the pack as an stftWindow, so packFrame can apply
+	// the window with two in-place Mul calls.
+	winRe, winIm []float32
 }
 
 // NumBins returns the number of output bins per frame, nfft/2 + 1 (the Hermitian
@@ -99,6 +124,10 @@ func (p *STFTPlan) NumBins() int { return p.half + 1 }
 // NFFT returns the transform size the plan was built for.
 func (p *STFTPlan) NFFT() int { return p.nfft }
 
+// stage4Tw3Power is the twiddle power of the radix-4 stage's third factor: tw3 =
+// w^(3j) (tw1 = w^(2j) and tw2 = w^(1j) are sliced from the radix-2 tables).
+const stage4Tw3Power = 3
+
 // NewSTFTPlan builds a reusable plan for nfft-point real-input STFTs. nfft must
 // be a power of two and at least 2; otherwise ErrNotPowerOfTwo is returned.
 func NewSTFTPlan(nfft int) (*STFTPlan, error) {
@@ -107,16 +136,30 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 	}
 	half := nfft >> 1
 
+	// Size the radix-4 tw3 table: the radix-4 core runs stages at spans 1, 4, 16, ...
+	// while 4*span <= half, and stage span s holds s entries, so they sum to
+	// (4^numStages - 1)/3. Zero when half < 4.
+	stage4Tw3Len := 0
+	for s := 1; butterflyStage4Radix*s <= half; s *= butterflyStage4Radix {
+		stage4Tw3Len += s
+	}
+
 	p := &STFTPlan{
-		nfft:      nfft,
-		half:      half,
-		bitrev:    make([]int, half),
-		stageTwRe: make([]float32, max(half-1, 0)),
-		stageTwIm: make([]float32, max(half-1, 0)),
-		unRe:      make([]float32, half+1),
-		unIm:      make([]float32, half+1),
-		re:        make([]float32, half),
-		im:        make([]float32, half),
+		nfft:        nfft,
+		half:        half,
+		bitrev:      make([]int, half),
+		stageTwRe:   make([]float32, max(half-1, 0)),
+		stageTwIm:   make([]float32, max(half-1, 0)),
+		stage4Tw3Re: make([]float32, stage4Tw3Len),
+		stage4Tw3Im: make([]float32, stage4Tw3Len),
+		unRe:        make([]float32, half+1),
+		unIm:        make([]float32, half+1),
+		re:          make([]float32, half),
+		im:          make([]float32, half),
+		outRe:       make([]float32, half),
+		outIm:       make([]float32, half),
+		winRe:       make([]float32, half),
+		winIm:       make([]float32, half),
 	}
 
 	// Bit-reversal permutation for a size-half FFT.
@@ -146,6 +189,22 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 		}
 	}
 
+	// Radix-4 tw3 = w^(3j) with w = exp(-i*2*pi/(4*span)), for each radix-4 stage
+	// span s in {1,4,16,...}. tw1 = w^(2j) and tw2 = w^j are the span-s and span-2s
+	// radix-2 tables above, sliced in fftHalf; only w^(3j) is not already present.
+	// The offset (s-1)/(radix4-1) is the exact running sum of the earlier stage
+	// lengths because each s is a power of butterflyStage4Radix. Computed in
+	// float64, stored as float32, like the radix-2 tables.
+	for s := 1; butterflyStage4Radix*s <= half; s *= butterflyStage4Radix {
+		off := (s - 1) / (butterflyStage4Radix - 1)
+		for j := range s {
+			ang := 2 * math.Pi * float64(stage4Tw3Power*j) / float64(butterflyStage4Radix*s)
+			sin, cos := math.Sincos(ang)
+			p.stage4Tw3Re[off+j] = float32(cos)
+			p.stage4Tw3Im[off+j] = float32(-sin)
+		}
+	}
+
 	// Real-input unravel twiddles W_N^k.
 	for k := 0; k <= half; k++ {
 		ang := 2 * math.Pi * float64(k) / float64(nfft)
@@ -157,10 +216,12 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 	return p, nil
 }
 
-// fftHalf runs an in-place size-half radix-2 decimation-in-time complex FFT on
-// the plan's scratch (p.re, p.im), using the resident bit-reversal and per-stage
-// twiddles. Each stage is one ButterflyComplexStage call, so the butterflies take
-// the AVX+FMA / NEON vector paths where the span and block count justify them.
+// fftHalf runs an in-place size-half decimation-in-time complex FFT on the plan's
+// scratch (p.re, p.im), using the resident bit-reversal and per-stage twiddles.
+// The core is radix-4: each ButterflyComplexStage4 call advances two radix-2
+// stages at once, with at most one trailing ButterflyComplexStage when half is
+// not a power of four, so the butterflies take the AVX+FMA / NEON vector paths
+// where the span and block count justify them.
 func (p *STFTPlan) fftHalf() {
 	re, im := p.re, p.im
 	// Bit-reversal reorder.
@@ -170,31 +231,69 @@ func (p *STFTPlan) fftHalf() {
 			im[i], im[j] = im[j], im[i]
 		}
 	}
-	// Butterfly stages. Stage m operates on span = m/2 with block stride m; its
-	// contiguous twiddles live at stageTwRe/stageTwIm[span-1 : 2*span-1].
-	for m := 2; m <= p.half; m <<= 1 {
-		span := m >> 1
-		off := span - 1
-		ButterflyComplexStage(re, im, span, p.stageTwRe[off:off+span], p.stageTwIm[off:off+span])
+	// Butterfly stages via the radix-4 core: a radix-4 stage at span s advances the
+	// transform two radix-2 stages at once (span s then span 2s), so it runs spans
+	// 1, 4, 16, ... while a full radix-4 block fits (4*s <= half). tw1 = w^(2j) is the
+	// span-s radix-2 table at stageTw[s-1 : 2s-1], tw2 = w^j is the first s entries of
+	// the span-2s table at stageTw[2s-1 : 3s-1], and tw3 = w^(3j) is the dedicated
+	// stage4Tw3 table at [(s-1)/3 : (s-1)/3 + s]. A single trailing radix-2 stage
+	// finishes the transform when half is not a power of four (odd log2(half)).
+	s := 1
+	for butterflyStage4Radix*s <= p.half {
+		o1 := s - 1                                // span-s radix-2 table
+		o2 := butterflyStageRadix*s - 1            // span-2s radix-2 table, first s taken
+		o3 := (s - 1) / (butterflyStage4Radix - 1) // dedicated w^(3j) table
+		ButterflyComplexStage4(re, im, s,
+			p.stageTwRe[o1:o1+s], p.stageTwIm[o1:o1+s],
+			p.stageTwRe[o2:o2+s], p.stageTwIm[o2:o2+s],
+			p.stage4Tw3Re[o3:o3+s], p.stage4Tw3Im[o3:o3+s])
+		s *= butterflyStage4Radix
+	}
+	if s < p.half {
+		off := s - 1
+		ButterflyComplexStage(re, im, s, p.stageTwRe[off:off+s], p.stageTwIm[off:off+s])
 	}
 }
 
-// packFrame loads frame f (signal[base : base+nfft]) into the scratch as half
-// complex samples c[j] = x[2j] + i*x[2j+1], applying the window during the pack.
-// window may be nil (rectangular). The caller guarantees the frame fits.
-func (p *STFTPlan) packFrame(signal, window []float32, base int) {
+// stftWindow is one call's analysis window in the form the frame pack consumes:
+// the even window samples w[2j] in re and the odd samples w[2j+1] in im, both
+// plan scratch filled by prepareWindow, or the zero value (nil halves) for a
+// rectangular window. Only prepareWindow produces a windowed value, so a pack
+// cannot apply a window the call did not split; a new entry point that forgets
+// to prepare gets a rectangular pack, not zeros or a previous call's window.
+type stftWindow struct {
+	re, im []float32
+}
+
+// prepareWindow normalizes and splits the caller's window for one public call:
+// nil, or a window shorter than nfft, means rectangular (the lenient public-API
+// treatment rather than a panic); otherwise the first nfft samples are split
+// into their even and odd halves, winRe and winIm, so the interior-frame pack
+// can apply the window with two vector multiplies on the packed halves instead
+// of a scalar multiply-and-deinterleave per sample. It runs once per public call
+// (STFT, STFTPower, STFTPowerInto), since the window is fixed across the call's
+// frames, and returns the stftWindow every frame of that call packs with.
+func (p *STFTPlan) prepareWindow(window []float32) stftWindow {
+	if len(window) < p.nfft {
+		return stftWindow{}
+	}
+	Deinterleave2(p.winRe, p.winIm, window[:p.nfft])
+	return stftWindow{re: p.winRe, im: p.winIm}
+}
+
+// packFrame loads the frame at signal[base : base+nfft] into the scratch as half
+// complex samples c[j] = x[2j] + i*x[2j+1]: a vector deinterleave of the frame,
+// then, when windowed, an in-place vector multiply of each half by the matching
+// window half (the same single-rounded products as a scalar x[n]*w[n] pack). The
+// caller guarantees the frame fits.
+func (p *STFTPlan) packFrame(signal []float32, w stftWindow, base int) {
 	re, im := p.re, p.im
-	if window == nil {
-		for j := range p.half {
-			re[j] = signal[base+2*j]
-			im[j] = signal[base+2*j+1]
-		}
+	Deinterleave2(re, im, signal[base:base+p.nfft])
+	if w.re == nil {
 		return
 	}
-	for j := range p.half {
-		re[j] = signal[base+2*j] * window[2*j]
-		im[j] = signal[base+2*j+1] * window[2*j+1]
-	}
+	Mul(re, re, w.re)
+	Mul(im, im, w.im)
 }
 
 // NumFrames reports how many frames a call with the given signal length, hop,
@@ -257,20 +356,21 @@ func sampleAt(signal []float32, idx int, pad PadMode) float32 {
 // may be negative for centered frames) into the scratch, applying the window and
 // pad mode. A frame fully inside the signal uses the fast packFrame path; only
 // edge frames pay for the bounds-aware sampleAt reads, so the common interior
-// frame is unaffected.
-func (p *STFTPlan) packFrameAt(signal, window []float32, base int, pad PadMode) {
+// frame is unaffected. The edge path reads the same split window halves, so
+// w[2j] and w[2j+1] multiply each sample exactly as the vector path does.
+func (p *STFTPlan) packFrameAt(signal []float32, w stftWindow, base int, pad PadMode) {
 	if base >= 0 && base+p.nfft <= len(signal) {
-		p.packFrame(signal, window, base)
+		p.packFrame(signal, w, base)
 		return
 	}
 	re, im := p.re, p.im
 	for j := range p.half {
 		s0 := sampleAt(signal, base+2*j, pad)
 		s1 := sampleAt(signal, base+2*j+1, pad)
-		if window == nil {
+		if w.re == nil {
 			re[j], im[j] = s0, s1
 		} else {
-			re[j], im[j] = s0*window[2*j], s1*window[2*j+1]
+			re[j], im[j] = s0*w.re[j], s1*w.im[j]
 		}
 	}
 }
@@ -302,71 +402,134 @@ func (p *STFTPlan) unravelBin(k int) (re, im float32) {
 	return re, im
 }
 
+// unravelRow writes the real-input spectrum X[0..half] of the FFT'd frame in
+// p.re/p.im into row as complex64 bins. A full-width row (len >= NumBins) takes
+// the vector path: RealFFTUnpack computes X[1..half-1] into the plan's split
+// scratch in one SIMD pass (its twiddle W[k] at index k-1 is exactly unRe/unIm
+// shifted by one, since W_N^k = exp(-i*pi*k/half)), and DC and Nyquist, both
+// real, come straight from C[0]. A shorter row keeps the per-bin scalar unravel:
+// it writes only the bins asked for, where the vector kernel would compute every
+// interior bin, and it keeps the two unravels on the same split as
+// unravelPowerRow, whose in-place kernel needs the full row.
+func (p *STFTPlan) unravelRow(row []complex64) {
+	half := p.half
+	if len(row) <= half {
+		for k := range row {
+			xr, xi := p.unravelBin(k)
+			row[k] = complex(xr, xi)
+		}
+		return
+	}
+	// Reslice row and the scratch to their exact extents before the first store
+	// so the compiler drops the bounds checks from the DC and Nyquist stores.
+	row = row[:half+1]
+	outRe, outIm := p.outRe[:half], p.outIm[:half]
+	RealFFTUnpack(outRe, outIm, p.re, p.im, p.unRe[1:], p.unIm[1:])
+	c0r, c0i := p.re[0], p.im[0]
+	row[0] = complex(c0r+c0i, 0)
+	// Two bins per iteration, for placement robustness rather than fewer
+	// instructions: the plain one-bin loop is so short that its speed swings
+	// with where the linker lands it relative to a cache line (the same code
+	// measured 191 and 206 us per STFT at nfft 1024 in two builds), while the
+	// unrolled form stays within 2% of the best placement wherever it lands. The
+	// step-2 index keeps its bounds checks; they cost less than the placement
+	// swing.
+	k := 1
+	for ; k+1 < half; k += 2 {
+		row[k] = complex(outRe[k], outIm[k])
+		row[k+1] = complex(outRe[k+1], outIm[k+1])
+	}
+	if k < half {
+		row[k] = complex(outRe[k], outIm[k])
+	}
+	row[half] = complex(c0r-c0i, 0)
+}
+
+// unravelPowerRow is the power-spectrum counterpart of unravelRow: it writes
+// |X[k]|^2 for k in [0, half] into row. A full-width row takes RealFFTPower,
+// which fuses the unpack and the magnitude-squared into one SIMD pass over the
+// interior bins and writes them in place; DC and Nyquist are squared directly.
+// A shorter row keeps the per-bin scalar unravel, since RealFFTPower writes all
+// of row[1:half] in place and so needs the full-width row.
+func (p *STFTPlan) unravelPowerRow(row []float32) {
+	half := p.half
+	if len(row) <= half {
+		for k := range row {
+			xr, xi := p.unravelBin(k)
+			row[k] = xr*xr + xi*xi
+		}
+		return
+	}
+	row = row[:half+1] // exact extent, so the DC/Nyquist stores need no bounds checks
+	RealFFTPower(row[:half], p.re, p.im, p.unRe[1:], p.unIm[1:])
+	c0r, c0i := p.re[0], p.im[0]
+	dc := c0r + c0i
+	ny := c0r - c0i
+	row[0] = dc * dc
+	row[half] = ny * ny
+}
+
 // STFT computes the real-input STFT of signal and writes one Hermitian
 // half-spectrum (NumBins complex64 values) per frame into dst. window, when
-// non-nil, must have length nfft. The pad argument selects the framing
-// convention: NoPad applies no padding (frame f is signal[f*hop : f*hop+nfft],
-// matching librosa stft(..., center=False)); PadZero and PadReflect center each
-// frame with nfft/2 of zero or reflect padding per side, matching librosa
-// center=True. See PadMode and NumFrames.
+// non-nil, should have length nfft: a shorter window is treated as rectangular
+// and only the first nfft samples of a longer one are used. The pad argument
+// selects the framing convention: NoPad applies no padding (frame f is
+// signal[f*hop : f*hop+nfft], matching librosa stft(..., center=False)); PadZero
+// and PadReflect center each frame with nfft/2 of zero or reflect padding per
+// side, matching librosa center=True. See PadMode and NumFrames.
 //
 // It writes min(len(dst), NumFrames) frames and, per frame, min(len(dst[f]),
 // NumBins) bins, and returns the number of frames written. It is allocation-free
-// and reuses the plan scratch.
+// and reuses the plan scratch. dst rows must not overlap signal (the window is
+// consumed into plan scratch before the first write).
+//
+// The output is tolerance-stable, not bit-stable: a full-width row is unravelled
+// by the vector RealFFTUnpack path and a shorter row by the scalar per-bin path,
+// the FFT core takes different vector paths per CPU tier, and any of these may
+// round the last bits differently across library versions, build targets and
+// row lengths. Compare STFT output to a tolerance, never bit for bit. The DC and
+// Nyquist bins are exactly real.
 func (p *STFTPlan) STFT(dst [][]complex64, signal, window []float32, hop int, pad PadMode) int {
 	frames := min(p.NumFrames(len(signal), hop, pad), len(dst))
 	if frames == 0 {
 		return 0
 	}
-	if window != nil && len(window) < p.nfft {
-		// Treat a short window as rectangular rather than panicking, matching the
-		// library's lenient public-API style.
-		window = nil
-	}
+	w := p.prepareWindow(window) // nil or short window: rectangular
 	off := 0
 	if pad != NoPad {
 		off = p.half // center: first sample of frame f is at f*hop - nfft/2
 	}
 	bins := p.NumBins()
 	for f := range frames {
-		p.packFrameAt(signal, window, f*hop-off, pad)
+		p.packFrameAt(signal, w, f*hop-off, pad)
 		p.fftHalf()
 		row := dst[f]
-		nb := min(len(row), bins)
-		for k := range nb {
-			xr, xi := p.unravelBin(k)
-			row[k] = complex(xr, xi)
-		}
+		p.unravelRow(row[:min(len(row), bins)])
 	}
 	return frames
 }
 
 // STFTPower computes the real-input STFT power spectrum |X|^2 directly, skipping
 // materialization of the complex bins. dst, signal, window, hop, and pad follow
-// the same conventions as STFT. Returns the number of frames written.
-// Allocation-free.
+// the same conventions as STFT, including the tolerance-stable (not bit-stable)
+// output contract. Returns the number of frames written. Allocation-free. dst
+// rows must not overlap signal.
 func (p *STFTPlan) STFTPower(dst [][]float32, signal, window []float32, hop int, pad PadMode) int {
 	frames := min(p.NumFrames(len(signal), hop, pad), len(dst))
 	if frames == 0 {
 		return 0
 	}
-	if window != nil && len(window) < p.nfft {
-		window = nil
-	}
+	w := p.prepareWindow(window) // nil or short window: rectangular
 	off := 0
 	if pad != NoPad {
 		off = p.half
 	}
 	bins := p.NumBins()
 	for f := range frames {
-		p.packFrameAt(signal, window, f*hop-off, pad)
+		p.packFrameAt(signal, w, f*hop-off, pad)
 		p.fftHalf()
 		row := dst[f]
-		nb := min(len(row), bins)
-		for k := range nb {
-			xr, xi := p.unravelBin(k)
-			row[k] = xr*xr + xi*xi
-		}
+		p.unravelPowerRow(row[:min(len(row), bins)])
 	}
 	return frames
 }
@@ -377,7 +540,7 @@ func (p *STFTPlan) STFTPower(dst [][]float32, signal, window []float32, hop int,
 // to DotProductBatch for a mel-filterbank projection. signal, window, hop, and
 // pad follow the same conventions as STFTPower. It writes
 // min(NumFrames, len(dst)/NumBins) whole frames and returns that frame count.
-// Allocation-free.
+// Allocation-free. dst must not overlap signal.
 func (p *STFTPlan) STFTPowerInto(dst, signal, window []float32, hop int, pad PadMode) int {
 	bins := p.NumBins()
 	frames := p.NumFrames(len(signal), hop, pad)
@@ -387,23 +550,16 @@ func (p *STFTPlan) STFTPowerInto(dst, signal, window []float32, hop int, pad Pad
 	if frames == 0 {
 		return 0
 	}
-	if window != nil && len(window) < p.nfft {
-		window = nil
-	}
+	w := p.prepareWindow(window) // nil or short window: rectangular
 	off := 0
 	if pad != NoPad {
 		off = p.half
 	}
 	for f := range frames {
-		p.packFrameAt(signal, window, f*hop-off, pad)
+		p.packFrameAt(signal, w, f*hop-off, pad)
 		p.fftHalf()
-		// Slice the frame's stride out of dst and range over it so the compiler
-		// fully eliminates bounds checks on the inner-loop writes.
-		row := dst[f*bins : (f+1)*bins]
-		for k := range row {
-			xr, xi := p.unravelBin(k)
-			row[k] = xr*xr + xi*xi
-		}
+		// Each frame's stride is a full-width row, so it takes the vector unravel.
+		p.unravelPowerRow(dst[f*bins : (f+1)*bins])
 	}
 	return frames
 }

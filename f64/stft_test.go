@@ -234,6 +234,233 @@ func TestSTFTClamps(t *testing.T) {
 	if n := plan.STFT(rows, signal, nil, hop, NoPad); n != 1 {
 		t.Errorf("partial-row frames = %d, want 1", n)
 	}
+
+	// Rows longer than NumBins: exactly NumBins bins written, the rest untouched,
+	// and the written bins identical to a NumBins-wide row (same path).
+	bins := plan.NumBins()
+	const sentinel = complex(-7, 7)
+	long := [][]complex128{make([]complex128, bins+3)}
+	for k := range long[0] {
+		long[0][k] = sentinel
+	}
+	exact := [][]complex128{make([]complex128, bins)}
+	if n := plan.STFT(long, signal, nil, hop, NoPad); n != 1 {
+		t.Errorf("long-row frames = %d, want 1", n)
+	}
+	plan.STFT(exact, signal, nil, hop, NoPad)
+	for k := range bins {
+		if long[0][k] != exact[0][k] {
+			t.Fatalf("long row bin %d = %v, want %v", k, long[0][k], exact[0][k])
+		}
+	}
+	for k := bins; k < len(long[0]); k++ {
+		if long[0][k] != sentinel {
+			t.Fatalf("long row bin %d beyond NumBins was written: %v", k, long[0][k])
+		}
+	}
+	longPow := [][]float64{make([]float64, bins+3)}
+	for k := range longPow[0] {
+		longPow[0][k] = -7
+	}
+	if n := plan.STFTPower(longPow, signal, nil, hop, NoPad); n != 1 {
+		t.Errorf("long-row power frames = %d, want 1", n)
+	}
+	exactPow := [][]float64{make([]float64, bins)}
+	plan.STFTPower(exactPow, signal, nil, hop, NoPad)
+	for k := range bins {
+		if longPow[0][k] != exactPow[0][k] {
+			t.Fatalf("long power row bin %d = %v, want %v", k, longPow[0][k], exactPow[0][k])
+		}
+	}
+	for k := bins; k < len(longPow[0]); k++ {
+		if longPow[0][k] != -7 {
+			t.Fatalf("long power row bin %d beyond NumBins was written: %v", k, longPow[0][k])
+		}
+	}
+}
+
+// TestSTFTShortRowsMatchFull pins the two unravel paths against each other: a
+// full-width row (NumBins) takes the vector RealFFTUnpack / RealFFTPower
+// unravel, a shorter row keeps the per-bin scalar unravel. The bins a short row
+// does write must agree with the same bins of the full row, for STFT and
+// STFTPower, across row lengths on both sides of the split and across nfft sizes
+// that exercise the vector kernels' full blocks and scalar tails. It also proves
+// the full-width row really took the vector path: the plan's unpack scratch is
+// poisoned with NaN before the call and the row's interior bins must be the
+// bits that scratch holds afterwards (only RealFFTUnpack writes it).
+func TestSTFTShortRowsMatchFull(t *testing.T) {
+	signal := testSignal(3000)
+	nan := math.NaN()
+	for _, nfft := range []int{2, 4, 16, 64, 512} {
+		plan, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatal(err)
+		}
+		window := hann(nfft)
+		hop := max(nfft/4, 1)
+		bins := plan.NumBins()
+		half := bins - 1
+		nf := plan.NumFrames(len(signal), hop, NoPad)
+
+		full := make([][]complex128, nf)
+		fullPow := make([][]float64, nf)
+		for f := range nf {
+			full[f] = make([]complex128, bins)
+			fullPow[f] = make([]float64, bins)
+		}
+		for k := range plan.outRe {
+			plan.outRe[k], plan.outIm[k] = nan, nan
+		}
+		plan.STFT(full, signal, window, hop, NoPad)
+		// Positive control: the last full row's interior bins are exactly the
+		// unpack scratch the vector path wrote (NaN would mean it never ran).
+		for k := 1; k < half; k++ {
+			if got, wr, wi := full[nf-1][k], plan.outRe[k], plan.outIm[k]; math.IsNaN(wr) || math.IsNaN(wi) ||
+				math.Float64bits(real(got)) != math.Float64bits(wr) || math.Float64bits(imag(got)) != math.Float64bits(wi) {
+				t.Fatalf("nfft=%d bin=%d: full row %v is not the vector unpack scratch (%v,%v)", nfft, k, got, wr, wi)
+			}
+		}
+		// The rounding gap between the FMA vector unpack and the scalar unravel
+		// scales with the packed spectrum's magnitude, not with the bin being
+		// compared (a near-null bin is a cancellation of large terms), so the
+		// tolerance is relative to the row's largest bin; 1e-12 is ~1e4 ulps of
+		// float64 against a measured gap of a few ulps.
+		rowMax := 0.0
+		for k := range bins {
+			rowMax = max(rowMax, math.Hypot(real(full[nf-1][k]), imag(full[nf-1][k])))
+		}
+		tol := 1e-12 * (1 + rowMax)
+		closeTo := func(ctx string, got, want complex128) {
+			t.Helper()
+			if d := math.Hypot(real(got)-real(want), imag(got)-imag(want)); d > tol {
+				t.Fatalf("%s: got %v want %v (|diff|=%g tol=%g)", ctx, got, want, d, tol)
+			}
+		}
+		// The plan scratch still holds the last frame's half-size spectrum, so
+		// every bin of the last full row, DC and Nyquist included, can be checked
+		// against the scalar per-bin unravel the short-row path uses.
+		for k := range bins {
+			xr, xi := plan.unravelBin(k)
+			closeTo(fmt.Sprintf("nfft=%d last frame bin=%d (vector vs scalar unravel)", nfft, k), full[nf-1][k], complex(xr, xi))
+		}
+		plan.STFTPower(fullPow, signal, window, hop, NoPad)
+		powTol := 1e-12 * (1 + rowMax*rowMax)
+		for k := range bins {
+			xr, xi := plan.unravelBin(k)
+			wp := xr*xr + xi*xi
+			if d := math.Abs(fullPow[nf-1][k] - wp); d > powTol {
+				t.Fatalf("nfft=%d last frame bin=%d: vector power %v, scalar power %v", nfft, k, fullPow[nf-1][k], wp)
+			}
+		}
+
+		for _, rowLen := range []int{1, 2, bins / 2, bins - 1, bins} {
+			short := make([][]complex128, nf)
+			shortPow := make([][]float64, nf)
+			for f := range nf {
+				short[f] = make([]complex128, rowLen)
+				shortPow[f] = make([]float64, rowLen)
+			}
+			plan.STFT(short, signal, window, hop, NoPad)
+			plan.STFTPower(shortPow, signal, window, hop, NoPad)
+			for f := range nf {
+				for k := range rowLen {
+					ctx := fmt.Sprintf("nfft=%d rowLen=%d frame=%d bin=%d", nfft, rowLen, f, k)
+					closeTo(ctx, short[f][k], full[f][k])
+					if d := math.Abs(shortPow[f][k] - fullPow[f][k]); d > powTol {
+						t.Fatalf("%s: short-row power %v, full-row power %v", ctx, shortPow[f][k], fullPow[f][k])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestSTFTWindowReuse pins that every public call applies exactly the window it
+// was given: the plan splits the window into per-call scratch for the vector
+// pack, so a stale split would leak a previous call's window into the next. One
+// shared plan runs a sequence of calls that changes the window on EVERY call
+// (Hann to ramp directly, to and from rectangular, a window longer than nfft)
+// and rotates through STFT, STFTPowerInto and STFTPower, and each call is
+// compared bit for bit against a plan created for that one call only (a fresh
+// plan replaying the same sequence would carry the same stale split and hide
+// the defect). A window longer than nfft must behave as its first nfft samples.
+func TestSTFTWindowReuse(t *testing.T) {
+	const nfft = 64
+	signal := testSignal(2000)
+	hop := 16
+	hannWin := hann(nfft)
+	ramp := make([]float64, nfft)
+	for i := range ramp {
+		ramp[i] = float64(i+1) / float64(nfft)
+	}
+	hannLong := append(append([]float64(nil), hannWin...), 9, 9, 9, 9, 9)
+	shared, _ := NewSTFTPlan(nfft)
+	nf := shared.NumFrames(len(signal), hop, PadReflect)
+	bins := shared.NumBins()
+	newSpec := func() [][]complex128 {
+		spec := make([][]complex128, nf)
+		for f := range spec {
+			spec[f] = make([]complex128, bins)
+		}
+		return spec
+	}
+	newPow := func() [][]float64 {
+		pow := make([][]float64, nf)
+		for f := range pow {
+			pow[f] = make([]float64, bins)
+		}
+		return pow
+	}
+	windows := [][]float64{hannWin, ramp, hannWin, ramp, hannWin, ramp, nil, hannLong, ramp}
+	for i, window := range windows {
+		fresh, _ := NewSTFTPlan(nfft)
+		switch i % 3 {
+		case 0:
+			got, want := newSpec(), newSpec()
+			shared.STFT(got, signal, window, hop, PadReflect)
+			fresh.STFT(want, signal, window, hop, PadReflect)
+			for f := range nf {
+				for k := range bins {
+					if got[f][k] != want[f][k] {
+						t.Fatalf("call %d (STFT) frame %d bin %d: shared plan %v, fresh plan %v", i, f, k, got[f][k], want[f][k])
+					}
+				}
+			}
+		case 1:
+			got, want := make([]float64, nf*bins), make([]float64, nf*bins)
+			shared.STFTPowerInto(got, signal, window, hop, PadReflect)
+			fresh.STFTPowerInto(want, signal, window, hop, PadReflect)
+			for j := range got {
+				if got[j] != want[j] {
+					t.Fatalf("call %d (STFTPowerInto) flat index %d: shared plan %v, fresh plan %v", i, j, got[j], want[j])
+				}
+			}
+		case 2:
+			got, want := newPow(), newPow()
+			shared.STFTPower(got, signal, window, hop, PadReflect)
+			fresh.STFTPower(want, signal, window, hop, PadReflect)
+			for f := range nf {
+				for k := range bins {
+					if got[f][k] != want[f][k] {
+						t.Fatalf("call %d (STFTPower) frame %d bin %d: shared plan %v, fresh plan %v", i, f, k, got[f][k], want[f][k])
+					}
+				}
+			}
+		}
+	}
+	// A window longer than nfft is its first nfft samples: bit-identical to Hann.
+	longPlan, _ := NewSTFTPlan(nfft)
+	hannPlan, _ := NewSTFTPlan(nfft)
+	got, want := newSpec(), newSpec()
+	longPlan.STFT(got, signal, hannLong, hop, PadReflect)
+	hannPlan.STFT(want, signal, hannWin, hop, PadReflect)
+	for f := range nf {
+		for k := range bins {
+			if got[f][k] != want[f][k] {
+				t.Fatalf("long window frame %d bin %d: %v, want Hann-prefix %v", f, k, got[f][k], want[f][k])
+			}
+		}
+	}
 }
 
 func TestSTFTAllocFree(t *testing.T) {
@@ -277,6 +504,21 @@ func TestSTFTAllocFree(t *testing.T) {
 	}
 	if a := testing.AllocsPerRun(5, func() { plan.STFT(cspec, signal, window, hop, PadReflect) }); a != 0 {
 		t.Errorf("centered STFT allocated %v times per run, want 0", a)
+	}
+
+	// Rows shorter than NumBins take the scalar unravel branch, which must also be
+	// allocation-free.
+	sspec := make([][]complex128, nf)
+	spow := make([][]float64, nf)
+	for f := range sspec {
+		sspec[f] = make([]complex128, 3)
+		spow[f] = make([]float64, 3)
+	}
+	if a := testing.AllocsPerRun(5, func() { plan.STFT(sspec, signal, window, hop, NoPad) }); a != 0 {
+		t.Errorf("short-row STFT allocated %v times per run, want 0", a)
+	}
+	if a := testing.AllocsPerRun(5, func() { plan.STFTPower(spow, signal, window, hop, NoPad) }); a != 0 {
+		t.Errorf("short-row STFTPower allocated %v times per run, want 0", a)
 	}
 }
 
@@ -638,7 +880,7 @@ func TestSTFTLibrosaParity(t *testing.T) {
 				maxRel = rel
 			}
 		}
-		// librosa uses pocketfft and we use a radix-2 rfft, so the bins differ at
+		// librosa uses pocketfft and we use a radix-4 rfft, so the bins differ at
 		// the float64 algorithm-noise level (~5e-8 relative; squaring to power
 		// roughly doubles the amplitude error). A convention error (wrong
 		// centering, window, or normalization) would be orders of magnitude
@@ -705,8 +947,9 @@ func TestSTFTGuards(t *testing.T) {
 	}
 }
 
-// TestSTFTStageTwiddles pins the per-stage contiguous twiddle layout that lets
-// fftHalf drive each radix-2 stage through ButterflyComplexStage (issue #205).
+// TestSTFTStageTwiddles pins the per-stage contiguous twiddle layout fftHalf
+// slices for ButterflyComplexStage4 (tw1/tw2) and the trailing
+// ButterflyComplexStage (issues #205 and #243).
 // Stage m in {2,4,...,half} must hold span = m/2 factors W_m^j = exp(-i*2*pi*j/m)
 // at offset span-1, and the tables must total exactly half-1 entries.
 func TestSTFTStageTwiddles(t *testing.T) {
@@ -734,6 +977,49 @@ func TestSTFTStageTwiddles(t *testing.T) {
 					t.Errorf("nfft=%d m=%d j=%d: stageTwIm=%g want %g", nfft, m, j, p.stageTwIm[off+j], -s)
 				}
 			}
+		}
+	}
+}
+
+// TestSTFTStage4Tw3Twiddles pins the layout of the radix-4 core's third twiddle
+// table, the one fftHalf cannot slice from the radix-2 tables: the radix-4 stage
+// with span s in {1,4,16,...} (while 4*s <= half) keeps s factors
+// w^(3j) = (cos(2*pi*3j/(4s)), -sin(2*pi*3j/(4s))) at offset (s-1)/3, and the
+// table totals (4^stages - 1)/3 entries, zero when half < 4. A wrong offset,
+// length or power would fail here, localized, rather than only as a spectrum
+// mismatch downstream. Exact bits: NewSTFTPlan stores cos/-sin of this same
+// float64 sincos.
+func TestSTFTStage4Tw3Twiddles(t *testing.T) {
+	for _, nfft := range []int{2, 4, 8, 16, 32, 128, 256, 1024} {
+		p, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatalf("nfft=%d: NewSTFTPlan: %v", nfft, err)
+		}
+		half := nfft >> 1
+		wantLen := 0
+		for s := 1; 4*s <= half; s *= 4 {
+			wantLen += s
+		}
+		if len(p.stage4Tw3Re) != wantLen || len(p.stage4Tw3Im) != wantLen {
+			t.Fatalf("nfft=%d: stage4Tw3 table len = (%d,%d), want %d",
+				nfft, len(p.stage4Tw3Re), len(p.stage4Tw3Im), wantLen)
+		}
+		off := 0
+		for s := 1; 4*s <= half; s *= 4 {
+			if off != (s-1)/3 {
+				t.Fatalf("nfft=%d s=%d: running offset %d, want (s-1)/3 = %d", nfft, s, off, (s-1)/3)
+			}
+			for j := range s {
+				ang := 2 * math.Pi * float64(3*j) / float64(4*s)
+				sin, cos := math.Sincos(ang)
+				if math.Float64bits(p.stage4Tw3Re[off+j]) != math.Float64bits(cos) {
+					t.Errorf("nfft=%d s=%d j=%d: stage4Tw3Re=%g want %g", nfft, s, j, p.stage4Tw3Re[off+j], cos)
+				}
+				if math.Float64bits(p.stage4Tw3Im[off+j]) != math.Float64bits(-sin) {
+					t.Errorf("nfft=%d s=%d j=%d: stage4Tw3Im=%g want %g", nfft, s, j, p.stage4Tw3Im[off+j], -sin)
+				}
+			}
+			off += s
 		}
 	}
 }
