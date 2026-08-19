@@ -236,6 +236,123 @@ func TestSTFTClamps(t *testing.T) {
 	}
 }
 
+// TestSTFTShortRowsMatchFull pins the two unravel paths against each other: a
+// full-width row (NumBins) takes the vector RealFFTUnpack / RealFFTPower
+// unravel, a shorter row keeps the per-bin scalar unravel. The bins a short row
+// does write must agree with the same bins of the full row, for STFT and
+// STFTPower, across row lengths on both sides of the split and across nfft sizes
+// that exercise the vector kernels' full blocks and scalar tails.
+func TestSTFTShortRowsMatchFull(t *testing.T) {
+	signal := testSignal(3000)
+	for _, nfft := range []int{2, 4, 16, 64, 512} {
+		plan, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatal(err)
+		}
+		window := hann(nfft)
+		hop := max(nfft/4, 1)
+		bins := plan.NumBins()
+		nf := plan.NumFrames(len(signal), hop, NoPad)
+
+		full := make([][]complex128, nf)
+		fullPow := make([][]float64, nf)
+		for f := range nf {
+			full[f] = make([]complex128, bins)
+			fullPow[f] = make([]float64, bins)
+		}
+		plan.STFT(full, signal, window, hop, NoPad)
+		// The plan scratch still holds the last frame's half-size spectrum, so
+		// every bin of the last full row, DC and Nyquist included, can be checked
+		// against the scalar per-bin unravel the short-row path uses.
+		for k := range bins {
+			xr, xi := plan.unravelBin(k)
+			ctx := fmt.Sprintf("nfft=%d last frame bin=%d (vector vs scalar unravel)", nfft, k)
+			cmplxClose(t, ctx, full[nf-1][k], complex(xr, xi), math.Hypot(xr, xi))
+		}
+		plan.STFTPower(fullPow, signal, window, hop, NoPad)
+		for k := range bins {
+			xr, xi := plan.unravelBin(k)
+			wp := xr*xr + xi*xi
+			if d := math.Abs(fullPow[nf-1][k] - wp); d > 1e-9*(1+wp) {
+				t.Fatalf("nfft=%d last frame bin=%d: vector power %v, scalar power %v", nfft, k, fullPow[nf-1][k], wp)
+			}
+		}
+
+		for _, rowLen := range []int{1, 2, bins / 2, bins - 1, bins} {
+			if rowLen < 1 || rowLen > bins {
+				continue
+			}
+			short := make([][]complex128, nf)
+			shortPow := make([][]float64, nf)
+			for f := range nf {
+				short[f] = make([]complex128, rowLen)
+				shortPow[f] = make([]float64, rowLen)
+			}
+			plan.STFT(short, signal, window, hop, NoPad)
+			plan.STFTPower(shortPow, signal, window, hop, NoPad)
+			for f := range nf {
+				for k := range rowLen {
+					// The vector and scalar unravels round differently in the last
+					// bits (FMA vs separate multiply-add), so compare to a relative
+					// tolerance scaled by the bin magnitude, not bit for bit.
+					ctx := fmt.Sprintf("nfft=%d rowLen=%d frame=%d bin=%d", nfft, rowLen, f, k)
+					want := full[f][k]
+					cmplxClose(t, ctx, short[f][k], want, math.Hypot(real(want), imag(want)))
+					wp := fullPow[f][k]
+					if d := math.Abs(shortPow[f][k] - wp); d > 1e-9*(1+wp) {
+						t.Fatalf("%s: short-row power %v, full-row power %v", ctx, shortPow[f][k], wp)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestSTFTWindowReuse runs one plan through a sequence of calls with different
+// windows (Hann, rectangular, then a different window) and checks each call's
+// output is bit-identical to a fresh plan's. The plan splits the window into
+// per-call scratch for the vector pack, so a stale split would leak a previous
+// call's window into the next call's frames.
+func TestSTFTWindowReuse(t *testing.T) {
+	const nfft = 64
+	signal := testSignal(2000)
+	hop := 16
+	hannWin := hann(nfft)
+	ramp := make([]float64, nfft)
+	for i := range ramp {
+		ramp[i] = float64(i+1) / float64(nfft)
+	}
+	shared, _ := NewSTFTPlan(nfft)
+	nf := shared.NumFrames(len(signal), hop, PadReflect)
+	bins := shared.NumBins()
+	alloc := func() ([][]complex128, []float64) {
+		spec := make([][]complex128, nf)
+		for f := range spec {
+			spec[f] = make([]complex128, bins)
+		}
+		return spec, make([]float64, nf*bins)
+	}
+	for i, window := range [][]float64{hannWin, nil, ramp, nil, hannWin} {
+		fresh, _ := NewSTFTPlan(nfft)
+		gotSpec, gotPow := alloc()
+		wantSpec, wantPow := alloc()
+		shared.STFT(gotSpec, signal, window, hop, PadReflect)
+		fresh.STFT(wantSpec, signal, window, hop, PadReflect)
+		shared.STFTPowerInto(gotPow, signal, window, hop, PadReflect)
+		fresh.STFTPowerInto(wantPow, signal, window, hop, PadReflect)
+		for f := range nf {
+			for k := range bins {
+				if gotSpec[f][k] != wantSpec[f][k] {
+					t.Fatalf("call %d frame %d bin %d: shared plan %v, fresh plan %v", i, f, k, gotSpec[f][k], wantSpec[f][k])
+				}
+				if gotPow[f*bins+k] != wantPow[f*bins+k] {
+					t.Fatalf("call %d frame %d bin %d: shared plan power %v, fresh plan %v", i, f, k, gotPow[f*bins+k], wantPow[f*bins+k])
+				}
+			}
+		}
+	}
+}
+
 func TestSTFTAllocFree(t *testing.T) {
 	plan, _ := NewSTFTPlan(512)
 	signal := testSignal(8192)

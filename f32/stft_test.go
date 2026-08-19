@@ -80,7 +80,10 @@ func TestNewSTFTPlanErrorsF32(t *testing.T) {
 // across nfft sizes, hops, and with or without a window.
 func TestSTFTAgainstDFTF32(t *testing.T) {
 	signal := testSignalF32(5000)
-	for _, nfft := range []int{2, 4, 8, 16, 64, 256, 1024} {
+	// The size list spans both radix-4 schedule shapes: even log2(half) runs only
+	// radix-4 stages (nfft 8/32/128 = 1/2/3 stages, no trailing), odd log2(half)
+	// finishes with one trailing radix-2 stage (nfft 4/16/64/256/1024).
+	for _, nfft := range []int{2, 4, 8, 16, 32, 64, 128, 256, 1024} {
 		for _, useWin := range []bool{false, true} {
 			plan, err := NewSTFTPlan(nfft)
 			if err != nil {
@@ -284,6 +287,125 @@ func TestSTFTClampsF32(t *testing.T) {
 	rows[0] = make([]complex64, 3)
 	if n := plan.STFT(rows, signal, nil, hop, NoPad); n != 1 {
 		t.Errorf("partial-row frames = %d, want 1", n)
+	}
+}
+
+// TestSTFTShortRowsMatchFullF32 pins the two unravel paths against each other:
+// a full-width row (NumBins) takes the vector RealFFTUnpack / RealFFTPower
+// unravel, a shorter row keeps the per-bin scalar unravel. The bins a short row
+// does write must agree with the same bins of the full row, for STFT and
+// STFTPower, across row lengths on both sides of the split and across nfft sizes
+// that exercise the vector kernels' full blocks and scalar tails.
+func TestSTFTShortRowsMatchFullF32(t *testing.T) {
+	signal := testSignalF32(3000)
+	for _, nfft := range []int{2, 4, 16, 64, 512} {
+		plan, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatal(err)
+		}
+		window := hannF32(nfft)
+		hop := max(nfft/4, 1)
+		bins := plan.NumBins()
+		nf := plan.NumFrames(len(signal), hop, NoPad)
+
+		full := make([][]complex64, nf)
+		fullPow := make([][]float32, nf)
+		for f := range nf {
+			full[f] = make([]complex64, bins)
+			fullPow[f] = make([]float32, bins)
+		}
+		plan.STFT(full, signal, window, hop, NoPad)
+		// The plan scratch still holds the last frame's half-size spectrum, so
+		// every bin of the last full row, DC and Nyquist included, can be checked
+		// against the scalar per-bin unravel the short-row path uses.
+		for k := range bins {
+			xr, xi := plan.unravelBin(k)
+			ctx := fmt.Sprintf("nfft=%d last frame bin=%d (vector vs scalar unravel)", nfft, k)
+			tol := 1e-5 * (1 + math.Hypot(float64(xr), float64(xi)))
+			cmplxCloseF32(t, ctx, full[nf-1][k], complex(float64(xr), float64(xi)), tol)
+		}
+		plan.STFTPower(fullPow, signal, window, hop, NoPad)
+		for k := range bins {
+			xr, xi := plan.unravelBin(k)
+			wp := xr*xr + xi*xi
+			if d := math.Abs(float64(fullPow[nf-1][k] - wp)); d > 1e-5*(1+float64(wp)) {
+				t.Fatalf("nfft=%d last frame bin=%d: vector power %v, scalar power %v", nfft, k, fullPow[nf-1][k], wp)
+			}
+		}
+
+		for _, rowLen := range []int{1, 2, bins / 2, bins - 1, bins} {
+			if rowLen < 1 || rowLen > bins {
+				continue
+			}
+			short := make([][]complex64, nf)
+			shortPow := make([][]float32, nf)
+			for f := range nf {
+				short[f] = make([]complex64, rowLen)
+				shortPow[f] = make([]float32, rowLen)
+			}
+			plan.STFT(short, signal, window, hop, NoPad)
+			plan.STFTPower(shortPow, signal, window, hop, NoPad)
+			for f := range nf {
+				for k := range rowLen {
+					// The vector and scalar unravels round differently in the last
+					// bits (FMA vs separate multiply-add), so compare to a relative
+					// tolerance scaled by the bin magnitude, not bit for bit.
+					ctx := fmt.Sprintf("nfft=%d rowLen=%d frame=%d bin=%d", nfft, rowLen, f, k)
+					want := full[f][k]
+					tol := 1e-5 * (1 + math.Hypot(float64(real(want)), float64(imag(want))))
+					cmplxCloseF32(t, ctx, short[f][k], complex128(want), tol)
+					wp := fullPow[f][k]
+					if d := math.Abs(float64(shortPow[f][k] - wp)); d > 1e-5*(1+float64(wp)) {
+						t.Fatalf("%s: short-row power %v, full-row power %v", ctx, shortPow[f][k], wp)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestSTFTWindowReuseF32 runs one plan through a sequence of calls with different
+// windows (Hann, rectangular, then a different window) and checks each call's
+// output is bit-identical to a fresh plan's. The plan splits the window into
+// per-call scratch for the vector pack, so a stale split would leak a previous
+// call's window into the next call's frames.
+func TestSTFTWindowReuseF32(t *testing.T) {
+	const nfft = 64
+	signal := testSignalF32(2000)
+	hop := 16
+	hann := hannF32(nfft)
+	ramp := make([]float32, nfft)
+	for i := range ramp {
+		ramp[i] = float32(i+1) / float32(nfft)
+	}
+	shared, _ := NewSTFTPlan(nfft)
+	nf := shared.NumFrames(len(signal), hop, PadReflect)
+	bins := shared.NumBins()
+	alloc := func() ([][]complex64, []float32) {
+		spec := make([][]complex64, nf)
+		for f := range spec {
+			spec[f] = make([]complex64, bins)
+		}
+		return spec, make([]float32, nf*bins)
+	}
+	for i, window := range [][]float32{hann, nil, ramp, nil, hann} {
+		fresh, _ := NewSTFTPlan(nfft)
+		gotSpec, gotPow := alloc()
+		wantSpec, wantPow := alloc()
+		shared.STFT(gotSpec, signal, window, hop, PadReflect)
+		fresh.STFT(wantSpec, signal, window, hop, PadReflect)
+		shared.STFTPowerInto(gotPow, signal, window, hop, PadReflect)
+		fresh.STFTPowerInto(wantPow, signal, window, hop, PadReflect)
+		for f := range nf {
+			for k := range bins {
+				if gotSpec[f][k] != wantSpec[f][k] {
+					t.Fatalf("call %d frame %d bin %d: shared plan %v, fresh plan %v", i, f, k, gotSpec[f][k], wantSpec[f][k])
+				}
+				if gotPow[f*bins+k] != wantPow[f*bins+k] {
+					t.Fatalf("call %d frame %d bin %d: shared plan power %v, fresh plan %v", i, f, k, gotPow[f*bins+k], wantPow[f*bins+k])
+				}
+			}
+		}
 	}
 }
 
