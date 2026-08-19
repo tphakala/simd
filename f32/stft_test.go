@@ -1058,3 +1058,84 @@ func TestSTFTGuardsF32(t *testing.T) {
 		}
 	}
 }
+
+// TestRFFTMatchesSTFTF32 pins RFFT to the batched transform: the single-frame
+// entry point on frame f of a NoPad STFT must reproduce that row exactly (same
+// code path, so bit-for-bit).
+func TestRFFTMatchesSTFTF32(t *testing.T) {
+	const nfft, hop = 256, 64
+	p, _ := NewSTFTPlan(nfft)
+	signal := testSignalF32(2048)
+	window := hannF32(nfft)
+	frames := p.NumFrames(len(signal), hop, NoPad)
+	spec := make([][]complex64, frames)
+	for f := range spec {
+		spec[f] = make([]complex64, p.NumBins())
+	}
+	p.STFT(spec, signal, window, hop, NoPad)
+	row := make([]complex64, p.NumBins())
+	for f := range frames {
+		if n := p.RFFT(row, signal[f*hop:f*hop+nfft], window); n != p.NumBins() {
+			t.Fatalf("frame %d: RFFT wrote %d bins, want %d", f, n, p.NumBins())
+		}
+		for k := range row {
+			if row[k] != spec[f][k] {
+				t.Fatalf("frame %d bin %d: RFFT %v != STFT %v", f, k, row[k], spec[f][k])
+			}
+		}
+	}
+	// Rectangular (nil window) frames must match the direct DFT.
+	frame := signal[:nfft]
+	p.RFFT(row, frame, nil)
+	for k := range row {
+		cmplxCloseF32(t, fmt.Sprintf("rect bin %d", k), row[k], dftBinF32(frame, k), stftTolF32(nfft, float64(nfft)))
+	}
+}
+
+// TestRFFTShortInputsF32 covers the lenient edges: a frame shorter than nfft is
+// zero-padded, a short window is treated as rectangular, and dst is clamped.
+func TestRFFTShortInputsF32(t *testing.T) {
+	const nfft = 64
+	p, _ := NewSTFTPlan(nfft)
+	signal := testSignalF32(nfft)
+	full := make([]complex64, p.NumBins())
+	short := make([]complex64, p.NumBins())
+
+	// Short frame == zero-padded frame.
+	padded := make([]float32, nfft)
+	copy(padded, signal[:40])
+	p.RFFT(full, padded, nil)
+	p.RFFT(short, signal[:40], nil)
+	for k := range full {
+		if full[k] != short[k] {
+			t.Fatalf("bin %d: short frame %v != zero-padded %v", k, short[k], full[k])
+		}
+	}
+
+	// Short window == rectangular.
+	p.RFFT(full, signal, nil)
+	p.RFFT(short, signal, hannF32(nfft/2))
+	for k := range full {
+		if full[k] != short[k] {
+			t.Fatalf("bin %d: short window %v != rectangular %v", k, short[k], full[k])
+		}
+	}
+
+	// dst clamp and zero-length dst.
+	if n := p.RFFT(make([]complex64, 5), signal, nil); n != 5 {
+		t.Fatalf("RFFT into 5 bins wrote %d", n)
+	}
+	if n := p.RFFT(nil, signal, nil); n != 0 {
+		t.Fatalf("RFFT into nil dst wrote %d", n)
+	}
+}
+
+func TestRFFTAllocFreeF32(t *testing.T) {
+	p, _ := NewSTFTPlan(1024)
+	frame := testSignalF32(1024)
+	window := hannF32(1024)
+	dst := make([]complex64, p.NumBins())
+	if a := testing.AllocsPerRun(10, func() { p.RFFT(dst, frame, window) }); a != 0 {
+		t.Errorf("RFFT allocated %v times per run, want 0", a)
+	}
+}

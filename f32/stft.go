@@ -563,3 +563,28 @@ func (p *STFTPlan) STFTPowerInto(dst, signal, window []float32, hop int, pad Pad
 	}
 	return frames
 }
+
+// RFFT computes the real-input FFT of a single frame: frame[:nfft] (zero-padded
+// when frame is shorter than nfft) is multiplied by window (nil for rectangular;
+// a window shorter than nfft is treated as rectangular, as in STFT) and its
+// Hermitian half-spectrum is written to dst. It writes min(len(dst), NumBins())
+// bins and returns that count. This is the same transform STFT runs per frame,
+// so RFFT on frame f of a NoPad STFT reproduces that frame's row. It is
+// allocation-free and reuses the plan scratch, so it is not safe for concurrent
+// use on one plan.
+func (p *STFTPlan) RFFT(dst []complex64, frame, window []float32) int {
+	nb := min(len(dst), p.NumBins())
+	if nb == 0 {
+		return 0
+	}
+	if window != nil && len(window) < p.nfft {
+		window = nil
+	}
+	p.packFrameAt(frame, window, 0, PadZero)
+	p.fftHalf()
+	for k := range nb {
+		xr, xi := p.unravelBin(k)
+		dst[k] = complex(xr, xi)
+	}
+	return nb
+}
