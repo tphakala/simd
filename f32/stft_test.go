@@ -1256,3 +1256,122 @@ func TestIRFFTAllocFreeF32(t *testing.T) {
 		t.Errorf("IRFFT allocated %v times per run, want 0", a)
 	}
 }
+
+// wolaNormF32 computes the squared-window overlap sum_f w^2[u - f*hop] at padded
+// position u for the given frame count, the normalization ISTFT applies.
+func wolaNormF32(window []float32, nfft, hop, frames, u int) float64 {
+	var norm float64
+	for f := range frames {
+		j := u - f*hop
+		if j < 0 || j >= nfft {
+			continue
+		}
+		w := 1.0
+		if window != nil {
+			w = float64(window[j])
+		}
+		norm += w * w
+	}
+	return norm
+}
+
+// TestISTFTRoundTripF32 checks ISTFT(STFT(x)) == x for every pad mode, at hops
+// nfft/4 and nfft/2, with Hann and rectangular windows. Samples whose squared
+// window overlap is below 1e-3 (only the outermost NoPad edge samples under a
+// Hann window, which ISTFT leaves unnormalized) are excluded from the check.
+func TestISTFTRoundTripF32(t *testing.T) {
+	const nfft = 256
+	x := testSignalF32(3000) // not a multiple of any hop, so the tail is partial
+	for _, pad := range []PadMode{NoPad, PadZero, PadReflect} {
+		for _, hop := range []int{nfft / 4, nfft / 2} {
+			for _, window := range [][]float32{hannF32(nfft), nil} {
+				p, _ := NewSTFTPlan(nfft)
+				frames := p.NumFrames(len(x), hop, pad)
+				spec := make([][]complex64, frames)
+				for f := range spec {
+					spec[f] = make([]complex64, p.NumBins())
+				}
+				p.STFT(spec, x, window, hop, pad)
+				y := make([]float32, len(x))
+				n := p.ISTFT(y, spec, window, hop, pad)
+				var wantN int
+				if pad == NoPad {
+					wantN = min(len(x), (frames-1)*hop+nfft)
+				} else {
+					wantN = min(len(x), (frames-1)*hop)
+				}
+				if n != wantN {
+					t.Fatalf("pad=%v hop=%d win=%v: wrote %d samples, want %d", pad, hop, window != nil, n, wantN)
+				}
+				off := 0
+				if pad != NoPad {
+					off = nfft / 2
+				}
+				tol := stftTolF32(nfft, 4)
+				for i := range n {
+					if wolaNormF32(window, nfft, hop, frames, i+off) < 1e-3 {
+						continue
+					}
+					if d := math.Abs(float64(y[i] - x[i])); d > tol {
+						t.Fatalf("pad=%v hop=%d win=%v sample %d: %g != %g (|diff|=%g tol=%g)", pad, hop, window != nil, i, y[i], x[i], d, tol)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestISTFTGuardsF32 covers the degenerate inputs: no frames, bad hop, empty
+// dst, a dst longer than the reconstructable length (clamped), and a short
+// window treated as rectangular.
+func TestISTFTGuardsF32(t *testing.T) {
+	const nfft, hop = 64, 16
+	p, _ := NewSTFTPlan(nfft)
+	x := testSignalF32(512)
+	frames := p.NumFrames(len(x), hop, NoPad)
+	spec := make([][]complex64, frames)
+	for f := range spec {
+		spec[f] = make([]complex64, p.NumBins())
+	}
+	p.STFT(spec, x, nil, hop, NoPad)
+
+	if n := p.ISTFT(make([]float32, 10), nil, nil, hop, NoPad); n != 0 {
+		t.Fatalf("no frames wrote %d", n)
+	}
+	if n := p.ISTFT(make([]float32, 10), spec, nil, 0, NoPad); n != 0 {
+		t.Fatalf("hop 0 wrote %d", n)
+	}
+	if n := p.ISTFT(nil, spec, nil, hop, NoPad); n != 0 {
+		t.Fatalf("nil dst wrote %d", n)
+	}
+	long := make([]float32, 10000)
+	if n := p.ISTFT(long, spec, nil, hop, NoPad); n != (frames-1)*hop+nfft {
+		t.Fatalf("long dst wrote %d, want %d", n, (frames-1)*hop+nfft)
+	}
+	a := make([]float32, 512)
+	b := make([]float32, 512)
+	p.ISTFT(a, spec, nil, hop, NoPad)
+	p.ISTFT(b, spec, hannF32(nfft/2), hop, NoPad)
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("sample %d: short window %g != rectangular %g", i, b[i], a[i])
+		}
+	}
+}
+
+func TestISTFTAllocFreeF32(t *testing.T) {
+	const nfft, hop = 512, 128
+	p, _ := NewSTFTPlan(nfft)
+	x := testSignalF32(8192)
+	window := hannF32(nfft)
+	frames := p.NumFrames(len(x), hop, PadZero)
+	spec := make([][]complex64, frames)
+	for f := range spec {
+		spec[f] = make([]complex64, p.NumBins())
+	}
+	p.STFT(spec, x, window, hop, PadZero)
+	y := make([]float32, len(x))
+	if a := testing.AllocsPerRun(5, func() { p.ISTFT(y, spec, window, hop, PadZero) }); a != 0 {
+		t.Errorf("ISTFT allocated %v times per run, want 0", a)
+	}
+}
