@@ -120,6 +120,19 @@ func fromRealGo(dst []complex64, src []float32) {
 	}
 }
 
+// mulRealGo is the scalar reference for MulReal: Y[k] = s[k]*a[k], reading a[i]
+// and s[i] before writing dst[i] so an exact dst==a overlay is safe.
+func mulRealGo(dst, a []complex64, s []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	_ = s[len(dst)-1]
+	for i := range dst {
+		dst[i] = complex(real(a[i])*s[i], imag(a[i])*s[i])
+	}
+}
+
 // dotProductGo computes the complex dot product sum(a[i]*b[i]) over
 // min(len(a), len(b)) elements, accumulating the real and imaginary parts in
 // float32. Like f32.DotProduct, the float32 accumulation trades a little

@@ -7,6 +7,7 @@ import "testing"
 // are not normally hit because the public API short-circuits before dispatch.
 func TestGoFallbacks_EmptyDst(_ *testing.T) {
 	src := []complex128{1 + 2i, 3 + 4i, 5 + 6i}
+	srcReal := []float64{1, 2, 3}
 	dst := []complex128{}
 	dstReal := []float64{}
 
@@ -18,4 +19,5 @@ func TestGoFallbacks_EmptyDst(_ *testing.T) {
 	absGo(dstReal, src)
 	absSqGo(dstReal, src)
 	conjGo(dst, src)
+	mulRealGo(dst, src, srcReal)
 }
