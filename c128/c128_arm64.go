@@ -94,6 +94,11 @@ func fromReal128(dst []complex128, src []float64) {
 	fromRealGo(dst, src)
 }
 
+// mulReal128 has no NEON kernel yet (see issue #259).
+func mulReal128(dst, a []complex128, s []float64) {
+	mulRealGo(dst, a, s)
+}
+
 //go:noescape
 func mulNEON(dst, a, b []complex128)
 

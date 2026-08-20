@@ -20,4 +20,5 @@ func TestGoFallbacks_EmptyDst(_ *testing.T) {
 	absSqGo(dstReal, src)
 	conjGo(dst, src)
 	fromRealGo(dst, srcReal)
+	mulRealGo(dst, src, srcReal)
 }

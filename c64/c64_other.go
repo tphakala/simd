@@ -15,3 +15,5 @@ func abs64(dst []float32, a []complex64)          { absGo(dst, a) }
 func absSq64(dst []float32, a []complex64)        { absSqGo(dst, a) }
 func conj64(dst, a []complex64)                   { conjGo(dst, a) }
 func fromReal64(dst []complex64, src []float32)   { fromRealGo(dst, src) }
+
+func mulReal64(dst, a []complex64, s []float32) { mulRealGo(dst, a, s) }

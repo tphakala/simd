@@ -80,6 +80,19 @@ func Scale(dst, a []complex64, s complex64) {
 	scale64(dst[:n], a[:n], s)
 }
 
+// MulReal scales each complex element of a by the real factor s[k], writing
+// Y[k] = complex(real(a[k])*s[k], imag(a[k])*s[k]) to dst. It is the fused form
+// of FromReal(scratch, s) followed by Mul(dst, a, scratch), for applying a
+// real per-bin gain to a spectrum. It processes min(len(dst), len(a), len(s))
+// elements; dst may alias a.
+func MulReal(dst, a []complex64, s []float32) {
+	n := minLen(len(dst), len(a), len(s))
+	if n == 0 {
+		return
+	}
+	mulReal64(dst[:n], a[:n], s[:n])
+}
+
 // Add computes element-wise complex addition: dst[i] = a[i] + b[i].
 // Processes min(len(dst), len(a), len(b)) elements.
 //
