@@ -676,8 +676,14 @@ func (p *STFTPlan) ISTFT(dst []float32, spec [][]complex64, window []float32, ho
 	if frames == 0 || hop <= 0 {
 		return 0
 	}
-	if window != nil && len(window) < p.nfft {
+	// Match STFT's window handling: a short window is rectangular, and a long
+	// window is sliced to nfft so the overlap-add Mul and the normalization loop
+	// index it identically.
+	switch {
+	case window == nil || len(window) < p.nfft:
 		window = nil
+	default:
+		window = window[:p.nfft]
 	}
 	off := 0
 	full := (frames-1)*hop + p.nfft
