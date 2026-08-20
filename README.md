@@ -289,6 +289,19 @@ bit-reversal reorder, padded edge frames and rows shorter than `NumBins` stay
 scalar. The output is tolerance-stable, not bit-stable, across CPU tiers and
 library versions.
 
+The inverse direction is available too. `RFFT` and `IRFFT` are the single-frame
+forward and inverse real FFT: `RFFT` transforms one windowed `nfft`-sample frame
+to its Hermitian half-spectrum (bit-for-bit a `NoPad` STFT row, same pipeline),
+and `IRFFT` inverts it back to `nfft` real samples scaled by `1/nfft`, following
+the `numpy.fft.irfft` convention that the imaginary parts of the DC and Nyquist
+bins are ignored, so `IRFFT(RFFT(x))` round-trips within tolerance. `ISTFT` is
+the batched synthesis inverse of `STFT`: it overlap-adds the windowed inverse
+frames and normalizes by the squared-window overlap (the librosa/scipy WOLA
+convention), trimming per the same `PadMode`, so `ISTFT(STFT(x))` reconstructs
+`x` for any window and hop whose squared overlap never vanishes. All three are
+allocation-free and reuse the plan scratch (so one plan per goroutine), and
+`ISTFT` is pinned against a librosa `istft` golden with a per-bin gain applied.
+
 ### `f32` - float32 Operations
 
 Same API as `f64` but for `float32` with wider SIMD.
@@ -494,6 +507,7 @@ are intentionally absent.
 |                | `AbsSq(dst, a)`      | Magnitude squared \|a + bi\|²      | 4x / 2x                 |
 |                | `Conj(dst, a)`       | Complex conjugate: a - bi          | 4x / 2x                 |
 | **Conversion** | `FromReal(dst, src)` | Real to complex: src → src+0i      | 2x (AVX-512/AVX) / 2x (NEON) |
+| **Fused**      | `MulReal(dst, a, s)` | Real per-bin scale: s[k]·a[k]      | scalar (pure Go)        |
 
 These operations are designed for FFT-based signal processing pipelines:
 
@@ -552,6 +566,7 @@ other float packages.
 |                | `AbsSq(dst, a)`      | Magnitude squared \|a + bi\|²      | 8x / 4x / 2x                      |
 |                | `Conj(dst, a)`       | Complex conjugate: a - bi          | 8x / 4x / 2x                      |
 | **Conversion** | `FromReal(dst, src)` | Real to complex: src → src+0i      | 8x / 4x / 2x                      |
+| **Fused**      | `MulReal(dst, a, s)` | Real per-bin scale: s[k]·a[k]      | scalar (pure Go)                  |
 
 Same API as `c128` but for `complex64` with 2x wider SIMD (8 bytes vs 16 bytes per element):
 

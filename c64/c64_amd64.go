@@ -149,6 +149,12 @@ func fromReal64(dst []complex64, src []float32) {
 	fromRealImpl(dst, src)
 }
 
+// mulReal64 has no SIMD kernel yet; wire a mulRealImpl function pointer here
+// when one lands (see issue #259).
+func mulReal64(dst, a []complex64, s []float32) {
+	mulRealGo(dst, a, s)
+}
+
 // AVX+FMA assembly function declarations (4x complex64 per iteration)
 //
 //go:noescape

@@ -190,6 +190,12 @@ func fromReal128(dst []complex128, src []float64) {
 	fromRealImpl(dst, src)
 }
 
+// mulReal128 has no SIMD kernel yet; wire a mulRealImpl function pointer here
+// when one lands (see issue #259).
+func mulReal128(dst, a []complex128, s []float64) {
+	mulRealGo(dst, a, s)
+}
+
 // AVX+FMA assembly function declarations (2x complex128 per iteration)
 //
 //go:noescape

@@ -10,6 +10,7 @@
 // - Add/Sub: Complex addition/subtraction for FFT butterflies
 // - AbsSq: Magnitude squared for power spectrum computation
 // - FromReal: Convert real float32 to complex64
+// - MulReal: Scale each complex element by a real per-bin factor
 //
 // Complex64 uses float32 internally, providing 2x the throughput of complex128
 // operations on SIMD registers (8 complex64 per AVX-512 vs 4 complex128).
@@ -25,7 +26,8 @@
 //
 // The element-wise operations may be used fully in place: the destination may
 // alias an input exactly, element for element. Add, Sub, Mul and MulConj accept
-// dst equal to a, to b, or to both; Scale and Conj accept dst equal to a. Each
+// dst equal to a, to b, or to both; Scale, Conj and MulReal accept dst equal to
+// a (MulReal's real factor slice s is a separate operand). Each
 // SIMD block reads its whole block of complex inputs into registers before
 // storing any output lane, and the remainder reads each complex element before it
 // writes that element, so an exact overlay is well defined lane by lane on every
@@ -78,6 +80,19 @@ func Scale(dst, a []complex64, s complex64) {
 		return
 	}
 	scale64(dst[:n], a[:n], s)
+}
+
+// MulReal scales each complex element of a by the real factor s[k], writing
+// Y[k] = complex(real(a[k])*s[k], imag(a[k])*s[k]) to dst. It is the fused form
+// of FromReal(scratch, s) followed by Mul(dst, a, scratch), for applying a
+// real per-bin gain to a spectrum. It processes min(len(dst), len(a), len(s))
+// elements; dst may alias a.
+func MulReal(dst, a []complex64, s []float32) {
+	n := minLen(len(dst), len(a), len(s))
+	if n == 0 {
+		return
+	}
+	mulReal64(dst[:n], a[:n], s[:n])
 }
 
 // Add computes element-wise complex addition: dst[i] = a[i] + b[i].

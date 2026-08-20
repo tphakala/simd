@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate a librosa STFT power-spectrogram golden vector for the simd parity
-tests (f64/stft_test.go, f32/stft_test.go).
+tests (f64/stft_test.go, f32/stft_test.go), plus an istft golden
+(istft_librosa_golden.json) for the ISTFT parity tests.
 
 Run from the repo root with the project venv. By default it writes the f64
 package copy; pass one or more output directories to target others:
@@ -66,6 +67,43 @@ for d in out_dirs:
     path = os.path.join(d, "stft_librosa_golden.json")
     with open(path, "w") as f:
         json.dump(out, f)
+    print("wrote", path)
+
+# ISTFT golden: a per-bin gain is applied to the forward spectrum before the
+# inverse, so the test pins normalization and centering rather than only the
+# identity round trip. hop NFFT/4 keeps every sample fully covered by the Hann
+# squared-window overlap, so there are no unnormalizable edge samples.
+ISTFT_HOP = NFFT // 4
+GAIN_PERIOD = 7.0
+k = np.arange(NFFT // 2 + 1, dtype=np.float64)
+gain = 0.5 + 0.5 * np.cos(k / GAIN_PERIOD)
+icases = []
+for go_pad, pad_mode in [("PadZero", "constant"), ("PadReflect", "reflect")]:
+    spec = librosa.stft(
+        sig, n_fft=NFFT, hop_length=ISTFT_HOP, window=win, center=True, pad_mode=pad_mode
+    )
+    y = librosa.istft(
+        spec * gain[:, None], hop_length=ISTFT_HOP, window=win, center=True, length=N
+    )
+    icases.append(
+        {
+            "go_pad": go_pad,
+            "frames": int(spec.shape[1]),
+            "y": [round_sig(v) for v in y],
+        }
+    )
+iout = {
+    "librosa_version": librosa.__version__,
+    "nfft": NFFT,
+    "hop": ISTFT_HOP,
+    "n": N,
+    "gain_period": GAIN_PERIOD,
+    "cases": icases,
+}
+for d in out_dirs:
+    path = os.path.join(d, "istft_librosa_golden.json")
+    with open(path, "w") as f:
+        json.dump(iout, f)
     print("wrote", path)
 
 print(

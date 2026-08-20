@@ -7,6 +7,7 @@
 // - DotProductConj: Hermitian inner product sum(a[i]*conj(b[i])) for correlation
 // - Scale: Scale by complex scalar
 // - FromReal: Convert real float64 to complex128 (FFT input preparation)
+// - MulReal: Scale each complex element by a real per-bin factor
 //
 // All functions automatically select the optimal implementation based on
 // runtime CPU feature detection. Functions gracefully fall back to pure Go
@@ -19,7 +20,8 @@
 //
 // The element-wise operations may be used fully in place: the destination may
 // alias an input exactly, element for element. Add, Sub, Mul and MulConj accept
-// dst equal to a, to b, or to both; Scale and Conj accept dst equal to a. Each
+// dst equal to a, to b, or to both; Scale, Conj and MulReal accept dst equal to
+// a (MulReal's real factor slice s is a separate operand). Each
 // SIMD block reads its whole block of complex inputs into registers before
 // storing any output lane, and the remainder reads each complex element before it
 // writes that element, so an exact overlay is well defined lane by lane on every
@@ -72,6 +74,19 @@ func Scale(dst, a []complex128, s complex128) {
 		return
 	}
 	scale128(dst[:n], a[:n], s)
+}
+
+// MulReal scales each complex element of a by the real factor s[k], writing
+// Y[k] = complex(real(a[k])*s[k], imag(a[k])*s[k]) to dst. It is the fused form
+// of FromReal(scratch, s) followed by Mul(dst, a, scratch), for applying a
+// real per-bin gain to a spectrum. It processes min(len(dst), len(a), len(s))
+// elements; dst may alias a.
+func MulReal(dst, a []complex128, s []float64) {
+	n := minLen(len(dst), len(a), len(s))
+	if n == 0 {
+		return
+	}
+	mulReal128(dst[:n], a[:n], s[:n])
 }
 
 // Add computes element-wise complex addition: dst[i] = a[i] + b[i].
