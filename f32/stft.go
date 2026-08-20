@@ -49,7 +49,10 @@ const rfftHalf = 0.5
 
 // istftNormFloor is the smallest squared-window overlap ISTFT divides by; a
 // sample below it is touched only by a window tail and is left unnormalized
-// rather than amplified (librosa/scipy use the float tiny for the same guard).
+// rather than amplified. This is the library's own conservative floor, not the
+// float tiny: librosa/scipy guard the same division, but against a much smaller
+// value (the smallest positive normal). 1e-8 is well below any supported
+// window's real overlap (Hann at hop <= nfft/2 never approaches it).
 const istftNormFloor = 1e-8
 
 // reImStride is the interleave step of the packed complex frame: sample j of the

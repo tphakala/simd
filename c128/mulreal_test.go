@@ -92,6 +92,25 @@ func TestMulReal_Clamp(t *testing.T) {
 			t.Errorf("MulReal_Clamp wrote past clamp at [%d] = %v, want sentinel %v", i, dst[i], sentinel)
 		}
 	}
+
+	// a is the strict shortest operand: the clamp must bind on len(a), not just
+	// on len(s) or len(dst).
+	aShort := []complex128{1 + 1i, 2 + 2i} // shortest: 2
+	sLong := []float64{2, 3, 4, 5}
+	dst2 := make([]complex128, 3)
+	for i := range dst2 {
+		dst2[i] = sentinel
+	}
+	MulReal(dst2, aShort, sLong)
+	wantA := mulRealRef(aShort, sLong[:len(aShort)])
+	for i := range 2 {
+		if !complexClose(dst2[i], wantA[i]) {
+			t.Errorf("MulReal_Clamp a-shortest[%d] = %v, want %v", i, dst2[i], wantA[i])
+		}
+	}
+	if dst2[2] != sentinel {
+		t.Errorf("MulReal_Clamp ignored len(a): wrote [2] = %v, want sentinel %v", dst2[2], sentinel)
+	}
 }
 
 func TestMulRealGo(t *testing.T) {

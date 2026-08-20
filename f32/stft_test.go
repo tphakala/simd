@@ -1444,3 +1444,31 @@ func TestISTFTLibrosaParityF32(t *testing.T) {
 		}
 	}
 }
+
+// TestISTFTShortDstF32 exercises the base>=n early break: a dst shorter than the
+// full reconstruction clamps the output, and frames whose base lands past it are
+// skipped. The retained prefix must equal the full-length reconstruction, since
+// the skipped frames do not cover any sample inside the short window.
+func TestISTFTShortDstF32(t *testing.T) {
+	const nfft, hop = 64, 16
+	p, _ := NewSTFTPlan(nfft)
+	x := testSignalF32(512)
+	frames := p.NumFrames(len(x), hop, NoPad)
+	spec := make([][]complex64, frames)
+	for f := range spec {
+		spec[f] = make([]complex64, p.NumBins())
+	}
+	p.STFT(spec, x, nil, hop, NoPad)
+	full := make([]float32, (frames-1)*hop+nfft)
+	p.ISTFT(full, spec, nil, hop, NoPad)
+	const shortN = 20 // < 2*hop, so frames f>=2 (base=32) hit the base>=n break
+	short := make([]float32, shortN)
+	if n := p.ISTFT(short, spec, nil, hop, NoPad); n != shortN {
+		t.Fatalf("short dst wrote %d, want %d", n, shortN)
+	}
+	for i := range short {
+		if short[i] != full[i] {
+			t.Fatalf("short dst sample %d: %g != full %g", i, short[i], full[i])
+		}
+	}
+}
