@@ -1446,3 +1446,152 @@ func TestISTFTShortDst(t *testing.T) {
 		}
 	}
 }
+
+// FuzzRFFTIRFFT exercises the single-frame spectral inversion invariants over
+// random nfft, hop, window, and spectrum: IRFFT(RFFT(x)) round-trips within
+// tolerance; IRFFT ignores the imaginary parts of the DC and Nyquist bins
+// (numpy.fft.irfft convention); and RFFT on frame f of a NoPad STFT equals that
+// STFT row bit-for-bit. It mirrors FuzzSTFT's shape, asserting invariants rather
+// than never-panic.
+func FuzzRFFTIRFFT(f *testing.F) {
+	f.Add(make([]byte, 256), uint8(3), uint8(7), uint8(0), false)
+	f.Add(make([]byte, 600), uint8(5), uint8(3), uint8(2), true)
+	f.Add(make([]byte, 600), uint8(4), uint8(2), uint8(1), true)
+
+	f.Fuzz(func(t *testing.T, raw []byte, nfftSel, hopSel, selSel uint8, useWin bool) {
+		// nfft in {4, 8, 16, 32, 64}; keep it small so the STFT reference is cheap.
+		nfft := 1 << (2 + int(nfftSel)%5)
+		signal := f64sUnit(raw)
+		if len(signal) < nfft {
+			return
+		}
+		plan, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var window []float64
+		if useWin {
+			window = hann(nfft)
+		}
+		bins := plan.NumBins()
+
+		// Invariant 1: IRFFT(RFFT(x)) round-trips. Use a rectangular (nil) window
+		// so RFFT is a plain forward real FFT that IRFFT inverts; a Hann window
+		// zeros both endpoints, so a windowed round trip has no bounded tolerance.
+		frame := signal[:nfft]
+		spec := make([]complex128, bins)
+		plan.RFFT(spec, frame, nil)
+		y := make([]float64, nfft)
+		plan.IRFFT(y, spec)
+		tol := stftTol(nfft, 2)
+		for i := range nfft {
+			if d := math.Abs(y[i] - frame[i]); d > tol {
+				t.Fatalf("nfft=%d sample %d: round trip %g != %g (|diff|=%g tol=%g)", nfft, i, y[i], frame[i], d, tol)
+			}
+		}
+
+		// Invariant 2: IRFFT ignores imaginary DC and Nyquist. randomSpectrum puts
+		// a nonzero imaginary part on every bin, including DC (index 0) and Nyquist
+		// (bins-1); zeroing those imaginaries must not move the output.
+		seed := 0.5 + float64(selSel)
+		full := randomSpectrum(bins, seed)
+		zeroed := make([]complex128, bins)
+		copy(zeroed, full)
+		zeroed[0] = complex(real(full[0]), 0)
+		zeroed[bins-1] = complex(real(full[bins-1]), 0)
+		a := make([]float64, nfft)
+		b := make([]float64, nfft)
+		plan.IRFFT(a, full)
+		plan.IRFFT(b, zeroed)
+		for i := range nfft {
+			if a[i] != b[i] {
+				t.Fatalf("nfft=%d sample %d: imaginary DC/Nyquist leaked: %g != %g", nfft, i, a[i], b[i])
+			}
+		}
+
+		// Invariant 3: RFFT on frame f of a NoPad STFT equals that STFT row
+		// bit-for-bit; both run the identical per-frame pipeline.
+		hop := 1 + int(hopSel)%nfft
+		frames := plan.NumFrames(len(signal), hop, NoPad)
+		if frames == 0 {
+			return
+		}
+		rows := make([][]complex128, frames)
+		for i := range rows {
+			rows[i] = make([]complex128, bins)
+		}
+		plan.STFT(rows, signal, window, hop, NoPad)
+		fr := int(selSel) % frames
+		row := make([]complex128, bins)
+		plan.RFFT(row, signal[fr*hop:fr*hop+nfft], window)
+		for k := range bins {
+			if row[k] != rows[fr][k] {
+				t.Fatalf("nfft=%d hop=%d frame=%d bin=%d: RFFT %v != STFT row %v", nfft, hop, fr, k, row[k], rows[fr][k])
+			}
+		}
+	})
+}
+
+// FuzzISTFT exercises the multi-frame WOLA reconstruction invariant: ISTFT(STFT(x))
+// reconstructs x wherever the squared-window overlap is non-vanishing. It mirrors
+// FuzzSTFT's shape over random nfft, hop, window, and pad mode.
+func FuzzISTFT(f *testing.F) {
+	f.Add(make([]byte, 256), uint8(3), uint8(7), false, uint8(0))
+	f.Add(make([]byte, 600), uint8(5), uint8(3), true, uint8(1))
+	f.Add(make([]byte, 600), uint8(4), uint8(2), true, uint8(2))
+
+	f.Fuzz(func(t *testing.T, raw []byte, nfftSel, hopSel uint8, useWin bool, padSel uint8) {
+		nfft := 1 << (2 + int(nfftSel)%5)
+		signal := f64sUnit(raw)
+		if len(signal) < nfft {
+			return
+		}
+		plan, err := NewSTFTPlan(nfft)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var window []float64
+		if useWin {
+			window = hann(nfft)
+		}
+		hop := 1 + int(hopSel)%nfft
+		pad := []PadMode{NoPad, PadZero, PadReflect}[int(padSel)%3]
+		frames := plan.NumFrames(len(signal), hop, pad)
+		if frames == 0 {
+			return
+		}
+		spec := make([][]complex128, frames)
+		for i := range spec {
+			spec[i] = make([]complex128, plan.NumBins())
+		}
+		plan.STFT(spec, signal, window, hop, pad)
+
+		y := make([]float64, len(signal))
+		n := plan.ISTFT(y, spec, window, hop, pad)
+		wantN := min(len(signal), (frames-1)*hop+nfft)
+		if pad != NoPad {
+			wantN = min(len(signal), (frames-1)*hop)
+		}
+		if n != wantN {
+			t.Fatalf("nfft=%d hop=%d pad=%v win=%v: wrote %d samples, want %d", nfft, hop, pad, window != nil, n, wantN)
+		}
+		off := 0
+		if pad != NoPad {
+			off = nfft / 2
+		}
+		tol := stftTol(nfft, 4)
+		for i := range n {
+			// Skip samples the squared-window overlap leaves effectively
+			// unnormalized; those are not required to reconstruct. The 1e-3 floor
+			// sits deliberately well above the production istftNormFloor (1e-8): it
+			// drops the low-overlap edge band where dividing by a tiny norm amplifies
+			// error.
+			if wolaNorm(window, nfft, hop, frames, i+off) < 1e-3 {
+				continue
+			}
+			if d := math.Abs(y[i] - signal[i]); d > tol {
+				t.Fatalf("nfft=%d hop=%d pad=%v win=%v sample %d: %g != %g (|diff|=%g tol=%g)", nfft, hop, pad, window != nil, i, y[i], signal[i], d, tol)
+			}
+		}
+	})
+}
