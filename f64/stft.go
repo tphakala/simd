@@ -49,6 +49,10 @@ const rfftHalf = 0.5
 // rather than amplified (librosa/scipy use the float tiny for the same guard).
 const istftNormFloor = 1e-8
 
+// reImStride is the interleave step of the packed complex frame: sample j of the
+// half-length transform occupies the real pair x[2j]=Re, x[2j+1]=Im.
+const reImStride = 2
+
 // PadMode selects the STFT framing/centering convention.
 //
 //   - NoPad: center=false. Frame f is signal[f*hop : f*hop+nfft] with no
@@ -634,7 +638,7 @@ func (p *STFTPlan) IRFFT(dst []float64, spec []complex128) int {
 	p.fftHalf()
 	scale := 1 / float64(half)
 	for j := range half {
-		i0, i1 := 2*j, 2*j+1
+		i0, i1 := reImStride*j, reImStride*j+1
 		if i0 < ns {
 			dst[i0] = re[j] * scale
 		}
@@ -646,7 +650,7 @@ func (p *STFTPlan) IRFFT(dst []float64, spec []complex128) int {
 }
 
 // irfftBin reads spec[k] as (re, im), treating bins beyond len(spec) as zero.
-func irfftBin(spec []complex128, k int) (float64, float64) {
+func irfftBin(spec []complex128, k int) (re, im float64) {
 	if k < len(spec) {
 		return real(spec[k]), imag(spec[k])
 	}
