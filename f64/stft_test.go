@@ -1023,3 +1023,398 @@ func TestSTFTStage4Tw3Twiddles(t *testing.T) {
 		}
 	}
 }
+
+// stftTol is the absolute tolerance for a float64 rfft-based value at the given
+// magnitude scale: the transform error grows with log2(nfft) in units of the
+// float64 epsilon, plus a small floor for near-zero results.
+func stftTol(nfft int, scale float64) float64 {
+	const eps64 = 2.220446049250313e-16
+	logN := math.Log2(float64(nfft))
+	return 8*logN*eps64*scale + 1e-11
+}
+
+// TestRFFTMatchesSTFT pins RFFT to the batched transform: the single-frame entry
+// point on frame f of a NoPad STFT must reproduce that row exactly (same code
+// path, so bit-for-bit).
+func TestRFFTMatchesSTFT(t *testing.T) {
+	const nfft, hop = 256, 64
+	p, _ := NewSTFTPlan(nfft)
+	signal := testSignal(2048)
+	window := hann(nfft)
+	frames := p.NumFrames(len(signal), hop, NoPad)
+	spec := make([][]complex128, frames)
+	for f := range spec {
+		spec[f] = make([]complex128, p.NumBins())
+	}
+	p.STFT(spec, signal, window, hop, NoPad)
+	row := make([]complex128, p.NumBins())
+	for f := range frames {
+		if n := p.RFFT(row, signal[f*hop:f*hop+nfft], window); n != p.NumBins() {
+			t.Fatalf("frame %d: RFFT wrote %d bins, want %d", f, n, p.NumBins())
+		}
+		for k := range row {
+			if row[k] != spec[f][k] {
+				t.Fatalf("frame %d bin %d: RFFT %v != STFT %v", f, k, row[k], spec[f][k])
+			}
+		}
+	}
+	// Rectangular (nil window) frames must match the direct DFT.
+	frame := signal[:nfft]
+	p.RFFT(row, frame, nil)
+	for k := range row {
+		cmplxClose(t, fmt.Sprintf("rect bin %d", k), row[k], dftBin(frame, k), float64(nfft))
+	}
+}
+
+// TestRFFTShortInputs covers the lenient edges: a frame shorter than nfft is
+// zero-padded, a short window is treated as rectangular, and dst is clamped.
+func TestRFFTShortInputs(t *testing.T) {
+	const nfft = 64
+	p, _ := NewSTFTPlan(nfft)
+	signal := testSignal(nfft)
+	full := make([]complex128, p.NumBins())
+	short := make([]complex128, p.NumBins())
+
+	// Short frame == zero-padded frame.
+	padded := make([]float64, nfft)
+	copy(padded, signal[:40])
+	p.RFFT(full, padded, nil)
+	p.RFFT(short, signal[:40], nil)
+	for k := range full {
+		if full[k] != short[k] {
+			t.Fatalf("bin %d: short frame %v != zero-padded %v", k, short[k], full[k])
+		}
+	}
+
+	// Short window == rectangular.
+	p.RFFT(full, signal, nil)
+	p.RFFT(short, signal, hann(nfft/2))
+	for k := range full {
+		if full[k] != short[k] {
+			t.Fatalf("bin %d: short window %v != rectangular %v", k, short[k], full[k])
+		}
+	}
+
+	// dst clamp and zero-length dst.
+	if n := p.RFFT(make([]complex128, 5), signal, nil); n != 5 {
+		t.Fatalf("RFFT into 5 bins wrote %d", n)
+	}
+	if n := p.RFFT(nil, signal, nil); n != 0 {
+		t.Fatalf("RFFT into nil dst wrote %d", n)
+	}
+}
+
+func TestRFFTAllocFree(t *testing.T) {
+	p, _ := NewSTFTPlan(1024)
+	frame := testSignal(1024)
+	window := hann(1024)
+	dst := make([]complex128, p.NumBins())
+	if a := testing.AllocsPerRun(10, func() { p.RFFT(dst, frame, window) }); a != 0 {
+		t.Errorf("RFFT allocated %v times per run, want 0", a)
+	}
+}
+
+// naiveIRFFT is the reference inverse real DFT: x[n] = (1/N) * (Re X[0] +
+// Re X[N/2] * (-1)^n + 2 * sum_{k=1}^{N/2-1} Re(X[k] e^{+2 pi i k n / N})),
+// evaluated in float64. By construction it ignores the imaginary parts of the
+// DC and Nyquist bins, which is the numpy.fft.irfft convention IRFFT follows.
+func naiveIRFFT(spec []complex128, nfft int) []float64 {
+	half := nfft / 2
+	x := make([]float64, nfft)
+	for n := range nfft {
+		acc := real(spec[0])
+		if n%2 == 0 {
+			acc += real(spec[half])
+		} else {
+			acc -= real(spec[half])
+		}
+		for k := 1; k < half; k++ {
+			ang := 2 * math.Pi * float64(k) * float64(n) / float64(nfft)
+			s, c := math.Sincos(ang)
+			acc += 2 * (real(spec[k])*c - imag(spec[k])*s)
+		}
+		x[n] = acc / float64(nfft)
+	}
+	return x
+}
+
+// randomSpectrum builds a deterministic complex half-spectrum with non-zero
+// imaginary parts everywhere, including DC and Nyquist.
+func randomSpectrum(bins int, seed float64) []complex128 {
+	s := make([]complex128, bins)
+	for k := range s {
+		a := float64(k) + seed
+		s[k] = complex(math.Sin(0.7*a)+0.3*math.Cos(1.9*a), math.Cos(0.4*a)-0.5*math.Sin(2.3*a))
+	}
+	return s
+}
+
+func TestIRFFTAgainstNaive(t *testing.T) {
+	for _, nfft := range []int{2, 4, 8, 16, 64, 256, 1024, 4096} {
+		p, _ := NewSTFTPlan(nfft)
+		spec := randomSpectrum(p.NumBins(), 0.5)
+		want := naiveIRFFT(spec, nfft)
+		got := make([]float64, nfft)
+		if n := p.IRFFT(got, spec); n != nfft {
+			t.Fatalf("nfft=%d: IRFFT wrote %d samples, want %d", nfft, n, nfft)
+		}
+		// Bin magnitudes are O(1), so |x| is O(1) after the 1/N scale; the
+		// float64 transform error grows with log2(nfft).
+		tol := stftTol(nfft, 2)
+		for i := range got {
+			if d := math.Abs(got[i] - want[i]); d > tol {
+				t.Fatalf("nfft=%d sample %d: got %g want %g (|diff|=%g tol=%g)", nfft, i, got[i], want[i], d, tol)
+			}
+		}
+	}
+}
+
+func TestRFFTIRFFTRoundTrip(t *testing.T) {
+	for _, nfft := range []int{2, 4, 8, 16, 64, 1024, 4096} {
+		p, _ := NewSTFTPlan(nfft)
+		x := testSignal(nfft)
+		spec := make([]complex128, p.NumBins())
+		y := make([]float64, nfft)
+		p.RFFT(spec, x, nil)
+		p.IRFFT(y, spec)
+		tol := stftTol(nfft, 2)
+		for i := range x {
+			if d := math.Abs(y[i] - x[i]); d > tol {
+				t.Fatalf("nfft=%d sample %d: round trip %g != %g (|diff|=%g tol=%g)", nfft, i, y[i], x[i], d, tol)
+			}
+		}
+	}
+}
+
+// TestIRFFTShortInputs covers the lenient edges: missing bins are zero, dst is
+// clamped, and an empty dst is a no-op.
+func TestIRFFTShortInputs(t *testing.T) {
+	const nfft = 32
+	p, _ := NewSTFTPlan(nfft)
+	spec := randomSpectrum(p.NumBins(), 1.5)
+
+	// Missing bins == zero bins.
+	zeroed := make([]complex128, len(spec))
+	copy(zeroed, spec[:10])
+	want := make([]float64, nfft)
+	got := make([]float64, nfft)
+	p.IRFFT(want, zeroed)
+	p.IRFFT(got, spec[:10])
+	for i := range want {
+		if want[i] != got[i] {
+			t.Fatalf("sample %d: short spec %g != zero-filled %g", i, got[i], want[i])
+		}
+	}
+
+	// dst clamp: the first 7 samples equal the full transform's first 7.
+	p.IRFFT(want, spec)
+	part := make([]float64, 7)
+	if n := p.IRFFT(part, spec); n != 7 {
+		t.Fatalf("IRFFT into 7 samples wrote %d", n)
+	}
+	for i := range part {
+		if part[i] != want[i] {
+			t.Fatalf("sample %d: clamped %g != full %g", i, part[i], want[i])
+		}
+	}
+	if n := p.IRFFT(nil, spec); n != 0 {
+		t.Fatalf("IRFFT into nil dst wrote %d", n)
+	}
+}
+
+func TestIRFFTAllocFree(t *testing.T) {
+	p, _ := NewSTFTPlan(1024)
+	spec := randomSpectrum(p.NumBins(), 2.5)
+	dst := make([]float64, 1024)
+	if a := testing.AllocsPerRun(10, func() { p.IRFFT(dst, spec) }); a != 0 {
+		t.Errorf("IRFFT allocated %v times per run, want 0", a)
+	}
+}
+
+// wolaNorm computes the squared-window overlap sum_f w^2[u - f*hop] at padded
+// position u for the given frame count, the normalization ISTFT applies.
+func wolaNorm(window []float64, nfft, hop, frames, u int) float64 {
+	var norm float64
+	for f := range frames {
+		j := u - f*hop
+		if j < 0 || j >= nfft {
+			continue
+		}
+		w := 1.0
+		if window != nil {
+			w = window[j]
+		}
+		norm += w * w
+	}
+	return norm
+}
+
+// TestISTFTRoundTrip checks ISTFT(STFT(x)) == x for every pad mode, at hops
+// nfft/4 and nfft/2, with Hann and rectangular windows. Samples whose squared
+// window overlap is below 1e-3 (only the outermost NoPad edge samples under a
+// Hann window, which ISTFT leaves unnormalized) are excluded from the check.
+func TestISTFTRoundTrip(t *testing.T) {
+	const nfft = 256
+	x := testSignal(3000) // not a multiple of any hop, so the tail is partial
+	for _, pad := range []PadMode{NoPad, PadZero, PadReflect} {
+		for _, hop := range []int{nfft / 4, nfft / 2} {
+			for _, window := range [][]float64{hann(nfft), nil} {
+				p, _ := NewSTFTPlan(nfft)
+				frames := p.NumFrames(len(x), hop, pad)
+				spec := make([][]complex128, frames)
+				for f := range spec {
+					spec[f] = make([]complex128, p.NumBins())
+				}
+				p.STFT(spec, x, window, hop, pad)
+				y := make([]float64, len(x))
+				n := p.ISTFT(y, spec, window, hop, pad)
+				var wantN int
+				if pad == NoPad {
+					wantN = min(len(x), (frames-1)*hop+nfft)
+				} else {
+					wantN = min(len(x), (frames-1)*hop)
+				}
+				if n != wantN {
+					t.Fatalf("pad=%v hop=%d win=%v: wrote %d samples, want %d", pad, hop, window != nil, n, wantN)
+				}
+				off := 0
+				if pad != NoPad {
+					off = nfft / 2
+				}
+				tol := stftTol(nfft, 4)
+				for i := range n {
+					if wolaNorm(window, nfft, hop, frames, i+off) < 1e-3 {
+						continue
+					}
+					if d := math.Abs(y[i] - x[i]); d > tol {
+						t.Fatalf("pad=%v hop=%d win=%v sample %d: %g != %g (|diff|=%g tol=%g)", pad, hop, window != nil, i, y[i], x[i], d, tol)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestISTFTGuards covers the degenerate inputs: no frames, bad hop, empty dst, a
+// dst longer than the reconstructable length (clamped), and a short window
+// treated as rectangular.
+func TestISTFTGuards(t *testing.T) {
+	const nfft, hop = 64, 16
+	p, _ := NewSTFTPlan(nfft)
+	x := testSignal(512)
+	frames := p.NumFrames(len(x), hop, NoPad)
+	spec := make([][]complex128, frames)
+	for f := range spec {
+		spec[f] = make([]complex128, p.NumBins())
+	}
+	p.STFT(spec, x, nil, hop, NoPad)
+
+	if n := p.ISTFT(make([]float64, 10), nil, nil, hop, NoPad); n != 0 {
+		t.Fatalf("no frames wrote %d", n)
+	}
+	if n := p.ISTFT(make([]float64, 10), spec, nil, 0, NoPad); n != 0 {
+		t.Fatalf("hop 0 wrote %d", n)
+	}
+	if n := p.ISTFT(nil, spec, nil, hop, NoPad); n != 0 {
+		t.Fatalf("nil dst wrote %d", n)
+	}
+	long := make([]float64, 10000)
+	if n := p.ISTFT(long, spec, nil, hop, NoPad); n != (frames-1)*hop+nfft {
+		t.Fatalf("long dst wrote %d, want %d", n, (frames-1)*hop+nfft)
+	}
+	a := make([]float64, 512)
+	b := make([]float64, 512)
+	p.ISTFT(a, spec, nil, hop, NoPad)
+	p.ISTFT(b, spec, hann(nfft/2), hop, NoPad)
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("sample %d: short window %g != rectangular %g", i, b[i], a[i])
+		}
+	}
+}
+
+func TestISTFTAllocFree(t *testing.T) {
+	const nfft, hop = 512, 128
+	p, _ := NewSTFTPlan(nfft)
+	x := testSignal(8192)
+	window := hann(nfft)
+	frames := p.NumFrames(len(x), hop, PadZero)
+	spec := make([][]complex128, frames)
+	for f := range spec {
+		spec[f] = make([]complex128, p.NumBins())
+	}
+	p.STFT(spec, x, window, hop, PadZero)
+	y := make([]float64, len(x))
+	if a := testing.AllocsPerRun(5, func() { p.ISTFT(y, spec, window, hop, PadZero) }); a != 0 {
+		t.Errorf("ISTFT allocated %v times per run, want 0", a)
+	}
+}
+
+//go:embed testdata/istft_librosa_golden.json
+var istftLibrosaGoldenJSON []byte
+
+// TestISTFTLibrosaParity pins ISTFT's normalization and centering against
+// librosa.istft on a spectrum with a per-bin gain applied, so the test is not
+// satisfied by the identity round trip alone. The forward spectrum comes from
+// this package's own STFT (already pinned to librosa by TestSTFTLibrosaParity).
+func TestISTFTLibrosaParity(t *testing.T) {
+	var g struct {
+		LibrosaVersion string  `json:"librosa_version"`
+		NFFT           int     `json:"nfft"`
+		Hop            int     `json:"hop"`
+		N              int     `json:"n"`
+		GainPeriod     float64 `json:"gain_period"`
+		Cases          []struct {
+			GoPad  string    `json:"go_pad"`
+			Frames int       `json:"frames"`
+			Y      []float64 `json:"y"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(istftLibrosaGoldenJSON, &g); err != nil {
+		t.Fatalf("unmarshal golden: %v", err)
+	}
+	t.Logf("golden generated by librosa %s (nfft=%d hop=%d)", g.LibrosaVersion, g.NFFT, g.Hop)
+	signal := testSignal(g.N)
+	window := hann(g.NFFT)
+	p, _ := NewSTFTPlan(g.NFFT)
+	gain := make([]float64, p.NumBins())
+	for k := range gain {
+		gain[k] = 0.5 + 0.5*math.Cos(float64(k)/g.GainPeriod)
+	}
+	padOf := map[string]PadMode{"PadZero": PadZero, "PadReflect": PadReflect}
+	for _, c := range g.Cases {
+		pad := padOf[c.GoPad]
+		frames := p.NumFrames(len(signal), g.Hop, pad)
+		if frames != c.Frames {
+			t.Fatalf("%s: NumFrames=%d but librosa produced %d", c.GoPad, frames, c.Frames)
+		}
+		spec := make([][]complex128, frames)
+		for f := range spec {
+			spec[f] = make([]complex128, p.NumBins())
+		}
+		p.STFT(spec, signal, window, g.Hop, pad)
+		for f := range spec {
+			for k := range spec[f] {
+				spec[f][k] *= complex(gain[k], 0)
+			}
+		}
+		y := make([]float64, g.N)
+		if n := p.ISTFT(y, spec, window, g.Hop, pad); n != g.N {
+			t.Fatalf("%s: ISTFT wrote %d samples, want %d", c.GoPad, n, g.N)
+		}
+		var peak float64
+		for _, v := range c.Y {
+			peak = max(peak, math.Abs(v))
+		}
+		var maxErr float64
+		for i := range y {
+			maxErr = max(maxErr, math.Abs(y[i]-c.Y[i]))
+		}
+		// float64 forward + inverse against librosa's float64: the error is at
+		// the golden's rounding (~1e-9 of peak); 1e-6 keeps wide margin while any
+		// convention slip (missing normalization, wrong trim) is far larger.
+		if maxErr > 1e-6*peak {
+			t.Errorf("%s: max abs error %g exceeds 1e-6 of peak %g vs librosa", c.GoPad, maxErr, peak)
+		}
+	}
+}

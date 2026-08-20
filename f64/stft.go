@@ -44,6 +44,11 @@ var (
 // rfftHalf is the 1/2 factor in the real-FFT even/odd half-spectrum split.
 const rfftHalf = 0.5
 
+// istftNormFloor is the smallest squared-window overlap ISTFT divides by; a
+// sample below it is touched only by a window tail and is left unnormalized
+// rather than amplified (librosa/scipy use the float tiny for the same guard).
+const istftNormFloor = 1e-8
+
 // PadMode selects the STFT framing/centering convention.
 //
 //   - NoPad: center=false. Frame f is signal[f*hop : f*hop+nfft] with no
@@ -112,6 +117,10 @@ type STFTPlan struct {
 	// public call and handed to the pack as an stftWindow, so packFrame can apply
 	// the window with two in-place Mul calls.
 	winRe, winIm []float64
+
+	// Per-frame time-domain scratch for ISTFT (one inverse frame before
+	// windowing and overlap-add).
+	frame []float64
 }
 
 // NumBins returns the number of output bins per frame, nfft/2 + 1 (the Hermitian
@@ -157,6 +166,7 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 		outIm:       make([]float64, half),
 		winRe:       make([]float64, half),
 		winIm:       make([]float64, half),
+		frame:       make([]float64, nfft),
 	}
 
 	// Bit-reversal permutation for a size-half FFT.
@@ -557,4 +567,168 @@ func (p *STFTPlan) STFTPowerInto(dst, signal, window []float64, hop int, pad Pad
 		p.unravelPowerRow(dst[f*bins : (f+1)*bins])
 	}
 	return frames
+}
+
+// RFFT computes the real-input FFT of a single frame: frame[:nfft] (zero-padded
+// when frame is shorter than nfft) is multiplied by window (nil for rectangular;
+// a window shorter than nfft is treated as rectangular, as in STFT) and its
+// Hermitian half-spectrum is written to dst. It writes min(len(dst), NumBins())
+// bins and returns that count. This is the same transform STFT runs per frame,
+// so RFFT on frame f of a NoPad STFT reproduces that frame's row. It is
+// allocation-free and reuses the plan scratch, so it is not safe for concurrent
+// use on one plan.
+func (p *STFTPlan) RFFT(dst []complex128, frame, window []float64) int {
+	nb := min(len(dst), p.NumBins())
+	if nb == 0 {
+		return 0
+	}
+	// Same pipeline STFT runs per frame (prepareWindow, packFrameAt, fftHalf,
+	// unravelRow), so RFFT on frame f of a NoPad STFT is bit-for-bit that row.
+	w := p.prepareWindow(window) // nil or short window: rectangular
+	p.packFrameAt(frame, w, 0, PadZero)
+	p.fftHalf()
+	p.unravelRow(dst[:nb])
+	return nb
+}
+
+// IRFFT computes the inverse of RFFT. It reads the NumBins() Hermitian
+// half-spectrum bins from spec (bins beyond len(spec) are taken as zero) and
+// writes min(len(dst), NFFT()) real samples to dst, scaled by 1/nfft, so that
+// IRFFT(RFFT(x, nil)) reproduces x within float64 tolerance. The imaginary
+// parts of the DC and Nyquist bins are ignored, as numpy.fft.irfft does,
+// because a real signal cannot carry them. It returns the number of samples
+// written, is allocation-free, and reuses the plan scratch.
+//
+// The inverse undoes unravelBin algebraically: with E = 0.5*(X[k] +
+// conj(X[half-k])) and O = 0.5*(X[k] - conj(X[half-k])) * conj(W_N^k), the
+// packed half-length spectrum is C[k] = E + i*O, whose inverse FFT c[j] =
+// x[2j] + i*x[2j+1] is computed as conj(FFT(conj(C)))/half on the existing
+// forward core.
+func (p *STFTPlan) IRFFT(dst []float64, spec []complex128) int {
+	ns := min(len(dst), p.nfft)
+	if ns == 0 {
+		return 0
+	}
+	half := p.half
+	re, im := p.re, p.im
+	for k := range half {
+		xr, xi := irfftBin(spec, k)
+		mr, mi := irfftBin(spec, half-k)
+		if k == 0 {
+			// DC and Nyquist are real for a real signal; drop any imaginary
+			// part rather than leaking it into the output.
+			xi, mi = 0, 0
+		}
+		er := rfftHalf * (xr + mr)
+		ei := rfftHalf * (xi - mi)
+		dr := rfftHalf * (xr - mr)
+		di := rfftHalf * (xi + mi)
+		// O = D * conj(W_N^k), with W_N^k = (unRe, unIm).
+		wr, wi := p.unRe[k], p.unIm[k]
+		or := dr*wr + di*wi
+		oi := di*wr - dr*wi
+		// Scratch holds conj(C) = conj(E + i*O).
+		re[k] = er - oi
+		im[k] = -(ei + or)
+	}
+	p.fftHalf()
+	scale := 1 / float64(half)
+	for j := range half {
+		i0, i1 := 2*j, 2*j+1
+		if i0 < ns {
+			dst[i0] = re[j] * scale
+		}
+		if i1 < ns {
+			dst[i1] = -im[j] * scale
+		}
+	}
+	return ns
+}
+
+// irfftBin reads spec[k] as (re, im), treating bins beyond len(spec) as zero.
+func irfftBin(spec []complex128, k int) (float64, float64) {
+	if k < len(spec) {
+		return real(spec[k]), imag(spec[k])
+	}
+	return 0, 0
+}
+
+// ISTFT inverts STFT. Each row of spec (one Hermitian half-spectrum; bins beyond
+// a row's length are taken as zero) is inverse transformed, multiplied by the
+// synthesis window (nil for rectangular; a window shorter than nfft is treated
+// as rectangular, as in STFT) and overlap-added at hop-sample spacing. The sum
+// is divided by the squared-window overlap sum_f window^2[n - f*hop] wherever
+// that exceeds istftNormFloor (the librosa/scipy convention), so ISTFT(STFT(x))
+// reproduces x for any window and hop whose squared overlap never vanishes
+// (Hann at hop <= nfft/2 included). pad selects the framing STFT used: NoPad
+// puts the first sample of frame 0 at dst[0]; PadZero and PadReflect (identical
+// here) trim the nfft/2 centering offset so dst[0] is the first signal sample.
+// It writes min(len(dst), L) samples, where L = (len(spec)-1)*hop + nfft for
+// NoPad and (len(spec)-1)*hop for centered framing (librosa's default length),
+// and returns that count. dst must not alias the plan scratch. Allocation-free.
+func (p *STFTPlan) ISTFT(dst []float64, spec [][]complex128, window []float64, hop int, pad PadMode) int {
+	frames := len(spec)
+	if frames == 0 || hop <= 0 {
+		return 0
+	}
+	// Match STFT's window handling: a short window is rectangular, and a long
+	// window is sliced to nfft so the overlap-add Mul and the normalization loop
+	// index it identically.
+	switch {
+	case window == nil || len(window) < p.nfft:
+		window = nil
+	default:
+		window = window[:p.nfft]
+	}
+	off := 0
+	full := (frames-1)*hop + p.nfft
+	if pad != NoPad {
+		off = p.half
+		full = (frames - 1) * hop
+	}
+	n := min(len(dst), full)
+	if n <= 0 {
+		return 0
+	}
+	out := dst[:n]
+	clear(out)
+	for f := range frames {
+		base := f*hop - off
+		if base >= n {
+			break
+		}
+		if base+p.nfft <= 0 {
+			continue
+		}
+		p.IRFFT(p.frame, spec[f])
+		if window != nil {
+			Mul(p.frame, p.frame, window)
+		}
+		lo := max(0, -base)
+		hi := min(p.nfft, n-base)
+		AccumulateAdd(out, p.frame[lo:hi], base+lo)
+	}
+	// Per-sample squared-window normalization. Sample i sits at padded position
+	// u = i + off and is covered by frames f with f*hop <= u < f*hop + nfft.
+	for i := range out {
+		u := i + off
+		fLo := 0
+		if a := u - p.nfft + 1; a > 0 {
+			fLo = (a + hop - 1) / hop
+		}
+		fHi := min(frames-1, u/hop)
+		var norm float64
+		for f := fLo; f <= fHi; f++ {
+			if window == nil {
+				norm++
+			} else {
+				w := window[u-f*hop]
+				norm += w * w
+			}
+		}
+		if norm > istftNormFloor {
+			out[i] /= norm
+		}
+	}
+	return n
 }
