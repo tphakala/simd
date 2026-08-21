@@ -268,3 +268,60 @@ func firValidQ15Go(dst, x []int32, taps []int16) {
 		dst[i] = acc
 	}
 }
+
+// mirrorSamplesPerPair is the number of samples a symmetric mirror pair spans
+// away from the center: one on the left and one on the right. A symmetric window
+// with K = len(pairs) pairs therefore holds mirrorSamplesPerPair*K + 1 samples (K
+// each side plus the center tap), and the valid-output count of a length-len(x)
+// input is len(x) - mirrorSamplesPerPair*K.
+const mirrorSamplesPerPair = 2
+
+// firSymValidQ15Go writes the int32 valid convolution of a SYMMETRIC Q15 tap set
+// that is FIRSymValidQ15's source of truth: a center tap plus K = len(pairs)
+// mirror pairs, window length 2K+1, in correlation orientation. For output i,
+// with the center sample at c = i+K:
+//
+//	dst[i] = int32(int64(center) * int64(x[c]) >> 15)
+//	       + sum over k in [1,K] of int32(int64(pairs[k-1]) * int64(x[c-k]+x[c+k]) >> 15)
+//
+// for i in [0, n), n = min(len(dst), len(x)-2K). The load-bearing difference from
+// firValidQ15Go is the mirror fold: the two mirror samples x[c-k] and x[c+k] are
+// summed with a two's-complement WRAPPING int32 add BEFORE the single Q15
+// truncation, so each pair contributes exactly ONE truncation, not two. This
+// matches libopus comb_filter_const_c (FIXED_POINT), which pre-adds each mirror
+// pair with ADD32 and then does one MULT16_32_Q15; because trunc((p+q)>>15) !=
+// trunc(p>>15)+trunc(q>>15) in general, a per-product FIR (FIRValidQ15 over a
+// folded tap set) is NOT bit-identical to the codec. The addends stay int32 (Go
+// wraps the +) and only widen to int64 for the multiply, so the pre-truncation
+// wrap is preserved; the running accumulator is likewise wrapping int32. The
+// product |pairs[k-1] * (x[c-k]+x[c+k])| <= 2^15 * 2^31 = 2^46 stays inside int64.
+//
+// When K == 0 (no pairs) this degenerates to a pure center scale over the whole
+// window (window length 1, n = min(len(dst), len(x))), matching ScaleQ15. The
+// public FIRSymValidQ15 applies the short-x guard and clamps dst, but this
+// function is self-guarding (it recomputes the safe output count), so a direct
+// fallback call cannot read x out of range. dst must not overlap x.
+func firSymValidQ15Go(dst, x []int32, center int16, pairs []int16) {
+	k := len(pairs)
+	if len(x) < mirrorSamplesPerPair*k+1 {
+		return
+	}
+	outLen := len(x) - mirrorSamplesPerPair*k
+	n := min(len(dst), outLen)
+	if n == 0 {
+		return
+	}
+	for i := range n {
+		// One slice bound per output hoists the x[c-k .. c+k] checks: the window
+		// w = x[i : i+2k+1] has length 2k+1 and w[k] is the center, w[k-p] and
+		// w[k+p] the mirror samples for pair p. i+2k+1 <= (n-1)+2k+1 <= len(x)
+		// because n <= len(x)-2k, so every index below is provably in range.
+		w := x[i : i+mirrorSamplesPerPair*k+1]
+		acc := int32(int64(center) * int64(w[k]) >> firValidQ15Shift) // wrapping int32
+		for p := 1; p <= k; p++ {
+			sum := w[k-p] + w[k+p]                                           // wrapping int32 add BEFORE truncation
+			acc += int32(int64(pairs[p-1]) * int64(sum) >> firValidQ15Shift) // wrapping accumulate
+		}
+		dst[i] = acc
+	}
+}

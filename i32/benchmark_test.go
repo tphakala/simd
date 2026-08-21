@@ -330,3 +330,32 @@ func BenchmarkFIRValidQ15_16(b *testing.B) { benchmarkFIRValidQ15(b, 16, FIRVali
 
 func BenchmarkFIRValidQ15Go_5(b *testing.B)  { benchmarkFIRValidQ15(b, 5, firValidQ15Go) }
 func BenchmarkFIRValidQ15Go_16(b *testing.B) { benchmarkFIRValidQ15(b, 16, firValidQ15Go) }
+
+// FIRSymValidQ15 is a symmetric-pair-folded valid convolution: each of the
+// outLen = n - 2K outputs runs a center tap plus K mirror pairs (window 2K+1),
+// each pair folded before a single Q15 truncation, so cost scales with
+// outLen*(K+1). K=2 is the 5-tap combFilterConst driver; K=8 stresses a longer
+// symmetric kernel. SetBytes counts the outputs written, 4 bytes per int32.
+func benchmarkFIRSymValidQ15(b *testing.B, k int, fn func(dst, x []int32, center int16, pairs []int16)) {
+	b.Helper()
+	x := make([]int32, benchN)
+	pairs := make([]int16, k)
+	center := int16(0x4000)
+	for i := range x {
+		x[i] = int32(i*7 - 3000)
+	}
+	for i := range pairs {
+		pairs[i] = int16(i*11 - 3)
+	}
+	dst := make([]int32, benchN-2*k)
+	b.SetBytes(int64(benchN-2*k) * 4)
+	for b.Loop() {
+		fn(dst, x, center, pairs)
+	}
+}
+
+func BenchmarkFIRSymValidQ15_2(b *testing.B) { benchmarkFIRSymValidQ15(b, 2, FIRSymValidQ15) }
+func BenchmarkFIRSymValidQ15_8(b *testing.B) { benchmarkFIRSymValidQ15(b, 8, FIRSymValidQ15) }
+
+func BenchmarkFIRSymValidQ15Go_2(b *testing.B) { benchmarkFIRSymValidQ15(b, 2, firSymValidQ15Go) }
+func BenchmarkFIRSymValidQ15Go_8(b *testing.B) { benchmarkFIRSymValidQ15(b, 8, firSymValidQ15Go) }

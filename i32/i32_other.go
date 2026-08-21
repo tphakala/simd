@@ -26,3 +26,7 @@ func gainQ31I32(dst, a []int32, gain int32, preShift, postShift int) {
 func butterflyI32(lo, hi []int32) { butterflyGo(lo, hi) }
 
 func firValidQ15I32(dst, x []int32, taps []int16) { firValidQ15Go(dst, x, taps) }
+
+func firSymValidQ15I32(dst, x []int32, center int16, pairs []int16) {
+	firSymValidQ15Go(dst, x, center, pairs)
+}
