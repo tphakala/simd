@@ -858,3 +858,136 @@ fir_avx2_tail_tap:
 fir_avx2_done:
     VZEROUPPER
     RET
+
+// func firSymValidQ15AVX2(dst, x []int32, center int16, pairs []int16)
+// int32 valid convolution in correlation orientation with a SYMMETRIC Q15 tap set
+// (one center tap plus K = len(pairs) mirror pairs, window length 2K+1),
+// vectorized over the OUTPUT index: 8 outputs per iteration. For output block i
+// the center sample sits at c = i+K. The accumulator Y2 starts at the center
+// contribution: load the center window x[c .. c+7] (VMOVDQU), broadcast center,
+// form the 8 Q15-TRUNCATED products with the exact scaleQ15AVX2 recombine (VPMULDQ
+// even + VPSRLQ $32 slide + VPMULDQ odd, VPSRLQ $15 each, VPSLLQ $32 + VPBLENDD
+// $0xAA to reassemble), then add. For each pair k in [1,K] it loads the LEFT
+// window x[c-k .. c-k+7] and the RIGHT window x[c+k .. c+k+7], adds them with
+// VPADDD (wrapping int32) BEFORE the multiply, the single-truncation-per-pair
+// contract that makes this bit-exact with libopus comb_filter_const_c, then
+// broadcasts pairs[k-1], forms the 8 truncated products with the same recombine,
+// and VPADDD-accumulates. The center base R10 slides +32 per block; the left
+// pointer BX slides -4 per pair, the right pointer R13 +4, the coeff pointer R11
+// +2. After all pairs the 8 outputs are stored. The scalar-output tail runs the
+// full center+pairs computation per remaining output, adding each mirror pair as
+// a wrapping int32 sum (MOVL/ADDL) then sign-extending to int64 for the multiply
+// (MOVLQSX/IMULQ/SARQ $15/ADDL), so the per-pair fold-then-truncate is preserved
+// and the result is bit-exact with firSymValidQ15Go. The dispatch gates n =
+// len(dst) >= 8, and the kernel reads x only up to index (n-1)+2K <= len(x)-1 (and
+// down to x[0] at i=0,k=K), so there is no over-read. dst must not overlap x.
+// Frame is dst+x+center+pairs: dst+0, x+24, center+48, pairs+56 (bytes 50-55 are
+// alignment padding before the 8-byte-aligned pairs slice header).
+TEXT ·firSymValidQ15AVX2(SB), NOSPLIT, $0-80
+    MOVQ    dst_base+0(FP), DX
+    MOVQ    dst_len+8(FP), CX       // n = number of outputs
+    MOVQ    x_base+24(FP), SI       // x base
+    MOVWQSX center+48(FP), AX       // center tap, sign-extended int16
+    VMOVD   AX, X7
+    VPBROADCASTD X7, Y7             // center in all 8 int32 lanes (constant)
+    MOVQ    pairs_base+56(FP), DI   // pairs base (constant)
+    MOVQ    pairs_len+64(FP), R8    // K = number of mirror pairs (>=0)
+
+    MOVQ    R8, R10
+    SHLQ    $2, R10                 // K*4 bytes
+    ADDQ    SI, R10                 // R10 = &x[K] = center window base for block 0
+
+    MOVQ    CX, R9
+    SHRQ    $3, R9                  // R9 = n / 8 = full 8-output blocks
+    JZ      sym_avx2_tail
+
+sym_avx2_block:
+    // center contribution -> acc
+    VMOVDQU  (R10), Y0              // center window x[c .. c+7]
+    VPMULDQ  Y7, Y0, Y4            // even-lane products
+    VPSRLQ   $32, Y0, Y1           // slide odd lanes into even positions
+    VPMULDQ  Y7, Y1, Y5           // odd-lane products
+    VPSRLQ   $15, Y4, Y4          // low 32 of each = even result lanes
+    VPSRLQ   $15, Y5, Y5          // low 32 of each = odd result lanes
+    VPSLLQ   $32, Y5, Y5          // lift odd results to positions 1,3,5,7
+    VPBLENDD $0xAA, Y5, Y4, Y6    // merge even/odd
+    VPXOR    Y2, Y2, Y2           // acc = 0
+    VPADDD   Y6, Y2, Y2           // acc = center products (wrapping)
+
+    MOVQ  R8, R12                  // R12 = pair counter = K
+    TESTQ R12, R12
+    JZ    sym_avx2_store           // K == 0: center only
+    MOVQ  R10, BX                  // BX = left window pointer
+    SUBQ  $4, BX                   // pair k=1 left = center - 1 int32
+    MOVQ  R10, R13                 // R13 = right window pointer
+    ADDQ  $4, R13                  // pair k=1 right = center + 1 int32
+    MOVQ  DI, R11                  // R11 = pairs coeff pointer
+sym_avx2_pair:
+    MOVWQSX (R11), AX             // pairs[k-1], sign-extended int16
+    VMOVD   AX, X3
+    VPBROADCASTD X3, Y3           // coeff in all 8 lanes
+    VMOVDQU (BX), Y0             // left window x[c-k .. c-k+7]
+    VMOVDQU (R13), Y1            // right window x[c+k .. c+k+7]
+    VPADDD  Y1, Y0, Y0          // left+right, wrapping int32, BEFORE the multiply
+    VPMULDQ  Y3, Y0, Y4
+    VPSRLQ   $32, Y0, Y1
+    VPMULDQ  Y3, Y1, Y5
+    VPSRLQ   $15, Y4, Y4
+    VPSRLQ   $15, Y5, Y5
+    VPSLLQ   $32, Y5, Y5
+    VPBLENDD $0xAA, Y5, Y4, Y6
+    VPADDD   Y6, Y2, Y2          // acc += 8 Q15-truncated folded products (wrapping)
+    SUBQ  $4, BX                  // next pair: left moves down
+    ADDQ  $4, R13                 // right moves up
+    ADDQ  $2, R11                 // next coeff
+    DECQ  R12
+    JNZ   sym_avx2_pair
+sym_avx2_store:
+    VMOVDQU Y2, (DX)              // store 8 outputs
+    ADDQ  $32, R10                // next block center base
+    ADDQ  $32, DX                 // next dst block
+    DECQ  R9
+    JNZ   sym_avx2_block
+
+sym_avx2_tail:
+    ANDQ $7, CX                   // CX = n mod 8 = scalar-output tail count
+    JZ   sym_avx2_done
+sym_avx2_tail_out:
+    // center contribution
+    MOVWQSX center+48(FP), AX    // center, sign-extended int64
+    MOVLQSX (R10), R13           // int64(x[c])
+    IMULQ   R13, AX              // center * x[c] (|p| <= 2^46)
+    SARQ    $15, AX              // Q15 truncating arithmetic shift
+    MOVL    AX, R9               // acc32 = center product (low 32)
+
+    MOVQ  R8, R12                 // R12 = pair counter = K
+    TESTQ R12, R12
+    JZ    sym_avx2_tail_store     // K == 0
+    MOVQ  R10, BX                 // left pointer = center
+    SUBQ  $4, BX
+    MOVQ  R10, R13                // right pointer = center
+    ADDQ  $4, R13
+    MOVQ  DI, R11                 // coeff pointer
+sym_avx2_tail_pair:
+    MOVWQSX (R11), AX            // int64(pairs[k-1])
+    MOVL    (BX), SI            // left (low 32)
+    ADDL    (R13), SI           // SI = left + right, wrapping int32, BEFORE truncation
+    MOVLQSX SI, SI              // sign-extend the int32 sum to int64
+    IMULQ   SI, AX              // coeff * sum (|p| <= 2^46)
+    SARQ    $15, AX             // Q15 truncating arithmetic shift
+    ADDL    AX, R9              // acc32 += low 32 (wrapping)
+    SUBQ    $4, BX              // next pair
+    ADDQ    $4, R13
+    ADDQ    $2, R11
+    DECQ    R12
+    JNZ     sym_avx2_tail_pair
+sym_avx2_tail_store:
+    MOVL R9, (DX)                // store output
+    ADDQ $4, R10                 // next output center base
+    ADDQ $4, DX                  // next dst
+    DECQ CX
+    JNZ  sym_avx2_tail_out
+
+sym_avx2_done:
+    VZEROUPPER
+    RET
