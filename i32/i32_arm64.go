@@ -223,3 +223,22 @@ func firValidQ15I32(dst, x []int32, taps []int16) {
 
 //go:noescape
 func firValidQ15NEON(dst, x []int32, taps []int16)
+
+// minNEONSymFIR is one 4-wide (.4S) output block: FIRSymValidQ15's NEON kernel
+// vectorizes over 4 outputs per iteration with a scalar-output tail, so it gates
+// on NEON and at least one full 4-output block; shorter outputs use the pure-Go
+// reference. The kernel is correct at any output length via the scalar-output
+// tail, so this is a performance cut only, never a safety requirement. len(dst)
+// here is already the clamped output count n from the public FIRSymValidQ15.
+const minNEONSymFIR = 4
+
+func firSymValidQ15I32(dst, x []int32, center int16, pairs []int16) {
+	if hasNEON && len(dst) >= minNEONSymFIR {
+		firSymValidQ15NEON(dst, x, center, pairs)
+		return
+	}
+	firSymValidQ15Go(dst, x, center, pairs)
+}
+
+//go:noescape
+func firSymValidQ15NEON(dst, x []int32, center int16, pairs []int16)

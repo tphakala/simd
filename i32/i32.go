@@ -32,9 +32,9 @@
 //
 // Some operations do not take an element-for-element overlay. Interleave2 and
 // Deinterleave2 have a destination whose length differs from their inputs (twice,
-// or half). FIRValidQ15 writes a valid-convolution output shorter than its input
-// and reads a sliding window ahead of each output, so its dst must be distinct
-// from x. Butterfly rewrites its two operands in place, so lo and hi must not
+// or half). FIRValidQ15 and FIRSymValidQ15 write a valid-convolution output
+// shorter than their input and read a sliding window ahead of each output, so
+// their dst must be distinct from x. Butterfly rewrites its two operands in place, so lo and hi must not
 // overlap each other. The reductions (Sum, MaxAbs, MinMax) write no output slice,
 // so aliasing does not apply to them.
 package i32

@@ -135,3 +135,134 @@ func TestFIRValidQ15Dispatch_ReachesNEON(t *testing.T) {
 		t.Fatalf("minNEONFIR = %d exceeds two vector blocks: FIRValidQ15 would not vectorize at the lengths it was written for", minNEONFIR)
 	}
 }
+
+// TestFIRSymValidQ15NEON_ParityWithGo drives the kernel directly across output
+// lengths that force the 4-wide vector body plus every scalar-output-tail
+// remainder, over the combFilterConst pair count (2) and neighbors including K=0.
+// MinInt16/MaxInt16 ride the center and pair extremes and MinInt32/MaxInt32 the
+// ends of x, so the sign-extension into SMULL, the mirror fold and the wrap are
+// exercised at every length.
+func TestFIRSymValidQ15NEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	pairCounts := []int{0, 1, 2, 3, 5, 8}
+	outLens := []int{4, 5, 6, 7, 8, 9, 11, 12, 15, 16, 17, 23, 24, 31, 32, 33, 40}
+	for _, k := range pairCounts {
+		center := int16(math.MinInt16)
+		pairs := genI16(k, uint32(k)*19+5)
+		if k > 0 {
+			pairs[0] = math.MinInt16
+			pairs[k-1] = math.MaxInt16
+		}
+		for _, outLen := range outLens {
+			xl := outLen + 2*k
+			x := genI32(xl, uint32(xl)*7+uint32(k))
+			x[0] = math.MinInt32
+			x[xl-1] = math.MaxInt32
+			got := make([]int32, outLen)
+			want := make([]int32, outLen)
+			firSymValidQ15NEON(got, x, center, pairs)
+			firSymValidQ15Go(want, x, center, pairs)
+			for i := range got {
+				if got[i] != want[i] {
+					t.Fatalf("firSymValidQ15NEON k=%d outLen=%d: dst[%d] = %d, want %d", k, outLen, i, got[i], want[i])
+				}
+			}
+		}
+	}
+}
+
+// TestFIRSymValidQ15NEON_OverRead catches a kernel that reads x outside [0, len(x)).
+// The in-range body is tame (samples in -2..2), while a slack region past len(x)
+// is poisoned with 0x55555555, a large non-zero value that is NOT an additive
+// identity. A kernel that loads a stray window block or runs the pair loop one
+// element too far lands in the poison and its result flips away from the reference;
+// a correct kernel reads only x[0 .. (n-1)+2K] and stays equal. The center and
+// pair coeffs are 0x4000 (0.5 in Q15) so every poisoned lane makes a large, visible
+// contribution.
+func TestFIRSymValidQ15NEON_OverRead(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	const poison = int32(0x55555555)
+	for _, k := range []int{0, 1, 2, 5} {
+		center := int16(0x4000)
+		pairs := make([]int16, k)
+		for i := range pairs {
+			pairs[i] = 0x4000
+		}
+		for _, outLen := range []int{4, 5, 7, 8, 9, 11, 13, 16, 17, 23, 31} {
+			xl := outLen + 2*k
+			const slack = 8 // >= one widest output block worth of window
+			backing := make([]int32, xl+slack)
+			for i := range backing {
+				if i < xl {
+					backing[i] = int32(i%5 - 2) // tame body: -2..2
+				} else {
+					backing[i] = poison
+				}
+			}
+			x := backing[:xl]
+			got := make([]int32, outLen)
+			want := make([]int32, outLen)
+			firSymValidQ15NEON(got, x, center, pairs)
+			firSymValidQ15Go(want, x, center, pairs)
+			for i := range got {
+				if got[i] != want[i] {
+					t.Fatalf("firSymValidQ15NEON k=%d outLen=%d: dst[%d] = %d, want %d: kernel read x past len into poison", k, outLen, i, got[i], want[i])
+				}
+			}
+		}
+	}
+}
+
+// TestFIRSymValidQ15NEON_NoOverwrite guards the scalar-output tail: the kernel may
+// not write past n when n is not a multiple of the 4-output block.
+func TestFIRSymValidQ15NEON_NoOverwrite(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	const outLen = 7
+	center := int16(0x1111)
+	pairs := genI16(2, 81)
+	x := genI32(outLen+2*len(pairs), 82)
+	dst := make([]int32, outLen+8)
+	for i := range dst {
+		dst[i] = math.MaxInt32 // sentinel
+	}
+	firSymValidQ15NEON(dst[:outLen], x, center, pairs)
+	for i := outLen; i < len(dst); i++ {
+		if dst[i] != math.MaxInt32 {
+			t.Errorf("firSymValidQ15NEON wrote past end at dst[%d] = %d", i, dst[i])
+		}
+	}
+}
+
+// TestFIRSymValidQ15NEON_AllocFree asserts the kernel runs allocation-free, the
+// repo's zero-allocation contract enforced at the kernel boundary.
+func TestFIRSymValidQ15NEON_AllocFree(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	x := make([]int32, 1024)
+	pairs := make([]int16, 2)
+	dst := make([]int32, 1020)
+	if got := testing.AllocsPerRun(100, func() { firSymValidQ15NEON(dst, x, 0x4000, pairs) }); got != 0 {
+		t.Errorf("firSymValidQ15NEON allocated %v times per run, want 0", got)
+	}
+}
+
+// TestFIRSymValidQ15Dispatch_ReachesNEON pins the dispatch state FIRSymValidQ15
+// depends on. It is a white-box check: the NEON kernel is bit-identical to the Go
+// reference by design, so a dispatcher that silently routed every call to Go would
+// pass every parity test. It must not call t.Parallel(): it reads package-level
+// dispatch state.
+func TestFIRSymValidQ15Dispatch_ReachesNEON(t *testing.T) {
+	if hasNEON != cpu.ARM64.NEON {
+		t.Fatalf("hasNEON = %v but cpu.ARM64.NEON = %v: dispatch flag is not wired to CPU detection", hasNEON, cpu.ARM64.NEON)
+	}
+	if minNEONSymFIR > 8 {
+		t.Fatalf("minNEONSymFIR = %d exceeds two vector blocks: FIRSymValidQ15 would not vectorize at the lengths it was written for", minNEONSymFIR)
+	}
+}

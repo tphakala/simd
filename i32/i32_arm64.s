@@ -699,3 +699,122 @@ fir_neon_tail_tap:
 
 fir_neon_done:
     RET
+
+// func firSymValidQ15NEON(dst, x []int32, center int16, pairs []int16)
+// int32 valid convolution in correlation orientation with a SYMMETRIC Q15 tap set
+// (one center tap plus K = len(pairs) mirror pairs, window length 2K+1),
+// vectorized over the OUTPUT index: 4 outputs per iteration. For output block i
+// the center sample sits at c = i+K. The accumulator V16 starts at zero; the
+// center window x[c .. c+3] is loaded (VLD1), center is broadcast (DUP from W2,
+// sign-extended by MOVH), the 4 Q15-TRUNCATED products are formed with the exact
+// scaleQ15NEON widen-shift-narrow (SMULL/SMULL2 to int64, SSHR .2D #15, XTN/XTN2
+// to the low 32 bits) and ADD .4S-accumulated. For each pair k in [1,K] the LEFT
+// window x[c-k .. c-k+3] and RIGHT window x[c+k .. c+k+3] are loaded and summed
+// with VADD .4S (wrapping int32) BEFORE the multiply, the
+// single-truncation-per-pair contract that makes this bit-exact with libopus
+// comb_filter_const_c, then pairs[k-1] is broadcast, the products formed with
+// the same widen-shift-narrow, and ADD .4S-accumulated. The center base R7 slides
+// +16 per block; the left pointer R10 slides -4 per pair, the right pointer R11
+// +4, the coeff pointer R8 +2. Both the center and every pair coeff funnel through
+// W2 -> DUP V1.4S,W2 and multiply V0/V1 -> V2/V3, so every SMULL/SMULL2/SSHR/XTN/
+// XTN2/DUP WORD is a scaleQ15NEON encoding verbatim (cross-checked by
+// TestArm64WordEncodings) and NO new hand-encoded WORD is introduced; the left+
+// right VADD is a plain Go-asm mnemonic. The scalar-output tail runs the full
+// center+pairs computation per remaining output, adding each mirror pair as a
+// wrapping int32 sum (MOVWU/ADDW then MOVW sign-extend) before the multiply
+// (MUL/ASR #15/ADD), so the per-pair fold-then-truncate is preserved and the
+// result is bit-exact with firSymValidQ15Go. The dispatch gates n = len(dst) >= 4,
+// and the kernel reads x only up to index (n-1)+2K <= len(x)-1 (and down to x[0]
+// at i=0,k=K), so there is no over-read. dst must not overlap x. Frame is dst+x+
+// center+pairs: dst+0, x+24, center+48, pairs+56 (bytes 50-55 are alignment
+// padding before the 8-byte-aligned pairs slice header).
+TEXT ·firSymValidQ15NEON(SB), NOSPLIT, $0-80
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3         // n = number of outputs
+    MOVD x_base+24(FP), R1         // x base
+    MOVD pairs_base+56(FP), R6     // pairs base (constant)
+    MOVD pairs_len+64(FP), R5      // K = number of mirror pairs (>=0)
+
+    LSL  $2, R5, R7               // K*4 bytes
+    ADD  R1, R7, R7              // R7 = &x[K] = center window base for block 0
+
+    LSR  $2, R3, R4               // R4 = n / 4 = full 4-output blocks
+    CBZ  R4, sym_neon_tail
+
+sym_neon_block:
+    VEOR V16.B16, V16.B16, V16.B16 // acc = 0
+    // center contribution
+    MOVH center+48(FP), R2         // center tap, sign-extended (W2 for DUP)
+    WORD $0x4E040C41              // DUP V1.4S, W2   (center in all 4 int32 lanes)
+    VLD1 (R7), [V0.S4]           // center window x[c .. c+3]
+    WORD $0x0EA1C002             // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
+    WORD $0x4EA1C003             // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
+    WORD $0x4F710442             // SSHR V2.2D, V2.2D, #15
+    WORD $0x4F710463             // SSHR V3.2D, V3.2D, #15
+    WORD $0x0EA12844             // XTN V4.2S, V2.2D   (low 32 of results 0,1)
+    WORD $0x4EA12864             // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    VADD V4.S4, V16.S4, V16.S4   // acc = center products (wrapping)
+
+    MOVD R5, R9                   // R9 = pair counter = K
+    CBZ  R9, sym_neon_store        // K == 0: center only
+    SUB  $4, R7, R10             // R10 = left pointer, pair k=1 = center - 1 int32
+    ADD  $4, R7, R11             // R11 = right pointer, pair k=1 = center + 1 int32
+    MOVD R6, R8                   // R8 = pairs coeff pointer
+sym_neon_pair:
+    MOVH.P 2(R8), R2             // pairs[k-1], sign-extended, post-inc coeff ptr
+    WORD $0x4E040C41            // DUP V1.4S, W2
+    VLD1 (R10), [V0.S4]         // left window x[c-k .. c-k+3]
+    VLD1 (R11), [V5.S4]         // right window x[c+k .. c+k+3]
+    VADD V5.S4, V0.S4, V0.S4    // left+right, wrapping int32, BEFORE the multiply
+    WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S
+    WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S
+    WORD $0x4F710442           // SSHR V2.2D, V2.2D, #15
+    WORD $0x4F710463           // SSHR V3.2D, V3.2D, #15
+    WORD $0x0EA12844           // XTN V4.2S, V2.2D
+    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D
+    VADD V4.S4, V16.S4, V16.S4  // acc += 4 Q15-truncated folded products (wrapping)
+    SUB  $4, R10, R10           // next pair: left moves down
+    ADD  $4, R11, R11           // right moves up
+    SUB  $1, R9, R9
+    CBNZ R9, sym_neon_pair
+sym_neon_store:
+    VST1.P [V16.S4], 16(R0)      // store 4 outputs
+    ADD  $16, R7, R7             // next block center base
+    SUB  $1, R4, R4
+    CBNZ R4, sym_neon_block
+
+sym_neon_tail:
+    AND  $3, R3, R4              // R4 = n mod 4 = scalar-output tail count
+    CBZ  R4, sym_neon_done
+sym_neon_tail_out:
+    // center contribution
+    MOVH center+48(FP), R2      // center, sign-extended
+    MOVW (R7), R12              // int64(x[c]), sign-extended
+    MUL  R2, R12, R14           // center * x[c] (|p| <= 2^46)
+    ASR  $15, R14, R14          // Q15 truncating shift; acc in R14
+    MOVD R5, R9                 // R9 = pair counter = K
+    CBZ  R9, sym_neon_tail_store // K == 0
+    SUB  $4, R7, R10            // left pointer = center - 1
+    ADD  $4, R7, R11            // right pointer = center + 1
+    MOVD R6, R8                 // coeff pointer
+sym_neon_tail_pair:
+    MOVH.P 2(R8), R2           // int64(pairs[k-1]), sign-extended, post-inc
+    MOVWU (R10), R12           // left, zero-extended low 32
+    MOVWU (R11), R13           // right, zero-extended low 32
+    ADDW  R13, R12, R12        // (left+right) mod 2^32, wrapping int32, BEFORE truncation
+    MOVW  R12, R12             // sign-extend the int32 sum to int64
+    MUL   R2, R12, R12         // coeff * sum (|p| <= 2^46)
+    ASR   $15, R12, R12        // Q15 truncating shift
+    ADD   R12, R14, R14        // acc += (wrapping; low 32 significant)
+    SUB   $4, R10, R10         // next pair
+    ADD   $4, R11, R11
+    SUB   $1, R9, R9
+    CBNZ  R9, sym_neon_tail_pair
+sym_neon_tail_store:
+    MOVW.P R14, 4(R0)          // store output (low 32), post-inc dst
+    ADD  $4, R7, R7            // next output center base
+    SUB  $1, R4, R4
+    CBNZ R4, sym_neon_tail_out
+
+sym_neon_done:
+    RET
