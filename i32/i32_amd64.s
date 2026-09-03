@@ -829,7 +829,8 @@ sumsq_avx2_reduce:
     VPADDD X1, X7, X7
     VPSHUFD $0xB1, X7, X1        // swap 32-bit within pairs
     VPADDD X1, X7, X7
-    MOVQ X7, DX                  // EDX = vector total (low int32)
+    VMOVD X7, DX                 // EDX = vector total (low int32); VEX extract keeps the
+                                 // whole kernel off the legacy-SSE path through VZEROUPPER
 
     ANDQ $7, DI
     JZ   sumsq_avx2_done
