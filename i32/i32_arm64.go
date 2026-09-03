@@ -205,6 +205,30 @@ func maxAbsI32(a []int32) int32 {
 //go:noescape
 func maxAbsNEON(a []int32) int32
 
+// minNEONSumSqShiftedQ31 is one 4-wide (.4S) block, an independent literal like
+// the tier-3 thresholds above. The kernel does the widen-square-accumulate in
+// 4-wide lanes with a VADDV across-vector fold and a scalar tail, so it gates on
+// NEON and at least one full 4-element block; shorter slices use the pure-Go
+// reference. The kernel is correct at any length via the scalar tail, so this is a
+// performance cut only, never a safety requirement.
+//
+// This stays at one block: NEON has no analogue of an AVX per-call penalty, so the
+// kernel does not need to amortise a fixed cost. MEASURED on Apple Silicon (arm64,
+// -benchtime pinned): the kernel is on par with sumSqShiftedQ31Go at one block
+// (n=4, ~2.0 ns either way) and pulls ahead from n=8 (2.3 vs 3.2 ns, 1.4x), the
+// same shape as the other NEON reductions, so one block is the right cut.
+const minNEONSumSqShiftedQ31 = 4
+
+func sumSqShiftedQ31I32(a []int32, shift int) int32 {
+	if hasNEON && len(a) >= minNEONSumSqShiftedQ31 {
+		return sumSqShiftedQ31NEON(a, shift)
+	}
+	return sumSqShiftedQ31Go(a, shift)
+}
+
+//go:noescape
+func sumSqShiftedQ31NEON(a []int32, shift int) int32
+
 // minNEONFIR is one 4-wide (.4S) output block: FIRValidQ15's NEON kernel
 // vectorizes over 4 outputs per iteration with a scalar-output tail, so it gates
 // on NEON and at least one full 4-output block; shorter outputs use the pure-Go

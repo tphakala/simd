@@ -228,6 +228,35 @@ func maxAbsI32(a []int32) int32 {
 //go:noescape
 func maxAbsAVX2(a []int32) int32
 
+// minAVX2SumSqShiftedQ31 is one 8-wide (256-bit) block. The kernel is correct at
+// any length (it falls through to a scalar tail), so this is a performance cut
+// only, never a safety requirement. It gates on AVX2 because the VPSLLD pre-shift,
+// the VPMULDQ Q31 square and the VPADDD accumulate are all 256-bit integer ops.
+//
+// Unlike GainQ31 (whose AVX2 kernel pays a large fixed per-call cost and sits at
+// 160), this kernel is MEASURED to win from the first 8-wide block, so the cut stays
+// at one block, matching Sum and MaxAbs. On the amd64 A/B host (i7-1260P, AVX2,
+// taskset P-core) it beats sumSqShiftedQ31Go at every size from n=8 up (n=8: 2.4 vs
+// 4.3 ns, 1.8x; n=16: 2.8 vs 7.7; n=64: 6.8 vs 34.6, 5x), with the Go side scaling
+// ~4x steeper, so there is no small-n regime where SIMD loses. One verified
+// structural difference from gainQ31AVX2 is that this kernel loads its single shift
+// count with VEX VMOVD before any YMM op, rather than a legacy MOVQ-to-XMM issued
+// after a VEX broadcast; keeping that count load off the legacy-SSE path avoids an
+// AVX-SSE assist and is the likely reason it shows no fixed per-call cost (the exact
+// source of gainQ31's cost was not isolated here). The arm64 NEON path likewise
+// stays at minNEONSumSqShiftedQ31 = 4.
+const minAVX2SumSqShiftedQ31 = 8
+
+func sumSqShiftedQ31I32(a []int32, shift int) int32 {
+	if hasAVX2 && len(a) >= minAVX2SumSqShiftedQ31 {
+		return sumSqShiftedQ31AVX2(a, shift)
+	}
+	return sumSqShiftedQ31Go(a, shift)
+}
+
+//go:noescape
+func sumSqShiftedQ31AVX2(a []int32, shift int) int32
+
 // minAVX2FIR is one 8-wide (256-bit) output block: FIRValidQ15's AVX2 kernel
 // vectorizes over 8 outputs per iteration with a scalar-output tail, so it gates
 // on AVX2 and at least one full 8-output block; shorter outputs use the pure-Go
