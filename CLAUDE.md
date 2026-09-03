@@ -86,10 +86,10 @@ happens, not about CPU features, and it applies to both architectures.
 
 ## Testing across architectures
 
-- AMD64 tests run natively here.
-- ARM64 is exercised on a native Raspberry Pi 5 host (`thakala@rpi5.local`,
-  aarch64, go installed). Cross-compile here, copy the test binary over, run it
-  there. No qemu emulation needed.
+- AMD64 tests run on an amd64 host.
+- ARM64 is exercised on native ARM64 hardware (a Raspberry Pi 5, Cortex-A76):
+  cross-compile, copy the test binary over, and run it there. No qemu emulation
+  needed.
 - Each SIMD primitive ships a Go reference, parity tests against the active SIMD
   path, a bit-exactness check vs the per-element scalar path where applicable, and
   a `testing.AllocsPerRun == 0` allocation-free assertion.
