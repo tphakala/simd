@@ -624,6 +624,70 @@ maxabs_neon_combine:
     MOVW R0, ret+24(FP)
     RET
 
+// func sumSqShiftedQ31NEON(a []int32, shift int) int32
+// Wrapping int32 sum of pre-shifted Q31 squares, 4 int32 per iteration. Each block
+// left-shifts the four int32 lanes by the runtime shift count (SSHL .4S applies
+// SHL32 in 32-bit lanes, so the value stays in int32 range BEFORE the widen), then
+// squares them with the scaleQ31NEON widen-shift-narrow: SMULL/SMULL2 multiply each
+// shifted lane by ITSELF into int64 (lanes 0,1 then 2,3), SSHR .2D #31 arithmetically
+// shifts each product right 31 (the square is non-negative so this is a plain
+// truncate), and XTN/XTN2 narrow the low 32 bits back to int32 (a shifted lane of
+// MinInt32 gives 2^62 >> 31 = 2^31, whose low 32 = MinInt32). VADD .4S accumulates
+// the four terms into a wrapping int32 accumulator, VADDV folds it to a scalar, and
+// the scalar tail closes out (n mod 4): LSLW wraps x in 32 bits, MOVW re-sign-extends
+// it, MUL forms x*x (|x| <= 2^31 so |p| <= 2^62), ASR #31 takes the term, and ADDW
+// accumulates it wrapping. Because wrapping int32 addition is associative, the 4-lane
+// split plus the VADDV fold is bit-identical to sumSqShiftedQ31Go for every input.
+// The DUP/SSHL/SSHR/XTN/XTN2 WORDs are the gainQ31NEON/scaleQ31NEON encodings
+// verbatim; the two SMULL/SMULL2 WORDs are those encodings with the multiplier lane
+// set to V0 (self-square, Rm field V1->V0). All are cross-checked against arm64asm by
+// TestArm64WordEncodings. The dispatch guarantees shift in [0,31]. Registers R1=a,
+// R3=n, R4=blocks, R5=total, R6=shift, R7=tail sample; V0/V2/V3/V4/V5/V6; none of
+// R16/R17/R18/R27/R28. Frame: a+0, shift+24, ret+32.
+TEXT ·sumSqShiftedQ31NEON(SB), NOSPLIT, $0-36
+    MOVD a_base+0(FP), R1
+    MOVD a_len+8(FP), R3
+    MOVD shift+24(FP), R6
+    WORD $0x4E040CC5             // DUP V5.4S, W6   (shift in all 4 lanes, SSHL count)
+    VEOR V6.B16, V6.B16, V6.B16  // wrapping int32 accumulator = 0
+
+    LSR  $2, R3, R4             // R4 = n / 4
+    CBZ  R4, sumsq_neon_reduce
+
+sumsq_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]      // a[i..i+3]
+    WORD $0x4EA54400            // SSHL V0.4S, V0.4S, V5.4S    (x = a << shift, wrapping)
+    WORD $0x0EA0C002           // SMULL V2.2D, V0.2S, V0.2S   (lanes 0,1 squared -> 2 int64)
+    WORD $0x4EA0C003           // SMULL2 V3.2D, V0.4S, V0.4S  (lanes 2,3 squared -> 2 int64)
+    WORD $0x4F610442           // SSHR V2.2D, V2.2D, #31
+    WORD $0x4F610463           // SSHR V3.2D, V3.2D, #31
+    WORD $0x0EA12844           // XTN V4.2S, V2.2D    (low 32 of terms 0,1)
+    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D   (low 32 of terms 2,3)
+    VADD V4.S4, V6.S4, V6.S4   // accumulate (wrapping int32 lanes)
+    SUB  $1, R4
+    CBNZ R4, sumsq_neon_loop4
+
+sumsq_neon_reduce:
+    VADDV V6.S4, V6            // ADDV S6, V6.4S: horizontal wrapping int32 sum
+    FMOVS F6, R5              // R5 = vector total (low 32 = int32)
+
+    AND  $3, R3
+    CBZ  R3, sumsq_neon_done
+
+sumsq_neon_scalar:
+    MOVW.P 4(R1), R7           // a[i], sign-extended
+    LSLW R6, R7, R7           // x = a << shift (wraps in the W register)
+    MOVW R7, R7               // re-sign-extend the WRAPPED x to 64-bit
+    MUL  R7, R7, R7           // x * x (|x| <= 2^31 so |p| <= 2^62)
+    ASR  $31, R7, R7          // MULT32_32_Q31 (square >= 0, arithmetic == logical)
+    ADDW R7, R5, R5           // + term, wrapping int32 add
+    SUB  $1, R3
+    CBNZ R3, sumsq_neon_scalar
+
+sumsq_neon_done:
+    MOVW R5, ret+32(FP)
+    RET
+
 // func firValidQ15NEON(dst, x []int32, taps []int16)
 // int32 valid convolution in correlation orientation with int16 Q15 taps,
 // vectorized over the OUTPUT index: 4 outputs per iteration. For output block i

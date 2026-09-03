@@ -225,6 +225,34 @@ func gainQ31Go(dst, a []int32, gain int32, preShift, postShift int) {
 	}
 }
 
+// sumSqShiftedQ31Go is SumSqShiftedQ31's source of truth: the wrapping int32 sum
+// over a of MULT32_32_Q31(a[i]<<shift, a[i]<<shift). Each term applies SHL32 (a
+// wrapping int32 left shift) to the sample BEFORE the widen, so the square is of
+// the already-truncated int32 value; the 64-bit square is at most (2^31)^2 = 2^62
+// and never overflows its int64 intermediate, and only the final int32() cast
+// wraps (a shifted value of MinInt32 gives 2^62 >> 31 = 2^31, wrapping to
+// MinInt32). The square is non-negative, so the arithmetic shift here is a plain
+// truncating >> 31.
+//
+// The accumulator wraps in int32: two's-complement addition is associative and
+// commutative modulo 2^32, so the SIMD lane grouping and horizontal reduction are
+// bit-identical to this sequential loop for every input, including forced
+// overflow. That reproducibility is the contract that lets the kernels vectorize.
+//
+// shift is masked into [0,31] once (a no-op within the documented precondition,
+// which public SumSqShiftedQ31 enforces) so the compiler can prove the per-element
+// shift count is in range and drop runtime.panicshift from the hot loop, exactly
+// as gainQ31Go does.
+func sumSqShiftedQ31Go(a []int32, shift int) int32 {
+	s := uint(shift) & gainShiftMax
+	var sum int32
+	for _, v := range a {
+		x := int32(uint32(v) << s)
+		sum += int32(int64(x) * int64(x) >> scaleQ31Shift)
+	}
+	return sum
+}
+
 // firValidQ15Shift is the Q15 fixed-point position of each tap product: the
 // 64-bit int64(taps[j])*int64(x[i+j]) is arithmetically shifted right by 15 to
 // land the Q15 fractional scale back in int32 range, per product, before it is

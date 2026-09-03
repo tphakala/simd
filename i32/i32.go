@@ -35,7 +35,7 @@
 // or half). FIRValidQ15 and FIRSymValidQ15 write a valid-convolution output
 // shorter than their input and read a sliding window ahead of each output, so
 // their dst must be distinct from x. Butterfly rewrites its two operands in place, so lo and hi must not
-// overlap each other. The reductions (Sum, MaxAbs, MinMax) write no output slice,
+// overlap each other. The reductions (Sum, MaxAbs, MinMax, SumSqShiftedQ31) write no output slice,
 // so aliasing does not apply to them.
 package i32
 

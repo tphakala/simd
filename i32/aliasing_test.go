@@ -11,7 +11,7 @@ import (
 // overlaid on an input, then compared under both the Go and SIMD kernels. The
 // length-changing shuffles (Interleave2, Deinterleave2), the valid convolutions
 // (FIRValidQ15 and FIRSymValidQ15, whose dst is shorter than x), the in-place pair transform
-// (Butterfly) and the reductions (Sum, MaxAbs, MinMax) do not take an
+// (Butterfly) and the reductions (Sum, MaxAbs, MinMax, SumSqShiftedQ31) do not take an
 // element-for-element dst overlay and are not swept here; see the package doc. It
 // asserts nothing about how a shifted overlay (dst offset from an input)
 // corrupts, which is undefined.

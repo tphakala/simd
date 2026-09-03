@@ -775,6 +775,82 @@ maxabs_ret_max:
     VZEROUPPER
     RET
 
+// func sumSqShiftedQ31AVX2(a []int32, shift int) int32
+// Wrapping int32 sum of pre-shifted Q31 squares, 8 int32 per iteration. Each block
+// left-shifts the eight int32 lanes by the runtime shift count (VPSLLD with an XMM
+// count applies SHL32 in 32-bit lanes, so the value stays in int32 range BEFORE the
+// widen), then squares them with the scaleQ31AVX2 recombine: VPMULDQ gives the four
+// even-lane squares x0,x2,x4,x6 as int64, VPSRLQ $32 slides the already-shifted odd
+// lanes down for a second VPMULDQ, each product is shifted right 31 (VPSRLQ $31 --
+// the square is non-negative so bit 63 is clear and the logical shift equals the
+// arithmetic one, low 32 = the MULT32_32_Q31 term), and VPSLLQ $32 + VPBLENDD $0xAA
+// reassemble the eight int32 terms. VPADDD accumulates them into an 8-lane int32
+// accumulator (wrapping). After the loop the accumulator folds to a single int32
+// exactly like sumAVX2 (VEXTRACTI128 + VPADDD + two VPSHUFD folds), and the scalar
+// tail closes out the (n mod 8) residuals: SHLL wraps x in 32 bits, MOVLQSX sign-
+// extends it, IMULQ forms x*x (|x| <= 2^31 so |p| <= 2^62 fits int64), SARQ $31
+// takes the term, and ADDL accumulates it wrapping. Because wrapping int32 addition
+// is associative, the 8-lane split plus the fold is bit-identical to
+// sumSqShiftedQ31Go for every input. The dispatch guarantees shift in [0,31], so
+// VPSLLD (saturates to 0 past 31) and SHLL (masks the count to 5 bits) never
+// disagree on an out-of-range count. Registers SI/DI/CX/AX/DX/R8 and
+// X6/Y0/Y1/Y2/Y4/Y5/Y7; no R14/R15/BP. Frame: a+0, shift+24, ret+32.
+TEXT ·sumSqShiftedQ31AVX2(SB), NOSPLIT, $0-36
+    MOVQ a_base+0(FP), SI
+    MOVQ shift+24(FP), R8
+    VMOVD R8, X6                  // VPSLLD count = shift; VEX move (not legacy MOVQ) so a
+                                  // caller with dirty upper YMM state pays no AVX-SSE assist
+    VPXOR Y7, Y7, Y7              // wrapping int32 accumulator = 0
+
+    MOVQ a_len+8(FP), DI          // DI = n (also the tail count)
+    MOVQ DI, CX
+    SHRQ $3, CX                   // CX = n / 8
+    JZ   sumsq_avx2_reduce
+
+sumsq_avx2_loop8:
+    VMOVDQU  (SI), Y0             // a[i..i+7]
+    VPSLLD   X6, Y0, Y0           // x = a << shift (wrapping in 32-bit lanes)
+    VPMULDQ  Y0, Y0, Y4          // even lanes x0,x2,x4,x6 squared -> 4x int64
+    VPSRLQ   $32, Y0, Y1          // slide shifted odd lanes into even positions
+    VPMULDQ  Y1, Y1, Y5         // odd lanes x1,x3,x5,x7 squared -> 4x int64
+    VPSRLQ   $31, Y4, Y4         // low 32 of each int64 = even Q31 terms
+    VPSRLQ   $31, Y5, Y5         // low 32 of each int64 = odd Q31 terms
+    VPSLLQ   $32, Y5, Y5         // lift odd terms to int32 positions 1,3,5,7
+    VPBLENDD $0xAA, Y5, Y4, Y2   // 8 int32 terms: 0,2,4,6 <- Y4, 1,3,5,7 <- Y5
+    VPADDD   Y2, Y7, Y7          // accumulate (wrapping int32 lanes)
+    ADDQ $32, SI
+    DECQ CX
+    JNZ  sumsq_avx2_loop8
+
+sumsq_avx2_reduce:
+    VEXTRACTI128 $1, Y7, X1
+    VPADDD X1, X7, X7            // fold 8 -> 4 int32
+    VPSHUFD $0x4E, X7, X1        // swap 64-bit halves
+    VPADDD X1, X7, X7
+    VPSHUFD $0xB1, X7, X1        // swap 32-bit within pairs
+    VPADDD X1, X7, X7
+    MOVQ X7, DX                  // EDX = vector total (low int32)
+
+    ANDQ $7, DI
+    JZ   sumsq_avx2_done
+
+sumsq_avx2_scalar:
+    MOVL    (SI), AX
+    MOVQ    R8, CX
+    SHLL    CX, AX              // x = a << shift (wraps in 32 bits, count in CL)
+    MOVLQSX AX, AX              // sign-extend the WRAPPED x to int64
+    IMULQ   AX, AX              // x * x (|x| <= 2^31 so |p| <= 2^62)
+    SARQ    $31, AX             // MULT32_32_Q31 (square >= 0, arithmetic == logical)
+    ADDL    AX, DX              // + term, wrapping int32 add
+    ADDQ $4, SI
+    DECQ DI
+    JNZ  sumsq_avx2_scalar
+
+sumsq_avx2_done:
+    MOVL DX, ret+32(FP)
+    VZEROUPPER
+    RET
+
 // func firValidQ15AVX2(dst, x []int32, taps []int16)
 // int32 valid convolution in correlation orientation with int16 Q15 taps,
 // vectorized over the OUTPUT index: 8 outputs per iteration. For output block i

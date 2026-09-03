@@ -304,6 +304,35 @@ func BenchmarkMaxAbsGo_25(b *testing.B)   { benchmarkMaxAbs(b, 25, maxAbsGo) }
 func BenchmarkMaxAbsGo_1000(b *testing.B) { benchmarkMaxAbs(b, 1000, maxAbsGo) }
 func BenchmarkMaxAbsGo_1003(b *testing.B) { benchmarkMaxAbs(b, 1003, maxAbsGo) }
 
+func benchmarkSumSqShiftedQ31(b *testing.B, n int, fn func(a []int32, shift int) int32) {
+	b.Helper()
+	a := make([]int32, n)
+	for i := range a {
+		a[i] = int32(i*7 - 3000)
+	}
+	const shift = 3 // a representative band-energy pre-shift
+	b.SetBytes(int64(n) * 4)
+	for b.Loop() {
+		_ = fn(a, shift)
+	}
+}
+
+func BenchmarkSumSqShiftedQ31_25(b *testing.B)   { benchmarkSumSqShiftedQ31(b, 25, SumSqShiftedQ31) }
+func BenchmarkSumSqShiftedQ31_1000(b *testing.B) { benchmarkSumSqShiftedQ31(b, 1000, SumSqShiftedQ31) }
+func BenchmarkSumSqShiftedQ31_1003(b *testing.B) { benchmarkSumSqShiftedQ31(b, 1003, SumSqShiftedQ31) }
+
+func BenchmarkSumSqShiftedQ31Go_25(b *testing.B) {
+	benchmarkSumSqShiftedQ31(b, 25, sumSqShiftedQ31Go)
+}
+
+func BenchmarkSumSqShiftedQ31Go_1000(b *testing.B) {
+	benchmarkSumSqShiftedQ31(b, 1000, sumSqShiftedQ31Go)
+}
+
+func BenchmarkSumSqShiftedQ31Go_1003(b *testing.B) {
+	benchmarkSumSqShiftedQ31(b, 1003, sumSqShiftedQ31Go)
+}
+
 // FIRValidQ15 is a sliding valid convolution: each of the outLen = n - kl + 1
 // outputs runs the full kl-tap inner loop, so cost scales with outLen*kl. The
 // 5-tap case is combFilterConst; the 16-tap case stresses a longer kernel.
