@@ -9,7 +9,7 @@ import (
 // TestQuantizeRandomizedDifferential runs many random cases through the public
 // path and the Go reference and asserts bit-exact agreement. It gives the active
 // SIMD kernel (AVX2 or NEON) broad differential coverage beyond the deterministic
-// parity sweep; on the rpi5 it is the on-device stress for the NEON kernels.
+// parity sweep; on a Raspberry Pi 5 it is the on-device stress for the NEON kernels.
 func TestQuantizeRandomizedDifferential(t *testing.T) {
 	r := rand.New(rand.NewSource(0x132))
 	for iter := range 4000 {
