@@ -84,7 +84,7 @@ const (
 // mulQ15Go is the bit-exact source of truth for the MulQ15 kernels. The int16
 // conversion keeps the low 16 bits, so the one product outside int16 range,
 // (-32768 * -32768) -> +32768, wraps to -32768 rather than saturating; both
-// SIMD paths reproduce that wrap exactly (SMULL/SRSHR/XTN on NEON, VPMULHRSW
+// SIMD paths reproduce that wrap exactly (SMULL/RSHRN on NEON, VPMULHRSW
 // on AVX2).
 func mulQ15Go(dst, a, b []int16) {
 	for i := range dst {

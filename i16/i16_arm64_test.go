@@ -280,9 +280,9 @@ func TestMulQ15NEON_ParityWithGo(t *testing.T) {
 	}
 }
 
-// TestMulQ15NEON_MinInt16 pins the SRSHR+XTN wrap at the kernel: (-32768)^2
-// must narrow to -32768 in the vector lanes and in the scalar tail. A
-// saturating substitute (SQRDMULH) would return 32767 in every position.
+// TestMulQ15NEON_MinInt16 pins the RSHRN rounding-narrow wrap at the kernel:
+// (-32768)^2 must narrow to -32768 in the vector lanes and in the scalar tail.
+// A saturating substitute (SQRDMULH) would return 32767 in every position.
 func TestMulQ15NEON_MinInt16(t *testing.T) {
 	if !cpu.ARM64.NEON {
 		t.Skip("NEON not available")
