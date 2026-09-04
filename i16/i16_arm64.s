@@ -285,23 +285,27 @@ xcorr4_neon_store:
 //
 // All three receive pre-clamped slices from the public API, so unlike
 // dotNEON there is no in-assembly length clamp anywhere below: dst_len (or
-// a_len) is the trusted element count. SMULL/SRSHR/XTN/ABS/UMAXV have no Go
+// a_len) is the trusted element count. SMULL/RSHRN/ABS/UMAXV have no Go
 // assembler mnemonics and are hand-encoded as WORD with the decoded form in
 // the trailing comment (cross-checked by asmcheck_test.go); VUMAX does have a
 // mnemonic and uses it.
 
 // func mulQ15NEON(dst, a, b []int16)
 // Rounding Q15 multiply, 8 lanes per iteration: SMULL/SMULL2 widen the int16
-// products to int32, SRSHR #15 is the rounding shift ((p + 2^14) >> 15,
-// computed on a wider intermediate, and |p| <= 2^30 anyway, so the rounding
-// add cannot overflow), and XTN/XTN2 narrow back to int16 by truncation,
-// which is the wrap: the one product outside int16 range, (-32768)^2 ->
-// +32768, lands as -32768, matching mulQ15Go.
+// products to int32, then RSHRN/RSHRN2 #15 do the rounding shift and narrow in
+// one instruction: the rounding shift ((p + 2^14) >> 15, computed on a wider
+// intermediate, and |p| <= 2^30 anyway, so the rounding add cannot overflow)
+// narrowed back to int16 by truncation, which is the wrap: the one product
+// outside int16 range, (-32768)^2 -> +32768, lands as -32768, matching
+// mulQ15Go. RSHRN keeps the low 16 bits of the rounded result, bit-identical to
+// the earlier two-step SRSHR .4S #15 + XTN/XTN2 (a logical and an arithmetic
+// shift by 15 differ only at and above bit 17, which the 4S->4H narrow discards).
 //
-// SQRDMULH would do all of this in one instruction and must never be used:
-// it saturates exactly that pair to 32767 (see mulq15.go). The scalar tail
-// does the same widen/round/narrow in a 64-bit GPR; the MOVH store keeps the
-// low 16 bits, wrapping identically.
+// SQRDMULH would also fuse this but must never be used: it SATURATES exactly
+// that pair to 32767 (see mulq15.go). RSHRN carries no Q, so it does NOT
+// saturate and preserves the wrap. The scalar tail does the same widen/round/
+// narrow in a 64-bit GPR; the MOVH store keeps the low 16 bits, wrapping
+// identically.
 TEXT ·mulQ15NEON(SB), NOSPLIT, $0-72
     MOVD dst_base+0(FP), R0
     MOVD dst_len+8(FP), R3
@@ -316,10 +320,8 @@ mulq15_neon_loop8:
     VLD1.P 16(R2), [V1.H8]
     WORD $0x0E61C002           // SMULL V2.4S, V0.4H, V1.4H
     WORD $0x4E61C003           // SMULL2 V3.4S, V0.8H, V1.8H
-    WORD $0x4F312442           // SRSHR V2.4S, V2.4S, #15
-    WORD $0x4F312463           // SRSHR V3.4S, V3.4S, #15
-    WORD $0x0E612844           // XTN V4.4H, V2.4S
-    WORD $0x4E612864           // XTN2 V4.8H, V3.4S
+    WORD $0x0F118C44           // RSHRN V4.4H, V2.4S, #15   (rounding >>15 then low 16)
+    WORD $0x4F118C64           // RSHRN2 V4.8H, V3.4S, #15
     VST1.P [V4.H8], 16(R0)
     SUB  $1, R4
     CBNZ R4, mulq15_neon_loop8
