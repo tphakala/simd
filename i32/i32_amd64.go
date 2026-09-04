@@ -147,26 +147,24 @@ func scaleQ31AVX2(dst, a []int32, k int32)
 //go:noescape
 func scaleQ15AVX2(dst, a []int32, k int16)
 
-// minAVX2GainQ31 gates the AVX2 GainQ31 kernel on total length. The kernel is
-// correct at any length (it falls through to a scalar tail), so this is a
-// performance cut only, never a safety requirement. It gates on AVX2 because the
-// VPMULDQ Q31 core plus the VPSLLD/VPADDD/VPSRAD pre- and post-shift stages are
-// all 256-bit integer ops.
+// minAVX2GainQ31 is one 8-wide (256-bit) block. The kernel is correct at any length
+// (it falls through to a scalar tail), so this is a performance cut only, never a
+// safety requirement. It gates on AVX2 because the VPMULDQ Q31 core plus the
+// VPSLLD/VPADDD/VPSRAD pre- and post-shift stages are all 256-bit integer ops.
 //
-// Unlike ScaleQ31 (whose single-broadcast prologue lets it win from one block),
-// the AVX2 GainQ31 path carries a large fixed per-call cost that dwarfs its
-// per-element work at small n: MEASURED as ~80-90 ns flat across n = 8..128 on two
-// amd64 hosts (an i7-class and a Xeon-class part), while gainQ31Go scales linearly
-// from ~6 ns (n=8). The kernel's own per-element work is cheap (~0.2 ns/elem vs Go's
-// ~0.75), so the crossover is set entirely by that fixed cost: gainQ31Go is faster
-// through n=144, the two are at parity near n=160, and the kernel pulls ahead from
-// n=176 (reaching ~2x by n=320). The arm64 NEON path shows no such fixed cost and
-// stays at minNEONGainQ31 = 4; the amd64-only gap is consistent with the 256-bit
-// AVX transition/warmup penalty each call pays after its closing VZEROUPPER (a
-// caller that keeps the upper YMM state warm would cross lower, so 160 is the
-// conservative crossover for a kernel invoked from scalar Go). See #251; the #250
-// masking speedup to gainQ31Go pushed the crossover out further still.
-const minAVX2GainQ31 = 160
+// This sat at 160 until #268. The kernel loaded its two runtime shift counts into XMM
+// with legacy MOVQ after the VEX gain broadcast had already dirtied the upper YMM
+// state, so every call paid two AVX-SSE transition assists, MEASURED as ~80-90 ns flat
+// across n = 8..128 (the earlier note blaming a post-VZEROUPPER warmup was wrong: every
+// AVX2 kernel here ends in VZEROUPPER and only this one carried the cost). Loading the
+// counts with VEX VMOVD instead (#268) removes both assists, and the kernel now wins
+// from the first 8-wide block like sumSqShiftedQ31AVX2. MEASURED on the i7-1260P (AVX2,
+// taskset P-core, 20 process rounds, benchstat medians): the AVX2 kernel beats
+// gainQ31Go at every size from n=8 up (n=8: 3.5 vs 6.4 ns, 1.8x; n=16: 4.0 vs 11.3;
+// n=64: 8.4 vs 46.6, 5.6x; direct before/after: n=64 fell from 98.9 to 8.4 ns), so the
+// cut drops to one block, like the scale kernels and minAVX2SumSqShiftedQ31 = 8. The
+// arm64 NEON path stays at minNEONGainQ31 = 4. See #268 and #251.
+const minAVX2GainQ31 = 8
 
 func gainQ31I32(dst, a []int32, gain int32, preShift, postShift int) {
 	if hasAVX2 && len(dst) >= minAVX2GainQ31 {
@@ -233,18 +231,14 @@ func maxAbsAVX2(a []int32) int32
 // only, never a safety requirement. It gates on AVX2 because the VPSLLD pre-shift,
 // the VPMULDQ Q31 square and the VPADDD accumulate are all 256-bit integer ops.
 //
-// Unlike GainQ31 (whose AVX2 kernel pays a large fixed per-call cost and sits at
-// 160), this kernel is MEASURED to win from the first 8-wide block, so the cut stays
-// at one block, matching Sum and MaxAbs. On the amd64 A/B host (i7-1260P, AVX2,
-// taskset P-core) it beats sumSqShiftedQ31Go at every size from n=8 up (n=8: 2.4 vs
-// 4.3 ns, 1.8x; n=16: 2.8 vs 7.7; n=64: 6.8 vs 34.6, 5x), with the Go side scaling
-// ~4x steeper, so there is no small-n regime where SIMD loses. One verified
-// structural difference from gainQ31AVX2 is that this kernel loads its single shift
-// count with VEX VMOVD before any YMM op, rather than a legacy MOVQ-to-XMM issued
-// after a VEX broadcast; keeping that count load off the legacy-SSE path avoids an
-// AVX-SSE assist and is the likely reason it shows no fixed per-call cost (the exact
-// source of gainQ31's cost was not isolated here). The arm64 NEON path likewise
-// stays at minNEONSumSqShiftedQ31 = 4.
+// This kernel is MEASURED to win from the first 8-wide block, so the cut stays at one
+// block, matching Sum and MaxAbs. On the amd64 A/B host (i7-1260P, AVX2, taskset
+// P-core) it beats sumSqShiftedQ31Go at every size from n=8 up (n=8: 2.4 vs 4.3 ns,
+// 1.8x; n=16: 2.8 vs 7.7; n=64: 6.8 vs 34.6, 5x), with the Go side scaling ~4x
+// steeper, so there is no small-n regime where SIMD loses. Like gainQ31AVX2 since
+// #268, it loads its runtime shift count with VEX VMOVD (not legacy MOVQ), so it pays
+// no AVX-SSE transition assist and has no fixed per-call cost. The arm64 NEON path
+// likewise stays at minNEONSumSqShiftedQ31 = 4.
 const minAVX2SumSqShiftedQ31 = 8
 
 func sumSqShiftedQ31I32(a []int32, shift int) int32 {

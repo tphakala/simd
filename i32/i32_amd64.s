@@ -577,7 +577,9 @@ scaleq15_avx2_done:
 // MOVLQSX (sign-extend AFTER the wrapping shift), IMULQ, SARQ $31, ADDL bias,
 // SARL to close out lengths that are not a multiple of 8. Registers: DX/SI/DI the
 // slices, BX=int64(gain), R8=preShift, R9=postShift, R10=bias, CX stages the CL
-// shift counts, Y3=gain, Y5=bias, X6/X7 the vector shift counts; no R14/R15/BP.
+// shift counts, Y3=gain, Y5=bias, X6/X7 the vector shift counts (loaded by VEX VMOVD,
+// not legacy MOVQ, so the upper YMM state the gain broadcast dirtied costs no AVX-SSE
+// transition assist, see #268); no R14/R15/BP.
 // preShift and postShift must be in [0, 31]. Frame: dst+0, a+24, gain+48, preShift+56,
 // postShift+64.
 TEXT ·gainQ31AVX2(SB), NOSPLIT, $0-72
@@ -594,8 +596,12 @@ TEXT ·gainQ31AVX2(SB), NOSPLIT, $0-72
 
     VMOVD   BX, X3
     VPBROADCASTD X3, Y3              // gain in all 8 int32 lanes
-    MOVQ    R8, X6                   // preShift count (VPSLLD, low 64 bits)
-    MOVQ    R9, X7                   // postShift count (VPSRAD, low 64 bits)
+    VMOVD   R8, X6                   // preShift count for VPSLLD (reads the low 64 bits). VEX
+                                     // VMOVD, not legacy MOVQ, so the upper YMM state the
+                                     // VPBROADCASTD above dirtied costs no AVX-SSE transition
+                                     // assist (#268). VMOVD zero-extends the 32-bit count, so
+                                     // the low 64 is identical to MOVQ for shifts in [0,31].
+    VMOVD   R9, X7                   // postShift count for VPSRAD (same VEX rationale)
     VMOVD   R10, X5
     VPBROADCASTD X5, Y5              // bias in all 8 int32 lanes
 
@@ -783,9 +789,12 @@ maxabs_ret_max:
 // even-lane squares x0,x2,x4,x6 as int64, VPSRLQ $32 slides the already-shifted odd
 // lanes down for a second VPMULDQ, each product is shifted right 31 (VPSRLQ $31 --
 // the square is non-negative so bit 63 is clear and the logical shift equals the
-// arithmetic one, low 32 = the MULT32_32_Q31 term), and VPSLLQ $32 + VPBLENDD $0xAA
-// reassemble the eight int32 terms. VPADDD accumulates them into an 8-lane int32
-// accumulator (wrapping). After the loop the accumulator folds to a single int32
+// arithmetic one, low 32 = the MULT32_32_Q31 term). Because this is a reduction the
+// terms are never reassembled into lane order: each >>31 result is <= 2^31 so the odd
+// int32 half of every int64 lane is zero, and two VPADDD (32-bit lanes, deliberately not
+// VPADDQ, so no carry crosses into those zero halves) accumulate the even (Y4) and odd
+// (Y5) term vectors straight into the 8-lane int32 accumulator (wrapping); lanes 1,3,5,7
+// stay zero. After the loop the accumulator folds to a single int32
 // exactly like sumAVX2 (VEXTRACTI128 + VPADDD + two VPSHUFD folds), and the scalar
 // tail closes out the (n mod 8) residuals: SHLL wraps x in 32 bits, MOVLQSX sign-
 // extends it, IMULQ forms x*x (|x| <= 2^31 so |p| <= 2^62 fits int64), SARQ $31
@@ -794,7 +803,8 @@ maxabs_ret_max:
 // sumSqShiftedQ31Go for every input. The dispatch guarantees shift in [0,31], so
 // VPSLLD (saturates to 0 past 31) and SHLL (masks the count to 5 bits) never
 // disagree on an out-of-range count. Registers SI/DI/CX/AX/DX/R8 and
-// X6/Y0/Y1/Y2/Y4/Y5/Y7; no R14/R15/BP. Frame: a+0, shift+24, ret+32.
+// X6/Y0/Y1/Y4/Y5/Y7 (Y2 no longer used since the reduction accumulates the term
+// halves directly); no R14/R15/BP. Frame: a+0, shift+24, ret+32.
 TEXT ·sumSqShiftedQ31AVX2(SB), NOSPLIT, $0-36
     MOVQ a_base+0(FP), SI
     MOVQ shift+24(FP), R8
@@ -815,9 +825,8 @@ sumsq_avx2_loop8:
     VPMULDQ  Y1, Y1, Y5         // odd lanes x1,x3,x5,x7 squared -> 4x int64
     VPSRLQ   $31, Y4, Y4         // low 32 of each int64 = even Q31 terms
     VPSRLQ   $31, Y5, Y5         // low 32 of each int64 = odd Q31 terms
-    VPSLLQ   $32, Y5, Y5         // lift odd terms to int32 positions 1,3,5,7
-    VPBLENDD $0xAA, Y5, Y4, Y2   // 8 int32 terms: 0,2,4,6 <- Y4, 1,3,5,7 <- Y5
-    VPADDD   Y2, Y7, Y7          // accumulate (wrapping int32 lanes)
+    VPADDD   Y4, Y7, Y7          // accumulate even terms (int32 lanes 0,2,4,6; 1,3,5,7 add 0)
+    VPADDD   Y5, Y7, Y7          // accumulate odd terms into the same lanes (wrapping int32)
     ADDQ $32, SI
     DECQ CX
     JNZ  sumsq_avx2_loop8
