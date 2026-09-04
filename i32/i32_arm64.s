@@ -347,20 +347,26 @@ negwhereneg_neon_done:
 
 // Fixed-point scale-by-scalar kernels (NEON / ASIMD).
 //
-// Unlike AVX2, NEON has a native 64-bit ARITHMETIC shift (SSHR .2D), so the Q31/
-// Q15 scale is a clean widen-shift-narrow: SMULL/SMULL2 multiply the int32 lanes
-// by the broadcast coefficient into int64 products (Q=0 takes lanes 0,1; Q=1 the
-// SMULL2 form takes lanes 2,3), SSHR .2D arithmetically shifts each 64-bit product
-// right by the fixed-point position, and XTN/XTN2 narrow the low 32 bits of each
-// int64 back to int32 (truncation = the int32() wrap, so a=k=MinInt32's 2^62 >> 31
-// = 2^31 lands as MinInt32). k is broadcast with DUP from a W register: MOVW
-// sign-extends the int32 for Q31, MOVH the int16 for Q15, and both leave int64(k)
-// in the register for the scalar tail (MUL then ASR then a MOVW store that keeps
-// the low 32 bits). dst may alias a exactly: each block/lane reads a before it
-// stores dst. SMULL/SMULL2/SSHR/XTN/XTN2/DUP have no Go assembler mnemonic and are
-// hand-encoded WORD directives with the decoded form in the trailing comment
-// (cross-checked against arm64asm by TestArm64WordEncodings). Frame is two slice
-// headers plus the scalar k: dst+0, a+24, k+48.
+// Both scale kernels widen with SMULL/SMULL2, multiplying the int32 lanes by the
+// broadcast coefficient into int64 products (Q=0 takes lanes 0,1; Q=1 the SMULL2
+// form takes lanes 2,3). They differ only in the shift-and-narrow:
+//   - scaleQ31NEON fuses it into SHRN/SHRN2 #31, which shift each product right 31
+//     and narrow the low 32 bits in one instruction. A logical (SHRN) and an
+//     arithmetic (SSHR) shift by 31 differ only in bits at and above 33 of the
+//     shifted product, which the 2D->2S narrow discards, so this is bit-identical
+//     to SSHR .2D #31 + XTN/XTN2 for every product, negative ones included
+//     (truncation = the int32() wrap, so a=k=MinInt32's 2^62 >> 31 = 2^31 lands as
+//     MinInt32).
+//   - scaleQ15NEON keeps the two-step form: SSHR .2D #15 arithmetically shifts each
+//     product, then XTN/XTN2 narrow the low 32 bits back to int32.
+// k is broadcast with DUP from a W register: MOVW sign-extends the int32 for Q31,
+// MOVH the int16 for Q15, and both leave int64(k) in the register for the scalar
+// tail (MUL then ASR then a MOVW store that keeps the low 32 bits). dst may alias a
+// exactly: each block/lane reads a before it stores dst. SMULL/SMULL2/SHRN/SHRN2/
+// SSHR/XTN/XTN2/DUP have no Go assembler mnemonic and are hand-encoded WORD
+// directives with the decoded form in the trailing comment (cross-checked against
+// arm64asm by TestArm64WordEncodings). Frame is two slice headers plus the scalar
+// k: dst+0, a+24, k+48.
 
 // func scaleQ31NEON(dst, a []int32, k int32)
 TEXT ·scaleQ31NEON(SB), NOSPLIT, $0-52
@@ -377,10 +383,8 @@ scaleq31_neon_loop4:
     VLD1.P 16(R1), [V0.S4]     // a[i..i+3]
     WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
     WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
-    WORD $0x4F610442           // SSHR V2.2D, V2.2D, #31
-    WORD $0x4F610463           // SSHR V3.2D, V3.2D, #31
-    WORD $0x0EA12844           // XTN V4.2S, V2.2D   (low 32 of results 0,1)
-    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    WORD $0x0F218444           // SHRN V4.2S, V2.2D, #31   (results 0,1: >>31 then low 32)
+    WORD $0x4F218464           // SHRN2 V4.4S, V3.2D, #31  (results 2,3)
     VST1.P [V4.S4], 16(R0)
     SUB  $1, R4
     CBNZ R4, scaleq31_neon_loop4
@@ -401,7 +405,9 @@ scaleq31_neon_done:
     RET
 
 // func scaleQ15NEON(dst, a []int32, k int16)
-// Identical widen-shift-narrow to scaleQ31NEON with a shift of 15. k is a signed
+// Same SMULL/SMULL2 widen as scaleQ31NEON, but the shift-and-narrow stays the
+// two-step SSHR .2D #15 + XTN/XTN2 form (a SHRN immediate for #15 is a different
+// encoding, out of scope here). k is a signed
 // int16, sign-extended by MOVH to int64(k); |k * a[i]| <= 2^46, well inside the
 // int64 product.
 TEXT ·scaleQ15NEON(SB), NOSPLIT, $0-50
@@ -444,7 +450,8 @@ scaleq15_neon_done:
 // func gainQ31NEON(dst, a []int32, gain int32, preShift, postShift int)
 // Fused Q31 gain: dst[i] = PSHR32(MULT32_32_Q31(SHL32(a[i], preShift), gain), postShift).
 // The MULT32_32_Q31 core is scaleQ31NEON verbatim (SMULL/SMULL2 widen to int64,
-// SSHR #31, XTN/XTN2 narrow to the low 32 bits); this kernel wraps it in a pre-shift
+// SHRN/SHRN2 #31 shift-and-narrow to the low 32 bits; see scaleQ31NEON for why the
+// logical narrow equals the arithmetic one); this kernel wraps it in a pre-shift
 // and a rounding post-shift, all with runtime-broadcast counts:
 //   - SSHL V0.4S,V0.4S,V5.4S applies SHL32 (V5 = preShift in every lane) to the
 //     int32 lanes BEFORE the widen, so the shifted value stays in int32 range and
@@ -489,10 +496,8 @@ gainq31_neon_loop4:
     WORD $0x4EA54400            // SSHL V0.4S, V0.4S, V5.4S   (x = a << preShift, wrapping)
     WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
     WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
-    WORD $0x4F610442           // SSHR V2.2D, V2.2D, #31
-    WORD $0x4F610463           // SSHR V3.2D, V3.2D, #31
-    WORD $0x0EA12844           // XTN V4.2S, V2.2D   (low 32 of results 0,1)
-    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    WORD $0x0F218444           // SHRN V4.2S, V2.2D, #31   (products 0,1: >>31 then low 32)
+    WORD $0x4F218464           // SHRN2 V4.4S, V3.2D, #31  (products 2,3)
     WORD $0x4EA78484           // ADD V4.4S, V4.4S, V7.4S    (+ bias, wrapping)
     WORD $0x4EA64484           // SSHL V4.4S, V4.4S, V6.4S   (arithmetic >> postShift)
     VST1.P [V4.S4], 16(R0)
@@ -641,8 +646,9 @@ maxabs_neon_combine:
 // split plus the VADDV fold is bit-identical to sumSqShiftedQ31Go for every input.
 // The DUP/SSHL WORDs are the gainQ31NEON encodings verbatim; the two SMULL/SMULL2 WORDs
 // are those encodings with the multiplier lane set to V0 (self-square, Rm field V1->V0);
-// the SHRN/SHRN2 WORDs are new (shift-right-narrow by immediate, U=0 opcode 10000,
-// immh:immb field = 2*esize - shift = 64 - 31 = 33). All are cross-checked against arm64asm by
+// the SHRN/SHRN2 WORDs are the scaleQ31NEON/gainQ31NEON encodings verbatim
+// (shift-right-narrow by immediate, U=0 opcode 10000, immh:immb field = 2*esize -
+// shift = 64 - 31 = 33). All are cross-checked against arm64asm by
 // TestArm64WordEncodings. The dispatch guarantees shift in [0,31]. Registers R1=a,
 // R3=n, R4=blocks, R5=total, R6=shift, R7=tail sample; V0/V2/V3/V4/V5/V6; none of
 // R16/R17/R18/R27/R28. Frame: a+0, shift+24, ret+32.
