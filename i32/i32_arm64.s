@@ -349,21 +349,20 @@ negwhereneg_neon_done:
 //
 // Both scale kernels widen with SMULL/SMULL2, multiplying the int32 lanes by the
 // broadcast coefficient into int64 products (Q=0 takes lanes 0,1; Q=1 the SMULL2
-// form takes lanes 2,3). They differ only in the shift-and-narrow:
-//   - scaleQ31NEON fuses it into SHRN/SHRN2 #31, which shift each product right 31
-//     and narrow the low 32 bits in one instruction. A logical (SHRN) and an
-//     arithmetic (SSHR) shift by 31 differ only in bits at and above 33 of the
-//     shifted product, which the 2D->2S narrow discards, so this is bit-identical
-//     to SSHR .2D #31 + XTN/XTN2 for every product, negative ones included
-//     (truncation = the int32() wrap, so a=k=MinInt32's 2^62 >> 31 = 2^31 lands as
-//     MinInt32).
-//   - scaleQ15NEON keeps the two-step form: SSHR .2D #15 arithmetically shifts each
-//     product, then XTN/XTN2 narrow the low 32 bits back to int32.
+// form takes lanes 2,3). They differ only in the fused narrow's shift immediate:
+//   - scaleQ31NEON uses SHRN/SHRN2 #31, scaleQ15NEON uses SHRN/SHRN2 #15. Each
+//     shifts every int64 product right by its Q amount and narrows the low 32 bits
+//     in one instruction. A logical (SHRN) and an arithmetic (SSHR) shift by s
+//     differ only in the shifted product's bits at and above 64-s (33 for #31, 49
+//     for #15), which the 2D->2S narrow discards, so the fused form is bit-identical
+//     to SSHR .2D #s + XTN/XTN2 for every product, negative ones included
+//     (truncation = the int32() wrap, so at #31 a=k=MinInt32's 2^62 >> 31 = 2^31
+//     lands as MinInt32).
 // k is broadcast with DUP from a W register: MOVW sign-extends the int32 for Q31,
 // MOVH the int16 for Q15, and both leave int64(k) in the register for the scalar
 // tail (MUL then ASR then a MOVW store that keeps the low 32 bits). dst may alias a
 // exactly: each block/lane reads a before it stores dst. SMULL/SMULL2/SHRN/SHRN2/
-// SSHR/XTN/XTN2/DUP have no Go assembler mnemonic and are hand-encoded WORD
+// DUP have no Go assembler mnemonic and are hand-encoded WORD
 // directives with the decoded form in the trailing comment (cross-checked against
 // arm64asm by TestArm64WordEncodings). Frame is two slice headers plus the scalar
 // k: dst+0, a+24, k+48.
@@ -405,9 +404,9 @@ scaleq31_neon_done:
     RET
 
 // func scaleQ15NEON(dst, a []int32, k int16)
-// Same SMULL/SMULL2 widen as scaleQ31NEON, but the shift-and-narrow stays the
-// two-step SSHR .2D #15 + XTN/XTN2 form (a SHRN immediate for #15 is a different
-// encoding, out of scope here). k is a signed
+// Same SMULL/SMULL2 widen as scaleQ31NEON, with the same fused SHRN/SHRN2
+// shift-and-narrow at shift #15 instead of #31 (bit-identical to the two-step
+// SSHR .2D #15 + XTN/XTN2 form; see the header block above). k is a signed
 // int16, sign-extended by MOVH to int64(k); |k * a[i]| <= 2^46, well inside the
 // int64 product.
 TEXT ·scaleQ15NEON(SB), NOSPLIT, $0-50
@@ -424,10 +423,8 @@ scaleq15_neon_loop4:
     VLD1.P 16(R1), [V0.S4]     // a[i..i+3]
     WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
     WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
-    WORD $0x4F710442           // SSHR V2.2D, V2.2D, #15
-    WORD $0x4F710463           // SSHR V3.2D, V3.2D, #15
-    WORD $0x0EA12844           // XTN V4.2S, V2.2D   (low 32 of results 0,1)
-    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    WORD $0x0F318444           // SHRN V4.2S, V2.2D, #15   (results 0,1: >>15 then low 32)
+    WORD $0x4F318464           // SHRN2 V4.4S, V3.2D, #15  (results 2,3)
     VST1.P [V4.S4], 16(R0)
     SUB  $1, R4
     CBNZ R4, scaleq15_neon_loop4
@@ -701,13 +698,13 @@ sumsq_neon_done:
 // x[i+j .. i+j+3] (one VLD1 that supplies the tap-j contribution for all 4 outputs
 // at once, since output i+k reads lane k of the window), broadcasts taps[j] (DUP
 // from W2, sign-extended by MOVH), forms the 4 Q15-TRUNCATED products with the
-// exact scaleQ15NEON widen-shift-narrow (SMULL/SMULL2 to int64, SSHR .2D #15,
-// XTN/XTN2 to the low 32 bits), and ADD .4S-accumulates them (wrapping int32). The
+// exact scaleQ15NEON widen-shift-narrow (SMULL/SMULL2 to int64, SHRN/SHRN2 #15 to
+// the low 32 bits), and ADD .4S-accumulates them (wrapping int32). The
 // window pointer R7 slides by 4 bytes per tap; the taps pointer R8 by 2. After all
 // taps the 4 outputs are stored. The scalar-output tail runs the full inner tap
 // loop per remaining output (MOVH/MOVW sign-extend, MUL, ASR #15, ADDW), so the
 // per-product truncation is preserved and the result is bit-exact with
-// firValidQ15Go. All SMULL/SMULL2/SSHR/XTN/XTN2/DUP WORDs are the scaleQ15NEON
+// firValidQ15Go. All SMULL/SMULL2/SHRN/SHRN2/DUP WORDs are the scaleQ15NEON
 // encodings verbatim (cross-checked by TestArm64WordEncodings). The dispatch gates
 // n = len(dst) >= 4, and the kernel reads x only up to index n-1+len(taps)-1 <=
 // len(x)-1, so there is no over-read. dst must not overlap x. Frame is dst+x+taps
@@ -734,10 +731,8 @@ fir_neon_tap:
     ADD  $4, R7                  // slide window by 1 int32
     WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
     WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
-    WORD $0x4F710442           // SSHR V2.2D, V2.2D, #15
-    WORD $0x4F710463           // SSHR V3.2D, V3.2D, #15
-    WORD $0x0EA12844           // XTN V4.2S, V2.2D   (low 32 of results 0,1)
-    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    WORD $0x0F318444           // SHRN V4.2S, V2.2D, #15   (results 0,1: >>15 then low 32)
+    WORD $0x4F318464           // SHRN2 V4.4S, V3.2D, #15  (results 2,3)
     VADD V4.S4, V16.S4, V16.S4  // acc += 4 Q15-truncated products (wrapping)
     SUB  $1, R9
     CBNZ R9, fir_neon_tap
@@ -777,8 +772,8 @@ fir_neon_done:
 // the center sample sits at c = i+K. The accumulator V16 starts at zero; the
 // center window x[c .. c+3] is loaded (VLD1), center is broadcast (DUP from W2,
 // sign-extended by MOVH), the 4 Q15-TRUNCATED products are formed with the exact
-// scaleQ15NEON widen-shift-narrow (SMULL/SMULL2 to int64, SSHR .2D #15, XTN/XTN2
-// to the low 32 bits) and ADD .4S-accumulated. For each pair k in [1,K] the LEFT
+// scaleQ15NEON widen-shift-narrow (SMULL/SMULL2 to int64, SHRN/SHRN2 #15 to the
+// low 32 bits) and ADD .4S-accumulated. For each pair k in [1,K] the LEFT
 // window x[c-k .. c-k+3] and RIGHT window x[c+k .. c+k+3] are loaded and summed
 // with VADD .4S (wrapping int32) BEFORE the multiply, the
 // single-truncation-per-pair contract that makes this bit-exact with libopus
@@ -786,8 +781,8 @@ fir_neon_done:
 // the same widen-shift-narrow, and ADD .4S-accumulated. The center base R7 slides
 // +16 per block; the left pointer R10 slides -4 per pair, the right pointer R11
 // +4, the coeff pointer R8 +2. Both the center and every pair coeff funnel through
-// W2 -> DUP V1.4S,W2 and multiply V0/V1 -> V2/V3, so every SMULL/SMULL2/SSHR/XTN/
-// XTN2/DUP WORD is a scaleQ15NEON encoding verbatim (cross-checked by
+// W2 -> DUP V1.4S,W2 and multiply V0/V1 -> V2/V3, so every SMULL/SMULL2/SHRN/SHRN2/
+// DUP WORD is a scaleQ15NEON encoding verbatim (cross-checked by
 // TestArm64WordEncodings) and NO new hand-encoded WORD is introduced; the left+
 // right VADD is a plain Go-asm mnemonic. The scalar-output tail runs the full
 // center+pairs computation per remaining output, adding each mirror pair as a
@@ -819,10 +814,8 @@ sym_neon_block:
     VLD1 (R7), [V0.S4]           // center window x[c .. c+3]
     WORD $0x0EA1C002             // SMULL V2.2D, V0.2S, V1.2S   (lanes 0,1 -> 2 int64)
     WORD $0x4EA1C003             // SMULL2 V3.2D, V0.4S, V1.4S  (lanes 2,3 -> 2 int64)
-    WORD $0x4F710442             // SSHR V2.2D, V2.2D, #15
-    WORD $0x4F710463             // SSHR V3.2D, V3.2D, #15
-    WORD $0x0EA12844             // XTN V4.2S, V2.2D   (low 32 of results 0,1)
-    WORD $0x4EA12864             // XTN2 V4.4S, V3.2D  (low 32 of results 2,3)
+    WORD $0x0F318444             // SHRN V4.2S, V2.2D, #15   (results 0,1: >>15 then low 32)
+    WORD $0x4F318464             // SHRN2 V4.4S, V3.2D, #15  (results 2,3)
     VADD V4.S4, V16.S4, V16.S4   // acc = center products (wrapping)
 
     MOVD R5, R9                   // R9 = pair counter = K
@@ -838,10 +831,8 @@ sym_neon_pair:
     VADD V5.S4, V0.S4, V0.S4    // left+right, wrapping int32, BEFORE the multiply
     WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S
     WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S
-    WORD $0x4F710442           // SSHR V2.2D, V2.2D, #15
-    WORD $0x4F710463           // SSHR V3.2D, V3.2D, #15
-    WORD $0x0EA12844           // XTN V4.2S, V2.2D
-    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D
+    WORD $0x0F318444           // SHRN V4.2S, V2.2D, #15   (results 0,1: >>15 then low 32)
+    WORD $0x4F318464           // SHRN2 V4.4S, V3.2D, #15  (results 2,3)
     VADD V4.S4, V16.S4, V16.S4  // acc += 4 Q15-truncated folded products (wrapping)
     SUB  $4, R10, R10           // next pair: left moves down
     ADD  $4, R11, R11           // right moves up
