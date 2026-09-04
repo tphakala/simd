@@ -11,17 +11,20 @@
 // multiply, deinterleaved with LD2 and re-interleaved with ST2.
 //
 // The truncating Q15 product is a clean widen-shift-narrow: SMULL/SMULL2 multiply
-// the int32 lanes into int64 products, SSHR .2D #15 arithmetically shifts each
-// product right by 15 (truncating toward -inf, no rounding), and XTN/XTN2 narrow
-// the low 32 bits back to int32 (the narrowing is the int32 wrap, so
-// MinInt32 * MinInt16 = 2^46 >> 15 = 2^31 lands as MinInt32). The complex kernels
+// the int32 lanes into int64 products, then SHRN/SHRN2 #15 shift each product
+// right by 15 (truncating toward -inf, no rounding) and narrow the low 32 bits
+// back to int32 in one op (the narrowing is the int32 wrap, so
+// MinInt32 * MinInt16 = 2^46 >> 15 = 2^31 lands as MinInt32). SHRN's logical shift
+// is bit-exact with the arithmetic SSHR it fuses in: a 2D -> 2S narrow at #15
+// keeps product bits [15:46], and a logical and an arithmetic shift by 15 differ
+// only at and above bit 49, which the narrow discards. The complex kernels
 // deinterleave a into V_ar/V_ai with LD2 .4S and the int16 twiddle into V_br/V_bi
 // with LD2 .4H, sign-extend the twiddle to int32 with SXTL (the #0 shift alias of
 // SSHLL), form the four half-products, combine with ADD/SUB .4S, and ST2 the
 // [re, im] pair back to interleaved [r0,i0,r1,i1,...]. dst may alias a exactly:
 // each block deinterleaves its whole a and tw block before it stores dst.
 //
-// SXTL/SMULL/SMULL2/SSHR/XTN/XTN2/DUP have no Go assembler mnemonic, and the
+// SXTL/SMULL/SMULL2/SHRN/SHRN2/DUP have no Go assembler mnemonic, and the
 // standalone Add/Sub kernels pin ADD/SUB .4S as verified WORD encodings (matching
 // i32); all are hand-encoded WORD directives with the decoded GNU form in the
 // trailing comment, cross-checked against golang.org/x/arch/arm64asm by
@@ -121,10 +124,8 @@ mulbyscalar_neon_loop4:
     VLD1 (R0), [V0.S4]         // a[i..i+3] (no advance; in-place store reuses R0)
     WORD $0x0EA1C002           // SMULL V2.2D, V0.2S, V1.2S
     WORD $0x4EA1C003           // SMULL2 V3.2D, V0.4S, V1.4S
-    WORD $0x4F710442           // SSHR V2.2D, V2.2D, #15
-    WORD $0x4F710463           // SSHR V3.2D, V3.2D, #15
-    WORD $0x0EA12844           // XTN V4.2S, V2.2D
-    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D
+    WORD $0x0F318444           // SHRN V4.2S, V2.2D, #15   (results 0,1: >>15 then low 32)
+    WORD $0x4F318464           // SHRN2 V4.4S, V3.2D, #15  (results 2,3)
     VST1 [V4.S4], (R0)         // in place
     ADD  $16, R0
     SUB  $1, R4
@@ -163,28 +164,20 @@ mul_neon_loop:
     WORD $0x0F10A465           // SXTL V5.4S, V3.4H   (bi int16 -> int32)
     WORD $0x0EA4C010           // SMULL V16.2D, V0.2S, V4.2S    (prr lanes 0,1)
     WORD $0x4EA4C011           // SMULL2 V17.2D, V0.4S, V4.4S   (prr lanes 2,3)
-    WORD $0x4F710610           // SSHR V16.2D, V16.2D, #15
-    WORD $0x4F710631           // SSHR V17.2D, V17.2D, #15
-    WORD $0x0EA12A06           // XTN V6.2S, V16.2D    (prr low 32 of lanes 0,1)
-    WORD $0x4EA12A26           // XTN2 V6.4S, V17.2D   (prr low 32 of lanes 2,3)
+    WORD $0x0F318606           // SHRN V6.2S, V16.2D, #15   (prr low 32 of lanes 0,1)
+    WORD $0x4F318626           // SHRN2 V6.4S, V17.2D, #15  (prr low 32 of lanes 2,3)
     WORD $0x0EA5C030           // SMULL V16.2D, V1.2S, V5.2S    (pii)
     WORD $0x4EA5C031           // SMULL2 V17.2D, V1.4S, V5.4S
-    WORD $0x4F710610           // SSHR V16.2D, V16.2D, #15
-    WORD $0x4F710631           // SSHR V17.2D, V17.2D, #15
-    WORD $0x0EA12A07           // XTN V7.2S, V16.2D    (pii)
-    WORD $0x4EA12A27           // XTN2 V7.4S, V17.2D
+    WORD $0x0F318607           // SHRN V7.2S, V16.2D, #15   (pii)
+    WORD $0x4F318627           // SHRN2 V7.4S, V17.2D, #15
     WORD $0x0EA5C010           // SMULL V16.2D, V0.2S, V5.2S    (pri)
     WORD $0x4EA5C011           // SMULL2 V17.2D, V0.4S, V5.4S
-    WORD $0x4F710610           // SSHR V16.2D, V16.2D, #15
-    WORD $0x4F710631           // SSHR V17.2D, V17.2D, #15
-    WORD $0x0EA12A08           // XTN V8.2S, V16.2D    (pri)
-    WORD $0x4EA12A28           // XTN2 V8.4S, V17.2D
+    WORD $0x0F318608           // SHRN V8.2S, V16.2D, #15   (pri)
+    WORD $0x4F318628           // SHRN2 V8.4S, V17.2D, #15
     WORD $0x0EA4C030           // SMULL V16.2D, V1.2S, V4.2S    (pir)
     WORD $0x4EA4C031           // SMULL2 V17.2D, V1.4S, V4.4S
-    WORD $0x4F710610           // SSHR V16.2D, V16.2D, #15
-    WORD $0x4F710631           // SSHR V17.2D, V17.2D, #15
-    WORD $0x0EA12A09           // XTN V9.2S, V16.2D    (pir)
-    WORD $0x4EA12A29           // XTN2 V9.4S, V17.2D
+    WORD $0x0F318609           // SHRN V9.2S, V16.2D, #15   (pir)
+    WORD $0x4F318629           // SHRN2 V9.4S, V17.2D, #15
     VSUB V7.S4, V6.S4, V10.S4        // re = prr - pii
     VADD V9.S4, V8.S4, V11.S4        // im = pri + pir
     VST2.P [V10.S4, V11.S4], 32(R0)  // re-interleave -> dst
@@ -238,28 +231,20 @@ mulconj_neon_loop:
     WORD $0x0F10A465           // SXTL V5.4S, V3.4H
     WORD $0x0EA4C010           // SMULL V16.2D, V0.2S, V4.2S    (prr)
     WORD $0x4EA4C011           // SMULL2 V17.2D, V0.4S, V4.4S
-    WORD $0x4F710610           // SSHR V16.2D, V16.2D, #15
-    WORD $0x4F710631           // SSHR V17.2D, V17.2D, #15
-    WORD $0x0EA12A06           // XTN V6.2S, V16.2D    (prr)
-    WORD $0x4EA12A26           // XTN2 V6.4S, V17.2D
+    WORD $0x0F318606           // SHRN V6.2S, V16.2D, #15   (prr)
+    WORD $0x4F318626           // SHRN2 V6.4S, V17.2D, #15
     WORD $0x0EA5C030           // SMULL V16.2D, V1.2S, V5.2S    (pii)
     WORD $0x4EA5C031           // SMULL2 V17.2D, V1.4S, V5.4S
-    WORD $0x4F710610           // SSHR V16.2D, V16.2D, #15
-    WORD $0x4F710631           // SSHR V17.2D, V17.2D, #15
-    WORD $0x0EA12A07           // XTN V7.2S, V16.2D    (pii)
-    WORD $0x4EA12A27           // XTN2 V7.4S, V17.2D
+    WORD $0x0F318607           // SHRN V7.2S, V16.2D, #15   (pii)
+    WORD $0x4F318627           // SHRN2 V7.4S, V17.2D, #15
     WORD $0x0EA5C010           // SMULL V16.2D, V0.2S, V5.2S    (pri)
     WORD $0x4EA5C011           // SMULL2 V17.2D, V0.4S, V5.4S
-    WORD $0x4F710610           // SSHR V16.2D, V16.2D, #15
-    WORD $0x4F710631           // SSHR V17.2D, V17.2D, #15
-    WORD $0x0EA12A08           // XTN V8.2S, V16.2D    (pri)
-    WORD $0x4EA12A28           // XTN2 V8.4S, V17.2D
+    WORD $0x0F318608           // SHRN V8.2S, V16.2D, #15   (pri)
+    WORD $0x4F318628           // SHRN2 V8.4S, V17.2D, #15
     WORD $0x0EA4C030           // SMULL V16.2D, V1.2S, V4.2S    (pir)
     WORD $0x4EA4C031           // SMULL2 V17.2D, V1.4S, V4.4S
-    WORD $0x4F710610           // SSHR V16.2D, V16.2D, #15
-    WORD $0x4F710631           // SSHR V17.2D, V17.2D, #15
-    WORD $0x0EA12A09           // XTN V9.2S, V16.2D    (pir)
-    WORD $0x4EA12A29           // XTN2 V9.4S, V17.2D
+    WORD $0x0F318609           // SHRN V9.2S, V16.2D, #15   (pir)
+    WORD $0x4F318629           // SHRN2 V9.4S, V17.2D, #15
     VADD V7.S4, V6.S4, V10.S4        // re = prr + pii
     VSUB V8.S4, V9.S4, V11.S4        // im = pir - pri
     VST2.P [V10.S4, V11.S4], 32(R0)  // re-interleave -> dst
