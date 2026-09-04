@@ -628,19 +628,21 @@ maxabs_neon_combine:
 // Wrapping int32 sum of pre-shifted Q31 squares, 4 int32 per iteration. Each block
 // left-shifts the four int32 lanes by the runtime shift count (SSHL .4S applies
 // SHL32 in 32-bit lanes, so the value stays in int32 range BEFORE the widen), then
-// squares them with the scaleQ31NEON widen-shift-narrow: SMULL/SMULL2 multiply each
-// shifted lane by ITSELF into int64 (lanes 0,1 then 2,3), SSHR .2D #31 arithmetically
-// shifts each product right 31 (the square is non-negative so this is a plain
-// truncate), and XTN/XTN2 narrow the low 32 bits back to int32 (a shifted lane of
-// MinInt32 gives 2^62 >> 31 = 2^31, whose low 32 = MinInt32). VADD .4S accumulates
+// squares them with a widen-shift-narrow: SMULL/SMULL2 multiply each
+// shifted lane by ITSELF into int64 (lanes 0,1 then 2,3), then SHRN/SHRN2 #31 shift each
+// product right 31 and narrow the low 32 bits back to int32 in one instruction (the
+// square is non-negative and <= 2^62, so the logical shift equals the arithmetic one and
+// the <= 2^31 result narrows exactly: a shifted lane of MinInt32 gives 2^62 >> 31 = 2^31,
+// whose low 32 = MinInt32). VADD .4S accumulates
 // the four terms into a wrapping int32 accumulator, VADDV folds it to a scalar, and
 // the scalar tail closes out (n mod 4): LSLW wraps x in 32 bits, MOVW re-sign-extends
 // it, MUL forms x*x (|x| <= 2^31 so |p| <= 2^62), ASR #31 takes the term, and ADDW
 // accumulates it wrapping. Because wrapping int32 addition is associative, the 4-lane
 // split plus the VADDV fold is bit-identical to sumSqShiftedQ31Go for every input.
-// The DUP/SSHL/SSHR/XTN/XTN2 WORDs are the gainQ31NEON/scaleQ31NEON encodings
-// verbatim; the two SMULL/SMULL2 WORDs are those encodings with the multiplier lane
-// set to V0 (self-square, Rm field V1->V0). All are cross-checked against arm64asm by
+// The DUP/SSHL WORDs are the gainQ31NEON encodings verbatim; the two SMULL/SMULL2 WORDs
+// are those encodings with the multiplier lane set to V0 (self-square, Rm field V1->V0);
+// the SHRN/SHRN2 WORDs are new (shift-right-narrow by immediate, U=0 opcode 10000,
+// immh:immb field = 2*esize - shift = 64 - 31 = 33). All are cross-checked against arm64asm by
 // TestArm64WordEncodings. The dispatch guarantees shift in [0,31]. Registers R1=a,
 // R3=n, R4=blocks, R5=total, R6=shift, R7=tail sample; V0/V2/V3/V4/V5/V6; none of
 // R16/R17/R18/R27/R28. Frame: a+0, shift+24, ret+32.
@@ -659,10 +661,8 @@ sumsq_neon_loop4:
     WORD $0x4EA54400            // SSHL V0.4S, V0.4S, V5.4S    (x = a << shift, wrapping)
     WORD $0x0EA0C002           // SMULL V2.2D, V0.2S, V0.2S   (lanes 0,1 squared -> 2 int64)
     WORD $0x4EA0C003           // SMULL2 V3.2D, V0.4S, V0.4S  (lanes 2,3 squared -> 2 int64)
-    WORD $0x4F610442           // SSHR V2.2D, V2.2D, #31
-    WORD $0x4F610463           // SSHR V3.2D, V3.2D, #31
-    WORD $0x0EA12844           // XTN V4.2S, V2.2D    (low 32 of terms 0,1)
-    WORD $0x4EA12864           // XTN2 V4.4S, V3.2D   (low 32 of terms 2,3)
+    WORD $0x0F218444           // SHRN V4.2S, V2.2D, #31   (terms 0,1: >>31 then low 32)
+    WORD $0x4F218464           // SHRN2 V4.4S, V3.2D, #31  (terms 2,3)
     VADD V4.S4, V6.S4, V6.S4   // accumulate (wrapping int32 lanes)
     SUB  $1, R4
     CBNZ R4, sumsq_neon_loop4

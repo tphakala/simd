@@ -118,9 +118,8 @@ func TestSumSqShiftedQ31Dispatch_ReachesSIMD(t *testing.T) {
 		t.Fatalf("hasAVX2 = %v but cpu.X86.AVX2 = %v: dispatch flag is not wired to CPU detection", hasAVX2, cpu.X86.AVX2)
 	}
 	// The threshold stays within two 8-wide blocks (measured: this kernel wins from
-	// the first block, so it does not need GainQ31's ~160 cut), so a regression to a
-	// large GainQ31-style threshold that left realistic short bands on the slower Go
-	// path is caught here.
+	// the first block), so a regression to a large threshold that left realistic short
+	// bands on the slower Go path is caught here.
 	if minAVX2SumSqShiftedQ31 > 16 {
 		t.Fatalf("minAVX2SumSqShiftedQ31 = %d exceeds two vector blocks: it would not vectorize at the lengths it was written for", minAVX2SumSqShiftedQ31)
 	}
