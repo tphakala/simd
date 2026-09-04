@@ -13,7 +13,7 @@ import (
 // sweep, over lengths the dispatcher would never route to it, so a threshold
 // change cannot quietly reduce this to a test of the Go reference against itself.
 // MinInt32 rides index 0 under k=MinInt32 so the wrap is exercised at every
-// length; the SMULL/XTN lane order is checked against the oracle at every position
+// length; the SMULL/SHRN lane order is checked against the oracle at every position
 // via the value-matrix test in scale_test.go.
 //
 //nolint:dupl // The Q31/Q15 parity sweep is intentionally identical bar the kernel, ref and coefficient type.
