@@ -136,12 +136,11 @@ func scaleQ15NEON(dst, a []int32, k int16)
 // thresholds above. The kernel is correct at any length (it falls through to a
 // scalar tail), so this is a performance cut only, never a safety requirement.
 //
-// This stays at one block, unlike the much larger amd64 minAVX2GainQ31: MEASURED on
-// a Raspberry Pi 5, the NEON GainQ31 kernel scales cleanly with n and already beats
-// gainQ31Go from the smallest sizes (n=8: ~15.8 vs 16.4 ns; n=16: ~20.4 vs 29.3),
-// with no fixed per-call cost. NEON has no analogue of the 256-bit AVX
-// transition/warmup penalty that pushes the amd64 crossover out to ~160, so one
-// block remains the right threshold here. See #251.
+// This stays at one block: MEASURED on a Raspberry Pi 5, the NEON GainQ31 kernel
+// scales cleanly with n and already beats gainQ31Go from the smallest sizes (n=8:
+// ~15.8 vs 16.4 ns; n=16: ~20.4 vs 29.3), with no fixed per-call cost. NEON never had
+// the AVX-SSE transition assist that once pushed the amd64 gain crossover out to 160
+// (removed in #268), so one block has always been the right threshold here. See #251.
 const minNEONGainQ31 = 4
 
 func gainQ31I32(dst, a []int32, gain int32, preShift, postShift int) {
@@ -212,11 +211,11 @@ func maxAbsNEON(a []int32) int32
 // reference. The kernel is correct at any length via the scalar tail, so this is a
 // performance cut only, never a safety requirement.
 //
-// This stays at one block: NEON has no analogue of an AVX per-call penalty, so the
-// kernel does not need to amortise a fixed cost. MEASURED on Apple Silicon (arm64,
-// -benchtime pinned): the kernel is on par with sumSqShiftedQ31Go at one block
-// (n=4, ~2.0 ns either way) and pulls ahead from n=8 (2.3 vs 3.2 ns, 1.4x), the
-// same shape as the other NEON reductions, so one block is the right cut.
+// This stays at one block: there is no fixed per-call cost to amortise here. MEASURED
+// on Apple Silicon (arm64, -benchtime pinned): the kernel is on par with
+// sumSqShiftedQ31Go at one block (n=4, ~2.0 ns either way) and pulls ahead from n=8
+// (2.3 vs 3.2 ns, 1.4x), the same shape as the other NEON reductions, so one block is
+// the right cut.
 const minNEONSumSqShiftedQ31 = 4
 
 func sumSqShiftedQ31I32(a []int32, shift int) int32 {

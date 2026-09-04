@@ -92,29 +92,28 @@ func TestGainQ31Dispatch_ReachesSIMD(t *testing.T) {
 	if hasAVX2 != cpu.X86.AVX2 {
 		t.Fatalf("hasAVX2 = %v but cpu.X86.AVX2 = %v: dispatch flag is not wired to CPU detection", hasAVX2, cpu.X86.AVX2)
 	}
-	// minAVX2GainQ31 is the measured SIMD/scalar crossover (#251), far above the one
-	// or two blocks the scale kernels use, because the AVX2 GainQ31 path carries a
-	// large fixed per-call cost that makes SIMD lose below ~160. Guard only that it
-	// stays in a sane range: high enough to skip that small-n region, low enough that
-	// realistic buffers (a few hundred samples and up, e.g. nfft 256/512/1024) still
-	// vectorize.
-	if minAVX2GainQ31 < 8 || minAVX2GainQ31 > 512 {
-		t.Fatalf("minAVX2GainQ31 = %d outside the sane [8, 512] range; see #251 for the ~160 crossover", minAVX2GainQ31)
+	// minAVX2GainQ31 is the measured SIMD/scalar crossover. Since #268 the AVX2 kernel
+	// has no fixed per-call cost and beats gainQ31Go from the first 8-wide block, so the
+	// cut is one block. Guard that the const stays within two blocks: a re-tune back to
+	// the old ~160 cut would leave realistic short bands on the slower Go path, and is
+	// caught here.
+	if minAVX2GainQ31 > 16 {
+		t.Fatalf("minAVX2GainQ31 = %d exceeds two vector blocks: since #268 the kernel wins from the first block, so this should be one block (8)", minAVX2GainQ31)
 	}
 }
 
 // BenchmarkGainQ31CrossoverAVX2 sweeps the AVX2 kernel directly against the Go
 // reference across the SIMD/scalar crossover region so minAVX2GainQ31 (#251) can be
 // re-tuned on other hardware. It benchmarks the kernel directly rather than the
-// dispatched GainQ31, so the threshold under test does not gate the measurement. On
-// the amd64 parts this was tuned against, the kernel's large fixed per-call cost
-// (~80-90 ns, absent on arm64 NEON) puts the crossover near n=160: gainQ31Go wins
-// below it, the two are at parity near 160, and the kernel pulls ahead above ~176.
+// dispatched GainQ31, so the threshold under test does not gate the measurement.
+// Since #268 the kernel has no fixed per-call cost and beats gainQ31Go from the first
+// 8-wide block (n=8), so the crossover is one block; before #268 a ~80-90 ns AVX-SSE
+// transition assist put it near n=160.
 func BenchmarkGainQ31CrossoverAVX2(b *testing.B) {
 	if !cpu.X86.AVX2 {
 		b.Skip("AVX2 not available")
 	}
-	for _, n := range []int{64, 128, 160, 192, 256, 512} {
+	for _, n := range []int{8, 16, 32, 64, 128, 160, 256, 512} {
 		b.Run(fmt.Sprintf("AVX2_n%d", n), func(b *testing.B) { benchmarkGainQ31(b, n, gainQ31AVX2) })
 		b.Run(fmt.Sprintf("Go_n%d", n), func(b *testing.B) { benchmarkGainQ31(b, n, gainQ31Go) })
 	}

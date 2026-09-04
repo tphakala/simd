@@ -99,9 +99,8 @@ func TestGainQ31Dispatch_ReachesNEON(t *testing.T) {
 
 // BenchmarkGainQ31CrossoverNEON sweeps the NEON kernel directly against the Go
 // reference across small n so minNEONGainQ31 (#251) can be re-tuned on other
-// hardware. Unlike the amd64 AVX2 path, the NEON kernel has no large fixed per-call
-// cost, so it beats gainQ31Go from the smallest sizes and the threshold stays at one
-// block (4).
+// hardware. The NEON kernel has no large fixed per-call cost, so it beats gainQ31Go
+// from the smallest sizes and the threshold stays at one block (4).
 func BenchmarkGainQ31CrossoverNEON(b *testing.B) {
 	if !cpu.ARM64.NEON {
 		b.Skip("NEON not available")
