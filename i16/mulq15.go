@@ -4,8 +4,9 @@ package i16
 //
 // Kernel selection constraint: NEON's single-instruction SQRDMULH computes the
 // same rounding product but SATURATES (-32768 * -32768) to 32767, so it can
-// never implement this op. The NEON kernel widens with SMULL, rounds with
-// SRSHR and narrows with XTN, which wraps; amd64's VPMULHRSW computes the
+// never implement this op. The NEON kernel widens with SMULL and does the
+// rounding shift-and-narrow with RSHRN, which wraps (RSHRN carries no Q, so it
+// truncates the narrow rather than saturating); amd64's VPMULHRSW computes the
 // identical ((a*b >> 14) + 1) >> 1 and wraps that pair too, so it is safe.
 // Do not "optimize" either kernel toward the saturating instruction.
 
