@@ -12,12 +12,13 @@
 //
 // The truncating Q15 product is a clean widen-shift-narrow: SMULL/SMULL2 multiply
 // the int32 lanes into int64 products, then SHRN/SHRN2 #15 shift each product
-// right by 15 (truncating toward -inf, no rounding) and narrow the low 32 bits
-// back to int32 in one op (the narrowing is the int32 wrap, so
-// MinInt32 * MinInt16 = 2^46 >> 15 = 2^31 lands as MinInt32). SHRN's logical shift
-// is bit-exact with the arithmetic SSHR it fuses in: a 2D -> 2S narrow at #15
-// keeps product bits [15:46], and a logical and an arithmetic shift by 15 differ
-// only at and above bit 49, which the narrow discards. The complex kernels
+// right by 15 and narrow the low 32 bits back to int32 in one op (the narrowing
+// is the int32 wrap, so MinInt32 * MinInt16 = 2^46 >> 15 = 2^31 lands as
+// MinInt32). SHRN's shift is logical, but the result is bit-exact with the
+// arithmetic SSHR .2D #15 + XTN/XTN2 it replaces, which truncates toward -inf
+// with no rounding: a 2D -> 2S narrow at #15 keeps product bits [15:46], and a
+// logical and an arithmetic shift by 15 differ only at and above bit 49, which
+// the narrow discards. The complex kernels
 // deinterleave a into V_ar/V_ai with LD2 .4S and the int16 twiddle into V_br/V_bi
 // with LD2 .4H, sign-extend the twiddle to int32 with SXTL (the #0 shift alias of
 // SSHLL), form the four half-products, combine with ADD/SUB .4S, and ST2 the
