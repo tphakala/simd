@@ -14,7 +14,7 @@ import (
 // sweep, over lengths the dispatcher would never route to it, so a threshold
 // change cannot quietly reduce this to a test of the Go reference against itself.
 // MinInt32 rides index 0 and MaxInt32 the last index so the SHL32/MULT32_32_Q31/
-// PSHR32 wraps are exercised at every length; the SSHL/SMULL/XTN lane order is
+// PSHR32 wraps are exercised at every length; the SSHL/SMULL/SHRN lane order is
 // checked against the oracle at every position via the value-matrix test in
 // gain_test.go.
 //
