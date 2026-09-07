@@ -178,28 +178,53 @@ sub_neon_done:
     RET
 
 // func minMaxNEON(res []int32) (minVal, maxVal int32)
-// Signed int32 min and max over res in one pass. The dispatch gates len(res) >=
-// 4, so at least one full 4-element (.4S) block exists: the min and max
-// accumulators start from block 0 and fold the remaining full blocks with
-// SMIN/SMAX, then SMINV/SMAXV reduce each accumulator across its 4 lanes to a
-// scalar and a scalar tail folds the (n mod 4) remainder. SMIN/SMAX/SMINV/SMAXV
-// have no Go assembler mnemonic, so they are hand-encoded WORD directives (the
-// trailing comment is the decoded form, cross-checked by asmcheck_test.go).
-// Every compare is signed, matching minMaxGo exactly.
+// Signed int32 min and max over res in one pass, with a 2-block unroll that keeps
+// two independent SMIN and two independent SMAX chains so the compare latency
+// stays off the loop-carried critical path (same rewrite as the i16 minMaxNEON,
+// #282). The dispatch gates len(res) >= 4, so block 0 always exists: it seeds both
+// accumulator pairs (min1=V0,max1=V1, min2=V5,max2=V6); the loop folds 2 blocks
+// per iteration, a possible odd trailing block folds into the first pair, the two
+// pairs are combined, SMINV/SMAXV reduce each across its 4 lanes to a scalar, and
+// a scalar tail folds the (n mod 4) remainder. SMIN/SMAX/SMINV/SMAXV have no Go
+// assembler mnemonic, so they are hand-encoded WORD directives (the trailing
+// comment is the decoded form, cross-checked by asmcheck_test.go). Every compare
+// is signed and min/max is idempotent (seeding both pairs from block 0
+// double-counts it harmlessly), so the result matches minMaxGo exactly. Measured
+// roughly -20% at n=64 up to -37% at n=4096 on Cortex-A76, with no small-n
+// regression (#283).
 TEXT ·minMaxNEON(SB), NOSPLIT, $0-32
     MOVD res_base+0(FP), R2
     MOVD res_len+8(FP), R3
+
     LSR  $2, R3, R4                  // R4 = full 4-element blocks (>=1)
-    VLD1 (R2), [V0.S4]               // V0 = block 0 (min acc), no advance
-    VLD1.P 16(R2), [V1.S4]           // V1 = block 0 (max acc), advance to block 1
-    SUB  $1, R4                      // blocks remaining after block 0
-    CBZ  R4, mm_neon_reduce          // single block: accumulators hold it; R2 at tail
+    VLD1 (R2), [V0.S4]               // min1 = block 0
+    VLD1 (R2), [V1.S4]               // max1 = block 0
+    VLD1 (R2), [V5.S4]               // min2 = block 0 (idempotent seed)
+    VLD1.P 16(R2), [V6.S4]           // max2 = block 0 (advance past block 0)
+    SUB  $1, R4                      // blocks after block 0
+    CBZ  R4, mm_neon_reduce          // single block: min1/max1 hold it; R2 at tail
+
+    LSR  $1, R4, R7                 // R7 = pairs = (blocks after 0) / 2
+    CBZ  R7, mm_neon_odd
+
 mm_neon_loop:
-    VLD1.P 16(R2), [V2.S4]           // load block + advance
+    VLD1.P 32(R2), [V2.S4, V3.S4]
     WORD $0x4EA26C00                 // SMIN V0.4S, V0.4S, V2.4S
     WORD $0x4EA26421                 // SMAX V1.4S, V1.4S, V2.4S
-    SUB  $1, R4
-    CBNZ R4, mm_neon_loop
+    WORD $0x4EA36CA5                 // SMIN V5.4S, V5.4S, V3.4S
+    WORD $0x4EA364C6                 // SMAX V6.4S, V6.4S, V3.4S
+    SUB  $1, R7
+    CBNZ R7, mm_neon_loop
+
+mm_neon_odd:
+    TBZ  $0, R4, mm_neon_foldpairs   // R4 (blocks after block 0) even => no leftover block
+    VLD1.P 16(R2), [V2.S4]
+    WORD $0x4EA26C00                 // SMIN V0.4S, V0.4S, V2.4S
+    WORD $0x4EA26421                 // SMAX V1.4S, V1.4S, V2.4S
+
+mm_neon_foldpairs:
+    WORD $0x4EA56C00                 // SMIN V0.4S, V0.4S, V5.4S
+    WORD $0x4EA66421                 // SMAX V1.4S, V1.4S, V6.4S
 
 mm_neon_reduce:
     WORD $0x4EB1A803                 // SMINV S3, V0.4S
@@ -225,29 +250,57 @@ mm_neon_done:
     RET
 
 // func sumNEON(a []int32) int32
-// Wrapping int32 sum: VADD folds 4-lane blocks into a vector accumulator,
-// ADDV reduces it to a scalar, and a 32-bit scalar tail adds the (n mod 4)
-// remainder. Every add wraps in a 32-bit lane, and wrapping addition is
-// associative, so the lane split and reduction order are bit-identical to
-// sumGo for every input, including forced overflow. The slice arrives
-// pre-clamped from the public Sum, so a_len is the trusted element count.
+// Wrapping int32 sum with four independent VADD accumulators (V16..V19), so the
+// accumulate latency stays off the loop-carried critical path: the 16-wide main
+// loop keeps four parallel int32 chains, a 4-wide cleanup loop folds the
+// (n mod 16)/4 residual blocks, ADDV reduces to a scalar, and a 32-bit scalar
+// tail adds the (n mod 4) remainder. Every add wraps in a 32-bit lane, and
+// wrapping addition is associative, so the four-way lane split and the reduction
+// order are bit-identical to sumGo for every input, including forced overflow.
+// The slice arrives pre-clamped from the public Sum, so a_len is the trusted
+// element count. Same latency-hiding rewrite as the i16 sumNEON (#282): measured
+// roughly -55% at n=1024 and -56% at n=4096 on Cortex-A76 (#283). Below n=32 the
+// two-level tail's extra addressing costs ~1-2 ns over the old single-accumulator
+// form; the win starts around n=63.
 TEXT ·sumNEON(SB), NOSPLIT, $0-28
     MOVD a_base+0(FP), R1
     MOVD a_len+8(FP), R3
 
-    VEOR V0.B16, V0.B16, V0.B16
-    LSR  $2, R3, R4            // R4 = n / 4
+    VEOR V16.B16, V16.B16, V16.B16   // primary int32 accumulator = 0
+    LSR  $4, R3, R4              // R4 = n / 16
+    CBZ  R4, sum_neon_cleanup    // no 16-wide block: single-accumulator path only
+
+    VEOR V17.B16, V17.B16, V17.B16   // three more accumulators, zeroed only when the
+    VEOR V18.B16, V18.B16, V18.B16   // 16-wide main loop runs, so small n keeps the
+    VEOR V19.B16, V19.B16, V19.B16   // single-accumulator cost
+
+sum_neon_loop16:
+    VLD1.P 64(R1), [V0.S4, V1.S4, V2.S4, V3.S4]
+    VADD V0.S4, V16.S4, V16.S4
+    VADD V1.S4, V17.S4, V17.S4
+    VADD V2.S4, V18.S4, V18.S4
+    VADD V3.S4, V19.S4, V19.S4
+    SUB  $1, R4
+    CBNZ R4, sum_neon_loop16
+
+    VADD V17.S4, V16.S4, V16.S4
+    VADD V19.S4, V18.S4, V18.S4
+    VADD V18.S4, V16.S4, V16.S4   // four chains -> V16
+
+sum_neon_cleanup:
+    AND  $15, R3, R2            // R2 = n mod 16
+    LSR  $2, R2, R4            // R4 = (n mod 16) / 4, in {0,1,2,3}
     CBZ  R4, sum_neon_reduce
 
 sum_neon_loop4:
-    VLD1.P 16(R1), [V1.S4]
-    VADD V1.S4, V0.S4, V0.S4   // accumulate (wrapping)
+    VLD1.P 16(R1), [V0.S4]
+    VADD V0.S4, V16.S4, V16.S4
     SUB  $1, R4
     CBNZ R4, sum_neon_loop4
 
 sum_neon_reduce:
-    VADDV V0.S4, V0            // ADDV S0, V0.4S
-    FMOVS F0, R5               // vector partial sum (low 32 = int32)
+    WORD $0x4EB1BA10           // ADDV S16, V16.4S
+    FMOVS F16, R5              // vector partial sum (low 32 = int32)
 
     AND  $3, R3
     CBZ  R3, sum_neon_done

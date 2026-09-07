@@ -493,11 +493,17 @@ sum_i16_done:
 // SMIN and two independent SMAX chains so the compare latency stays off the
 // loop-carried critical path (measured ~37% faster at n=4096 on Cortex-A76 than
 // the single-accumulator-pair form, #282). A possible odd trailing block folds
-// into the first pair, the two pairs are combined, SMINV/SMAXV reduce each across
-// its 8 lanes to a halfword, and a scalar tail folds the (n mod 8) remainder. The
-// dispatch gates n >= 8, so block 0 always exists. Signed min/max is idempotent
-// and has no accumulation order, so the result is bit-identical to minMaxGo;
-// seeding both accumulator pairs from block 0 double-counts it harmlessly.
+// into the first pair, the two pairs are combined, and when (n mod 8) != 0 the
+// last 8 elements a[n-8:n] are folded in as one overlapping .8H block so every
+// element stays on the SIMD path (no scalar tail); SMINV/SMAXV then reduce each
+// accumulator across its 8 lanes to a halfword. The dispatch gates n >= 8, so
+// block 0 and the a[n-8] overlap block are always in range. Signed min/max is
+// idempotent and has no accumulation order, so the result is bit-identical to
+// minMaxGo; seeding both accumulator pairs from block 0, and re-counting the
+// overlap of already-processed elements, both double-count harmlessly. The
+// overlap block replaces a scalar tail of up to 7 CSEL iterations: measured
+// roughly -24% to -41% at ragged sizes (n mod 8 != 0) on Cortex-A76, and neutral
+// when n is a multiple of 8 (no tail to replace) (#283).
 TEXT ·minMaxNEON(SB), NOSPLIT, $0-28
     MOVD a_base+0(FP), R2
     MOVD a_len+8(FP), R3
@@ -508,7 +514,9 @@ TEXT ·minMaxNEON(SB), NOSPLIT, $0-28
     VLD1 (R2), [V5.H8]           // min2 = block 0 (idempotent seed)
     VLD1.P 16(R2), [V6.H8]       // max2 = block 0 (advance past block 0)
     SUB  $1, R4                   // blocks after block 0
-    CBZ  R4, mm_i16_reduce
+    // Single block: fold pairs (harmless self-fold of block 0) then run the
+    // overlap tail, rather than jumping past both straight to the reduce.
+    CBZ  R4, mm_i16_foldpairs
 
     LSR  $1, R4, R7             // R7 = pairs = (blocks after 0) / 2
     CBZ  R7, mm_i16_odd
@@ -532,6 +540,20 @@ mm_i16_foldpairs:
     WORD $0x4E656C00             // SMIN V0.8H, V0.8H, V5.8H
     WORD $0x4E666421             // SMAX V1.8H, V1.8H, V6.8H
 
+    // Overlapping tail: when (n mod 8) != 0, fold the last 8 elements a[n-8:n] in
+    // as one .8H block before the horizontal reduce, so every element stays on the
+    // SIMD path (no scalar tail). Idempotency makes re-counting the overlap of
+    // already-processed elements harmless; the n >= 8 gate keeps a[n-8] in range.
+    AND  $7, R3, R4
+    CBZ  R4, mm_i16_reduce
+    SUB  $8, R3, R7             // R7 = n - 8 (element index of the overlap block)
+    LSL  $1, R7, R7            // R7 = (n-8)*2 bytes
+    MOVD a_base+0(FP), R2       // reload base (R2 was advanced past the full blocks)
+    ADD  R7, R2, R2            // R2 = &a[n-8]
+    VLD1 (R2), [V2.H8]
+    WORD $0x4E626C00             // SMIN V0.8H, V0.8H, V2.8H
+    WORD $0x4E626421             // SMAX V1.8H, V1.8H, V2.8H
+
 mm_i16_reduce:
     WORD $0x4E71A803             // SMINV H3, V0.8H
     WORD $0x4E70A824             // SMAXV H4, V1.8H
@@ -541,19 +563,6 @@ mm_i16_reduce:
     ASRW $16, R5, R5              // sign-extend low halfword -> int32 min
     LSLW $16, R6, R6
     ASRW $16, R6, R6              // sign-extend low halfword -> int32 max
-
-    AND  $7, R3, R4              // tail count
-    CBZ  R4, mm_i16_done
-    // R2 already points at &a[fullBlocks*8] after the loop.
-
-mm_i16_tail:
-    MOVH.P 2(R2), R7            // r (sign-extended)
-    CMPW R5, R7
-    CSEL LT, R7, R5, R5           // R5 = min(r, R5)
-    CMPW R6, R7
-    CSEL GT, R7, R6, R6           // R6 = max(r, R6)
-    SUB  $1, R4
-    CBNZ R4, mm_i16_tail
 
 mm_i16_done:
     MOVH R5, minVal+24(FP)

@@ -95,9 +95,13 @@ func dotI16(a, b []int16) int32 {
 
 // Tier-3 thresholds: one 8-wide (.8H) vector block each. Like minNEONDot they
 // are independent literals rather than aliases of minNEONElements, so retuning
-// one op can never silently move another's cut. All three kernels are correct
-// at any length (each falls through to a scalar tail), so these are
-// performance cuts only, never a safety requirement.
+// one op can never silently move another's cut. mulQ15NEON, absNEON, maxAbsNEON
+// and sumNEON are correct at any length: each writes element-wise or accumulates
+// from zero and falls through to a scalar tail, so their thresholds are
+// performance cuts only. minMaxNEON is the exception: it seeds its min/max
+// accumulators from the first 8-wide block and folds an overlapping final block
+// in place of a scalar tail, so it needs a full block present and minNEONMinMax
+// = 8 is a correctness floor, not just a performance cut.
 const (
 	minNEONMulQ15 = 8
 	minNEONAbs    = 8
