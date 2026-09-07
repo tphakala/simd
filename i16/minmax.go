@@ -4,7 +4,7 @@ package i16
 //
 //	minVal = min_i a[i],  maxVal = max_i a[i]
 //
-// Both are signed comparisons. Unlike [MaxAbs] the result needs no widening: the
+// Both are signed comparisons. Unlike [MaxAbs], the result needs no widening: the
 // minimum and maximum of a set of int16 values are themselves int16, so this is
 // the signed range probe (peak and trough), distinct from the abs-max headroom
 // probe. An empty a returns (0, 0). a is read-only; the call allocates nothing.
