@@ -172,10 +172,11 @@ func butterflyI32(lo, hi []int32) {
 func butterflyNEON(lo, hi []int32)
 
 // minMaxI32 dispatches the signed int32 min/max reduction. The NEON kernel does
-// the reduction in 4-wide SMIN/SMAX lanes with a single-instruction SMINV/SMAXV
-// across-vector fold and a scalar tail, so it gates on NEON and at least one full
-// 4-element block; shorter slices use the pure-Go reference. res is non-empty
-// (the public MinMax guards the empty case).
+// the reduction in 4-wide SMIN/SMAX lanes (a 2-block unroll with dual min/max
+// accumulator pairs) with a single-instruction SMINV/SMAXV across-vector fold and
+// a scalar tail, so it gates on NEON and at least one full 4-element block;
+// shorter slices use the pure-Go reference. res is non-empty (the public MinMax
+// guards the empty case).
 func minMaxI32(res []int32) (minVal, maxVal int32) {
 	if hasNEON && len(res) >= minNEONElements {
 		return minMaxNEON(res)

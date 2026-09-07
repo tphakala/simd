@@ -173,27 +173,61 @@ toi32_done:
     RET
 
 // func sumNEON(a []int8) int32
-// Pairwise widen-accumulate: SADDLP folds 16 int8 to 8 int16, SADALP accumulates
-// those into a 4-lane int32 accumulator; ADDV folds the lanes and a scalar tail
-// adds the (n mod 16) remainder.
+// Pairwise widen-accumulate with four independent int32 accumulators (V16..V19),
+// processing 64 int8 per iteration: SADDLP folds each 16 int8 to 8 int16 into a
+// fresh temporary (V4..V7), SADALP accumulates those into one of four parallel
+// int32 chains, a 16-wide cleanup loop folds the (n mod 64)/16 residual blocks,
+// ADDV reduces to a scalar, and a scalar tail adds the (n mod 16) remainder. The
+// widening is exact and int32 accumulation wraps and is associative, so the
+// four-way split and the reduction order are bit-identical to sumGo. Measured
+// roughly -20% at n=1024 and -24% at n=4096 on Cortex-A76 against an
+// alignment-matched baseline (#283); the win comes from the 64-wide unroll, so
+// below it the 16-wide path dominates and is alignment-sensitive as before,
+// leaving small-to-medium n unchanged in character.
 TEXT ·sumNEON(SB), NOSPLIT, $0-28
     MOVD a_base+0(FP), R1
     MOVD a_len+8(FP), R3
 
-    VEOR V2.B16, V2.B16, V2.B16   // int32 accumulator = 0
-    LSR  $4, R3, R4               // R4 = n / 16
+    VEOR V16.B16, V16.B16, V16.B16   // primary int32 accumulator = 0
+    LSR  $6, R3, R4               // R4 = n / 64
+    CBZ  R4, sum_cleanup           // no 64-wide block: single-accumulator path only
+
+    VEOR V17.B16, V17.B16, V17.B16   // three more accumulators, zeroed only when the
+    VEOR V18.B16, V18.B16, V18.B16   // 64-wide main loop runs, so small n keeps the
+    VEOR V19.B16, V19.B16, V19.B16   // single-accumulator cost
+
+sum_loop64:
+    VLD1.P 64(R1), [V0.B16, V1.B16, V2.B16, V3.B16]
+    WORD $0x4E202804             // SADDLP V4.8H, V0.16B
+    WORD $0x4E606890             // SADALP V16.4S, V4.8H
+    WORD $0x4E202825             // SADDLP V5.8H, V1.16B
+    WORD $0x4E6068B1             // SADALP V17.4S, V5.8H
+    WORD $0x4E202846             // SADDLP V6.8H, V2.16B
+    WORD $0x4E6068D2             // SADALP V18.4S, V6.8H
+    WORD $0x4E202867             // SADDLP V7.8H, V3.16B
+    WORD $0x4E6068F3             // SADALP V19.4S, V7.8H
+    SUB  $1, R4
+    CBNZ R4, sum_loop64
+
+    VADD V17.S4, V16.S4, V16.S4
+    VADD V19.S4, V18.S4, V18.S4
+    VADD V18.S4, V16.S4, V16.S4   // four chains -> V16
+
+sum_cleanup:
+    AND  $63, R3, R2             // R2 = n mod 64
+    LSR  $4, R2, R4             // R4 = (n mod 64) / 16, in {0,1,2,3}
     CBZ  R4, sum_reduce
 
 sum_loop16:
     VLD1.P 16(R1), [V0.B16]
     WORD $0x4E202801             // SADDLP V1.8H, V0.16B
-    WORD $0x4E606822             // SADALP V2.4S, V1.8H
+    WORD $0x4E606830             // SADALP V16.4S, V1.8H
     SUB  $1, R4
     CBNZ R4, sum_loop16
 
 sum_reduce:
-    WORD $0x4EB1B843             // ADDV S3, V2.4S
-    FMOVS F3, R5                  // R5 = vector total (low 32)
+    WORD $0x4EB1BA10             // ADDV S16, V16.4S
+    FMOVS F16, R5                 // R5 = vector total (low 32)
 
     AND  $15, R3
     CBZ  R3, sum_done
