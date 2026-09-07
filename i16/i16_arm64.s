@@ -424,27 +424,55 @@ maxabs_neon_done:
     RET
 
 // func sumNEON(a []int16) int32
-// Widening int16 sum: SADALP pairwise-accumulates each .8H block into a 4-lane
-// int32 accumulator, ADDV folds the lanes, and a scalar tail adds the (n mod 8)
-// remainder. Accumulation wraps in int32 exactly as sumGo does, so the result is
-// bit-identical to Sum's pure-Go reference for every input, including overflow.
+// Widening int16 sum. The 32-wide main loop feeds four independent SADALP chains
+// (V16..V19), each pairwise-accumulating one .8H block into a 4-lane int32
+// accumulator; keeping four accumulators in flight holds the SADALP accumulate
+// latency off the loop-carried critical path (measured ~21% faster at n=4096 on
+// Cortex-A76 than the single-accumulator form, #282). The four chains are then
+// summed, an 8-wide loop absorbs the (n mod 32) blocks, ADDV folds the lanes, and
+// a scalar tail adds the (n mod 8) remainder. Accumulation wraps in int32 exactly
+// as sumGo does, and wrapping add is associative and commutative, so any lane
+// grouping is bit-identical to Sum's pure-Go reference for every input, including
+// overflow.
 TEXT ·sumNEON(SB), NOSPLIT, $0-28
     MOVD a_base+0(FP), R1
     MOVD a_len+8(FP), R3
 
-    VEOR V2.B16, V2.B16, V2.B16   // int32 accumulator = 0
-    LSR  $3, R3, R4               // R4 = n / 8
+    VEOR V16.B16, V16.B16, V16.B16   // four int32 accumulators = 0
+    VEOR V17.B16, V17.B16, V17.B16
+    VEOR V18.B16, V18.B16, V18.B16
+    VEOR V19.B16, V19.B16, V19.B16
+
+    LSR  $5, R3, R4               // R4 = n / 32
+    CBZ  R4, sum_i16_fold
+
+sum_i16_loop32:
+    VLD1.P 64(R1), [V0.H8, V1.H8, V2.H8, V3.H8]
+    WORD $0x4E606810             // SADALP V16.4S, V0.8H
+    WORD $0x4E606831             // SADALP V17.4S, V1.8H
+    WORD $0x4E606852             // SADALP V18.4S, V2.8H
+    WORD $0x4E606873             // SADALP V19.4S, V3.8H
+    SUB  $1, R4
+    CBNZ R4, sum_i16_loop32
+
+sum_i16_fold:
+    VADD V17.S4, V16.S4, V16.S4
+    VADD V19.S4, V18.S4, V18.S4
+    VADD V18.S4, V16.S4, V16.S4   // four chains -> V16
+
+    AND  $31, R3, R2             // R2 = n mod 32
+    LSR  $3, R2, R4             // R4 = (n mod 32) / 8, in {0,1,2,3}
     CBZ  R4, sum_i16_reduce
 
 sum_i16_loop8:
     VLD1.P 16(R1), [V0.H8]
-    WORD $0x4E606802             // SADALP V2.4S, V0.8H
+    WORD $0x4E606810             // SADALP V16.4S, V0.8H
     SUB  $1, R4
     CBNZ R4, sum_i16_loop8
 
 sum_i16_reduce:
-    WORD $0x4EB1B842             // ADDV S2, V2.4S
-    FMOVS F2, R5                  // R5 = vector total (low 32)
+    WORD $0x4EB1BA10            // ADDV S16, V16.4S
+    FMOVS F16, R5                // R5 = vector total (low 32)
 
     AND  $7, R3
     CBZ  R3, sum_i16_done
@@ -460,27 +488,49 @@ sum_i16_done:
     RET
 
 // func minMaxNEON(a []int16) (minVal, maxVal int16)
-// Signed int16 min and max in one pass: SMIN/SMAX fold 8-wide (.8H) blocks into
-// running accumulators seeded from block 0, SMINV/SMAXV reduce each across its 8
-// lanes to a halfword, and a scalar tail folds the (n mod 8) remainder. The
-// dispatch gates n >= 8, so at least one full block exists. Signed min/max has no
-// accumulation order, so the result is bit-identical to minMaxGo.
+// Signed int16 min and max in one pass. Block 0 seeds two min accumulators (V0,V5)
+// and two max accumulators (V1,V6); the 16-wide main loop keeps two independent
+// SMIN and two independent SMAX chains so the compare latency stays off the
+// loop-carried critical path (measured ~37% faster at n=4096 on Cortex-A76 than
+// the single-accumulator-pair form, #282). A possible odd trailing block folds
+// into the first pair, the two pairs are combined, SMINV/SMAXV reduce each across
+// its 8 lanes to a halfword, and a scalar tail folds the (n mod 8) remainder. The
+// dispatch gates n >= 8, so block 0 always exists. Signed min/max is idempotent
+// and has no accumulation order, so the result is bit-identical to minMaxGo;
+// seeding both accumulator pairs from block 0 double-counts it harmlessly.
 TEXT ·minMaxNEON(SB), NOSPLIT, $0-28
     MOVD a_base+0(FP), R2
     MOVD a_len+8(FP), R3
 
     LSR  $3, R3, R4               // R4 = full 8-wide blocks (>=1)
-    VLD1 (R2), [V0.H8]            // min acc = block 0 (no advance)
-    VLD1.P 16(R2), [V1.H8]        // max acc = block 0 (advance to block 1)
-    SUB  $1, R4
+    VLD1 (R2), [V0.H8]           // min1 = block 0
+    VLD1 (R2), [V1.H8]           // max1 = block 0
+    VLD1 (R2), [V5.H8]           // min2 = block 0 (idempotent seed)
+    VLD1.P 16(R2), [V6.H8]       // max2 = block 0 (advance past block 0)
+    SUB  $1, R4                   // blocks after block 0
     CBZ  R4, mm_i16_reduce
 
+    LSR  $1, R4, R7             // R7 = pairs = (blocks after 0) / 2
+    CBZ  R7, mm_i16_odd
+
 mm_i16_loop:
+    VLD1.P 32(R2), [V2.H8, V3.H8]
+    WORD $0x4E626C00             // SMIN V0.8H, V0.8H, V2.8H
+    WORD $0x4E626421             // SMAX V1.8H, V1.8H, V2.8H
+    WORD $0x4E636CA5             // SMIN V5.8H, V5.8H, V3.8H
+    WORD $0x4E6364C6             // SMAX V6.8H, V6.8H, V3.8H
+    SUB  $1, R7
+    CBNZ R7, mm_i16_loop
+
+mm_i16_odd:
+    TBZ  $0, R4, mm_i16_foldpairs   // R4 (blocks after block 0) even => no leftover block
     VLD1.P 16(R2), [V2.H8]
     WORD $0x4E626C00             // SMIN V0.8H, V0.8H, V2.8H
     WORD $0x4E626421             // SMAX V1.8H, V1.8H, V2.8H
-    SUB  $1, R4
-    CBNZ R4, mm_i16_loop
+
+mm_i16_foldpairs:
+    WORD $0x4E656C00             // SMIN V0.8H, V0.8H, V5.8H
+    WORD $0x4E666421             // SMAX V1.8H, V1.8H, V6.8H
 
 mm_i16_reduce:
     WORD $0x4E71A803             // SMINV H3, V0.8H
