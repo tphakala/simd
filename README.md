@@ -663,7 +663,7 @@ Interleaving is pure 32-bit-lane movement, so those kernels reuse the proven `f3
 
 The 16-bit integer counterpart to `i32`, serving two kinds of hot loop. First, raw-PCM movement, where the source samples are 16-bit and the cheapest place to vectorize is the channel (de)interleaving that happens before samples are widened to int32. Second, fixed-point DSP, where int16 inputs are multiplied and accumulated into int32.
 
-**Scope:** element-wise int16 add/sub still belongs in `i32`, because inter-channel decorrelation can exceed the source bit depth by one bit. What lives here is the *widening* direction (operations that read int16 and accumulate into int32, where the narrow input is the point) plus the element-wise operations that are well-defined at 16-bit width: the wrapping absolute value (`Abs`, with the `MaxAbs` reduction) and the rounding Q15 fixed-point multiply (`MulQ15`).
+**Scope:** element-wise int16 add/sub still belongs in `i32`, because inter-channel decorrelation can exceed the source bit depth by one bit. What lives here is the *widening* direction (operations that read int16 and accumulate into int32, where the narrow input is the point) plus the element-wise operations that are well-defined at 16-bit width: the wrapping absolute value (`Abs`) and the rounding Q15 fixed-point multiply (`MulQ15`). The reductions are `MaxAbs` (abs-max headroom, widening to `int`), `MinMax` (the signed range, which fits int16), and the widening `Sum` (an int16 total accumulated into int32).
 
 | Category       | Function                   | Description                                | SIMD Width                         |
 | -------------- | -------------------------- | ------------------------------------------ | ---------------------------------- |
@@ -672,6 +672,8 @@ The 16-bit integer counterpart to `i32`, serving two kinds of hot loop. First, r
 | **Reduction**  | `DotProduct(a, b)`         | Widening dot product, wrapping int32       | 16x (AVX2) / 8x (SSE2) / 16x (NEON) |
 |                | `DotProductUnsafe(a, b)`   | As above, without the empty-slice guard    | 16x (AVX2) / 8x (SSE2) / 16x (NEON) |
 |                | `MaxAbs(a) int`            | Abs-max headroom probe, range `[0, 32768]` | 16x (AVX2) / 8x (NEON) |
+|                | `Sum(a) int32`             | Widening int16 total, wrapping int32       | 16x (AVX2) / 8x (NEON) |
+|                | `MinMax(a) (min, max)`     | Signed per-slice minimum and maximum, one pass | 16x (AVX2) / 8x (NEON) |
 | **Correlation**| `XCorr(dst, x, y)`         | Dot product of x against y at every lag    | 4 lags/call, 16x (AVX2) / 8x (SSE2/NEON) |
 | **Element-wise**| `Abs(dst, a)`             | Wrapping absolute value (`abs(-32768) = -32768`) | 16x (AVX2) / 8x (NEON) |
 |                | `MulQ15(dst, a, b)`        | Rounding Q15 multiply (libopus `MULT16_16_P15`) | 16x (AVX2) / 8x (NEON) |
@@ -689,6 +691,8 @@ i16.Deinterleave2(left, right, stereo) // inverse: split back to channels
 sum := i16.DotProduct(left, right)     // sum(left[i]*right[i]) widened into int32
 
 peak := i16.MaxAbs(left)               // headroom probe: |-32768| reports 32768
+total := i16.Sum(left)                 // wrapping int32 total of the samples
+mn, mx := i16.MinMax(left)             // signed minimum and maximum in one pass
 gain := make([]int16, n)               // Q15 gains, e.g. 16384 = 0.5
 i16.MulQ15(left, left, gain)           // rounding Q15 multiply, in place
 i16.Abs(left, left)                    // wrapping |x|, in place
@@ -708,6 +712,8 @@ The interleave kernels are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plu
 `XCorr` is the same arithmetic evaluated at every lag, and `dst[k]` is defined to equal `DotProduct(x, y[k:k+len(x)])` exactly. The win over calling `DotProduct` in a loop is that it loads `x` once and multiply-accumulates it against four overlapping `y` windows at a time (the libopus `xcorr_kernel` shape), rather than re-reading `x` for every lag. Only lags whose full window fits in `y` are computed, and `dst` beyond that is left untouched rather than zeroed. On CPUs with AVX-VNNI (Intel Alder Lake and later, AMD Zen 4 and later) a fourth dispatch tier fuses each `VPMADDWD`+`VPADDD` in the 16-wide loop into one `VPDPWSSD`, which is bit-identical because it accumulates with the same wrapping dword add; it is selected above the plain AVX2 tier and can be masked back to AVX2 with `SIMD_DISABLE=avxvnni`.
 
 `Abs`, `MaxAbs` and `MulQ15` are the fixed-point envelope/gain trio. `Abs` wraps rather than saturates (`abs(-32768) = -32768`, the opposite of `i8.Abs`), `MaxAbs` returns an `int` because `|-32768| = 32768` does not fit int16 (libopus `celt_maxabs16`), and `MulQ15` is the *rounding* Q15 multiply (`MULT16_16_P15`): `dst[i] = int16((a[i]*b[i] + 1<<14) >> 15)` with the single out-of-range product `(-32768)^2` wrapping to `-32768`. All three are bit-exact against their pure-Go references for every input. On amd64 these three are AVX2-or-Go (no SSE2 tier, matching `i8` and the `i32` arithmetic); on ARM64 they run NEON (`MulQ15` via `SMULL` and the fused rounding-narrow `RSHRN`, since the single-instruction `SQRDMULH` saturates the `(-32768)^2` case and would break the wrap guarantee, whereas `RSHRN` narrows by truncation and preserves it).
+
+`Sum` and `MinMax` are the two general reductions. `Sum` widens each int16 to int32 and accumulates with the same two's-complement wraparound as `DotProduct` (associative, so the lane split is bit-identical to the scalar loop even on overflowing inputs), wrapping once the running total passes 2^31, about 65536 full-scale samples. `MinMax` returns the signed minimum and maximum in one pass (`VPMINSW`/`VPMAXSW` on AVX2, `SMIN`/`SMAX` with single-instruction `SMINV`/`SMAXV` folds on NEON), the signed range probe distinct from the abs-max `MaxAbs`. Like `MaxAbs` both are AVX2-or-Go / NEON-or-Go with no SSE2 tier, bit-exact against their pure-Go references, and allocation-free.
 
 ### `i8` - int8 Operations
 

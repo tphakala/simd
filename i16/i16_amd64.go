@@ -144,6 +144,8 @@ const (
 	minAVX2MulQ15 = 16
 	minAVX2Abs    = 16
 	minAVX2MaxAbs = 16
+	minAVX2Sum    = 16
+	minAVX2MinMax = 16
 )
 
 func mulQ15I16(dst, a, b []int16) {
@@ -168,6 +170,26 @@ func maxAbsI16(a []int16) int {
 	}
 	return maxAbsGo(a)
 }
+
+func sumI16(a []int16) int32 {
+	if hasAVX2 && len(a) >= minAVX2Sum {
+		return sumAVX2(a)
+	}
+	return sumGo(a)
+}
+
+func minMaxI16(a []int16) (minVal, maxVal int16) {
+	if hasAVX2 && len(a) >= minAVX2MinMax {
+		return minMaxAVX2(a)
+	}
+	return minMaxGo(a)
+}
+
+//go:noescape
+func sumAVX2(a []int16) int32
+
+//go:noescape
+func minMaxAVX2(a []int16) (minVal, maxVal int16)
 
 //go:noescape
 func mulQ15AVX2(dst, a, b []int16)

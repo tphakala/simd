@@ -102,6 +102,8 @@ const (
 	minNEONMulQ15 = 8
 	minNEONAbs    = 8
 	minNEONMaxAbs = 8
+	minNEONSum    = 8
+	minNEONMinMax = 8
 )
 
 func mulQ15I16(dst, a, b []int16) {
@@ -126,6 +128,26 @@ func maxAbsI16(a []int16) int {
 	}
 	return maxAbsGo(a)
 }
+
+func sumI16(a []int16) int32 {
+	if hasNEON && len(a) >= minNEONSum {
+		return sumNEON(a)
+	}
+	return sumGo(a)
+}
+
+func minMaxI16(a []int16) (minVal, maxVal int16) {
+	if hasNEON && len(a) >= minNEONMinMax {
+		return minMaxNEON(a)
+	}
+	return minMaxGo(a)
+}
+
+//go:noescape
+func sumNEON(a []int16) int32
+
+//go:noescape
+func minMaxNEON(a []int16) (minVal, maxVal int16)
 
 //go:noescape
 func mulQ15NEON(dst, a, b []int16)

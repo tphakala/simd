@@ -214,6 +214,35 @@ func FuzzI16AbsMaxAbs(f *testing.F) {
 	})
 }
 
+// FuzzI16Sum differentially fuzzes the widening int16 sum against its reference,
+// including inputs long enough to wrap the int32 accumulator.
+func FuzzI16Sum(f *testing.F) {
+	addLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		a := i16sFromBits(raw)
+		if got, want := Sum(a), sumGo(a); got != want {
+			t.Fatalf("Sum = %d, want %d (len=%d)", got, want, len(a))
+		}
+	})
+}
+
+// FuzzI16MinMax differentially fuzzes the signed min/max reduction. The empty
+// case is guarded by the public wrapper, so the reference is guarded to match.
+func FuzzI16MinMax(f *testing.F) {
+	addLenSeeds(f)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		a := i16sFromBits(raw)
+		gotLo, gotHi := MinMax(a)
+		var wantLo, wantHi int16
+		if len(a) != 0 {
+			wantLo, wantHi = minMaxGo(a)
+		}
+		if gotLo != wantLo || gotHi != wantHi {
+			t.Fatalf("MinMax = (%d,%d), want (%d,%d) (len=%d)", gotLo, gotHi, wantLo, wantHi, len(a))
+		}
+	})
+}
+
 // FuzzI16XCorr differentially fuzzes multi-lag correlation. The high-value bug
 // class is the lag blocking: the kernel evaluates 4 lags per call and the
 // dispatcher finishes the remainder with the dot kernel, so arbitrary lag

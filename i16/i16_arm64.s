@@ -422,3 +422,90 @@ maxabs_neon_scalar:
 maxabs_neon_done:
     MOVD R5, ret+24(FP)
     RET
+
+// func sumNEON(a []int16) int32
+// Widening int16 sum: SADALP pairwise-accumulates each .8H block into a 4-lane
+// int32 accumulator, ADDV folds the lanes, and a scalar tail adds the (n mod 8)
+// remainder. Accumulation wraps in int32 exactly as sumGo does, so the result is
+// bit-identical to Sum's pure-Go reference for every input, including overflow.
+TEXT ·sumNEON(SB), NOSPLIT, $0-28
+    MOVD a_base+0(FP), R1
+    MOVD a_len+8(FP), R3
+
+    VEOR V2.B16, V2.B16, V2.B16   // int32 accumulator = 0
+    LSR  $3, R3, R4               // R4 = n / 8
+    CBZ  R4, sum_i16_reduce
+
+sum_i16_loop8:
+    VLD1.P 16(R1), [V0.H8]
+    WORD $0x4E606802             // SADALP V2.4S, V0.8H
+    SUB  $1, R4
+    CBNZ R4, sum_i16_loop8
+
+sum_i16_reduce:
+    WORD $0x4EB1B842             // ADDV S2, V2.4S
+    FMOVS F2, R5                  // R5 = vector total (low 32)
+
+    AND  $7, R3
+    CBZ  R3, sum_i16_done
+
+sum_i16_scalar:
+    MOVH.P 2(R1), R6             // sign-extending 16-bit load
+    ADDW R6, R5, R5             // 32-bit wrapping add
+    SUB  $1, R3
+    CBNZ R3, sum_i16_scalar
+
+sum_i16_done:
+    MOVW R5, ret+24(FP)
+    RET
+
+// func minMaxNEON(a []int16) (minVal, maxVal int16)
+// Signed int16 min and max in one pass: SMIN/SMAX fold 8-wide (.8H) blocks into
+// running accumulators seeded from block 0, SMINV/SMAXV reduce each across its 8
+// lanes to a halfword, and a scalar tail folds the (n mod 8) remainder. The
+// dispatch gates n >= 8, so at least one full block exists. Signed min/max has no
+// accumulation order, so the result is bit-identical to minMaxGo.
+TEXT ·minMaxNEON(SB), NOSPLIT, $0-28
+    MOVD a_base+0(FP), R2
+    MOVD a_len+8(FP), R3
+
+    LSR  $3, R3, R4               // R4 = full 8-wide blocks (>=1)
+    VLD1 (R2), [V0.H8]            // min acc = block 0 (no advance)
+    VLD1.P 16(R2), [V1.H8]        // max acc = block 0 (advance to block 1)
+    SUB  $1, R4
+    CBZ  R4, mm_i16_reduce
+
+mm_i16_loop:
+    VLD1.P 16(R2), [V2.H8]
+    WORD $0x4E626C00             // SMIN V0.8H, V0.8H, V2.8H
+    WORD $0x4E626421             // SMAX V1.8H, V1.8H, V2.8H
+    SUB  $1, R4
+    CBNZ R4, mm_i16_loop
+
+mm_i16_reduce:
+    WORD $0x4E71A803             // SMINV H3, V0.8H
+    WORD $0x4E70A824             // SMAXV H4, V1.8H
+    FMOVS F3, R5                  // min halfword (zero-extended)
+    FMOVS F4, R6                  // max halfword
+    LSLW $16, R5, R5
+    ASRW $16, R5, R5              // sign-extend low halfword -> int32 min
+    LSLW $16, R6, R6
+    ASRW $16, R6, R6              // sign-extend low halfword -> int32 max
+
+    AND  $7, R3, R4              // tail count
+    CBZ  R4, mm_i16_done
+    // R2 already points at &a[fullBlocks*8] after the loop.
+
+mm_i16_tail:
+    MOVH.P 2(R2), R7            // r (sign-extended)
+    CMPW R5, R7
+    CSEL LT, R7, R5, R5           // R5 = min(r, R5)
+    CMPW R6, R7
+    CSEL GT, R7, R6, R6           // R6 = max(r, R6)
+    SUB  $1, R4
+    CBNZ R4, mm_i16_tail
+
+mm_i16_done:
+    MOVH R5, minVal+24(FP)
+    MOVH R6, maxVal+26(FP)
+    RET
