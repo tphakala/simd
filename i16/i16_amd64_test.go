@@ -563,6 +563,131 @@ func TestMaxAbsAVX2_NoOverRead(t *testing.T) {
 	}
 }
 
+// TestSumAVX2_ParityWithGo drives the kernel directly across the sweep, then
+// pins the int32 two's-complement wraparound: a long run of the type maximum
+// must wrap exactly as the reference does.
+func TestSumAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range tier3Lengths {
+		a := genI16(n, 145)
+		if got, want := sumAVX2(a), sumGo(a); got != want {
+			t.Errorf("sumAVX2 n=%d: got %d, want %d", n, got, want)
+		}
+	}
+	wa := make([]int16, 70000)
+	for i := range wa {
+		wa[i] = math.MaxInt16
+	}
+	if got, want := sumAVX2(wa), sumGo(wa); got != want {
+		t.Errorf("sumAVX2 wraparound: got %d, want %d", got, want)
+	}
+	if sumGo(wa) >= 0 {
+		t.Fatalf("test setup: expected the reference to wrap negative, got %d", sumGo(wa))
+	}
+}
+
+// TestSumAVX2_NoOverRead hands the kernel a prefix of a longer allocation whose
+// tail is -32768. A wrapping sum's identity is 0, so zeroed past-slice memory is
+// invisible; the planted extreme shifts the total by a nonzero multiple of
+// -32768 that a handful of over-read lanes cannot cancel, so an over-reading
+// kernel diverges from the reference over a[:n].
+func TestSumAVX2_NoOverRead(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	backing := make([]int16, 64+16)
+	for i := range backing {
+		backing[i] = math.MinInt16
+	}
+	for _, n := range []int{1, 7, 8, 9, 15, 16, 17, 24, 31, 32, 33, 64} {
+		a := backing[:n]
+		for i := range a {
+			a[i] = int16(i%50 - 25)
+		}
+		if got, want := sumAVX2(a), sumGo(a); got != want {
+			t.Fatalf("sumAVX2 n=%d: got %d, want %d (read past the operand?)", n, got, want)
+		}
+		for i := range a {
+			backing[i] = math.MinInt16
+		}
+	}
+}
+
+// TestMinMaxAVX2_ParityWithGo drives the kernel directly across the sweep, then
+// plants each type extreme at every lane position: the signed min must report
+// -32768 and the max +32767.
+func TestMinMaxAVX2_ParityWithGo(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	for _, n := range tier3Lengths {
+		if n < minAVX2MinMax {
+			continue // the kernel seeds from block 0; sub-block n routes to Go
+		}
+		a := genI16(n, 146)
+		gotLo, gotHi := minMaxAVX2(a)
+		wantLo, wantHi := minMaxGo(a)
+		if gotLo != wantLo || gotHi != wantHi {
+			t.Errorf("minMaxAVX2 n=%d: got (%d,%d), want (%d,%d)", n, gotLo, gotHi, wantLo, wantHi)
+		}
+	}
+	for _, n := range []int{16, 17, 24, 32, 33} {
+		for pos := range n {
+			a := make([]int16, n)
+			for i := range a {
+				a[i] = int16(i%100 - 50)
+			}
+			a[pos] = math.MinInt16
+			if lo, _ := minMaxAVX2(a); lo != math.MinInt16 {
+				t.Fatalf("minMaxAVX2 n=%d pos=%d min: got %d, want %d", n, pos, lo, math.MinInt16)
+			}
+			b := make([]int16, n)
+			for i := range b {
+				b[i] = int16(i%100 - 50)
+			}
+			b[pos] = math.MaxInt16
+			if _, hi := minMaxAVX2(b); hi != math.MaxInt16 {
+				t.Fatalf("minMaxAVX2 n=%d pos=%d max: got %d, want %d", n, pos, hi, math.MaxInt16)
+			}
+		}
+	}
+}
+
+// TestMinMaxAVX2_NoOverRead hands the kernel a prefix of a longer allocation
+// whose tail alternates the two type extremes. The overlapping final block reads
+// a[n-16 .. n), all in bounds for n >= 16; an over-read past a[n) would pull a
+// planted extreme into the min or max and diverge from the reference.
+func TestMinMaxAVX2_NoOverRead(t *testing.T) {
+	if !cpu.X86.AVX2 {
+		t.Skip("AVX2 not available")
+	}
+	backing := make([]int16, 64+16)
+	poison := func() {
+		for i := range backing {
+			if i%2 == 0 {
+				backing[i] = math.MinInt16
+			} else {
+				backing[i] = math.MaxInt16
+			}
+		}
+	}
+	poison()
+	for _, n := range []int{16, 17, 24, 31, 32, 33, 64} {
+		a := backing[:n]
+		for i := range a {
+			a[i] = int16(i%50 - 25)
+		}
+		gotLo, gotHi := minMaxAVX2(a)
+		wantLo, wantHi := minMaxGo(a)
+		if gotLo != wantLo || gotHi != wantHi {
+			t.Fatalf("minMaxAVX2 n=%d: got (%d,%d), want (%d,%d) (read past the operand?)", n, gotLo, gotHi, wantLo, wantHi)
+		}
+		poison()
+	}
+}
+
 // TestTier3Dispatch_ReachesSIMD pins the dispatch state the tier-3 SIMD paths
 // depend on. It has to be a white-box check: the kernels are bit-identical to
 // the Go references by design, so a dispatcher that silently routed every
@@ -582,9 +707,9 @@ func TestTier3Dispatch_ReachesSIMD(t *testing.T) {
 	if hasAVX2 != cpu.X86.AVX2 {
 		t.Fatalf("hasAVX2 = %v but cpu.X86.AVX2 = %v: dispatch flag is not wired to CPU detection", hasAVX2, cpu.X86.AVX2)
 	}
-	if minAVX2MulQ15 > 32 || minAVX2Abs > 32 || minAVX2MaxAbs > 32 {
-		t.Fatalf("tier-3 AVX2 thresholds exceed two vector blocks (MulQ15 %d, Abs %d, MaxAbs %d): the ops would not vectorize at the frame lengths they were written for",
-			minAVX2MulQ15, minAVX2Abs, minAVX2MaxAbs)
+	if minAVX2MulQ15 > 32 || minAVX2Abs > 32 || minAVX2MaxAbs > 32 || minAVX2Sum > 32 || minAVX2MinMax > 32 {
+		t.Fatalf("tier-3 AVX2 thresholds exceed two vector blocks (MulQ15 %d, Abs %d, MaxAbs %d, Sum %d, MinMax %d): the ops would not vectorize at the frame lengths they were written for",
+			minAVX2MulQ15, minAVX2Abs, minAVX2MaxAbs, minAVX2Sum, minAVX2MinMax)
 	}
 }
 
@@ -606,6 +731,8 @@ func TestTier3AVX2Kernels_AllocFree(t *testing.T) {
 		{"mulQ15AVX2", func() { mulQ15AVX2(dst, a, b) }},
 		{"absAVX2", func() { absAVX2(dst, a) }},
 		{"maxAbsAVX2", func() { _ = maxAbsAVX2(a) }},
+		{"sumAVX2", func() { _ = sumAVX2(a) }},
+		{"minMaxAVX2", func() { _, _ = minMaxAVX2(a) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(100, c.fn); got != 0 {

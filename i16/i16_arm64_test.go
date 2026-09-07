@@ -375,6 +375,127 @@ func TestMaxAbsNEON_NoOverRead(t *testing.T) {
 	}
 }
 
+// TestSumNEON_ParityWithGo drives the kernel directly across the sweep, then
+// pins the int32 two's-complement wraparound.
+func TestSumNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range tier3Lengths {
+		a := genI16(n, 147)
+		if got, want := sumNEON(a), sumGo(a); got != want {
+			t.Errorf("sumNEON n=%d: got %d, want %d", n, got, want)
+		}
+	}
+	wa := make([]int16, 70000)
+	for i := range wa {
+		wa[i] = math.MaxInt16
+	}
+	if got, want := sumNEON(wa), sumGo(wa); got != want {
+		t.Errorf("sumNEON wraparound: got %d, want %d", got, want)
+	}
+	if sumGo(wa) >= 0 {
+		t.Fatalf("test setup: expected the reference to wrap negative, got %d", sumGo(wa))
+	}
+}
+
+// TestSumNEON_NoOverRead hands the kernel a prefix of a longer allocation whose
+// tail is -32768. A wrapping sum's identity is 0, so zeroed past-slice memory is
+// invisible; the planted extreme shifts the total so an over-reading kernel
+// diverges from the reference over a[:n].
+func TestSumNEON_NoOverRead(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	backing := make([]int16, 64+8)
+	for i := range backing {
+		backing[i] = math.MinInt16
+	}
+	for _, n := range []int{1, 7, 8, 9, 15, 16, 17, 24, 33, 64} {
+		a := backing[:n]
+		for i := range a {
+			a[i] = int16(i%50 - 25)
+		}
+		if got, want := sumNEON(a), sumGo(a); got != want {
+			t.Fatalf("sumNEON n=%d: got %d, want %d (read past the operand?)", n, got, want)
+		}
+		for i := range a {
+			backing[i] = math.MinInt16
+		}
+	}
+}
+
+// TestMinMaxNEON_ParityWithGo drives the kernel directly across the sweep, then
+// plants each type extreme at every lane position.
+func TestMinMaxNEON_ParityWithGo(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for _, n := range tier3Lengths {
+		if n < minNEONMinMax {
+			continue // the kernel seeds from block 0; sub-block n routes to Go
+		}
+		a := genI16(n, 148)
+		gotLo, gotHi := minMaxNEON(a)
+		wantLo, wantHi := minMaxGo(a)
+		if gotLo != wantLo || gotHi != wantHi {
+			t.Errorf("minMaxNEON n=%d: got (%d,%d), want (%d,%d)", n, gotLo, gotHi, wantLo, wantHi)
+		}
+	}
+	for _, n := range []int{8, 9, 16, 17, 24} {
+		for pos := range n {
+			a := make([]int16, n)
+			for i := range a {
+				a[i] = int16(i%100 - 50)
+			}
+			a[pos] = math.MinInt16
+			if lo, _ := minMaxNEON(a); lo != math.MinInt16 {
+				t.Fatalf("minMaxNEON n=%d pos=%d min: got %d, want %d", n, pos, lo, math.MinInt16)
+			}
+			b := make([]int16, n)
+			for i := range b {
+				b[i] = int16(i%100 - 50)
+			}
+			b[pos] = math.MaxInt16
+			if _, hi := minMaxNEON(b); hi != math.MaxInt16 {
+				t.Fatalf("minMaxNEON n=%d pos=%d max: got %d, want %d", n, pos, hi, math.MaxInt16)
+			}
+		}
+	}
+}
+
+// TestMinMaxNEON_NoOverRead hands the kernel a prefix of a longer allocation
+// whose tail alternates the two type extremes; an over-read past a[n) would pull
+// a planted extreme into the min or max and diverge from the reference.
+func TestMinMaxNEON_NoOverRead(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	backing := make([]int16, 64+8)
+	poison := func() {
+		for i := range backing {
+			if i%2 == 0 {
+				backing[i] = math.MinInt16
+			} else {
+				backing[i] = math.MaxInt16
+			}
+		}
+	}
+	poison()
+	for _, n := range []int{8, 9, 15, 16, 17, 24, 33, 64} {
+		a := backing[:n]
+		for i := range a {
+			a[i] = int16(i%50 - 25)
+		}
+		gotLo, gotHi := minMaxNEON(a)
+		wantLo, wantHi := minMaxGo(a)
+		if gotLo != wantLo || gotHi != wantHi {
+			t.Fatalf("minMaxNEON n=%d: got (%d,%d), want (%d,%d) (read past the operand?)", n, gotLo, gotHi, wantLo, wantHi)
+		}
+		poison()
+	}
+}
+
 // TestTier3Dispatch_ReachesNEON pins the dispatch state the tier-3 SIMD paths
 // depend on. It has to be a white-box check: the kernels are bit-identical to
 // the Go references by design, so a dispatcher that silently routed every
@@ -396,9 +517,9 @@ func TestTier3Dispatch_ReachesNEON(t *testing.T) {
 	if !hasNEON {
 		t.Fatal("hasNEON is false though cpu.ARM64.NEON is true: the tier-3 ops silently run the Go reference on every call")
 	}
-	if minNEONMulQ15 > 16 || minNEONAbs > 16 || minNEONMaxAbs > 16 {
-		t.Fatalf("tier-3 NEON thresholds exceed two vector blocks (MulQ15 %d, Abs %d, MaxAbs %d): the ops would not vectorize at the frame lengths they were written for",
-			minNEONMulQ15, minNEONAbs, minNEONMaxAbs)
+	if minNEONMulQ15 > 16 || minNEONAbs > 16 || minNEONMaxAbs > 16 || minNEONSum > 16 || minNEONMinMax > 16 {
+		t.Fatalf("tier-3 NEON thresholds exceed two vector blocks (MulQ15 %d, Abs %d, MaxAbs %d, Sum %d, MinMax %d): the ops would not vectorize at the frame lengths they were written for",
+			minNEONMulQ15, minNEONAbs, minNEONMaxAbs, minNEONSum, minNEONMinMax)
 	}
 }
 
@@ -420,6 +541,8 @@ func TestTier3NEONKernels_AllocFree(t *testing.T) {
 		{"mulQ15NEON", func() { mulQ15NEON(dst, a, b) }},
 		{"absNEON", func() { absNEON(dst, a) }},
 		{"maxAbsNEON", func() { _ = maxAbsNEON(a) }},
+		{"sumNEON", func() { _ = sumNEON(a) }},
+		{"minMaxNEON", func() { _, _ = minMaxNEON(a) }},
 	}
 	for _, c := range checks {
 		if got := testing.AllocsPerRun(100, c.fn); got != 0 {

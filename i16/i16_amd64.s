@@ -1194,3 +1194,132 @@ maxabs_avx2_done:
     MOVQ AX, ret+24(FP)
     VZEROUPPER
     RET
+
+// func sumAVX2(a []int16) int32
+// Widening int16 sum: VPMADDWD against a +1 vector widens and pairwise-adds each
+// block to int32, VPADDD accumulates, a horizontal add folds the lanes, and a
+// scalar tail adds the remainder. An 8-wide XMM block before the loop absorbs 8
+// of the 0-15 remainder into the still-zero accumulator so a residue of 8-15 does
+// not fall entirely to the serial scalar tail (same shape as dotAVX2, #160).
+// Accumulation wraps in int32 exactly as sumGo, so the result is bit-identical
+// for every input including overflow.
+TEXT ·sumAVX2(SB), NOSPLIT, $0-28
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    VPXOR Y2, Y2, Y2           // int32 accumulator = 0
+    VPCMPEQW Y4, Y4, Y4        // all ones (each int16 lane = -1)
+    VPXOR Y5, Y5, Y5
+    VPSUBW Y4, Y5, Y3          // Y3 = 0 - (-1) = +1 per int16 lane
+
+    TESTQ $8, CX               // n % 16 >= 8? one XMM block absorbs the 8
+    JZ   sum_i16_blocks16
+    VMOVDQU (SI), X0           // 8 int16
+    VPMADDWD X3, X0, X1        // widen + add adjacent pairs -> 4 int32
+    VPADDD X1, X2, X2          // Y2[255:128] still zero after this
+    ADDQ $16, SI
+
+sum_i16_blocks16:
+    MOVQ CX, AX
+    SHRQ $4, AX                // AX = n / 16
+    JZ   sum_i16_reduce
+
+sum_i16_loop16:
+    VMOVDQU (SI), Y0
+    VPMADDWD Y3, Y0, Y1        // Y1 = widen + add adjacent pairs -> 8 int32
+    VPADDD Y1, Y2, Y2          // accumulate (wrapping)
+    ADDQ $32, SI
+    DECQ AX
+    JNZ  sum_i16_loop16
+
+sum_i16_reduce:
+    VEXTRACTI128 $1, Y2, X3
+    VPADDD X3, X2, X2          // fold 8 -> 4 int32
+    VPSHUFD $0x4E, X2, X3      // swap 64-bit halves
+    VPADDD X3, X2, X2
+    VPSHUFD $0xB1, X2, X3      // swap 32-bit within pairs
+    VPADDD X3, X2, X2
+    MOVQ X2, AX                // low int32 = vector total (in EAX)
+
+    ANDQ $7, CX                // the 8-wide block took n % 16 down to n % 8
+    JZ   sum_i16_done
+
+sum_i16_scalar:
+    MOVWLSX (SI), BX           // sign-extending 16-bit load
+    ADDL BX, AX                // 32-bit add: wraps like sumGo
+    ADDQ $2, SI
+    DECQ CX
+    JNZ  sum_i16_scalar
+
+sum_i16_done:
+    MOVL AX, ret+24(FP)
+    VZEROUPPER
+    RET
+
+// func minMaxAVX2(a []int16) (minVal, maxVal int16)
+// Signed int16 min and max in one pass: VPMINSW/VPMAXSW fold 32-byte blocks into
+// running accumulators seeded from block 0, a per-lane cascade reduces a 128-bit
+// lane to a single word, and an overlapping final 32-byte block folds the
+// (n mod 16) remainder (signed min/max are idempotent, so reprocessing the
+// overlap is bit-exact). The dispatch gates n >= 16, so at least one full block
+// exists. The result is bit-identical to minMaxGo.
+TEXT ·minMaxAVX2(SB), NOSPLIT, $0-28
+    MOVQ a_base+0(FP), SI
+    MOVQ a_len+8(FP), CX
+
+    VMOVDQU (SI), Y0           // min acc = block 0
+    VMOVDQU (SI), Y1           // max acc = block 0
+    MOVQ CX, AX
+    SHRQ $4, AX                // AX = full 16-int16 blocks (>=1)
+    DECQ AX                    // blocks remaining after block 0
+    JZ   mm_i16_overlap
+    LEAQ 32(SI), DI            // working ptr at block 1
+
+mm_i16_loop:
+    VMOVDQU (DI), Y2
+    VPMINSW Y2, Y0, Y0
+    VPMAXSW Y2, Y1, Y1
+    ADDQ $32, DI
+    DECQ AX
+    JNZ  mm_i16_loop
+
+mm_i16_overlap:
+    // Absorb the (n mod 16) tail with an overlapping final 32-byte block instead
+    // of a serial scalar tail. minMaxAVX2 is dispatched only for n >= 16, so
+    // a+2*n-32 is in bounds; signed min/max are idempotent, so reprocessing the
+    // overlap with the last full block is bit-exact. Guarded on a nonzero residue
+    // so aligned n pays nothing.
+    TESTQ $15, CX
+    JZ   mm_i16_reduce
+    LEAQ (SI)(CX*2), DI        // DI = a + n (int16 elements are 2 bytes)
+    VMOVDQU -32(DI), Y2        // a[n-16 .. n)
+    VPMINSW Y2, Y0, Y0
+    VPMAXSW Y2, Y1, Y1
+
+mm_i16_reduce:
+    // Fold the 256-bit min accumulator to one word.
+    VEXTRACTI128 $1, Y0, X3
+    VPMINSW X3, X0, X0         // 8 words
+    VPSRLDQ $8, X0, X3
+    VPMINSW X3, X0, X0         // 4 words
+    VPSRLDQ $4, X0, X3
+    VPMINSW X3, X0, X0         // 2 words
+    VPSRLDQ $2, X0, X3
+    VPMINSW X3, X0, X0         // 1 word
+    MOVD X0, AX                // AX low word = running min
+
+    // Fold the 256-bit max accumulator to one word.
+    VEXTRACTI128 $1, Y1, X3
+    VPMAXSW X3, X1, X1
+    VPSRLDQ $8, X1, X3
+    VPMAXSW X3, X1, X1
+    VPSRLDQ $4, X1, X3
+    VPMAXSW X3, X1, X1
+    VPSRLDQ $2, X1, X3
+    VPMAXSW X3, X1, X1
+    MOVD X1, DX                // DX low word = running max
+
+    MOVW AX, minVal+24(FP)
+    MOVW DX, maxVal+26(FP)
+    VZEROUPPER
+    RET

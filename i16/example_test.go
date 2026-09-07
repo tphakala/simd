@@ -70,6 +70,25 @@ func ExampleMaxAbs() {
 	// Output: 32768
 }
 
+func ExampleSum() {
+	// DC-offset probe: the running total of a frame, widened to int32 so the
+	// sum does not overflow the way an int16 running total would.
+	frame := []int16{1000, -2000, 1500, -500, 3000}
+
+	fmt.Println(i16.Sum(frame))
+	// Output: 3000
+}
+
+func ExampleMinMax() {
+	// Signed range probe (peak and trough) before a normalization decision.
+	// Unlike MaxAbs this keeps the sign, so a DC-asymmetric clip is visible.
+	frame := []int16{100, -32768, 3000, 15, 32767}
+
+	lo, hi := i16.MinMax(frame)
+	fmt.Println(lo, hi)
+	// Output: -32768 32767
+}
+
 func ExampleXCorr() {
 	// Correlate a short pattern against a longer signal at every lag. The
 	// pattern occurs at lag 2, which is where the correlation peaks.
