@@ -247,3 +247,47 @@ func BenchmarkMaxAbsGo_8(b *testing.B)    { benchmarkMaxAbs(b, 8, maxAbsGo) }
 func BenchmarkMaxAbsGo_25(b *testing.B)   { benchmarkMaxAbs(b, 25, maxAbsGo) }
 func BenchmarkMaxAbsGo_1000(b *testing.B) { benchmarkMaxAbs(b, 1000, maxAbsGo) }
 func BenchmarkMaxAbsGo_1003(b *testing.B) { benchmarkMaxAbs(b, 1003, maxAbsGo) }
+
+func benchmarkSum(b *testing.B, n int, fn func(a []int16) int32) {
+	b.Helper()
+	a := make([]int16, n)
+	for i := range a {
+		a[i] = int16(i*7 - 3000)
+	}
+	b.SetBytes(int64(n) * 2)
+	for b.Loop() {
+		_ = fn(a)
+	}
+}
+
+func BenchmarkSum_8(b *testing.B)    { benchmarkSum(b, 8, Sum) }
+func BenchmarkSum_25(b *testing.B)   { benchmarkSum(b, 25, Sum) }
+func BenchmarkSum_1000(b *testing.B) { benchmarkSum(b, 1000, Sum) }
+func BenchmarkSum_1003(b *testing.B) { benchmarkSum(b, 1003, Sum) }
+
+func BenchmarkSumGo_8(b *testing.B)    { benchmarkSum(b, 8, sumGo) }
+func BenchmarkSumGo_25(b *testing.B)   { benchmarkSum(b, 25, sumGo) }
+func BenchmarkSumGo_1000(b *testing.B) { benchmarkSum(b, 1000, sumGo) }
+func BenchmarkSumGo_1003(b *testing.B) { benchmarkSum(b, 1003, sumGo) }
+
+func benchmarkMinMax(b *testing.B, n int, fn func(a []int16) (int16, int16)) {
+	b.Helper()
+	a := make([]int16, n)
+	for i := range a {
+		a[i] = int16(i*7 - 3000)
+	}
+	b.SetBytes(int64(n) * 2)
+	for b.Loop() {
+		_, _ = fn(a)
+	}
+}
+
+func BenchmarkMinMax_8(b *testing.B)    { benchmarkMinMax(b, 8, MinMax) }
+func BenchmarkMinMax_25(b *testing.B)   { benchmarkMinMax(b, 25, MinMax) }
+func BenchmarkMinMax_1000(b *testing.B) { benchmarkMinMax(b, 1000, MinMax) }
+func BenchmarkMinMax_1003(b *testing.B) { benchmarkMinMax(b, 1003, MinMax) }
+
+func BenchmarkMinMaxGo_8(b *testing.B)    { benchmarkMinMax(b, 8, minMaxGo) }
+func BenchmarkMinMaxGo_25(b *testing.B)   { benchmarkMinMax(b, 25, minMaxGo) }
+func BenchmarkMinMaxGo_1000(b *testing.B) { benchmarkMinMax(b, 1000, minMaxGo) }
+func BenchmarkMinMaxGo_1003(b *testing.B) { benchmarkMinMax(b, 1003, minMaxGo) }

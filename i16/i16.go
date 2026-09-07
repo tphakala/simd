@@ -17,11 +17,12 @@
 //
 // Element-wise int16 add/sub still belongs in the i32 package, because
 // inter-channel decorrelation can exceed the source bit depth by one bit. What
-// lives here is the widening direction (DotProduct, XCorr), where the narrow
-// input is the point, plus the element-wise operations that are well-defined
-// at 16-bit width: the wrapping absolute value (Abs) and the rounding Q15
-// fixed-point multiply (MulQ15). Those two produce a result that fits int16
-// for every input except the single wrapping case each documents. The MaxAbs reduction is the
+// lives here is the widening direction (DotProduct, XCorr, Sum), where the
+// narrow input is the point, plus the element-wise operations that are
+// well-defined at 16-bit width: the wrapping absolute value (Abs) and the
+// rounding Q15 fixed-point multiply (MulQ15). Those two produce a result that
+// fits int16 for every input except the single wrapping case each documents;
+// the MinMax reduction fits int16 unconditionally. The MaxAbs reduction is the
 // deliberate exception: it widens to int, because |-32768| = 32768 is the
 // headroom value callers need and it does not fit the element type.
 //
@@ -50,8 +51,8 @@
 // their inputs (twice the inputs, or half the source), so an element-for-element
 // overlay does not apply. XCorr writes an int32 result from int16 inputs, so its
 // output and inputs have distinct element types and cannot alias in safe Go. The
-// reductions DotProduct and MaxAbs write no output slice, so aliasing does not
-// apply to them.
+// reductions (DotProduct, MaxAbs, Sum, MinMax) write no output slice, so
+// aliasing does not apply to them.
 package i16
 
 // interleave2Channels is the number of channels handled by Interleave2 and

@@ -119,6 +119,39 @@ func maxAbsGo(a []int16) int {
 	return m
 }
 
+// sumGo widens each int16 to int32 and accumulates into an int32 running sum
+// with two's-complement wraparound. It is the bit-exact source of truth for the
+// Sum kernels.
+//
+// Wrapping (rather than saturating) accumulation is the contract, exactly as for
+// dotGo: wrapping addition is associative and commutative modulo 2^32, so the
+// SIMD lane grouping and horizontal reduction produce bit-identical results to
+// this sequential loop for every input, including forced overflow.
+func sumGo(a []int16) int32 {
+	var s int32
+	for _, v := range a {
+		s += int32(v)
+	}
+	return s
+}
+
+// minMaxGo returns the signed minimum and maximum of a. Both fit int16 for every
+// input (min and max of int16 values are themselves int16), so no widening is
+// needed, unlike maxAbsGo. It indexes a[0], so the public wrapper guards the
+// empty case; it is the bit-exact source of truth for the MinMax kernels.
+func minMaxGo(a []int16) (minVal, maxVal int16) {
+	lo, hi := a[0], a[0]
+	for _, v := range a[1:] {
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+	return lo, hi
+}
+
 // xcorrWindow returns the y window the 4-lag kernel may read for the block at
 // lag k: lag k+3 reaches y[k+3+len(x)-1], so the block needs len(x)+3 elements
 // from y[k]. That is in bounds precisely when k+xcorrLagBlock <= m, which is
