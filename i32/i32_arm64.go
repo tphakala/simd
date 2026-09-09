@@ -197,12 +197,14 @@ func minMaxI32(res []int32) (minVal, maxVal int32) {
 //go:noescape
 func minMaxNEON(res []int32) (minVal, maxVal int32)
 
-// minNEONMaxAbs is one 4-wide (.4S) block, an independent literal like the
-// tier-3 thresholds above. The kernel does the signed min/max reduction in
-// 4-wide SMIN/SMAX lanes with SMINV/SMAXV folds and a scalar tail before
-// combining to max(maxVal, -minVal), so it gates on NEON and at least one full
-// 4-element block; shorter slices use the pure-Go reference. a is non-empty (the
-// public MaxAbs guards the empty case).
+// minNEONMaxAbs is one 4-wide (.4S) block. Like minNEONMinMax it is an independent
+// literal AND a correctness floor, not just a performance cut: the maxAbsNEON kernel
+// does the signed min/max reduction in 4-wide SMIN/SMAX lanes, folds an overlapping
+// final .4S block that reloads a[n-4] in place of a scalar tail, reduces with
+// SMINV/SMAXV, then combines to max(maxVal, -minVal), so it must never run on fewer
+// than 4 elements. Keeping it separate from the shared minNEONElements means a future
+// retune of that cannot silently move this safety floor; shorter slices use the
+// pure-Go reference. a is non-empty (the public MaxAbs guards the empty case).
 const minNEONMaxAbs = 4
 
 func maxAbsI32(a []int32) int32 {

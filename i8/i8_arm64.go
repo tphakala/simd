@@ -119,6 +119,12 @@ func negI8(dst, a []int8) {
 	negGo(dst, a)
 }
 
+// maxAbsI8 dispatches the per-tensor abs-max reduction. The NEON kernel folds
+// 16-byte blocks through a 2-block unroll with dual UMAX-of-ABS accumulators,
+// folds an overlapping final .16B block in place of a scalar tail, then reduces
+// with UMAXV, so the n >= minNEON16 (16) gate is a correctness floor (the overlap
+// block reloads a[n-16]), not just a performance cut; shorter slices use the
+// pure-Go reference.
 func maxAbsI8(a []int8) int {
 	if hasNEON && len(a) >= minNEON16 {
 		return maxAbsNEON(a)
