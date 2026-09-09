@@ -603,45 +603,65 @@ neg_done:
 
 // func maxAbsNEON(a []int8) int
 // Per-tensor abs-max for dynamic quantization: ABS maps each byte to its
-// magnitude (abs(-128) -> 0x80, i.e. 128 read unsigned), UMAX folds 16-byte
-// blocks into an unsigned-max accumulator, UMAXV reduces it to a byte, and a
-// scalar tail folds the (n mod 16) remainder. The byte is read zero-extended,
-// so the result lands in [0, 128].
+// magnitude (abs(-128) -> 0x80, i.e. 128 read unsigned) and UMAX folds 16-byte
+// blocks into an unsigned-max accumulator. A 2-block unroll keeps two independent
+// UMAX chains (V2, V4) so the compare latency stays off the loop-carried critical
+// path (same latency-hiding rewrite as minMaxNEON, #283); a possible odd trailing
+// block folds into the first chain, the two chains are combined, and when
+// (n mod 16) != 0 the last 16 elements a[n-16:n] are folded in as one overlapping
+// .16B block so every element stays on the SIMD path (no scalar tail). UMAXV then
+// reduces the accumulator to a byte. The dispatch gates n >= 16, so block 0 and
+// the a[n-16] overlap block are always in range. UMAX-of-ABS is idempotent and
+// has no accumulation order, so re-counting the overlap of already-processed
+// elements double-counts harmlessly and the result is bit-identical to maxAbsGo.
+// The byte is read zero-extended, so the result lands in [0, 128]. The overlap
+// block replaces a scalar tail of up to 15 CSEL iterations.
 TEXT ·maxAbsNEON(SB), NOSPLIT, $0-32
     MOVD a_base+0(FP), R1
     MOVD a_len+8(FP), R3
 
-    VEOR V2.B16, V2.B16, V2.B16   // unsigned-max accumulator = 0
-    LSR  $4, R3, R4               // R4 = n / 16
-    CBZ  R4, maxabs_reduce
+    VEOR V2.B16, V2.B16, V2.B16   // unsigned-max accumulator 1 = 0
+    VEOR V4.B16, V4.B16, V4.B16   // unsigned-max accumulator 2 = 0
+    LSR  $4, R3, R4               // R4 = full 16-byte blocks (>=1, gate floor)
+    LSR  $1, R4, R7             // R7 = pairs = blocks / 2
+    CBZ  R7, maxabs_odd
 
-maxabs_loop16:
-    VLD1.P 16(R1), [V0.B16]
+maxabs_loop32:
+    VLD1.P 32(R1), [V0.B16, V1.B16]
     WORD $0x4E20B800             // ABS  V0.16B, V0.16B   (|a|; abs(-128)=0x80)
+    WORD $0x4E20B821             // ABS  V1.16B, V1.16B
     WORD $0x6E206442             // UMAX V2.16B, V2.16B, V0.16B
-    SUB  $1, R4
-    CBNZ R4, maxabs_loop16
+    WORD $0x6E216484             // UMAX V4.16B, V4.16B, V1.16B
+    SUB  $1, R7
+    CBNZ R7, maxabs_loop32
+
+maxabs_odd:
+    TBZ  $0, R4, maxabs_foldpairs   // R4 (full blocks) even => no leftover block
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x4E20B800             // ABS  V0.16B, V0.16B
+    WORD $0x6E206442             // UMAX V2.16B, V2.16B, V0.16B
+
+maxabs_foldpairs:
+    WORD $0x6E246442             // UMAX V2.16B, V2.16B, V4.16B   (combine the two chains)
+
+maxabs_overlap:
+    // Overlapping tail: when (n mod 16) != 0, fold the last 16 elements a[n-16:n]
+    // in as one .16B block before the horizontal reduce, so every element stays on
+    // the SIMD path (no scalar tail). Idempotency makes re-counting the overlap of
+    // already-processed elements harmless; the n >= 16 gate keeps a[n-16] in range.
+    AND  $15, R3, R4
+    CBZ  R4, maxabs_reduce
+    SUB  $16, R3, R7            // R7 = n - 16 (element index of the overlap block)
+    MOVD a_base+0(FP), R1       // reload base (R1 was advanced past the full blocks)
+    ADD  R7, R1, R1            // R1 = &a[n-16] (int8 => 1 byte per element)
+    VLD1 (R1), [V0.B16]
+    WORD $0x4E20B800             // ABS  V0.16B, V0.16B
+    WORD $0x6E206442             // UMAX V2.16B, V2.16B, V0.16B
 
 maxabs_reduce:
     WORD $0x6E30A843             // UMAXV B3, V2.16B
     FMOVS F3, R5                  // R5 = abs-max byte (zero-extended)
     AND  $0xFF, R5, R5            // defensively keep only the byte, [0, 128]
-
-    AND  $15, R3
-    CBZ  R3, maxabs_done
-
-maxabs_scalar:
-    MOVB (R1), R6                 // v (sign-extended)
-    NEG  R6, R7                   // -v
-    CMP  $0, R6
-    CSEL LT, R7, R6, R6           // |v| = v < 0 ? -v : v   (can be 128)
-    CMP  R5, R6
-    CSEL HI, R6, R5, R5           // unsigned: |v| > max ? |v| : max
-    ADD  $1, R1
-    SUB  $1, R3
-    CBNZ R3, maxabs_scalar
-
-maxabs_done:
     MOVD R5, ret+24(FP)
     RET
 

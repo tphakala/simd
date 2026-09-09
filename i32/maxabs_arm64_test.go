@@ -10,11 +10,11 @@ import (
 )
 
 // TestMaxAbsNEON_ParityWithGo drives the kernel directly across lengths that force
-// the 4-wide vector body plus every scalar-tail remainder (block boundaries and
+// the 4-wide vector body plus every (n mod 4) tail remainder (block boundaries and
 // primes in 4..40), over lengths the dispatcher would route the same way, so a
 // threshold change cannot quietly reduce this to a test of the Go reference against
 // itself. MinInt32 rides index 0 so the wrapping -minVal combine is exercised, and
-// MaxInt32 rides the last index so the scalar tail must be folded in.
+// MaxInt32 rides the last index so the overlapping final block must fold it in.
 func TestMaxAbsNEON_ParityWithGo(t *testing.T) {
 	if !cpu.ARM64.NEON {
 		t.Skip("NEON not available")
@@ -62,7 +62,7 @@ func TestMaxAbsNEON_PlantedExtreme(t *testing.T) {
 // past n is poisoned with the absolute extremes MinInt32 and MaxInt32, which would
 // dominate the signed min/max reduction if read. a is backing[:n] over a backing of
 // length n+8 (two full 4-wide blocks of slack), so a kernel that reads a stray block
-// or a scalar tail past n lands in the poisoned (still allocated) memory and its
+// or an overlap block past n lands in the poisoned (still allocated) memory and its
 // result flips away from the oracle over a[:n]; a correct kernel stops at n and
 // stays equal. For a min/max reduction the poison must be MORE extreme than any
 // in-range element, the opposite of an additive kernel where a zero or an
