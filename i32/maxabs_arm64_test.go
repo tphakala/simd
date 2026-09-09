@@ -10,16 +10,17 @@ import (
 )
 
 // TestMaxAbsNEON_ParityWithGo drives the kernel directly across lengths that force
-// the 4-wide vector body plus every (n mod 4) tail remainder (block boundaries and
-// primes in 4..40), over lengths the dispatcher would route the same way, so a
-// threshold change cannot quietly reduce this to a test of the Go reference against
-// itself. MinInt32 rides index 0 so the wrapping -minVal combine is exercised, and
-// MaxInt32 rides the last index so the overlapping final block must fold it in.
+// the 4-wide vector body plus every (n mod 4) tail remainder: aligned lengths
+// (residue 0, overlap skipped) and residue 1/2/3 lengths (overlap runs), over
+// lengths the dispatcher would route the same way, so a threshold change cannot
+// quietly reduce this to a test of the Go reference against itself. MinInt32 rides
+// index 0 so the wrapping -minVal combine is exercised, and MaxInt32 rides the last
+// index so the overlapping final block must fold it in.
 func TestMaxAbsNEON_ParityWithGo(t *testing.T) {
 	if !cpu.ARM64.NEON {
 		t.Skip("NEON not available")
 	}
-	lens := []int{4, 5, 7, 8, 9, 11, 13, 16, 17, 19, 23, 24, 29, 31, 32, 37, 40}
+	lens := []int{4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 16, 17, 19, 22, 23, 24, 26, 29, 31, 32, 34, 37, 38, 40}
 	for _, n := range lens {
 		a := genI32(n, 71)
 		a[0] = math.MinInt32

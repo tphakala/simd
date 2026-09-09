@@ -106,4 +106,9 @@ func TestMaxAbsDispatch_ReachesNEON(t *testing.T) {
 	if minNEON16 > 32 {
 		t.Fatalf("minNEON16 = %d exceeds two vector blocks: MaxAbs would not vectorize at the lengths it was written for", minNEON16)
 	}
+	// Lower bound: the overlap tail reloads a[n-16], so the kernel must never be
+	// dispatched below one 16-byte block or it would read out of bounds.
+	if minNEON16 < 16 {
+		t.Fatalf("minNEON16 = %d is below maxAbsNEON's 16-byte block: the overlap reload of a[n-16] would read out of bounds", minNEON16)
+	}
 }
