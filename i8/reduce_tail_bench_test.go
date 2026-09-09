@@ -9,7 +9,8 @@ import (
 // on the MaxAbs/MinMax reductions: instead of serving the (n mod width) residue
 // with a serial compare/cmov scalar chain, one overlapping final vector block
 // re-folds the last full block. amd64 got this for both MaxAbs and MinMax in #149;
-// arm64 NEON has it for MinMax since #286 (NEON MaxAbs still uses a scalar tail).
+// arm64 NEON now has it for MinMax too (issue #286), while NEON MaxAbs still uses a
+// scalar tail.
 // The fixed 4096-byte benchmarks are residue-free and never run the overlap block,
 // so ragged residue lengths must be measured explicitly. 32 is an aligned sentinel
 // (overlap skipped on the 16- and 32-wide kernels alike). At the arm64 16-wide

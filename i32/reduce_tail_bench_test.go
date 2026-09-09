@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// BenchmarkMinMax_N measures the overlapping-final-block tail added to minMaxNEON
-// in #286. The residue of 1..3 int32 elements (n mod 4) that a scalar CSEL tail
+// BenchmarkMinMax_N measures the overlapping-final-block tail that the i32
+// minMaxNEON kernel uses (issue #286). The residue of 1..3 int32 elements (n mod 4)
+// that a scalar CSEL tail
 // used to serve is now re-folded as one overlapping .4S block before the
 // horizontal reduce. The fixed BenchmarkMinMax_1000 (n%4==0) is residue-free and
 // never runs the overlap block, so ragged residue lengths must be measured

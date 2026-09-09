@@ -31,7 +31,7 @@ func TestMinMaxNEON_ParityWithGo(t *testing.T) {
 	sizes := []int{16, 17, 18, 19, 20, 23, 24, 25, 30, 31, 32, 33, 47, 48, 49, 63, 64, 65, 95, 96, 127, 128, 255, 256, 257}
 	for _, n := range sizes {
 		if n < minNEON16 {
-			continue // dispatch routes these to Go; the kernel is not called
+			continue // minMaxNEON is called directly here and needs a full 16-elem block
 		}
 		for _, swap := range []bool{false, true} {
 			a := make([]int8, n)

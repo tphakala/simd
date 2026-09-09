@@ -9,7 +9,7 @@
 // with the decoded GNU form in the trailing comment; asmcheck_test.go
 // cross-checks every WORD (arm64asm directly, or aarch64 objdump for SDOT, which
 // arm64asm cannot decode). All encodings were verified with aarch64-linux-gnu-as
-// + objdump. Scratch lives in R0-R10, V0-V6, and V16-V19 (the reductions); R28 (g),
+// + objdump. Scratch lives in R0-R10, V0-V7, and V16-V19 (the reductions); R28 (g),
 // R18, R27, R16/R17, and the frame/link registers are left untouched (see CLAUDE.md).
 //
 // Saturating arithmetic (SQADD/SQSUB) clamps each byte lane to [-128, 127]; the
