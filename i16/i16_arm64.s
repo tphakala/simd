@@ -426,25 +426,27 @@ maxabs_neon_done:
 // func sumNEON(a []int16) int32
 // Widening int16 sum. The 32-wide main loop feeds four independent SADALP chains
 // (V16..V19), each pairwise-accumulating one .8H block into a 4-lane int32
-// accumulator; keeping four accumulators in flight holds the SADALP accumulate
-// latency off the loop-carried critical path (measured ~21% faster at n=4096 on
-// Cortex-A76 than the single-accumulator form, #282). The four chains are then
-// summed, an 8-wide loop absorbs the (n mod 32) blocks, ADDV folds the lanes, and
-// a scalar tail adds the (n mod 8) remainder. Accumulation wraps in int32 exactly
-// as sumGo does, and wrapping add is associative and commutative, so any lane
-// grouping is bit-identical to Sum's pure-Go reference for every input, including
-// overflow.
+// accumulator. On Cortex-A76 SADALP has an accumulate-forwarding path and is
+// single-pipe throughput-bound, so the four accumulators mainly amortize the loop
+// overhead rather than hide accumulate latency (measured ~21% faster at n=4096 on
+// Cortex-A76 than the single-accumulator form, #282). The three extra accumulators
+// are zeroed and folded only inside the wide-loop branch, so small n keeps the
+// single-accumulator cost. The four chains are then summed, an 8-wide loop absorbs
+// the (n mod 32) blocks, ADDV folds the lanes, and a scalar tail adds the (n mod 8)
+// remainder. Accumulation wraps in int32 exactly as sumGo does, and wrapping add is
+// associative and commutative, so any lane grouping is bit-identical to Sum's
+// pure-Go reference for every input, including overflow.
 TEXT ·sumNEON(SB), NOSPLIT, $0-28
     MOVD a_base+0(FP), R1
     MOVD a_len+8(FP), R3
 
-    VEOR V16.B16, V16.B16, V16.B16   // four int32 accumulators = 0
-    VEOR V17.B16, V17.B16, V17.B16
-    VEOR V18.B16, V18.B16, V18.B16
-    VEOR V19.B16, V19.B16, V19.B16
-
+    VEOR V16.B16, V16.B16, V16.B16   // primary int32 accumulator = 0
     LSR  $5, R3, R4               // R4 = n / 32
-    CBZ  R4, sum_i16_fold
+    CBZ  R4, sum_i16_cleanup       // no 32-wide block: single-accumulator path only
+
+    VEOR V17.B16, V17.B16, V17.B16   // three more accumulators, zeroed only when the
+    VEOR V18.B16, V18.B16, V18.B16   // 32-wide main loop runs, so small n keeps the
+    VEOR V19.B16, V19.B16, V19.B16   // single-accumulator cost
 
 sum_i16_loop32:
     VLD1.P 64(R1), [V0.H8, V1.H8, V2.H8, V3.H8]
@@ -455,11 +457,11 @@ sum_i16_loop32:
     SUB  $1, R4
     CBNZ R4, sum_i16_loop32
 
-sum_i16_fold:
     VADD V17.S4, V16.S4, V16.S4
     VADD V19.S4, V18.S4, V18.S4
     VADD V18.S4, V16.S4, V16.S4   // four chains -> V16
 
+sum_i16_cleanup:
     AND  $31, R3, R2             // R2 = n mod 32
     LSR  $3, R2, R4             // R4 = (n mod 32) / 8, in {0,1,2,3}
     CBZ  R4, sum_i16_reduce
@@ -514,9 +516,11 @@ TEXT ·minMaxNEON(SB), NOSPLIT, $0-28
     VLD1 (R2), [V5.H8]           // min2 = block 0 (idempotent seed)
     VLD1.P 16(R2), [V6.H8]       // max2 = block 0 (advance past block 0)
     SUB  $1, R4                   // blocks after block 0
-    // Single block: fold pairs (harmless self-fold of block 0) then run the
-    // overlap tail, rather than jumping past both straight to the reduce.
-    CBZ  R4, mm_i16_foldpairs
+    // Single block: V0/V1 already hold block 0, so foldpairs would be a no-op
+    // self-fold. Skip it and go straight to the overlap check (which must still
+    // run so the tail is not dropped, the #285 hazard), rather than jumping past
+    // both straight to the reduce.
+    CBZ  R4, mm_i16_overlap
 
     LSR  $1, R4, R7             // R7 = pairs = (blocks after 0) / 2
     CBZ  R7, mm_i16_odd
@@ -540,6 +544,7 @@ mm_i16_foldpairs:
     WORD $0x4E656C00             // SMIN V0.8H, V0.8H, V5.8H
     WORD $0x4E666421             // SMAX V1.8H, V1.8H, V6.8H
 
+mm_i16_overlap:
     // Overlapping tail: when (n mod 8) != 0, fold the last 8 elements a[n-8:n] in
     // as one .8H block before the horizontal reduce, so every element stays on the
     // SIMD path (no scalar tail). Idempotency makes re-counting the overlap of
@@ -557,14 +562,11 @@ mm_i16_foldpairs:
 mm_i16_reduce:
     WORD $0x4E71A803             // SMINV H3, V0.8H
     WORD $0x4E70A824             // SMAXV H4, V1.8H
-    FMOVS F3, R5                  // min halfword (zero-extended)
-    FMOVS F4, R6                  // max halfword
-    LSLW $16, R5, R5
-    ASRW $16, R5, R5              // sign-extend low halfword -> int32 min
-    LSLW $16, R6, R6
-    ASRW $16, R6, R6              // sign-extend low halfword -> int32 max
+    FMOVS F3, R5                  // min halfword in the low 16 bits
+    FMOVS F4, R6                  // max halfword in the low 16 bits
 
 mm_i16_done:
+    // MOVH stores only the low halfword, so the reduced result needs no sign-extension.
     MOVH R5, minVal+24(FP)
     MOVH R6, maxVal+26(FP)
     RET

@@ -171,14 +171,24 @@ func butterflyI32(lo, hi []int32) {
 //go:noescape
 func butterflyNEON(lo, hi []int32)
 
-// minMaxI32 dispatches the signed int32 min/max reduction. The NEON kernel does
-// the reduction in 4-wide SMIN/SMAX lanes (a 2-block unroll with dual min/max
-// accumulator pairs) with a single-instruction SMINV/SMAXV across-vector fold and
-// a scalar tail, so it gates on NEON and at least one full 4-element block;
-// shorter slices use the pure-Go reference. res is non-empty (the public MinMax
-// guards the empty case).
+// minNEONMinMax is one 4-wide (.4S) block. Unlike the shared minNEONElements it is
+// an independent literal AND a correctness floor, not just a performance cut: the
+// minMaxNEON kernel folds an overlapping final .4S block that reloads res[n-4] in
+// place of a scalar tail, so it must never run on fewer than 4 elements. Keeping it
+// separate means a future retune of the shared minNEONElements (add/sub/interleave)
+// cannot silently move this safety floor. The i16 minNEONMinMax carries the same
+// guard for the same reason.
+const minNEONMinMax = 4
+
+// minMaxI32 dispatches the signed int32 min/max reduction. The NEON kernel does the
+// reduction in 4-wide SMIN/SMAX lanes (a 2-block unroll with dual min/max
+// accumulator pairs), folds an overlapping final .4S block in place of a scalar
+// tail, then reduces with a single-instruction SMINV/SMAXV across-vector fold, so
+// the n >= minNEONMinMax gate is a correctness floor (the overlap block reloads
+// res[n-4]), not just a performance cut; shorter slices use the pure-Go reference.
+// res is non-empty (the public MinMax guards the empty case).
 func minMaxI32(res []int32) (minVal, maxVal int32) {
-	if hasNEON && len(res) >= minNEONElements {
+	if hasNEON && len(res) >= minNEONMinMax {
 		return minMaxNEON(res)
 	}
 	return minMaxGo(res)

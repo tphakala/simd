@@ -66,6 +66,12 @@ func dotI8(a, b []int8) int32 {
 	}
 }
 
+// minMaxI8 dispatches the signed int8 min/max reduction. The NEON kernel folds
+// 16-byte blocks through a 2-block unroll with dual min/max accumulator pairs,
+// folds an overlapping final .16B block in place of a scalar tail, then reduces
+// with SMINV/SMAXV, so the n >= minNEON16 (16) gate is a correctness floor (the
+// overlap block reloads a[n-16]), not just a performance cut; shorter slices use
+// the pure-Go reference.
 func minMaxI8(a []int8) (minVal, maxVal int8) {
 	if hasNEON && len(a) >= minNEON16 {
 		return minMaxNEON(a)

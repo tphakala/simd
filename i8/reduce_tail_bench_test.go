@@ -6,13 +6,17 @@ import (
 )
 
 // BenchmarkMaxAbs_N and BenchmarkMinMax_N guard the overlapping-final-block tail
-// (#149) on the 32-wide MaxAbs/MinMax reductions: a residue of 1..31 bytes was
-// served by a serial compare/cmov scalar chain (up to 31 dependent steps), now
-// absorbed by one overlapping 32-wide block. The fixed 4096-byte benchmarks are
-// all n%32==0 and never run the overlap block, so residue lengths must be
-// measured explicitly. 32 is the aligned sentinel (overlap skipped, the untouched
-// control); 40/48/63/95/248 are ragged so the overlap block runs, with 63 and 95
-// at the worst-case residue 31.
+// on the MaxAbs/MinMax reductions: instead of serving the (n mod width) residue
+// with a serial compare/cmov scalar chain, one overlapping final vector block
+// re-folds the last full block. amd64 got this for both MaxAbs and MinMax in #149;
+// arm64 NEON now has it for MinMax too (issue #286), while NEON MaxAbs still uses a
+// scalar tail.
+// The fixed 4096-byte benchmarks are residue-free and never run the overlap block,
+// so ragged residue lengths must be measured explicitly. 32 is an aligned sentinel
+// (overlap skipped on the 16- and 32-wide kernels alike). At the arm64 16-wide
+// width 40/63/95/248 are ragged and run the overlap while 48 is aligned there
+// (48 mod 16 == 0); at the amd64 32-wide width all of 40/48/63/95/248 are ragged,
+// with 63 and 95 at the worst-case residue 31.
 func BenchmarkMaxAbs_N(b *testing.B) {
 	for _, n := range []int{32, 40, 48, 63, 95, 248} {
 		a := genI8(n, 1)

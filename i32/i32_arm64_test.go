@@ -248,8 +248,8 @@ func TestMinMaxNEON_ParityWithGo(t *testing.T) {
 	// variant plants the extremes in a mid-block lane and in the tail, the other
 	// swaps them, covering both a dropped lane and a dropped tail on both reduces.
 	for _, n := range paritySizes {
-		if n < minNEONElements {
-			continue // dispatch routes these to Go; the kernel is not called
+		if n < minNEONMinMax {
+			continue // minMaxNEON is called directly here and needs a full 4-elem block
 		}
 		for _, swap := range []bool{false, true} {
 			res := make([]int32, n)
