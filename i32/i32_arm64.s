@@ -184,14 +184,21 @@ sub_neon_done:
 // #282). The dispatch gates len(res) >= 4, so block 0 always exists: it seeds both
 // accumulator pairs (min1=V0,max1=V1, min2=V5,max2=V6); the loop folds 2 blocks
 // per iteration, a possible odd trailing block folds into the first pair, the two
-// pairs are combined, SMINV/SMAXV reduce each across its 4 lanes to a scalar, and
-// a scalar tail folds the (n mod 4) remainder. SMIN/SMAX/SMINV/SMAXV have no Go
+// pairs are combined, and when (n mod 4) != 0 the last 4 elements res[n-4:n] are
+// folded in as one overlapping .4S block before the horizontal reduce, so every
+// element stays on the SIMD path (no scalar tail). SMINV/SMAXV then reduce each
+// accumulator across its 4 lanes to a scalar. SMIN/SMAX/SMINV/SMAXV have no Go
 // assembler mnemonic, so they are hand-encoded WORD directives (the trailing
 // comment is the decoded form, cross-checked by asmcheck_test.go). Every compare
-// is signed and min/max is idempotent (seeding both pairs from block 0
-// double-counts it harmlessly), so the result matches minMaxGo exactly. Measured
-// roughly -20% at n=64 up to -37% at n=4096 on Cortex-A76, with no small-n
-// regression (#283).
+// is signed and min/max is idempotent (seeding both pairs from block 0, and
+// re-counting the overlap of already-processed elements, both double-count
+// harmlessly), so the result matches minMaxGo exactly. The overlap block replaces
+// a scalar tail of up to 3 CSEL iterations: measured roughly -13% to -17% at
+// ragged sizes n=7..63 on Cortex-A76, tapering to neutral by n>=1023 as the tail
+// becomes a negligible fraction of the work (#286). The one exception is a
+// single-block residue-1 input (n=5), where re-folding a whole .4S block costs
+// ~0.4 ns more than the single CSEL it replaces; that is a measured tradeoff left
+// documented rather than special-cased.
 TEXT ·minMaxNEON(SB), NOSPLIT, $0-32
     MOVD res_base+0(FP), R2
     MOVD res_len+8(FP), R3
@@ -202,7 +209,11 @@ TEXT ·minMaxNEON(SB), NOSPLIT, $0-32
     VLD1 (R2), [V5.S4]               // min2 = block 0 (idempotent seed)
     VLD1.P 16(R2), [V6.S4]           // max2 = block 0 (advance past block 0)
     SUB  $1, R4                      // blocks after block 0
-    CBZ  R4, mm_neon_reduce          // single block: min1/max1 hold it; R2 at tail
+    // Single block: V0/V1 already hold block 0, so foldpairs would be a no-op
+    // self-fold. Skip it and go straight to the overlap check (which must still
+    // run so the tail is not dropped, the #285 hazard), rather than jumping past
+    // both straight to the reduce.
+    CBZ  R4, mm_neon_overlap
 
     LSR  $1, R4, R7                 // R7 = pairs = (blocks after 0) / 2
     CBZ  R7, mm_neon_odd
@@ -226,23 +237,26 @@ mm_neon_foldpairs:
     WORD $0x4EA56C00                 // SMIN V0.4S, V0.4S, V5.4S
     WORD $0x4EA66421                 // SMAX V1.4S, V1.4S, V6.4S
 
+mm_neon_overlap:
+    // Overlapping tail: when (n mod 4) != 0, fold the last 4 elements res[n-4:n]
+    // in as one .4S block before the horizontal reduce, so every element stays on
+    // the SIMD path (no scalar tail). Idempotency makes re-counting the overlap of
+    // already-processed elements harmless; the n >= 4 gate keeps res[n-4] in range.
+    AND  $3, R3, R4
+    CBZ  R4, mm_neon_reduce
+    SUB  $4, R3, R7                  // R7 = n - 4 (element index of the overlap block)
+    LSL  $2, R7, R7                 // R7 = (n-4)*4 bytes
+    MOVD res_base+0(FP), R2          // reload base (R2 was advanced past the full blocks)
+    ADD  R7, R2, R2                 // R2 = &res[n-4]
+    VLD1 (R2), [V2.S4]
+    WORD $0x4EA26C00                 // SMIN V0.4S, V0.4S, V2.4S
+    WORD $0x4EA26421                 // SMAX V1.4S, V1.4S, V2.4S
+
 mm_neon_reduce:
     WORD $0x4EB1A803                 // SMINV S3, V0.4S
     WORD $0x4EB0A824                 // SMAXV S4, V1.4S
     FMOVS F3, R5                     // R5 = running min (low 32 = int32)
     FMOVS F4, R6                     // R6 = running max (low 32 = int32)
-
-    // scalar tail: (n mod 4) residuals (R2 already at &res[fullBlocks*4])
-    AND  $3, R3, R4
-    CBZ  R4, mm_neon_done
-mm_neon_tail:
-    MOVW.P 4(R2), R7                 // r (sign-extended; low 32 = int32)
-    CMPW R5, R7                      // (R7 - R5), signed 32-bit
-    CSEL LT, R7, R5, R5             // R5 = min(r, R5)
-    CMPW R6, R7
-    CSEL GT, R7, R6, R6             // R6 = max(r, R6)
-    SUB  $1, R4
-    CBNZ R4, mm_neon_tail
 
 mm_neon_done:
     MOVW R5, minVal+24(FP)
