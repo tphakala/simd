@@ -681,10 +681,10 @@ func BenchmarkISTFT(b *testing.B) {
 	}
 }
 
-// BenchmarkISTFTHopSweep times ISTFT across hop sizes at fixed nfft, so the
-// block-normalization Div-dispatch cost is visible: at small hops the periodic
-// squared-window table is tiled across the frame and divided nfft/hop periods
-// at a time instead of one hop-block per Div.
+// BenchmarkISTFTHopSweep times ISTFT across hop sizes at fixed nfft. normalizeISTFT
+// divides one hop-length block per Div call, so a smaller hop means more and shorter
+// Div calls; this sweep makes that per-hop cost visible and is the measurement tool
+// for the per-frame inverse-transform follow-ups in #295.
 func BenchmarkISTFTHopSweep(b *testing.B) {
 	const nfft = 1024
 	signal := testSignal(8192)
