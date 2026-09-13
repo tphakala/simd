@@ -440,7 +440,7 @@ func TestRealFFTPower_SignedZero(t *testing.T) {
 // Per-arm byte accounting for SetBytes, counting the distinct length-n float64
 // slices each arm touches. This is a working-set proxy, not a full multi-pass
 // traffic count: the baseline re-reads its outRe/outIm scratch across the Mul and
-// FMA passes, so its real memory traffic is higher than the count implies. The
+// MulAdd passes, so its real memory traffic is higher than the count implies. The
 // point is only to stop charging both arms the same bytes; ns/op stays the
 // apples-to-apples fused-vs-baseline comparison, since the per-arm byte counts
 // make the derived MB/s figures non-comparable across arms.
@@ -448,9 +448,9 @@ const (
 	// fusedSlicesTouched is what the fused RealFFTPower touches per call: it reads
 	// zRe, zIm, twRe, twIm and writes dst (5 distinct slices).
 	fusedSlicesTouched = 5
-	// baselineSlicesTouched is what the unpack+Mul+FMA baseline touches per call:
+	// baselineSlicesTouched is what the unpack+Mul+MulAdd baseline touches per call:
 	// the same five plus the outRe/outIm scratch RealFFTUnpack writes and the
-	// following Mul/FMA passes re-read (7 distinct slices).
+	// following Mul/MulAdd passes re-read (7 distinct slices).
 	baselineSlicesTouched = 7
 )
 
@@ -485,7 +485,7 @@ func realFFTPowerDispatched(dst, zRe, zIm, twRe, twIm []float64, _ int) {
 	RealFFTPower(dst, zRe, zIm, twRe, twIm)
 }
 
-// realFFTPowerBaseline is the three-pass unpack + Mul + FMA the fused kernel
+// realFFTPowerBaseline is the three-pass unpack + Mul + MulAdd the fused kernel
 // replaces: RealFFTUnpack writes the complex half-spectrum, then the power is
 // squared and summed in two more passes. It carries its own scratch so the
 // benchmark measures the extra traffic, not an allocation.
@@ -495,12 +495,12 @@ type realFFTPowerBaseline struct {
 
 func (s *realFFTPowerBaseline) run(dst, zRe, zIm, twRe, twIm []float64, _ int) {
 	RealFFTUnpack(s.outRe, s.outIm, zRe, zIm, twRe, twIm)
-	Mul(dst, s.outRe, s.outRe)      // dst = outRe^2
-	FMA(dst, s.outIm, s.outIm, dst) // dst = outIm^2 + outRe^2
+	Mul(dst, s.outRe, s.outRe)    // dst = outRe^2
+	MulAdd(dst, s.outIm, s.outIm) // dst += outIm^2
 }
 
 // BenchmarkRealFFTPower compares the fused RealFFTPower against the three-pass
-// RealFFTUnpack + Mul + FMA baseline it replaces. n is the half-size (nfft/2), so
+// RealFFTUnpack + Mul + MulAdd baseline it replaces. n is the half-size (nfft/2), so
 // the rows correspond to nfft 256/512/1024/2048 from issue #198.
 func BenchmarkRealFFTPower(b *testing.B) {
 	sizes := []int{128, 256, 512, 1024}

@@ -678,13 +678,18 @@ func irfftBin(spec []complex64, k int) (re, im float32) {
 // It writes min(len(dst), L) samples, where L = (len(spec)-1)*hop + nfft for
 // NoPad and (len(spec)-1)*hop for centered framing (librosa's default length),
 // and returns that count. dst must not alias the plan scratch. Allocation-free.
+//
+// The output is tolerance-stable, not bit-stable, across CPU tiers: the inverse
+// transform takes per-tier kernels, and with a window the overlap-add is MulAdd,
+// one fused rounding per sample on FMA-capable paths and a separate multiply and
+// add elsewhere.
 func (p *STFTPlan) ISTFT(dst []float32, spec [][]complex64, window []float32, hop int, pad PadMode) int {
 	frames := len(spec)
 	if frames == 0 || hop <= 0 {
 		return 0
 	}
 	// Match STFT's window handling: a short window is rectangular, and a long
-	// window is sliced to nfft so the overlap-add Mul and the normalization loop
+	// window is sliced to nfft so the overlap-add MulAdd and the normalization loop
 	// index it identically.
 	switch {
 	case window == nil || len(window) < p.nfft:
@@ -713,12 +718,16 @@ func (p *STFTPlan) ISTFT(dst []float32, spec [][]complex64, window []float32, ho
 			continue
 		}
 		p.IRFFT(p.frame, spec[f])
-		if window != nil {
-			Mul(p.frame, p.frame, window)
-		}
+		// Only frame[lo:hi] lands inside out, so boundary frames window and
+		// accumulate just that span. The windowed case fuses the multiply into
+		// the accumulate in one pass, leaving the IRFFT scratch unwindowed.
 		lo := max(0, -base)
 		hi := min(p.nfft, n-base)
-		AccumulateAdd(out, p.frame[lo:hi], base+lo)
+		if window != nil {
+			MulAdd(out[base+lo:base+hi], p.frame[lo:hi], window[lo:hi])
+		} else {
+			AccumulateAdd(out, p.frame[lo:hi], base+lo)
+		}
 	}
 	// Per-sample squared-window normalization. Sample i sits at padded position
 	// u = i + off and is covered by frames f with f*hop <= u < f*hop + nfft.

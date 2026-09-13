@@ -646,6 +646,39 @@ func BenchmarkSTFTPower(b *testing.B) {
 	}
 }
 
+// BenchmarkISTFT times the overlap-add inverse over ~1s of 48 kHz audio. The
+// hann rows exercise the windowed MulAdd path, the rect rows the plain
+// AccumulateAdd path; centered rows add the boundary frames that are only
+// partly accumulated.
+func BenchmarkISTFT(b *testing.B) {
+	const nfft = 1024
+	const hop = 256
+	signal := testSignal(48000)
+	for _, bc := range []struct {
+		name   string
+		window []float64
+		pad    PadMode
+	}{
+		{"hann/NoPad", hann(nfft), NoPad},
+		{"hann/PadZero", hann(nfft), PadZero},
+		{"rect/NoPad", nil, NoPad},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			plan, _ := NewSTFTPlan(nfft)
+			spec := make([][]complex128, plan.NumFrames(len(signal), hop, bc.pad))
+			for f := range spec {
+				spec[f] = make([]complex128, plan.NumBins())
+			}
+			plan.STFT(spec, signal, bc.window, hop, bc.pad)
+			dst := make([]float64, len(signal)+nfft)
+			b.ReportAllocs()
+			for b.Loop() {
+				plan.ISTFT(dst, spec, bc.window, hop, bc.pad)
+			}
+		})
+	}
+}
+
 func TestNumFrames(t *testing.T) {
 	p, _ := NewSTFTPlan(8)
 	cases := []struct {
@@ -1445,6 +1478,78 @@ func TestISTFTShortDst(t *testing.T) {
 			t.Fatalf("short dst sample %d: %g != full %g", i, short[i], full[i])
 		}
 	}
+}
+
+// TestISTFTOverlapAddReference checks the overlap-add (MulAdd with a window,
+// AccumulateAdd without, over the in-range span of each frame) against a
+// per-sample scalar reference that windows and bounds-checks every frame sample
+// and accumulates the squared window separately. Centered framing makes lo > 0 on the leading frames and
+// the short dst lengths make hi < nfft on the trailing ones, so the window[lo:hi]
+// slicing is exercised at both ends. MulAdd may fuse the multiply-add, so the
+// comparison is tolerance-based rather than bit-exact.
+func TestISTFTOverlapAddReference(t *testing.T) {
+	const nfft = 128
+	x := testSignal(1000)
+	for _, window := range [][]float64{hann(nfft), nil} {
+		for _, pad := range []PadMode{NoPad, PadZero, PadReflect} {
+			for _, hop := range []int{nfft / 4, nfft / 2, 50} {
+				p, _ := NewSTFTPlan(nfft)
+				spec := make([][]complex128, p.NumFrames(len(x), hop, pad))
+				for f := range spec {
+					spec[f] = make([]complex128, p.NumBins())
+				}
+				p.STFT(spec, x, window, hop, pad)
+				full := (len(spec)-1)*hop + nfft
+				if pad != NoPad {
+					full = (len(spec) - 1) * hop
+				}
+				for _, dstLen := range []int{full, full - 37, nfft/2 + 3, hop - 1} {
+					want := istftReference(p, spec, window, hop, pad, dstLen)
+					y := make([]float64, dstLen)
+					if n := p.ISTFT(y, spec, window, hop, pad); n != dstLen {
+						t.Fatalf("window=%t pad=%v hop=%d len=%d: ISTFT wrote %d", window != nil, pad, hop, dstLen, n)
+					}
+					for i := range y {
+						if d := math.Abs(y[i] - want[i]); d > 1e-12*(1+math.Abs(want[i])) {
+							t.Fatalf("window=%t pad=%v hop=%d len=%d sample %d: got %g want %g", window != nil, pad, hop, dstLen, i, y[i], want[i])
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// istftReference is the per-sample scalar ISTFT the overlap-add reference test
+// compares against: every frame sample is windowed and bounds-checked on its own,
+// and the squared window is accumulated alongside.
+func istftReference(p *STFTPlan, spec [][]complex128, window []float64, hop int, pad PadMode, n int) []float64 {
+	off := 0
+	if pad != NoPad {
+		off = p.NFFT() / 2
+	}
+	ref := make([]float64, n)
+	norm := make([]float64, n)
+	buf := make([]float64, p.NFFT())
+	for f := range spec {
+		p.IRFFT(buf, spec[f])
+		for j, v := range buf {
+			w := 1.0
+			if window != nil {
+				w = window[j]
+			}
+			if i := f*hop - off + j; i >= 0 && i < n {
+				ref[i] += v * w
+				norm[i] += w * w
+			}
+		}
+	}
+	for i := range ref {
+		if norm[i] > istftNormFloor {
+			ref[i] /= norm[i]
+		}
+	}
+	return ref
 }
 
 // FuzzRFFTIRFFT exercises the single-frame spectral inversion invariants over
