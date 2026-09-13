@@ -1253,6 +1253,17 @@ func TestIRFFTShortInputs(t *testing.T) {
 	if n := p.IRFFT(nil, spec); n != 0 {
 		t.Fatalf("IRFFT into nil dst wrote %d", n)
 	}
+
+	// An empty spectrum is all zero bins, so the transform is exactly zero.
+	for i := range got {
+		got[i] = 1
+	}
+	p.IRFFT(got, nil)
+	for i, v := range got {
+		if v != 0 {
+			t.Fatalf("sample %d: empty spec gave %g, want 0", i, v)
+		}
+	}
 }
 
 func TestIRFFTAllocFree(t *testing.T) {
@@ -1492,7 +1503,7 @@ func TestISTFTOverlapAddReference(t *testing.T) {
 	x := testSignal(1000)
 	for _, window := range [][]float64{hann(nfft), nil} {
 		for _, pad := range []PadMode{NoPad, PadZero, PadReflect} {
-			for _, hop := range []int{nfft / 4, nfft / 2, 50} {
+			for _, hop := range []int{nfft / 4, nfft / 2, 50, 150} {
 				p, _ := NewSTFTPlan(nfft)
 				spec := make([][]complex128, p.NumFrames(len(x), hop, pad))
 				for f := range spec {
@@ -1550,6 +1561,41 @@ func istftReference(p *STFTPlan, spec [][]complex128, window []float64, hop int,
 		}
 	}
 	return ref
+}
+
+// TestNormalizeISTFTMatchesPerSample pins the block normalization bit for bit
+// to the per-sample loop it replaces: both read the same istftNorm sums, a table
+// entry clamped to 1 divides exactly, and Div is an exact IEEE division on every
+// tier. The sweep crosses hop = 1, hop dividing and not dividing nfft, hop = nfft
+// (Hann overlap vanishes at the frame joins, so table entries hit the floor),
+// hop > nfft (no table), both centering offsets, and out shorter or longer than
+// the covered span.
+func TestNormalizeISTFTMatchesPerSample(t *testing.T) {
+	const nfft = 64
+	p, _ := NewSTFTPlan(nfft)
+	src := testSignal(700)
+	for _, window := range [][]float64{hann(nfft), nil} {
+		for _, hop := range []int{1, 7, 16, 50, nfft, nfft + 1, 100} {
+			for _, off := range []int{0, nfft / 2} {
+				for _, frames := range []int{1, 3, 12} {
+					for _, n := range []int{0, 5, nfft, 333, 700} {
+						got := append([]float64(nil), src[:n]...)
+						want := append([]float64(nil), src[:n]...)
+						p.normalizeISTFT(got, window, hop, frames, off)
+						for i := range want {
+							p.normalizeSample(want, window, hop, frames, off, i)
+						}
+						for i := range want {
+							if got[i] != want[i] {
+								t.Fatalf("window=%t hop=%d off=%d frames=%d n=%d sample %d: block %g != per-sample %g",
+									window != nil, hop, off, frames, n, i, got[i], want[i])
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 // FuzzRFFTIRFFT exercises the single-frame spectral inversion invariants over

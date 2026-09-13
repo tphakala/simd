@@ -510,7 +510,7 @@ func BenchmarkRealFFTPower(b *testing.B) {
 		b.Run(fmt.Sprintf("Fused_nfft%d", nfft), func(b *testing.B) {
 			benchRealFFTPower64(b, n, fusedSlicesTouched, realFFTPowerDispatched)
 		})
-		b.Run(fmt.Sprintf("UnpackMulFMA_nfft%d", nfft), func(b *testing.B) {
+		b.Run(fmt.Sprintf("UnpackMulMulAdd_nfft%d", nfft), func(b *testing.B) {
 			base := &realFFTPowerBaseline{outRe: make([]float64, n), outIm: make([]float64, n)}
 			benchRealFFTPower64(b, n, baselineSlicesTouched, base.run)
 		})
