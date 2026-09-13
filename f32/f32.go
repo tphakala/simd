@@ -298,8 +298,8 @@ func FMA(dst, a, b, c []float32) {
 //
 // It is equivalent to FMA(dst, a, b, dst) and shares FMA's numerical contract:
 // on CPU tiers with hardware FMA (AVX+FMA, AVX-512, NEON) the multiply-add is
-// fused with a single rounding; on the SSE2 and pure-Go amd64 paths it is a
-// separate multiply then add. Results are therefore tolerance-stable across
+// fused with a single rounding; on the SSE2 path and the pure-Go fallback it is
+// a separate multiply then add. Results are therefore tolerance-stable across
 // tiers, not bit-identical.
 //
 // dst is a read-modify-write accumulator. Following the package default, dst may
