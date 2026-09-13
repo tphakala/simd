@@ -1433,6 +1433,28 @@ func TestISTFTGuardsF32(t *testing.T) {
 	}
 }
 
+// TestISTFTHugeHopF32 pins the #294 fix: a hop so large that the frame and
+// normalization arithmetic overflows int must be rejected (return 0) rather
+// than panicking or miscounting. Before the guard the windowed case panicked in
+// istftNorm on a wrapped negative window index, and the nil-window case
+// silently used a wrapped frame count. The 2-frame spec is the issue reproducer
+// (a shape where full does not itself wrap, so the panic comes from istftNorm).
+func TestISTFTHugeHopF32(t *testing.T) {
+	p, _ := NewSTFTPlan(4)
+	spec := [][]complex64{{1, 2, 3}, {1, 2, 3}}
+	win := []float32{0, 0.5, 1, 0.5}
+	for _, hop := range []int{math.MaxInt, math.MaxInt - 50} {
+		for _, pad := range []PadMode{NoPad, PadZero, PadReflect} {
+			for _, w := range [][]float32{win, nil} {
+				got := p.ISTFT(make([]float32, 100), spec, w, hop, pad)
+				if got != 0 {
+					t.Errorf("hop=%d pad=%v windowed=%v: ISTFT wrote %d, want 0", hop, pad, w != nil, got)
+				}
+			}
+		}
+	}
+}
+
 func TestISTFTAllocFreeF32(t *testing.T) {
 	const nfft, hop = 512, 128
 	p, _ := NewSTFTPlan(nfft)

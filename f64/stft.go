@@ -706,6 +706,15 @@ func (p *STFTPlan) ISTFT(dst []float64, spec [][]complex128, window []float64, h
 	if frames == 0 || hop <= 0 {
 		return 0
 	}
+	// Reject a hop so large the frame and normalization arithmetic would overflow
+	// int. The largest intermediate anywhere (full, base, the fLo term a+hop-1 in
+	// istftNorm, and the i+=hop block step) is bounded by frames*hop+nfft, so
+	// keeping frames*hop <= MaxInt-nfft keeps every one of them below MaxInt.
+	// Such a hop spaces frames astronomically apart with nothing worth computing,
+	// so returning 0 matches the hop <= 0 rejection just above (see #294).
+	if hop > (math.MaxInt-p.nfft)/frames {
+		return 0
+	}
 	// Match STFT's window handling: a short window is rectangular, and a long
 	// window is sliced to nfft so the overlap-add MulAdd and the normalization loop
 	// index it identically.
