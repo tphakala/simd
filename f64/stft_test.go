@@ -681,6 +681,31 @@ func BenchmarkISTFT(b *testing.B) {
 	}
 }
 
+// BenchmarkISTFTHopSweep times ISTFT across hop sizes at fixed nfft, so the
+// block-normalization Div-dispatch cost is visible: at small hops the periodic
+// squared-window table is tiled across the frame and divided nfft/hop periods
+// at a time instead of one hop-block per Div.
+func BenchmarkISTFTHopSweep(b *testing.B) {
+	const nfft = 1024
+	signal := testSignal(8192)
+	window := hann(nfft)
+	for _, hop := range []int{1, 4, 16, nfft / 4} {
+		b.Run(fmt.Sprintf("hop%d", hop), func(b *testing.B) {
+			plan, _ := NewSTFTPlan(nfft)
+			spec := make([][]complex128, plan.NumFrames(len(signal), hop, PadZero))
+			for f := range spec {
+				spec[f] = make([]complex128, plan.NumBins())
+			}
+			plan.STFT(spec, signal, window, hop, PadZero)
+			dst := make([]float64, len(signal)+nfft)
+			b.ReportAllocs()
+			for b.Loop() {
+				plan.ISTFT(dst, spec, window, hop, PadZero)
+			}
+		})
+	}
+}
+
 // BenchmarkIRFFT times the single-frame inverse real FFT across nfft sizes, so
 // the per-call overhead of the vector pack is visible at small nfft where it is
 // not amortized over many frames.
