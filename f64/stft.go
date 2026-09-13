@@ -37,10 +37,12 @@ import (
 //
 // The inverse runs on the same primitives. IRFFT packs the conjugated spectrum
 // through RealFFTUnpack, reuses the FFT core, and writes a full frame with Scale
-// and Interleave2; ISTFT overlap-adds each windowed frame with MulAdd
-// (AccumulateAdd for a rectangular window) and divides the interior by the
-// periodic squared-window overlap a hop-aligned block at a time with Div when
-// hop <= nfft; the remaining samples stay on the per-sample loop. See #292.
+// and Interleave2; a windowed ISTFT folds IRFFT's 1/half scale and odd-sample sign
+// into a pre-scaled window so the unscaled inverse frame and the window meet in one
+// MulAdd (a rectangular frame keeps the scaled IRFFT and AccumulateAdd, having no
+// per-sample multiply to ride), then it divides the interior by the periodic
+// squared-window overlap a hop-aligned block at a time with Div when hop <= nfft;
+// the remaining samples stay on the per-sample loop. See #292, #295.
 
 // ErrSTFT* describe invalid STFTPlan configurations.
 var (
@@ -137,6 +139,15 @@ type STFTPlan struct {
 	// Time-domain scratch for ISTFT: it holds one inverse frame for the
 	// overlap-add and, after the frame loop, the periodic normalization table.
 	frame []float64
+
+	// ISTFT windowed-frame overlap-add scratch, length nfft. altScale is the
+	// constant alternating amplitude correction (+1/half at even samples, -1/half
+	// at odd) that carries IRFFT's 1/half scale and its odd-sample sign flip. pw =
+	// window*altScale is the pre-scaled window, built once per windowed ISTFT call,
+	// so the inverse frame stays unscaled and one MulAdd applies window, scale and
+	// sign together. The rectangular path keeps the scaled IRFFT and AccumulateAdd,
+	// so it uses neither.
+	altScale, pw []float64
 }
 
 // NumBins returns the number of output bins per frame, nfft/2 + 1 (the Hermitian
@@ -183,6 +194,8 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 		winRe:       make([]float64, half),
 		winIm:       make([]float64, half),
 		frame:       make([]float64, nfft),
+		altScale:    make([]float64, nfft),
+		pw:          make([]float64, nfft),
 	}
 
 	// Bit-reversal permutation for a size-half FFT.
@@ -232,6 +245,19 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 		s, c := math.Sincos(ang)
 		p.unRe[k] = c
 		p.unIm[k] = -s
+	}
+
+	// ISTFT pre-scaled overlap-add table: fold IRFFT's 1/half amplitude scale and
+	// its odd-sample sign flip into an alternating +scale/-scale table so the
+	// per-frame inverse stays unscaled and the whole amplitude correction rides the
+	// overlap-add MulAdd. half >= 1 for any valid plan, so scale is finite.
+	scale := 1 / float64(half)
+	for i := range p.altScale {
+		if i&1 == 0 {
+			p.altScale[i] = scale
+		} else {
+			p.altScale[i] = -scale
+		}
 	}
 
 	return p, nil
@@ -653,6 +679,20 @@ func (p *STFTPlan) IRFFT(dst []float64, spec []complex128) int {
 	return ns
 }
 
+// irfftFrameUnscaled writes one inverse frame into p.frame without IRFFT's 1/half
+// amplitude scale or its odd-sample sign flip: p.frame[2j] = re[j], p.frame[2j+1]
+// = im[j]. ISTFT folds the scale and the alternating sign into its pre-scaled
+// overlap-add window (altScale/pw) so the whole amplitude correction collapses into
+// the overlap-add MulAdd, cutting the per-frame passes from four (two Scale, one
+// Interleave, one MulAdd) to two (Interleave, MulAdd). The rounding then differs
+// from a scaled IRFFT by the order of one multiply, which ISTFT's tolerance-stable
+// contract permits.
+func (p *STFTPlan) irfftFrameUnscaled(spec []complex128) {
+	p.packInverse(spec)
+	p.fftHalf()
+	Interleave2(p.frame, p.re, p.im)
+}
+
 // packInverse writes conj(C) into the plan scratch for IRFFT, reading bins
 // beyond len(spec) as zero. conj(C[k]) = conj(E) - i*W_N^k*conj(D), with
 // conj(E) = 0.5*(conj(X[k]) + X[half-k]) and 2*conj(D) = conj(X[k]) - X[half-k],
@@ -741,6 +781,17 @@ func (p *STFTPlan) ISTFT(dst []float64, spec [][]complex128, window []float64, h
 	}
 	out := dst[:n]
 	clear(out)
+	// A windowed frame folds IRFFT's 1/half scale and its odd-sample sign flip into
+	// the pre-scaled window pw = window*altScale (built once here), so each inverse
+	// frame stays unscaled (irfftFrameUnscaled) and one MulAdd applies the window,
+	// the scale and the sign in a single pass instead of two Scale passes plus the
+	// MulAdd. A rectangular frame has no per-sample multiply to ride, so it keeps the
+	// lighter scaled IRFFT plus AccumulateAdd.
+	var pw []float64
+	if window != nil {
+		Mul(p.pw, window, p.altScale)
+		pw = p.pw
+	}
 	for f := range frames {
 		base := f*hop - off
 		if base >= n {
@@ -749,15 +800,16 @@ func (p *STFTPlan) ISTFT(dst []float64, spec [][]complex128, window []float64, h
 		if base+p.nfft <= 0 {
 			continue
 		}
-		p.IRFFT(p.frame, spec[f])
-		// Only frame[lo:hi] lands inside out, so boundary frames window and
-		// accumulate just that span, and the windowed case does both in one
-		// MulAdd pass.
+		// Only frame[lo:hi] lands inside out, so boundary frames overlap-add just
+		// that span. pw[lo:hi] tracks the re/im interleave parity of frame[lo:hi], so
+		// the scale and odd-sample sign stay aligned at every edge.
 		lo := max(0, -base)
 		hi := min(p.nfft, n-base)
 		if window != nil {
-			MulAdd(out[base+lo:base+hi], p.frame[lo:hi], window[lo:hi])
+			p.irfftFrameUnscaled(spec[f])
+			MulAdd(out[base+lo:base+hi], p.frame[lo:hi], pw[lo:hi])
 		} else {
+			p.IRFFT(p.frame, spec[f])
 			AccumulateAdd(out, p.frame[lo:hi], base+lo)
 		}
 	}
