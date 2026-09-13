@@ -681,6 +681,31 @@ func BenchmarkISTFT(b *testing.B) {
 	}
 }
 
+// BenchmarkISTFTHopSweep times ISTFT across hop sizes at fixed nfft. normalizeISTFT
+// divides one hop-length block per Div call, so a smaller hop means more and shorter
+// Div calls; this sweep makes that per-hop cost visible and is the measurement tool
+// for the per-frame inverse-transform follow-ups in #295.
+func BenchmarkISTFTHopSweep(b *testing.B) {
+	const nfft = 1024
+	signal := testSignal(8192)
+	window := hann(nfft)
+	for _, hop := range []int{1, 4, 16, nfft / 4} {
+		b.Run(fmt.Sprintf("hop%d", hop), func(b *testing.B) {
+			plan, _ := NewSTFTPlan(nfft)
+			spec := make([][]complex128, plan.NumFrames(len(signal), hop, PadZero))
+			for f := range spec {
+				spec[f] = make([]complex128, plan.NumBins())
+			}
+			plan.STFT(spec, signal, window, hop, PadZero)
+			dst := make([]float64, len(signal)+nfft)
+			b.ReportAllocs()
+			for b.Loop() {
+				plan.ISTFT(dst, spec, window, hop, PadZero)
+			}
+		})
+	}
+}
+
 // BenchmarkIRFFT times the single-frame inverse real FFT across nfft sizes, so
 // the per-call overhead of the vector pack is visible at small nfft where it is
 // not amortized over many frames.
@@ -1407,6 +1432,35 @@ func TestISTFTGuards(t *testing.T) {
 	}
 }
 
+// TestISTFTHugeHop pins the #294 fix: a hop so large that the frame and
+// normalization arithmetic overflows int must be rejected (return 0) rather
+// than panicking or miscounting. Before the guard the windowed case panicked in
+// istftNorm on a wrapped negative window index, and the nil-window case
+// silently used a wrapped frame count. The 2-frame spec is the issue reproducer
+// (a shape where full does not itself wrap, so the panic comes from istftNorm).
+func TestISTFTHugeHop(t *testing.T) {
+	p, _ := NewSTFTPlan(4)
+	spec := [][]complex128{{1, 2, 3}, {1, 2, 3}}
+	win := []float64{0, 0.5, 1, 0.5}
+	for _, hop := range []int{math.MaxInt, math.MaxInt - 50} {
+		for _, pad := range []PadMode{NoPad, PadZero, PadReflect} {
+			for _, w := range [][]float64{win, nil} {
+				got := p.ISTFT(make([]float64, 100), spec, w, hop, pad)
+				if got != 0 {
+					t.Errorf("hop=%d pad=%v windowed=%v: ISTFT wrote %d, want 0", hop, pad, w != nil, got)
+				}
+			}
+		}
+	}
+	// A single frame never overflows for any hop (full is just nfft, and istftNorm
+	// keeps a <= 0), so the guard must not reject it: a huge hop still returns the
+	// nfft-sample NoPad reconstruction rather than 0.
+	one := [][]complex128{{1, 2, 3}}
+	if got := p.ISTFT(make([]float64, 100), one, win, math.MaxInt, NoPad); got != p.NFFT() {
+		t.Errorf("single-frame huge hop: ISTFT wrote %d, want %d", got, p.NFFT())
+	}
+}
+
 func TestISTFTAllocFree(t *testing.T) {
 	const nfft, hop = 512, 128
 	p, _ := NewSTFTPlan(nfft)
@@ -1419,7 +1473,14 @@ func TestISTFTAllocFree(t *testing.T) {
 	}
 	p.STFT(spec, x, window, hop, PadZero)
 	y := make([]float64, len(x))
-	if a := testing.AllocsPerRun(5, func() { p.ISTFT(y, spec, window, hop, PadZero) }); a != 0 {
+	if a := testing.AllocsPerRun(5, func() {
+		// Assert the sample count inside the closure so an early-return
+		// regression (returning 0 without doing the work) fails here rather
+		// than passing as zero allocations.
+		if n := p.ISTFT(y, spec, window, hop, PadZero); n != len(y) {
+			t.Errorf("ISTFT wrote %d samples, want %d", n, len(y))
+		}
+	}); a != 0 {
 		t.Errorf("ISTFT allocated %v times per run, want 0", a)
 	}
 }
