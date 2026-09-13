@@ -180,6 +180,7 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 |                 | `AddScalar(dst, a, s)`              | Add scalar                    | 8x / 4x / 2x                        |
 |                 | `SubFromScalar(dst, a, s)`          | Scalar minus vector           | 8x / 4x / 2x (composed SIMD)        |
 |                 | `FMA(dst, a, b, c)`                 | Fused multiply-add: a\*b+c    | 8x / 4x / 2x                        |
+|                 | `MulAdd(dst, a, b)`                 | Fused accumulate: dst += a\*b | 8x / 4x / 2x                        |
 |                 | `AddScaled(dst, alpha, s)`          | dst += alpha\*s (axpy)        | 8x / 4x / 2x                        |
 | **Unary**       | `Abs(dst, a)`                       | Absolute value                | 8x / 4x / 2x                        |
 |                 | `Neg(dst, a)`                       | Negation                      | 8x / 4x / 2x                        |

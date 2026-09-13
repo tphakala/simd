@@ -83,6 +83,7 @@ func TestAliasingSweep(t *testing.T) {
 		t.Helper()
 		aliastest.Sweep(t, f64AliasCases())
 		t.Run("AddScaled", sweepAddScaled)
+		t.Run("MulAdd", sweepMulAdd)
 	})
 }
 
@@ -99,6 +100,17 @@ func TestAliasingZeroAlloc(t *testing.T) {
 				a[i] = aliasGenF64(i)
 			}
 			aliastest.ZeroAlloc(t, "AddScaled s==dst", func() { AddScaled(a, 1.5, a) })
+		})
+		t.Run("MulAdd", func(t *testing.T) {
+			a := make([]float64, 64)
+			b := make([]float64, 64)
+			for i := range a {
+				a[i] = aliasGenF64(i)
+				b[i] = aliasGenF64(i + 11)
+			}
+			aliastest.ZeroAlloc(t, "MulAdd dst==a", func() { MulAdd(a, a, b) })
+			aliastest.ZeroAlloc(t, "MulAdd dst==b", func() { MulAdd(b, a, b) })
+			aliastest.ZeroAlloc(t, "MulAdd dst==a==b", func() { MulAdd(a, a, a) })
 		})
 	})
 }
@@ -121,5 +133,45 @@ func sweepAddScaled(t *testing.T) {
 		got := append([]float64(nil), data...)
 		AddScaled(got, alpha, got)
 		aliastest.Report(t, n, "AddScaled s==dst", aliasEqF64, want, got)
+	}
+}
+
+// sweepMulAdd checks MulAdd's documented in-place overlays: dst may exactly
+// equal a, b, or both (dst[i] += a[i]*b[i], a read-modify-write accumulator).
+// Like sweepAddScaled it seeds the reference and the overlay from identical
+// initial state, since dst is an accumulator and does not fit the generic
+// BinaryCase oracle. MulAdd dispatches through the FMA function pointer, so
+// forTiers forces its tiers.
+func sweepMulAdd(t *testing.T) {
+	t.Helper()
+	for _, n := range aliastest.Sizes {
+		a := make([]float64, n)
+		b := make([]float64, n)
+		for i := range a {
+			a[i] = aliasGenF64(i)
+			b[i] = aliasGenF64(i + 11)
+		}
+
+		// dst == a: a[i] += a[i]*b[i].
+		want := append([]float64(nil), a...)
+		MulAdd(want, append([]float64(nil), a...), b)
+		got := append([]float64(nil), a...)
+		MulAdd(got, got, b)
+		aliastest.Report(t, n, "MulAdd dst==a", aliasEqF64, want, got)
+
+		// dst == b: b[i] += a[i]*b[i].
+		want = append([]float64(nil), b...)
+		MulAdd(want, a, append([]float64(nil), b...))
+		got = append([]float64(nil), b...)
+		MulAdd(got, a, got)
+		aliastest.Report(t, n, "MulAdd dst==b", aliasEqF64, want, got)
+
+		// dst == a == b: x[i] += x[i]*x[i].
+		want = append([]float64(nil), a...)
+		src := append([]float64(nil), a...)
+		MulAdd(want, src, src)
+		got = append([]float64(nil), a...)
+		MulAdd(got, got, got)
+		aliastest.Report(t, n, "MulAdd dst==a==b", aliasEqF64, want, got)
 	}
 }
