@@ -38,9 +38,9 @@ import (
 // The inverse runs on the same primitives. IRFFT packs the conjugated spectrum
 // through RealFFTUnpack, reuses the FFT core, and writes a full frame with Scale
 // and Interleave2; ISTFT overlap-adds each windowed frame with MulAdd
-// (AccumulateAdd for a rectangular window) and divides its interior by the
-// periodic squared-window overlap a hop-aligned block at a time with Div, leaving
-// only the edge samples on the scalar loop. See #292.
+// (AccumulateAdd for a rectangular window) and divides the interior by the
+// periodic squared-window overlap a hop-aligned block at a time with Div when
+// hop <= nfft; the remaining samples stay on the per-sample loop. See #292.
 
 // ErrSTFT* describe invalid STFTPlan configurations.
 var (
@@ -121,9 +121,11 @@ type STFTPlan struct {
 	// Per-transform scratch (the packed complex frame, FFT'd in place).
 	re, im []float64
 
-	// Unravel scratch for STFT: RealFFTUnpack writes the split-complex bins
-	// X[1..half-1] here before they are interleaved into the caller's complex128
-	// row. Length half; index 0 is unused (DC and Nyquist are computed directly).
+	// Shared unravel/pack scratch, length half. On the STFT path unravelRow's
+	// RealFFTUnpack writes the split-complex bins X[1..half-1] here before they are
+	// interleaved into the caller's complex128 row (index 0 unused there; DC and
+	// Nyquist are computed directly). On the IRFFT path packInverse writes its
+	// conjugated input Z = conj(spec) here, index 0 included and read.
 	outRe, outIm []float64
 
 	// Window halves for the vector pack: winRe holds the even window samples
@@ -132,8 +134,8 @@ type STFTPlan struct {
 	// the window with two in-place Mul calls.
 	winRe, winIm []float64
 
-	// Per-frame time-domain scratch for ISTFT (one inverse frame before
-	// windowing and overlap-add).
+	// Time-domain scratch for ISTFT: it holds one inverse frame for the
+	// overlap-add and, after the frame loop, the periodic normalization table.
 	frame []float64
 }
 
@@ -611,7 +613,9 @@ func (p *STFTPlan) RFFT(dst []complex128, frame, window []float64) int {
 // IRFFT(RFFT(x, nil)) reproduces x within float64 tolerance. The imaginary
 // parts of the DC and Nyquist bins are ignored, as numpy.fft.irfft does,
 // because a real signal cannot carry them. It returns the number of samples
-// written, is allocation-free, and reuses the plan scratch.
+// written, is allocation-free, and reuses the plan scratch. The output is
+// tolerance-stable, not bit-stable, across CPU tiers: the pack runs
+// RealFFTUnpack's per-tier kernels.
 //
 // The inverse undoes unravelBin algebraically: with E = 0.5*(X[k] +
 // conj(X[half-k])) and O = 0.5*(X[k] - conj(X[half-k])) * conj(W_N^k), the
@@ -663,7 +667,7 @@ func (p *STFTPlan) packInverse(spec []complex128) {
 	zRe, zIm := p.outRe[:half], p.outIm[:half]
 	nb := min(len(spec), half)
 	for k, v := range spec[:nb] {
-		zRe[k], zIm[k] = real(v), -imag(v)
+		zRe[k], zIm[k] = real(v), 0-imag(v) // 0-x, not -x: a zero bin must match clear's +0
 	}
 	clear(zRe[nb:])
 	clear(zIm[nb:])
@@ -696,8 +700,7 @@ func (p *STFTPlan) packInverse(spec []complex128) {
 //
 // The output is tolerance-stable, not bit-stable, across CPU tiers: the inverse
 // transform takes per-tier kernels, and with a window the overlap-add is MulAdd,
-// one fused rounding per sample on FMA-capable paths and a separate multiply and
-// add elsewhere.
+// which fuses or splits the multiply-add per tier (see MulAdd).
 func (p *STFTPlan) ISTFT(dst []float64, spec [][]complex128, window []float64, hop int, pad PadMode) int {
 	frames := len(spec)
 	if frames == 0 || hop <= 0 {
@@ -734,8 +737,8 @@ func (p *STFTPlan) ISTFT(dst []float64, spec [][]complex128, window []float64, h
 		}
 		p.IRFFT(p.frame, spec[f])
 		// Only frame[lo:hi] lands inside out, so boundary frames window and
-		// accumulate just that span. The windowed case fuses the multiply into
-		// the accumulate in one pass, leaving the IRFFT scratch unwindowed.
+		// accumulate just that span, and the windowed case does both in one
+		// MulAdd pass.
 		lo := max(0, -base)
 		hi := min(p.nfft, n-base)
 		if window != nil {
@@ -757,13 +760,15 @@ func (p *STFTPlan) ISTFT(dst []float64, spec [][]complex128, window []float64, h
 // cover u exists, so the sum depends only on u mod hop. When hop <= nfft that
 // periodic table fits the frame scratch: it is built once, summed in the same
 // order as the per-sample loop, with sub-floor entries set to 1 (x/1 is exact),
-// and applied a hop-aligned block at a time with Div. The edges, and any hop
-// wider than nfft, keep the per-sample loop.
+// and applied a hop-aligned block at a time with Div. Samples before the first
+// hop-aligned interior position, a trailing partial block, the edges, and any hop
+// wider than nfft keep the per-sample loop.
 func (p *STFTPlan) normalizeISTFT(out, window []float64, hop, frames, off int) {
 	n := len(out)
 	lo, hi := n, n // out[lo:hi] is the block-normalized interior
 	if hop <= p.nfft {
-		uLo := (max(p.nfft-1, off) + hop - 1) / hop * hop // first hop-aligned interior u
+		// off <= nfft/2 <= nfft-1, so the first interior u keeps lo = uLo-off >= 0
+		uLo := (p.nfft - 1 + hop - 1) / hop * hop
 		uHi := min(frames*hop, n+off)
 		if uHi-uLo >= hop {
 			uHi = uLo + (uHi-uLo)/hop*hop
@@ -771,7 +776,7 @@ func (p *STFTPlan) normalizeISTFT(out, window []float64, hop, frames, off int) {
 			table := p.frame[:hop]
 			for r := range table {
 				table[r] = p.istftNorm(window, hop, frames, r+uLo)
-				if table[r] <= istftNormFloor {
+				if !(table[r] > istftNormFloor) { // complement of normalizeSample's test, NaN included
 					table[r] = 1
 				}
 			}
