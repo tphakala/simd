@@ -387,7 +387,9 @@ func TestSTFTClampsF32(t *testing.T) {
 // that exercise the vector kernels' full blocks and scalar tails. It also proves
 // the full-width row really took the vector path: the plan's unpack scratch is
 // poisoned with NaN before the call and the row's interior bins must be the
-// bits that scratch holds afterwards (only RealFFTUnpack writes it).
+// bits that scratch holds afterwards (on the STFT path only RealFFTUnpack writes
+// it; packInverse also writes the scratch, but only on the IRFFT path, which
+// this test does not run).
 func TestSTFTShortRowsMatchFullF32(t *testing.T) {
 	signal := testSignalF32(3000)
 	nan := float32(math.NaN())
@@ -730,6 +732,56 @@ func BenchmarkSTFTPower(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		plan.STFTPower(dst, signal, window, hop, NoPad)
+	}
+}
+
+// BenchmarkISTFT times the overlap-add inverse over ~1s of 48 kHz audio. The
+// hann rows exercise the windowed MulAdd path, the rect rows the plain
+// AccumulateAdd path; centered rows add the boundary frames that are only
+// partly accumulated.
+func BenchmarkISTFT(b *testing.B) {
+	const nfft = 1024
+	const hop = 256
+	signal := testSignalF32(48000)
+	for _, bc := range []struct {
+		name   string
+		window []float32
+		pad    PadMode
+	}{
+		{"hann/NoPad", hannF32(nfft), NoPad},
+		{"hann/PadZero", hannF32(nfft), PadZero},
+		{"rect/NoPad", nil, NoPad},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			plan, _ := NewSTFTPlan(nfft)
+			spec := make([][]complex64, plan.NumFrames(len(signal), hop, bc.pad))
+			for f := range spec {
+				spec[f] = make([]complex64, plan.NumBins())
+			}
+			plan.STFT(spec, signal, bc.window, hop, bc.pad)
+			dst := make([]float32, len(signal)+nfft)
+			b.ReportAllocs()
+			for b.Loop() {
+				plan.ISTFT(dst, spec, bc.window, hop, bc.pad)
+			}
+		})
+	}
+}
+
+// BenchmarkIRFFT times the single-frame inverse real FFT across nfft sizes, so
+// the per-call overhead of the vector pack is visible at small nfft where it is
+// not amortized over many frames.
+func BenchmarkIRFFT(b *testing.B) {
+	for _, nfft := range []int{16, 64, 512, 1024, 2048} {
+		b.Run(fmt.Sprintf("nfft%d", nfft), func(b *testing.B) {
+			plan, _ := NewSTFTPlan(nfft)
+			spec := randomSpectrumF32(plan.NumBins(), 0.5)
+			dst := make([]float32, nfft)
+			b.ReportAllocs()
+			for b.Loop() {
+				plan.IRFFT(dst, spec)
+			}
+		})
 	}
 }
 
@@ -1218,17 +1270,25 @@ func TestIRFFTShortInputsF32(t *testing.T) {
 	const nfft = 32
 	p, _ := NewSTFTPlan(nfft)
 	spec := randomSpectrumF32(p.NumBins(), 1.5)
-
-	// Missing bins == zero bins.
-	zeroed := make([]complex64, len(spec))
-	copy(zeroed, spec[:10])
 	want := make([]float32, nfft)
 	got := make([]float32, nfft)
-	p.IRFFT(want, zeroed)
-	p.IRFFT(got, spec[:10])
-	for i := range want {
-		if want[i] != got[i] {
-			t.Fatalf("sample %d: short spec %g != zero-filled %g", i, got[i], want[i])
+
+	// Missing bins == zero bins: a spec truncated to nb bins must transform
+	// bit-for-bit like the same nb bins zero-extended to a full-width spectrum,
+	// signed zeros included. Dirtying the scratch with the full random spectrum
+	// between the two calls proves packInverse clears its stale scratch tail
+	// rather than inheriting the zeros the zero-extended call just wrote. nb =
+	// p.half exercises a spectrum of exactly half bins (no Nyquist bin present).
+	for _, nb := range []int{10, p.half, p.half - 1, 1} {
+		zeroed := make([]complex64, p.NumBins())
+		copy(zeroed, spec[:nb])
+		p.IRFFT(want, zeroed)
+		p.IRFFT(got, spec) // dirty the scratch tail with the full spectrum
+		p.IRFFT(got, spec[:nb])
+		for i := range want {
+			if math.Float32bits(want[i]) != math.Float32bits(got[i]) {
+				t.Fatalf("nb=%d sample %d: short spec %g != zero-filled %g", nb, i, got[i], want[i])
+			}
 		}
 	}
 
@@ -1245,6 +1305,20 @@ func TestIRFFTShortInputsF32(t *testing.T) {
 	}
 	if n := p.IRFFT(nil, spec); n != 0 {
 		t.Fatalf("IRFFT into nil dst wrote %d", n)
+	}
+
+	// An empty spectrum is all zero bins, so the transform is exactly zero.
+	// Dirty the scratch with the full spectrum first so a packInverse that
+	// skipped its clear would leak the stale bins into the empty result.
+	p.IRFFT(got, spec)
+	for i := range got {
+		got[i] = 1
+	}
+	p.IRFFT(got, nil)
+	for i, v := range got {
+		if v != 0 {
+			t.Fatalf("sample %d: empty spec gave %g, want 0", i, v)
+		}
 	}
 }
 
@@ -1469,6 +1543,158 @@ func TestISTFTShortDstF32(t *testing.T) {
 	for i := range short {
 		if short[i] != full[i] {
 			t.Fatalf("short dst sample %d: %g != full %g", i, short[i], full[i])
+		}
+	}
+}
+
+// TestISTFTWindowedShortDstPrefixF32 pins that a windowed ISTFT into a dst
+// shorter than the full reconstruction is a bit-exact prefix of the full output,
+// at every truncation length. Both the per-frame MulAdd span (hi = min(nfft,
+// n-base)) and the block-normalization interior (uHi clamped to n+off) depend on
+// n, so a length-dependent slip would move an early sample.
+func TestISTFTWindowedShortDstPrefixF32(t *testing.T) {
+	const nfft, hop = 64, 16
+	x := testSignalF32(700)
+	window := hannF32(nfft)
+	for _, pad := range []PadMode{NoPad, PadZero} {
+		p, _ := NewSTFTPlan(nfft)
+		frames := p.NumFrames(len(x), hop, pad)
+		spec := make([][]complex64, frames)
+		for f := range spec {
+			spec[f] = make([]complex64, p.NumBins())
+		}
+		p.STFT(spec, x, window, hop, pad)
+		full := (frames-1)*hop + nfft
+		if pad != NoPad {
+			full = (frames - 1) * hop
+		}
+		ref := make([]float32, full)
+		if n := p.ISTFT(ref, spec, window, hop, pad); n != full {
+			t.Fatalf("pad=%v: full ISTFT wrote %d, want %d", pad, n, full)
+		}
+		for dstLen := 1; dstLen <= full; dstLen++ {
+			got := make([]float32, dstLen)
+			if n := p.ISTFT(got, spec, window, hop, pad); n != dstLen {
+				t.Fatalf("pad=%v dstLen=%d: ISTFT wrote %d", pad, dstLen, n)
+			}
+			for i := range got {
+				if math.Float32bits(got[i]) != math.Float32bits(ref[i]) {
+					t.Fatalf("pad=%v dstLen=%d sample %d: %g != full prefix %g", pad, dstLen, i, got[i], ref[i])
+				}
+			}
+		}
+	}
+}
+
+// TestISTFTOverlapAddReferenceF32 checks the overlap-add (MulAdd with a window,
+// AccumulateAdd without, over the in-range span of each frame) against a
+// per-sample scalar reference that windows and bounds-checks every frame sample
+// and accumulates the squared window separately. Centered framing makes lo > 0
+// on the leading frames and the short dst lengths make hi < nfft on the trailing
+// ones, so the window[lo:hi] slicing is exercised at both ends. MulAdd may fuse
+// the multiply-add, so the comparison is tolerance-based rather than bit-exact.
+func TestISTFTOverlapAddReferenceF32(t *testing.T) {
+	const nfft = 128
+	x := testSignalF32(1000)
+	for _, window := range [][]float32{hannF32(nfft), nil} {
+		for _, pad := range []PadMode{NoPad, PadZero, PadReflect} {
+			for _, hop := range []int{nfft / 4, nfft / 2, 50, 150} {
+				p, _ := NewSTFTPlan(nfft)
+				spec := make([][]complex64, p.NumFrames(len(x), hop, pad))
+				for f := range spec {
+					spec[f] = make([]complex64, p.NumBins())
+				}
+				p.STFT(spec, x, window, hop, pad)
+				full := (len(spec)-1)*hop + nfft
+				if pad != NoPad {
+					full = (len(spec) - 1) * hop
+				}
+				for _, dstLen := range []int{full, full - 37, nfft/2 + 3, hop - 1} {
+					want := istftReferenceF32(p, spec, window, hop, pad, dstLen)
+					y := make([]float32, dstLen)
+					if n := p.ISTFT(y, spec, window, hop, pad); n != dstLen {
+						t.Fatalf("window=%t pad=%v hop=%d len=%d: ISTFT wrote %d", window != nil, pad, hop, dstLen, n)
+					}
+					for i := range y {
+						if d := math.Abs(float64(y[i]) - want[i]); d > 1e-5*(1+math.Abs(want[i])) {
+							t.Fatalf("window=%t pad=%v hop=%d len=%d sample %d: got %g want %g", window != nil, pad, hop, dstLen, i, y[i], want[i])
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// istftReferenceF32 is the per-sample scalar ISTFT the overlap-add reference test
+// compares against: every frame sample is windowed and bounds-checked on its own,
+// and the squared window is accumulated alongside, in float64.
+func istftReferenceF32(p *STFTPlan, spec [][]complex64, window []float32, hop int, pad PadMode, n int) []float64 {
+	off := 0
+	if pad != NoPad {
+		off = p.NFFT() / 2
+	}
+	ref := make([]float64, n)
+	norm := make([]float64, n)
+	buf := make([]float32, p.NFFT())
+	for f := range spec {
+		p.IRFFT(buf, spec[f])
+		for j, v := range buf {
+			w := 1.0
+			if window != nil {
+				w = float64(window[j])
+			}
+			if i := f*hop - off + j; i >= 0 && i < n {
+				ref[i] += float64(v) * w
+				norm[i] += w * w
+			}
+		}
+	}
+	for i := range ref {
+		if norm[i] > istftNormFloor {
+			ref[i] /= norm[i]
+		}
+	}
+	return ref
+}
+
+// TestNormalizeISTFTMatchesPerSampleF32 pins the block normalization bit for bit
+// to the per-sample loop it replaces: both read the same istftNorm sums, a table
+// entry clamped to 1 divides exactly, and Div is an exact IEEE division on every
+// tier. The sweep crosses hop = 1 (which only reaches the block path once frames
+// is large enough to push the interior span past nfft-1), hop dividing and not
+// dividing nfft, hop = nfft (Hann overlap vanishes at the frame joins, so table
+// entries hit zero), hop > nfft (no table), both centering offsets, and out
+// shorter or longer than the covered span. A third window is the Hann window with
+// w[0] nudged to 1e-5, so its squared frame-join overlap is 1e-10, strictly
+// between 0 and istftNormFloor (1e-8): it exercises the sub-floor clamp with a
+// nonzero entry, which a clamp that caught only exact zero would divide by.
+func TestNormalizeISTFTMatchesPerSampleF32(t *testing.T) {
+	const nfft = 64
+	p, _ := NewSTFTPlan(nfft)
+	src := testSignalF32(700)
+	subFloorWin := append([]float32(nil), hannF32(nfft)...)
+	subFloorWin[0] = 1e-5 // w^2 = 1e-10, strictly between 0 and istftNormFloor
+	for _, window := range [][]float32{hannF32(nfft), subFloorWin, nil} {
+		for _, hop := range []int{1, 3, 7, 16, 50, nfft, nfft + 1, 100} {
+			for _, off := range []int{0, nfft / 2} {
+				for _, frames := range []int{1, 3, 12, 700} {
+					for _, n := range []int{0, 5, nfft, 333, 700} {
+						got := append([]float32(nil), src[:n]...)
+						want := append([]float32(nil), src[:n]...)
+						p.normalizeISTFT(got, window, hop, frames, off)
+						for i := range want {
+							p.normalizeSample(want, window, hop, frames, off, i)
+						}
+						for i := range want {
+							if got[i] != want[i] {
+								t.Fatalf("window=%t hop=%d off=%d frames=%d n=%d sample %d: block %g != per-sample %g",
+									window != nil, hop, off, frames, n, i, got[i], want[i])
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 }

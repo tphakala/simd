@@ -302,6 +302,11 @@ convention), trimming per the same `PadMode`, so `ISTFT(STFT(x))` reconstructs
 `x` for any window and hop whose squared overlap never vanishes. All three are
 allocation-free and reuse the plan scratch (so one plan per goroutine), and
 `ISTFT` is pinned against a librosa `istft` golden with a per-bin gain applied.
+The inverse runs on the same vector primitives: `IRFFT` packs through
+`RealFFTUnpack` and writes a full frame with `Scale` and `Interleave2`, and
+`ISTFT` overlap-adds with `MulAdd` (`AccumulateAdd` for a rectangular window) and
+normalizes its interior with `Div`. Like `STFT`, the inverse output is
+tolerance-stable, not bit-stable, across CPU tiers and library versions.
 
 ### `f32` - float32 Operations
 
