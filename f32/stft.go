@@ -701,9 +701,10 @@ func (p *STFTPlan) packInverse(spec []complex64) {
 // here) trim the nfft/2 centering offset so dst[0] is the first signal sample.
 // It writes min(len(dst), L) samples, where L = (len(spec)-1)*hop + nfft for
 // NoPad and (len(spec)-1)*hop for centered framing (librosa's default length),
-// and returns that count. A non-positive hop, or a hop so large that L would
-// overflow int, is rejected and returns 0. dst must not alias the plan scratch.
-// Allocation-free.
+// and returns that count. A non-positive hop returns 0, as does a hop so large
+// that the multi-frame overlap-add length arithmetic would overflow int (a
+// single frame never overflows and is always accepted). dst must not alias the
+// plan scratch. Allocation-free.
 //
 // The output is tolerance-stable, not bit-stable, across CPU tiers: the inverse
 // transform takes per-tier kernels, and with a window the overlap-add is MulAdd,
@@ -714,12 +715,14 @@ func (p *STFTPlan) ISTFT(dst []float32, spec [][]complex64, window []float32, ho
 		return 0
 	}
 	// Reject a hop so large the frame and normalization arithmetic would overflow
-	// int. Every intermediate (full, base, the frames*hop overlap ceiling, the fLo
-	// term a+hop-1 in istftNorm, and the i+=hop block step) is bounded by
-	// frames*hop+nfft, so keeping frames*hop <= MaxInt-nfft keeps all of them below
-	// MaxInt. Such a hop spaces frames astronomically apart with nothing worth
+	// int. With more than one frame every intermediate (full, base, the frames*hop
+	// overlap ceiling, the a+hop-1 term in istftNorm, and the i+=hop block step) is
+	// bounded by frames*hop+nfft, so keeping frames*hop <= MaxInt-nfft keeps all of
+	// them below MaxInt. A single frame scales hop into none of them (full is just
+	// nfft and istftNorm's a stays <= 0), so it needs no bound and is always
+	// accepted. Such a hop spaces frames astronomically apart with nothing worth
 	// computing, so returning 0 matches the hop <= 0 rejection just above (see #294).
-	if hop > (math.MaxInt-p.nfft)/frames {
+	if frames > 1 && hop > (math.MaxInt-p.nfft)/frames {
 		return 0
 	}
 	// Match STFT's window handling: a short window is rectangular, and a long

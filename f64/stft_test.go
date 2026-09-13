@@ -1452,6 +1452,13 @@ func TestISTFTHugeHop(t *testing.T) {
 			}
 		}
 	}
+	// A single frame never overflows for any hop (full is just nfft, and istftNorm
+	// keeps a <= 0), so the guard must not reject it: a huge hop still returns the
+	// nfft-sample NoPad reconstruction rather than 0.
+	one := [][]complex128{{1, 2, 3}}
+	if got := p.ISTFT(make([]float64, 100), one, win, math.MaxInt, NoPad); got != p.NFFT() {
+		t.Errorf("single-frame huge hop: ISTFT wrote %d, want %d", got, p.NFFT())
+	}
 }
 
 func TestISTFTAllocFree(t *testing.T) {
