@@ -75,7 +75,7 @@
 //
 // # Available Operations
 //
-// Core arithmetic: Add, Sub, Mul, Div, Scale, AddScalar, AddScaled, FMA
+// Core arithmetic: Add, Sub, Mul, Div, Scale, AddScalar, AddScaled, FMA, MulAdd
 //
 // Reductions: Sum, DotProduct, DotProductBatch, DotProductIndexed, DotProductStrided, Min, Max, MaxAbs, MinIdx, MaxIdx
 //
@@ -92,7 +92,7 @@
 //
 // Sliding-window argmin (f32): MinIdxOfSum, MinIdxOfSumRows (batched sliding-window argmin of a[i]+k[base+r*slide+i], first-index-wins ties, bit-exact across all paths)
 //
-// Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames) - fused real-input short-time Fourier transform with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
+// Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames, NumBins, NFFT, RFFT, IRFFT, ISTFT) - fused real-input short-time Fourier transform and its inverse, with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //
 // FFT primitives (f64, f32): ButterflyComplex (radix-2 butterfly with twiddle multiply, split-complex), RealFFTUnpack (real-FFT even/odd unpack step), RealFFTPower (the fused power-writing counterpart of RealFFTUnpack that emits the |X_k|^2 power spectrum in one pass), ButterflyComplexStage (one whole radix-2 decimation-in-time stage at any span, which picks its vectorization axis from the span) and ButterflyComplexStage4 (one whole radix-4 stage, two radix-2 stages in one pass)
 //

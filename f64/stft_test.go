@@ -1441,7 +1441,14 @@ func TestISTFTAllocFree(t *testing.T) {
 	}
 	p.STFT(spec, x, window, hop, PadZero)
 	y := make([]float64, len(x))
-	if a := testing.AllocsPerRun(5, func() { p.ISTFT(y, spec, window, hop, PadZero) }); a != 0 {
+	if a := testing.AllocsPerRun(5, func() {
+		// Assert the sample count inside the closure so an early-return
+		// regression (returning 0 without doing the work) fails here rather
+		// than passing as zero allocations.
+		if n := p.ISTFT(y, spec, window, hop, PadZero); n != len(y) {
+			t.Errorf("ISTFT wrote %d samples, want %d", n, len(y))
+		}
+	}); a != 0 {
 		t.Errorf("ISTFT allocated %v times per run, want 0", a)
 	}
 }
