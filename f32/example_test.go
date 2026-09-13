@@ -73,6 +73,17 @@ func ExampleFMA() {
 	// Output: [3 5 7]
 }
 
+func ExampleMulAdd() {
+	dst := []float32{1, 2, 3, 4}
+	a := []float32{2, 2, 2, 2}
+	b := []float32{5, 5, 5, 5}
+
+	// dst[i] += a[i] * b[i]
+	f32.MulAdd(dst, a, b)
+	fmt.Println(dst)
+	// Output: [11 12 13 14]
+}
+
 func ExampleMaxAbs() {
 	a := []float32{1, -7, 3, -2}
 

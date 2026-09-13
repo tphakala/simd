@@ -294,6 +294,24 @@ func FMA(dst, a, b, c []float32) {
 	fma32(dst[:n], a[:n], b[:n], c[:n])
 }
 
+// MulAdd computes the fused multiply-accumulate dst[i] += a[i] * b[i].
+//
+// It is equivalent to FMA(dst, a, b, dst) and shares FMA's numerical contract:
+// on CPU tiers with hardware FMA (AVX+FMA, AVX-512, NEON) the multiply-add is
+// fused with a single rounding; on the SSE2 and pure-Go amd64 paths it is a
+// separate multiply then add. Results are therefore tolerance-stable across
+// tiers, not bit-identical.
+//
+// dst is a read-modify-write accumulator. Following the package default, dst may
+// exactly overlay a and/or b; a shifted overlay is undefined.
+func MulAdd(dst, a, b []float32) {
+	n := minLen(len(dst), len(a), len(b))
+	if n == 0 {
+		return
+	}
+	fma32(dst[:n], a[:n], b[:n], dst[:n])
+}
+
 // Clamp clamps each element to [min, max].
 func Clamp(dst, a []float32, minVal, maxVal float32) {
 	n := min(len(a), len(dst))
