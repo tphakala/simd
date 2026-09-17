@@ -206,9 +206,9 @@ func DotProduct(a, b []int8) int32 {
 // Batching the rows keeps vec resident across them (in registers under the
 // 4-row kernel, in L1 otherwise) instead of re-streaming it per DotProduct call.
 //
-// results, rows and vec must not overlap, and rows and vec are read-only.
-// Trailing capacity in results beyond n is left untouched. The call allocates
-// nothing.
+// rows and vec are read-only and may overlap (a row may even be vec itself).
+// Elements of results from index n onward are left untouched. The call
+// allocates nothing.
 func DotProductBatch(results []int32, rows [][]int8, vec []int8) {
 	n := min(len(results), len(rows))
 	if n == 0 {

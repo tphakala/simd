@@ -774,7 +774,7 @@ sum := i8.Sum(a)           // int32-accumulated sum
 
 // Batched matrix-vector: one int32 dot product per weight row against a shared
 // activation vector, with the vector kept resident across the rows.
-rows := [][]int8{ /* int8 weight rows, each len(vec) long */ }
+rows := [][]int8{ /* int8 weight rows, each len(a) long */ }
 results := make([]int32, len(rows))
 i8.DotProductBatch(results, rows, a) // results[i] = DotProduct(rows[i], a)
 mn, mx := i8.MinMax(a)     // smallest and largest value in one signed pass

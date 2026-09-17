@@ -143,10 +143,12 @@ func TestDotProductBatchLengthClamp(t *testing.T) {
 // TestDotProductBatchAllocFree asserts the operation writes into the caller's
 // results slice with no heap allocation on the kernel path.
 func TestDotProductBatchAllocFree(t *testing.T) {
-	vec := genI8(64, 1)
+	// Length 63 so the fused kernels' scalar-tail residue path is also covered by
+	// the allocation assertion, not just the width-aligned path.
+	vec := genI8(63, 1)
 	rows := make([][]int8, 8)
 	for r := range rows {
-		rows[r] = genI8(64, uint32(r+2))
+		rows[r] = genI8(63, uint32(r+2))
 	}
 	results := make([]int32, len(rows))
 	if got := testing.AllocsPerRun(10, func() { DotProductBatch(results, rows, vec) }); got != 0 {
