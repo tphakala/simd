@@ -39,7 +39,8 @@ import (
 // #108, #205, #243 and #257.
 //
 // The inverse runs on the same primitives. IRFFT packs the conjugated spectrum
-// through RealFFTUnpack, reuses the FFT core, and writes a full frame with Scale
+// through RealFFTUnpack (or a fused scalar pack below a small-nfft cutoff, #295),
+// reuses the FFT core, and writes a full frame with Scale
 // and Interleave2; a windowed ISTFT folds IRFFT's 1/half scale and odd-sample sign
 // into a pre-scaled window so the unscaled inverse frame and the window meet in one
 // MulAdd (a rectangular frame keeps the scaled IRFFT and AccumulateAdd, having no
@@ -663,10 +664,13 @@ func (p *STFTPlan) IRFFT(dst []float32, spec []complex64) int {
 	half := p.half
 	re, im := p.re, p.im
 	scale := 1 / float32(half)
-	if ns == p.nfft {
+	if ns == p.nfft && half >= irfftScalarHalfCutoff {
 		// A full frame is dst[2j] = re[j]*scale, dst[2j+1] = -im[j]*scale, the
 		// same products the per-sample loop below writes (im*-scale is exactly
-		// -im*scale), so the vector path matches it bit for bit.
+		// -im*scale), so the vector path matches it bit for bit. Small transforms
+		// (half < irfftScalarHalfCutoff) take the per-sample loop, whose scalar
+		// writes are bit-identical while skipping the two non-inlined Scale calls
+		// and Interleave2.
 		Scale(re, re, scale)
 		Scale(im, im, -scale)
 		Interleave2(dst[:ns], re, im)
@@ -695,6 +699,16 @@ func (p *STFTPlan) IRFFT(dst []float32, spec []complex64) int {
 func (p *STFTPlan) irfftFrameUnscaled(spec []complex64) {
 	p.packInverse(spec)
 	p.fftHalf()
+	if p.half < irfftScalarHalfCutoff {
+		// Interleave2 is pure data movement, so a scalar interleave is
+		// bit-identical while skipping the non-inlined call at tiny sizes.
+		re, im, frame := p.re, p.im, p.frame
+		for j := range p.half {
+			frame[reImStride*j] = re[j]
+			frame[reImStride*j+1] = im[j]
+		}
+		return
+	}
 	Interleave2(p.frame, p.re, p.im)
 }
 
@@ -702,13 +716,19 @@ func (p *STFTPlan) irfftFrameUnscaled(spec []complex64) {
 // beyond len(spec) as zero. conj(C[k]) = conj(E) - i*W_N^k*conj(D), with
 // conj(E) = 0.5*(conj(X[k]) + X[half-k]) and 2*conj(D) = conj(X[k]) - X[half-k],
 // which is exactly RealFFTUnpack's even + (-0.5i)*W*diff over Z = conj(X) and the
-// unravel twiddles. So the interior bins k in [1, half-1] take that SIMD kernel;
-// X[0] and X[half] only meet at k = 0, which is written directly with their
-// imaginary parts dropped. A short spectrum is zero-extended into Z rather than
-// taking a separate scalar path, so it transforms bit for bit like the
+// unravel twiddles. For half >= irfftScalarHalfCutoff the interior bins k in
+// [1, half-1] take that SIMD kernel; below the cutoff packInverseScalar computes
+// the same conj(C) with one fused scalar loop, since the vector primitives' call
+// overhead dominates at tiny sizes (#295). X[0] and X[half] only meet at k = 0,
+// written directly with their imaginary parts dropped. Either path reads bins at
+// or past len(spec) as zero, so a short spectrum transforms bit for bit like the
 // zero-filled full-width one.
 func (p *STFTPlan) packInverse(spec []complex64) {
 	half := p.half
+	if half < irfftScalarHalfCutoff {
+		p.packInverseScalar(spec)
+		return
+	}
 	zRe, zIm := p.outRe[:half], p.outIm[:half]
 	nb := min(len(spec), half)
 	for k, v := range spec[:nb] {
@@ -725,6 +745,68 @@ func (p *STFTPlan) packInverse(spec []complex64) {
 		xh = real(spec[half])
 	}
 	x0 := zRe[0] // cleared above when spec is empty
+	re[0] = rfftHalf * (x0 + xh)
+	im[0] = -(rfftHalf * (x0 - xh))
+}
+
+// irfftScalarHalfCutoff is the packed-FFT half size (p.half) below which the
+// inverse path packs and writes the frame with fused scalar loops instead of the
+// vectorized RealFFTUnpack, Scale and Interleave2 primitives. Below the SIMD
+// dispatch thresholds those primitives run their non-inlined Go fallbacks over
+// several passes plus two scratch clears, so at these tiny sizes one fused scalar
+// pass is cheaper. p.half is always a power of two, so this selects
+// nfft < 2*irfftScalarHalfCutoff. The value was chosen from BenchmarkIRFFT on
+// amd64 and arm64; see #295.
+const irfftScalarHalfCutoff = 16
+
+// packInverseScalar is the small-transform equivalent of packInverse: it writes
+// conj(C) into p.re/p.im with a single fused loop, inlining the realFFTUnpack Go
+// fallback's even/odd math bin for bin and reading each bin straight from spec
+// (bins at or past len(spec) count as zero, so a short spectrum transforms
+// exactly like its zero-filled form). It avoids the two scratch clears, the split
+// load into p.outRe/p.outIm and the non-inlined RealFFTUnpack call that
+// packInverse pays, which dominate at half < irfftScalarHalfCutoff. Where the
+// vector path would itself have fallen back to realFFTUnpack32Go (half <= 8 on
+// amd64), this is bit-identical; elsewhere it stays within the tolerance-stable
+// IRFFT/ISTFT contract.
+func (p *STFTPlan) packInverseScalar(spec []complex64) {
+	half := p.half
+	re, im := p.re, p.im
+	for k := 1; k < half; k++ {
+		var zkRe, zkIm, znkRe, znkImRaw float32
+		if k < len(spec) {
+			// Z = conj(spec): 0-imag, not -imag, so a present zero bin is +0,
+			// exactly like packInverse's cleared scratch (see packInverse).
+			zkRe, zkIm = real(spec[k]), 0-imag(spec[k])
+		}
+		// znkImRaw mirrors packInverse's zIm[half-k]: 0-imag for a present bin,
+		// and the +0 default matches its cleared scratch for a missing bin, so a
+		// short spectrum packs bit-for-bit like its zero-filled form. conj(Z)
+		// then negates it, exactly as realFFTUnpack does with -zIm[half-k].
+		if nk := half - k; nk < len(spec) {
+			znkRe, znkImRaw = real(spec[nk]), 0-imag(spec[nk])
+		}
+		znkIm := -znkImRaw
+		evenRe := rfftHalf * (zkRe + znkRe)
+		evenIm := rfftHalf * (zkIm + znkIm)
+		diffRe := zkRe - znkRe
+		diffIm := zkIm - znkIm
+		wr, wi := p.unRe[k], p.unIm[k]
+		oddRe := rfftHalf * (wr*diffIm + wi*diffRe)
+		oddIm := rfftHalf * (wi*diffIm - wr*diffRe)
+		re[k] = evenRe + oddRe
+		im[k] = evenIm + oddIm
+	}
+	// DC and Nyquist: X[0] and X[half] are real, so conj(C[0]) = E - i*O with
+	// E = 0.5*(X[0]+X[half]) and O = 0.5*(X[0]-X[half]). Identical to packInverse.
+	var xh float32
+	if len(spec) > half {
+		xh = real(spec[half])
+	}
+	var x0 float32
+	if len(spec) > 0 {
+		x0 = real(spec[0])
+	}
 	re[0] = rfftHalf * (x0 + xh)
 	im[0] = -(rfftHalf * (x0 - xh))
 }

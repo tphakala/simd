@@ -56,6 +56,30 @@ func TestDotProductBatchVariedRowLengths(t *testing.T) {
 	}
 }
 
+// TestDotProductBatchEmptyVec verifies the contract that an empty vec zeroes
+// results[:n] rather than leaving stale values (the dot product of an empty
+// vector is 0, consistent with the empty-row rule and the i8 package). See #303.
+func TestDotProductBatchEmptyVec(t *testing.T) {
+	rows := [][]float32{
+		deterministicF32Vector(1, 10),
+		deterministicF32Vector(2, 20),
+		nil,
+		deterministicF32Vector(3, 5),
+	}
+	for _, vec := range [][]float32{nil, {}} {
+		results := []float32{111, 222, 333, 444, 555} // one extra to pin results[:n]
+		DotProductBatch(results, rows, vec)
+		for r := range rows {
+			if results[r] != 0 {
+				t.Fatalf("empty vec (len %d): results[%d] = %g, want 0", len(vec), r, results[r])
+			}
+		}
+		if results[len(rows)] != 555 {
+			t.Fatalf("empty vec (len %d): results beyond n must be untouched, got %g", len(vec), results[len(rows)])
+		}
+	}
+}
+
 func TestDotProductBatchAllocs(t *testing.T) {
 	for _, rowCount := range []int{4, 8, 16, 128} {
 		vec := deterministicF32Vector(21, 768)

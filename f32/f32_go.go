@@ -1034,6 +1034,9 @@ const realFFTUnpackHalf = 0.5
 // For k in [1, n-1]:
 //
 //	X[k] = 0.5*(Z[k] + conj(Z[n-k])) + W[k]*(-0.5i)*(Z[k] - conj(Z[n-k]))
+//
+// STFTPlan.packInverseScalar (stft.go) hand-inlines this same per-bin math for
+// small inverse transforms; keep the two in sync if the formula changes.
 func realFFTUnpack32Go(outRe, outIm, zRe, zIm, twRe, twIm []float32, n int) {
 	if n < realFFTUnpackMinN {
 		return

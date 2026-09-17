@@ -797,7 +797,7 @@ func BenchmarkISTFTHopSweep(b *testing.B) {
 // the per-call overhead of the vector pack is visible at small nfft where it is
 // not amortized over many frames.
 func BenchmarkIRFFT(b *testing.B) {
-	for _, nfft := range []int{16, 64, 512, 1024, 2048} {
+	for _, nfft := range []int{4, 8, 16, 32, 64, 512, 1024, 2048} {
 		b.Run(fmt.Sprintf("nfft%d", nfft), func(b *testing.B) {
 			plan, _ := NewSTFTPlan(nfft)
 			spec := randomSpectrumF32(plan.NumBins(), 0.5)
@@ -1292,58 +1292,66 @@ func TestRFFTIRFFTRoundTripF32(t *testing.T) {
 // TestIRFFTShortInputsF32 covers the lenient edges: missing bins are zero, dst
 // is clamped, and an empty dst is a no-op.
 func TestIRFFTShortInputsF32(t *testing.T) {
-	const nfft = 32
-	p, _ := NewSTFTPlan(nfft)
-	spec := randomSpectrumF32(p.NumBins(), 1.5)
-	want := make([]float32, nfft)
-	got := make([]float32, nfft)
+	// Cover both the vectorized pack (nfft 32) and the fused scalar pack
+	// (nfft < 32, half < irfftScalarHalfCutoff): the short-vs-zero-filled
+	// bit-exactness contract must hold identically on both paths.
+	for _, nfft := range []int{8, 16, 32} {
+		t.Run(fmt.Sprintf("nfft%d", nfft), func(t *testing.T) {
+			p, _ := NewSTFTPlan(nfft)
+			spec := randomSpectrumF32(p.NumBins(), 1.5)
+			want := make([]float32, nfft)
+			got := make([]float32, nfft)
 
-	// Missing bins == zero bins: a spec truncated to nb bins must transform
-	// bit-for-bit like the same nb bins zero-extended to a full-width spectrum,
-	// signed zeros included. Dirtying the scratch with the full random spectrum
-	// between the two calls proves packInverse clears its stale scratch tail
-	// rather than inheriting the zeros the zero-extended call just wrote. nb =
-	// p.half exercises a spectrum of exactly half bins (no Nyquist bin present).
-	for _, nb := range []int{10, p.half, p.half - 1, 1} {
-		zeroed := make([]complex64, p.NumBins())
-		copy(zeroed, spec[:nb])
-		p.IRFFT(want, zeroed)
-		p.IRFFT(got, spec) // dirty the scratch tail with the full spectrum
-		p.IRFFT(got, spec[:nb])
-		for i := range want {
-			if math.Float32bits(want[i]) != math.Float32bits(got[i]) {
-				t.Fatalf("nb=%d sample %d: short spec %g != zero-filled %g", nb, i, got[i], want[i])
+			// Missing bins == zero bins: a spec truncated to nb bins must transform
+			// bit-for-bit like the same nb bins zero-extended to a full-width
+			// spectrum, signed zeros included. Dirtying the scratch with the full
+			// random spectrum between the two calls proves the pack clears its stale
+			// scratch tail rather than inheriting the zeros the zero-extended call
+			// just wrote. nb = p.half exercises a spectrum of exactly half bins (no
+			// Nyquist bin present); nb = 1 leaves the whole interior a zero region,
+			// the case that stresses the signed-zero handling in the scalar pack.
+			for _, nb := range []int{p.half, p.half - 1, 1} {
+				zeroed := make([]complex64, p.NumBins())
+				copy(zeroed, spec[:nb])
+				p.IRFFT(want, zeroed)
+				p.IRFFT(got, spec) // dirty the scratch tail with the full spectrum
+				p.IRFFT(got, spec[:nb])
+				for i := range want {
+					if math.Float32bits(want[i]) != math.Float32bits(got[i]) {
+						t.Fatalf("nb=%d sample %d: short spec %g != zero-filled %g", nb, i, got[i], want[i])
+					}
+				}
 			}
-		}
-	}
 
-	// dst clamp: the first 7 samples equal the full transform's first 7.
-	p.IRFFT(want, spec)
-	part := make([]float32, 7)
-	if n := p.IRFFT(part, spec); n != 7 {
-		t.Fatalf("IRFFT into 7 samples wrote %d", n)
-	}
-	for i := range part {
-		if part[i] != want[i] {
-			t.Fatalf("sample %d: clamped %g != full %g", i, part[i], want[i])
-		}
-	}
-	if n := p.IRFFT(nil, spec); n != 0 {
-		t.Fatalf("IRFFT into nil dst wrote %d", n)
-	}
+			// dst clamp: the first 7 samples equal the full transform's first 7.
+			p.IRFFT(want, spec)
+			part := make([]float32, 7)
+			if n := p.IRFFT(part, spec); n != 7 {
+				t.Fatalf("IRFFT into 7 samples wrote %d", n)
+			}
+			for i := range part {
+				if part[i] != want[i] {
+					t.Fatalf("sample %d: clamped %g != full %g", i, part[i], want[i])
+				}
+			}
+			if n := p.IRFFT(nil, spec); n != 0 {
+				t.Fatalf("IRFFT into nil dst wrote %d", n)
+			}
 
-	// An empty spectrum is all zero bins, so the transform is exactly zero.
-	// Dirty the scratch with the full spectrum first so a packInverse that
-	// skipped its clear would leak the stale bins into the empty result.
-	p.IRFFT(got, spec)
-	for i := range got {
-		got[i] = 1
-	}
-	p.IRFFT(got, nil)
-	for i, v := range got {
-		if v != 0 {
-			t.Fatalf("sample %d: empty spec gave %g, want 0", i, v)
-		}
+			// An empty spectrum is all zero bins, so the transform is exactly zero.
+			// Dirty the scratch with the full spectrum first so a pack that skipped
+			// its clear would leak the stale bins into the empty result.
+			p.IRFFT(got, spec)
+			for i := range got {
+				got[i] = 1
+			}
+			p.IRFFT(got, nil)
+			for i, v := range got {
+				if v != 0 {
+					t.Fatalf("sample %d: empty spec gave %g, want 0", i, v)
+				}
+			}
+		})
 	}
 }
 
