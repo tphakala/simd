@@ -35,12 +35,13 @@ func aliasGenF64Pos(i int) float64 { return aliasHashF64(i)*8 + 0.03125 }
 // Scalar parameters for the scalar-taking ops. Their exact values do not affect
 // the overlay property.
 const (
-	aliasScaleK  = 1.5
-	aliasAddK    = 0.75
-	aliasClampLo = -1.25
-	aliasClampHi = 2.5
-	aliasScaleC  = 0.5
-	aliasPowExp  = 0.75
+	aliasScaleK     = 1.5
+	aliasAddK       = 0.75
+	aliasClampLo    = -1.25
+	aliasClampHi    = 2.5
+	aliasScaleC     = 0.5
+	aliasPowExp     = 0.75
+	aliasLog10Floor = 0.5
 )
 
 func f64AliasCases() []aliastest.Case {
@@ -62,10 +63,12 @@ func f64AliasCases() []aliastest.Case {
 
 		aliastest.UnaryCase("Scale", aliasEqF64, aliasGenF64, func(dst, a []float64) { Scale(dst, a, aliasScaleK) }),
 		aliastest.UnaryCase("AddScalar", aliasEqF64, aliasGenF64, func(dst, a []float64) { AddScalar(dst, a, aliasAddK) }),
+		aliastest.UnaryCase("Affine", aliasEqF64, aliasGenF64, func(dst, a []float64) { Affine(dst, a, aliasScaleK, aliasAddK) }),
 		aliastest.UnaryCase("SubFromScalar", aliasEqF64, aliasGenF64, func(dst, a []float64) { SubFromScalar(dst, a, aliasAddK) }),
 		aliastest.UnaryCase("Clamp", aliasEqF64, aliasGenF64, func(dst, a []float64) { Clamp(dst, a, aliasClampLo, aliasClampHi) }),
 		aliastest.UnaryCase("ClampScale", aliasEqF64, aliasGenF64, func(dst, a []float64) { ClampScale(dst, a, aliasClampLo, aliasClampHi, aliasScaleC) }),
 		aliastest.UnaryCase("Pow", aliasEqF64, aliasGenF64Pos, func(dst, a []float64) { Pow(dst, a, aliasPowExp) }),
+		aliastest.UnaryCase("Log10Floored", aliasEqF64, aliasGenF64Pos, func(dst, a []float64) { Log10Floored(dst, a, aliasLog10Floor) }),
 
 		aliastest.BinaryCase("Add", aliasEqF64, aliasGenF64, Add),
 		aliastest.BinaryCase("Sub", aliasEqF64, aliasGenF64, Sub),

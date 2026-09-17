@@ -40,12 +40,13 @@ func genF32Pos(i int) float32 { return hashF32(i)*8 + 0.03125 }
 // Scalar parameters for the scalar-taking element-wise ops. The exact values are
 // irrelevant to the overlay property; they only need to exercise the kernel.
 const (
-	aliasScaleK  = 1.5
-	aliasAddK    = 0.75
-	aliasClampLo = -1.25
-	aliasClampHi = 2.5
-	aliasScaleC  = 0.5
-	aliasPowExp  = 0.75
+	aliasScaleK     = 1.5
+	aliasAddK       = 0.75
+	aliasClampLo    = -1.25
+	aliasClampHi    = 2.5
+	aliasScaleC     = 0.5
+	aliasPowExp     = 0.75
+	aliasLog10Floor = 0.5
 )
 
 func f32AliasCases() []aliastest.Case {
@@ -71,10 +72,12 @@ func f32AliasCases() []aliastest.Case {
 		// Element-wise unary maps with a scalar parameter.
 		aliastest.UnaryCase("Scale", aliasEqF32, genF32, func(dst, a []float32) { Scale(dst, a, aliasScaleK) }),
 		aliastest.UnaryCase("AddScalar", aliasEqF32, genF32, func(dst, a []float32) { AddScalar(dst, a, aliasAddK) }),
+		aliastest.UnaryCase("Affine", aliasEqF32, genF32, func(dst, a []float32) { Affine(dst, a, aliasScaleK, aliasAddK) }),
 		aliastest.UnaryCase("SubFromScalar", aliasEqF32, genF32, func(dst, a []float32) { SubFromScalar(dst, a, aliasAddK) }),
 		aliastest.UnaryCase("Clamp", aliasEqF32, genF32, func(dst, a []float32) { Clamp(dst, a, aliasClampLo, aliasClampHi) }),
 		aliastest.UnaryCase("ClampScale", aliasEqF32, genF32, func(dst, a []float32) { ClampScale(dst, a, aliasClampLo, aliasClampHi, aliasScaleC) }),
 		aliastest.UnaryCase("Pow", aliasEqF32, genF32Pos, func(dst, a []float32) { Pow(dst, a, aliasPowExp) }),
+		aliastest.UnaryCase("Log10Floored", aliasEqF32, genF32Pos, func(dst, a []float32) { Log10Floored(dst, a, aliasLog10Floor) }),
 
 		// Element-wise binary maps (dst may overlay a, b, or both exactly).
 		aliastest.BinaryCase("Add", aliasEqF32, genF32, Add),

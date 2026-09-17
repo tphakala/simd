@@ -31,6 +31,7 @@ type (
 	reduceIdxFunc           func(a []float32) int
 	fmaFunc                 func(dst, a, b, c []float32)
 	clampFunc               func(dst, a []float32, minVal, maxVal float32)
+	affineFunc              func(dst, a []float32, alpha, beta float32)
 	varianceFunc            func(a []float32, mean float32) float32
 	euclideanDistanceFunc   func(a, b []float32) float32
 	addScaledFunc           func(dst []float32, alpha float32, s []float32)
@@ -60,6 +61,7 @@ var (
 	roundImpl               unaryOpFunc
 	fmaImpl                 fmaFunc
 	clampImpl               clampFunc
+	affineImpl              affineFunc
 	varianceImpl            varianceFunc
 	euclideanDistanceImpl   euclideanDistanceFunc
 	minIdxImpl              reduceIdxFunc
@@ -108,6 +110,7 @@ func initAVX512() {
 	roundImpl = roundAVX
 	fmaImpl = fmaAVX512
 	clampImpl = clampAVX512
+	affineImpl = affineAVX512
 	// AVX-512 variance/euclidean kernels are out of scope (no AVX-512 hardware to
 	// verify them; see #75/#96); reuse the AVX kernels so the tier still benefits.
 	varianceImpl = varianceAVX
@@ -145,6 +148,7 @@ func initAVX() {
 	roundImpl = roundAVX
 	fmaImpl = fmaAVX
 	clampImpl = clampAVX
+	affineImpl = affineAVX
 	varianceImpl = varianceAVX
 	euclideanDistanceImpl = euclideanDistanceAVX
 	minIdxImpl = minIdxGo
@@ -174,6 +178,7 @@ func initSSE() {
 	roundImpl = round32Go
 	fmaImpl = fmaSSE
 	clampImpl = clampSSE
+	affineImpl = affineSSE
 	varianceImpl = varianceSSE
 	euclideanDistanceImpl = euclideanDistanceSSE
 	minIdxImpl = minIdxGo
@@ -205,6 +210,7 @@ func initGo() {
 	roundImpl = round32Go
 	fmaImpl = fmaGo
 	clampImpl = clampGo
+	affineImpl = affineGo
 	varianceImpl = variance32Go
 	euclideanDistanceImpl = euclideanDistance32Go
 	minIdxImpl = minIdxGo
@@ -244,6 +250,19 @@ func scale(dst, a []float32, s float32) {
 func addScalar(dst, a []float32, s float32) {
 	addScalarImpl(dst, a, s)
 }
+
+func affine32(dst, a []float32, alpha, beta float32) {
+	affineImpl(dst, a, alpha, beta)
+}
+
+//go:noescape
+func affineAVX(dst, a []float32, alpha, beta float32)
+
+//go:noescape
+func affineAVX512(dst, a []float32, alpha, beta float32)
+
+//go:noescape
+func affineSSE(dst, a []float32, alpha, beta float32)
 
 func sum(a []float32) float32 {
 	return sumImpl(a)
