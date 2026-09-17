@@ -211,3 +211,47 @@ func FuzzI8Convert(f *testing.F) {
 		}
 	})
 }
+
+// FuzzI8DotProductBatch derives a shared vec and a set of rows of assorted
+// lengths from the fuzz input and checks DotProductBatch against the independent
+// scalar oracle. The row-length pattern spans full 4-row groups, ragged groups,
+// over-long (clamped) rows, empty rows, and non-multiple-of-4 trailing rows.
+func FuzzI8DotProductBatch(f *testing.F) {
+	lenSeeds(f)
+	// lenSeeds' first byte is always 11, so vecLen stays < 16 and every seed
+	// takes the per-row fallback. Add one seed with a large first byte and room
+	// for several full-length rows so the corpus also reaches the 4-row kernel.
+	kernelSeed := make([]byte, 320)
+	kernelSeed[0] = 40 // vecLen = 40 % 321 = 40 (>= 16), leaving 280 bytes of rows
+	for i := 1; i < len(kernelSeed); i++ {
+		kernelSeed[i] = byte(i*29 + 7)
+	}
+	f.Add(kernelSeed)
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		data := i8FromBytes(raw)
+		n := len(data)
+		vecLen := 0
+		if n > 0 {
+			vecLen = int(raw[0]) % (n + 1)
+		}
+		vec := data[:vecLen]
+		rest := data[vecLen:]
+
+		lens := []int{vecLen, vecLen, vecLen, vecLen, 0, vecLen/2 + 1, vecLen + 5, 1, vecLen}
+		rows := make([][]int8, 0, len(lens))
+		pos := 0
+		for _, rl := range lens {
+			end := min(pos+rl, len(rest))
+			rows = append(rows, rest[pos:end])
+			pos = end
+		}
+		results := make([]int32, len(rows))
+		DotProductBatch(results, rows, vec)
+		want := naiveDotProductBatch(rows, vec)
+		for i := range results {
+			if results[i] != want[i] {
+				t.Fatalf("row %d len=%d vecLen=%d: got %d want %d", i, len(rows[i]), vecLen, results[i], want[i])
+			}
+		}
+	})
+}

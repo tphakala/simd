@@ -158,6 +158,22 @@ func dotGo(a, b []int8) int32 {
 	return s
 }
 
+// dotProductBatchRows scores each row against vec through the per-row dotI8
+// dispatch (a SIMD kernel where the clamped row is long enough, else the Go
+// reference). It is the batch fallback for inputs that do not meet a 4-row
+// kernel's gate, and it still keeps vec hot in L1 across the rows. An empty row,
+// or an empty vec, yields 0. The caller guarantees len(results) == len(rows).
+func dotProductBatchRows(results []int32, rows [][]int8, vec []int8) {
+	for i, row := range rows {
+		m := min(len(row), len(vec))
+		if m == 0 {
+			results[i] = 0
+			continue
+		}
+		results[i] = dotI8(row[:m], vec[:m])
+	}
+}
+
 // minMaxGo returns the smallest and largest int8 in a via a single signed scan.
 // a must be non-empty (the public MinMax guards the empty case); it is the
 // bit-exact source of truth the SIMD MinMax kernels are validated against.

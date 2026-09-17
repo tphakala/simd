@@ -1136,3 +1136,88 @@ requant_tail:
 
 requant_done:
     RET
+
+// func dotProduct4SDOT(res []int32, r0, r1, r2, r3, vec []int8)
+// Four-row quantized matrix-vector kernel: res[k] = sum_j r_k[j]*vec[j] (int32,
+// two's-complement wraparound), for k in 0..3. vec is loaded once per 16-byte
+// block into V3 and shared across the four rows' SDOT accumulators (V4..V7), so
+// the query stays in a register instead of being re-streamed per row (the
+// DotProductBatch win). Each row is at least len(vec) long (the caller's 4-row
+// group gate), so vec_len drives the element count. ADDV folds each accumulator's
+// four lanes and an n%16 scalar tail finishes. int32 addition is associative, so
+// the block order is bit-identical to the scalar dotGo reference. arm64asm cannot
+// decode SDOT/ADDV, so asmcheck cross-checks the WORD encodings via objdump.
+TEXT ·dotProduct4SDOT(SB), NOSPLIT, $0-144
+    MOVD res_base+0(FP), R0
+    MOVD r0_base+24(FP), R1
+    MOVD r1_base+48(FP), R2
+    MOVD r2_base+72(FP), R3
+    MOVD r3_base+96(FP), R4
+    MOVD vec_base+120(FP), R5
+    MOVD vec_len+128(FP), R6
+
+    VEOR V4.B16, V4.B16, V4.B16   // acc r0 = 0
+    VEOR V5.B16, V5.B16, V5.B16   // acc r1 = 0
+    VEOR V6.B16, V6.B16, V6.B16   // acc r2 = 0
+    VEOR V7.B16, V7.B16, V7.B16   // acc r3 = 0
+
+    LSR  $4, R6, R7               // R7 = n / 16
+    CBZ  R7, b4s_reduce
+
+b4s_loop16:
+    VLD1.P 16(R5), [V3.B16]       // vec (loaded once, shared across the 4 rows)
+    VLD1.P 16(R1), [V0.B16]
+    WORD $0x4E839404             // SDOT V4.4S, V0.16B, V3.16B
+    VLD1.P 16(R2), [V0.B16]
+    WORD $0x4E839405             // SDOT V5.4S, V0.16B, V3.16B
+    VLD1.P 16(R3), [V0.B16]
+    WORD $0x4E839406             // SDOT V6.4S, V0.16B, V3.16B
+    VLD1.P 16(R4), [V0.B16]
+    WORD $0x4E839407             // SDOT V7.4S, V0.16B, V3.16B
+    SUB  $1, R7
+    CBNZ R7, b4s_loop16
+
+b4s_reduce:
+    WORD $0x4EB1B884             // ADDV S4, V4.4S
+    FMOVS F4, R8
+    MOVW R8, 0(R0)
+    WORD $0x4EB1B8A5             // ADDV S5, V5.4S
+    FMOVS F5, R8
+    MOVW R8, 4(R0)
+    WORD $0x4EB1B8C6             // ADDV S6, V6.4S
+    FMOVS F6, R8
+    MOVW R8, 8(R0)
+    WORD $0x4EB1B8E7             // ADDV S7, V7.4S
+    FMOVS F7, R8
+    MOVW R8, 12(R0)
+
+    AND  $15, R6                 // tail count n % 16
+    CBZ  R6, b4s_done
+
+b4s_scalar:
+    MOVB.P 1(R5), R8             // vec[j], shared across the four rows
+    MOVB.P 1(R1), R9
+    MUL  R8, R9, R9
+    MOVW 0(R0), R10
+    ADDW R9, R10, R10
+    MOVW R10, 0(R0)
+    MOVB.P 1(R2), R9
+    MUL  R8, R9, R9
+    MOVW 4(R0), R10
+    ADDW R9, R10, R10
+    MOVW R10, 4(R0)
+    MOVB.P 1(R3), R9
+    MUL  R8, R9, R9
+    MOVW 8(R0), R10
+    ADDW R9, R10, R10
+    MOVW R10, 8(R0)
+    MOVB.P 1(R4), R9
+    MUL  R8, R9, R9
+    MOVW 12(R0), R10
+    ADDW R9, R10, R10
+    MOVW R10, 12(R0)
+    SUB  $1, R6
+    CBNZ R6, b4s_scalar
+
+b4s_done:
+    RET

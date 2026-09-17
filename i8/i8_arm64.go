@@ -66,6 +66,39 @@ func dotI8(a, b []int8) int32 {
 	}
 }
 
+func dotProductBatchI8(results []int32, rows [][]int8, vec []int8) {
+	vecLen := len(vec)
+	if hasDotProd && len(rows) >= 4 && vecLen >= minNEON16 {
+		dotProductBatch4SDOT(results, rows, vec, vecLen)
+		return
+	}
+	// Plain NEON (no FEAT_DotProd) and the scalar baseline still vectorize each
+	// row through dotI8 and keep vec hot in L1; only the register-blocked group
+	// win is FEAT_DotProd-only.
+	dotProductBatchRows(results, rows, vec)
+}
+
+// dotProductBatch4SDOT scores rows against vec in groups of four so vec stays in
+// a register across the group instead of being re-loaded per row. A group whose
+// four rows are each at least vecLen long takes the fused 4-row SDOT kernel; a
+// ragged group (any row shorter than vec) and the trailing rows past the last
+// full group both go through the shared dotProductBatchRows fallback (per-row
+// dotI8, scoring 0 for an empty clamped row). The caller guarantees FEAT_DotProd,
+// len(rows) >= 4, vecLen >= minNEON16, and len(results) == len(rows).
+func dotProductBatch4SDOT(results []int32, rows [][]int8, vec []int8, vecLen int) {
+	i := 0
+	for i+3 < len(rows) {
+		r0, r1, r2, r3 := rows[i], rows[i+1], rows[i+2], rows[i+3]
+		if len(r0) >= vecLen && len(r1) >= vecLen && len(r2) >= vecLen && len(r3) >= vecLen {
+			dotProduct4SDOT(results[i:i+4], r0, r1, r2, r3, vec)
+		} else {
+			dotProductBatchRows(results[i:i+4], rows[i:i+4], vec)
+		}
+		i += 4
+	}
+	dotProductBatchRows(results[i:], rows[i:], vec)
+}
+
 // minMaxI8 dispatches the signed int8 min/max reduction. The NEON kernel folds
 // 16-byte blocks through a 2-block unroll with dual min/max accumulator pairs,
 // folds an overlapping final .16B block in place of a scalar tail, then reduces
@@ -190,6 +223,14 @@ func dotNEON(a, b []int8) int32
 
 //go:noescape
 func dotSDOT(a, b []int8) int32
+
+// dotProduct4SDOT scores four rows (each at least len(vec) long) against vec,
+// writing the four int32 dot products to res[0:4]. vec is loaded once per
+// 16-byte block and shared across the four rows' SDOT accumulators. res must
+// have len >= 4.
+//
+//go:noescape
+func dotProduct4SDOT(res []int32, r0, r1, r2, r3, vec []int8)
 
 //go:noescape
 func minMaxNEON(a []int8) (minVal, maxVal int8)

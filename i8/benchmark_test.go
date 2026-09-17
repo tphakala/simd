@@ -275,3 +275,48 @@ func BenchmarkRequantize(b *testing.B) {
 		Requantize(dst, acc, 0x40000000, -2, 0)
 	}
 }
+
+// BenchmarkDotProductBatch measures the register-blocked 4-row matrix-vector
+// kernel across a dims x rows grid. BenchmarkDotProductBatchLoop is the per-row
+// DotProduct baseline (same work, vec re-streamed per row) it is compared to.
+func BenchmarkDotProductBatch(b *testing.B) {
+	for _, dims := range []int{8, 64, 100, 256, 1024} {
+		for _, nrows := range []int{16, 64} {
+			vec := genI8(dims, 1)
+			rows := make([][]int8, nrows)
+			for r := range rows {
+				rows[r] = genI8(dims, uint32(r+2))
+			}
+			results := make([]int32, nrows)
+			b.Run(fmt.Sprintf("dims%d_rows%d", dims, nrows), func(b *testing.B) {
+				b.SetBytes(int64(dims * nrows))
+				b.ResetTimer()
+				for b.Loop() {
+					DotProductBatch(results, rows, vec)
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkDotProductBatchLoop(b *testing.B) {
+	for _, dims := range []int{8, 64, 100, 256, 1024} {
+		for _, nrows := range []int{16, 64} {
+			vec := genI8(dims, 1)
+			rows := make([][]int8, nrows)
+			for r := range rows {
+				rows[r] = genI8(dims, uint32(r+2))
+			}
+			results := make([]int32, nrows)
+			b.Run(fmt.Sprintf("dims%d_rows%d", dims, nrows), func(b *testing.B) {
+				b.SetBytes(int64(dims * nrows))
+				b.ResetTimer()
+				for b.Loop() {
+					for i, row := range rows {
+						results[i] = DotProduct(row, vec)
+					}
+				}
+			})
+		}
+	}
+}
