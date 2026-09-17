@@ -427,6 +427,52 @@ addsc_avx_done:
     VZEROUPPER
     RET
 
+// func affineAVX(dst, a []float64, alpha, beta float64)
+// dst[i] = alpha*a[i] + beta. Split rounding (VMULPD then VADDPD, two roundings),
+// bit-identical to scaleAVX then addScalarAVX. Never fuse to VFMADD: this kernel is
+// assigned by the initAVXNoFMA tier (AVX without FMA3) so it must stay FMA-free, and
+// the two-rounding result is a numeric contract (mirrors the f32 #156 no-fuse guard).
+TEXT ·affineAVX(SB), NOSPLIT, $0-64
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    VBROADCASTSD alpha+48(FP), Y1
+    VBROADCASTSD beta+56(FP), Y2
+
+    MOVQ CX, AX
+    SHRQ $2, AX
+    JZ   affine_avx_remainder
+
+affine_avx_loop4:
+    VMOVUPD (SI), Y0
+    VMULPD Y0, Y1, Y0
+    VADDPD Y0, Y2, Y0
+    VMOVUPD Y0, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  affine_avx_loop4
+
+affine_avx_remainder:
+    ANDQ $3, CX
+    JZ   affine_avx_done
+    VMOVSD alpha+48(FP), X1
+    VMOVSD beta+56(FP), X2
+
+affine_avx_scalar:
+    VMOVSD (SI), X0
+    VMULSD X0, X1, X0
+    VADDSD X0, X2, X0
+    VMOVSD X0, (DX)
+    ADDQ $8, SI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  affine_avx_scalar
+
+affine_avx_done:
+    VZEROUPPER
+    RET
+
 // func sumAVX(a []float64) float64
 // Optimized with 4 independent accumulators to hide ADD latency (4 cycles).
 TEXT ·sumAVX(SB), NOSPLIT, $0-32
@@ -1869,6 +1915,49 @@ addsc_512_done:
     VZEROUPPER
     RET
 
+// func affineAVX512(dst, a []float64, alpha, beta float64)
+// Split rounding (VMULPD then VADDPD); never fuse to VFMADD (mirrors the f32 #156 guard).
+TEXT ·affineAVX512(SB), NOSPLIT, $0-64
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    VBROADCASTSD alpha+48(FP), Z1
+    VBROADCASTSD beta+56(FP), Z2
+
+    MOVQ CX, AX
+    SHRQ $3, AX
+    JZ   affine_512_remainder
+
+affine_512_loop8:
+    VMOVUPD (SI), Z0
+    VMULPD Z0, Z1, Z0
+    VADDPD Z0, Z2, Z0
+    VMOVUPD Z0, (DX)
+    ADDQ $64, SI
+    ADDQ $64, DX
+    DECQ AX
+    JNZ  affine_512_loop8
+
+affine_512_remainder:
+    ANDQ $7, CX
+    JZ   affine_512_done
+    VMOVSD alpha+48(FP), X1
+    VMOVSD beta+56(FP), X2
+
+affine_512_scalar:
+    VMOVSD (SI), X0
+    VMULSD X0, X1, X0
+    VADDSD X0, X2, X0
+    VMOVSD X0, (DX)
+    ADDQ $8, SI
+    ADDQ $8, DX
+    DECQ CX
+    JNZ  affine_512_scalar
+
+affine_512_done:
+    VZEROUPPER
+    RET
+
 // func sumAVX512(a []float64) float64
 // Optimized with 4 independent accumulators to hide ADD latency (4 cycles).
 TEXT ·sumAVX512(SB), NOSPLIT, $0-32
@@ -2748,6 +2837,43 @@ addsc_sse2_remainder:
     MOVSD X0, (DX)
 
 addsc_sse2_done:
+    RET
+
+// func affineSSE2(dst, a []float64, alpha, beta float64)
+// Split rounding (MULPD then ADDPD); never fuse (mirrors the f32 #156 guard).
+TEXT ·affineSSE2(SB), NOSPLIT, $0-64
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ a_base+24(FP), SI
+    MOVSD alpha+48(FP), X1
+    SHUFPD $0, X1, X1
+    MOVSD beta+56(FP), X2
+    SHUFPD $0, X2, X2
+
+    MOVQ CX, AX
+    SHRQ $1, AX
+    JZ   affine_sse2_remainder
+
+affine_sse2_loop2:
+    MOVUPD (SI), X0
+    MULPD X1, X0
+    ADDPD X2, X0
+    MOVUPD X0, (DX)
+    ADDQ $16, SI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ  affine_sse2_loop2
+
+affine_sse2_remainder:
+    ANDQ $1, CX
+    JZ   affine_sse2_done
+
+    MOVSD (SI), X0
+    MULSD X1, X0
+    ADDSD X2, X0
+    MOVSD X0, (DX)
+
+affine_sse2_done:
     RET
 
 // func sumSSE2(a []float64) float64

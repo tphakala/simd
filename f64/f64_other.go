@@ -26,6 +26,10 @@ func round64(dst, src []float64)                       { round64Go(dst, src) }
 func variance64(a []float64, mean float64) float64     { return variance64Go(a, mean) }
 func euclideanDistance64(a, b []float64) float64       { return euclideanDistance64Go(a, b) }
 func cumulativeSum64(dst, a []float64)                 { cumulativeSum64Go(dst, a) }
+
+func affine64(dst, a []float64, alpha, beta float64) {
+	affineGo(dst, a, alpha, beta)
+}
 func dotProductBatch64(results []float64, rows [][]float64, vec []float64) {
 	dotProductBatch64Go(results, rows, vec)
 }

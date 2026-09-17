@@ -7,12 +7,22 @@
 // Thread Safety: All functions are safe for concurrent use.
 // Memory: All functions are zero-allocation (no heap allocations).
 //
+// Rounding and fusion: the elementwise scale, offset and affine primitives
+// ([Scale], [AddScalar], [Affine]) never contract a multiply and a following add
+// into a fused multiply-add; the product rounds to float64 before the add, so
+// [Affine] is bit-identical to [Scale] followed by [AddScalar]. Where a single
+// fused rounding is wanted, use [FMA], the AXPY [AddScaled], or the
+// multiply-accumulate [MulAdd], whose names say so; the exp/log family uses FMA
+// internally, where a single fused rounding is correct. The no-fuse contract is
+// asmcheck-enforced (see TestNoFMAContract in the module root).
+//
 // # Aliasing
 //
 // The element-wise maps may be used fully in place: the destination may alias an
 // input exactly, element for element. This holds for the unary maps (Abs, Neg,
-// Round, Sqrt, Reciprocal, Exp, Log, Log2, Log10, ReLU, Sigmoid, Tanh, Scale,
-// AddScalar, SubFromScalar, Clamp, ClampScale, Pow), for the two-pass
+// Round, Sqrt, Reciprocal, Exp, Log, Log2, Log10, Log10Floored, ReLU, Sigmoid,
+// Tanh, Scale, AddScalar, Affine, SubFromScalar, Clamp, ClampScale, Pow), for
+// the two-pass
 // CumulativeSum and Normalize (dst==a), for the binary maps (Add, Sub, Mul, Div,
 // PowElem, where dst may alias any input, or both at once), and for the fused
 // multiply-add FMA (dst may alias a, b or c). The guarantee is mechanical: each
@@ -150,6 +160,22 @@ func AddScalar(dst, a []float64, s float64) {
 		return
 	}
 	addScalar(dst[:n], a[:n], s)
+}
+
+// Affine computes the scalar-affine map dst[i] = alpha*src[i] + beta for every
+// element: the fused form of Scale (alpha*x) followed by AddScalar
+// (x + beta). The multiply and the add round separately (two IEEE-754 roundings),
+// so the result is bit-identical to Scale(dst, src, alpha) then
+// AddScalar(dst, dst, beta) on every dispatch path; the kernels never contract
+// into a fused multiply-add. Where a single fused rounding is wanted, use FMA.
+//
+// In-place safe (dst may alias src). Processes min(len(dst), len(src)) elements.
+func Affine(dst, src []float64, alpha, beta float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	affine64(dst[:n], src[:n], alpha, beta)
 }
 
 // SubFromScalar subtracts each element from a scalar: dst[i] = s - a[i].
@@ -900,6 +926,30 @@ func Log10(dst, src []float64) {
 		return
 	}
 	log10_64(dst[:n], src[:n])
+}
+
+// Log10Floored computes dst[i] = log10(max(src[i], floor)) for every element: a
+// floored base-10 logarithm. The floor is an exact lower clamp applied before the
+// logarithm, so a zero, negative, or tiny input maps to log10(floor) rather than
+// -Inf or NaN; pass a small positive floor (for example a spectrogram noise
+// floor) to keep every result finite.
+//
+// It composes an exact lower clamp with the existing log10 kernel: it is
+// equivalent to Clamp(dst, src, floor, +Inf) then Log10(dst, dst), bit-identical
+// to that pair on each dispatch path. The clamp and the log run as two passes,
+// not a single fused kernel; a fused single-pass floored log10 is deferred (the
+// log dominates, so the extra clamp pass is a small fraction of the cost).
+// Processes min(len(dst), len(src)) elements; in-place safe (dst may alias src).
+func Log10Floored(dst, src []float64, floor float64) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	// Exact lower floor (max with floor via a +Inf upper bound), then the
+	// standard log10 kernel. For the intended positive-finite magnitude/power
+	// domain the clamp introduces no rounding beyond Log10's own.
+	clamp64(dst[:n], src[:n], floor, math.Inf(1))
+	log10_64(dst[:n], dst[:n])
 }
 
 // Pow raises each element to a scalar power: dst[i] = src[i]**exp. The scalar

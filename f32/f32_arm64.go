@@ -136,6 +136,17 @@ func fma32(dst, a, b, c []float32) {
 	fmaGo(dst, a, b, c)
 }
 
+func affine32(dst, a []float32, alpha, beta float32) {
+	if hasNEON && len(dst) >= 4 {
+		affineNEON(dst, a, alpha, beta)
+		return
+	}
+	affineGo(dst, a, alpha, beta)
+}
+
+//go:noescape
+func affineNEON(dst, a []float32, alpha, beta float32)
+
 func clamp32(dst, a []float32, minVal, maxVal float32) {
 	if hasNEON && len(dst) >= 4 {
 		clampNEON(dst, a, minVal, maxVal)

@@ -415,6 +415,45 @@ addsc32_loop1:
 addsc32_done:
     RET
 
+// func affineNEON(dst, a []float32, alpha, beta float32)
+// dst[i] = alpha*a[i] + beta. Split rounding (FMUL then FADD); never fuse to FMLA (see #156).
+TEXT ·affineNEON(SB), NOSPLIT, $0-56
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R2
+    MOVD a_base+24(FP), R1
+    FMOVS alpha+48(FP), F3
+    WORD $0x4E040463           // DUP V3.4S, V3.S[0]
+    FMOVS beta+52(FP), F4
+    WORD $0x4E040484           // DUP V4.4S, V4.S[0]
+
+    LSR $2, R2, R3
+    CBZ R3, affine32_scalar
+
+affine32_loop4:
+    VLD1.P 16(R1), [V0.S4]
+    WORD $0x6E23DC01           // FMUL V1.4S, V0.4S, V3.4S
+    WORD $0x4E24D421           // FADD V1.4S, V1.4S, V4.4S
+    VST1.P [V1.S4], 16(R0)
+    SUB $1, R3
+    CBNZ R3, affine32_loop4
+
+affine32_scalar:
+    AND $3, R2
+    CBZ R2, affine32_done
+
+affine32_loop1:
+    FMOVS (R1), F0
+    FMULS F0, F3, F0
+    FADDS F0, F4, F0
+    FMOVS F0, (R0)
+    ADD $4, R0
+    ADD $4, R1
+    SUB $1, R2
+    CBNZ R2, affine32_loop1
+
+affine32_done:
+    RET
+
 // func sumNEON(a []float32) float32
 TEXT ·sumNEON(SB), NOSPLIT, $0-28
     MOVD a_base+0(FP), R0

@@ -76,6 +76,17 @@ func subFromScalar64(dst, a []float64, s float64) {
 	addScalar(dst, dst, s)
 }
 
+func affine64(dst, a []float64, alpha, beta float64) {
+	if hasNEON && len(dst) >= 2 {
+		affineNEON(dst, a, alpha, beta)
+		return
+	}
+	affineGo(dst, a, alpha, beta)
+}
+
+//go:noescape
+func affineNEON(dst, a []float64, alpha, beta float64)
+
 func sum(a []float64) float64 {
 	if hasNEON && len(a) >= 2 {
 		return sumNEON(a)

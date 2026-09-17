@@ -19,6 +19,10 @@ func neg32(dst, a []float32)                           { negGo(dst, a) }
 func copySign32(dst, mag, sign []float32)              { copySign32Go(dst, mag, sign) }
 func fma32(dst, a, b, c []float32)                     { fmaGo(dst, a, b, c) }
 func clamp32(dst, a []float32, minVal, maxVal float32) { clampGo(dst, a, minVal, maxVal) }
+
+func affine32(dst, a []float32, alpha, beta float32) {
+	affineGo(dst, a, alpha, beta)
+}
 func dotProductBatch32(results []float32, rows [][]float32, vec []float32) {
 	dotProductBatch32Go(results, rows, vec)
 }

@@ -298,12 +298,13 @@ func TestNoGoroutineRegisterClobber(t *testing.T) {
 	}
 }
 
-// singleRoundingKernel names a kernel whose scalar reference computes
-// float32(a*b)+c as two separate roundings (the product rounds to float32 before
-// the add). Its body must emit a distinct multiply and add, never a fused
-// multiply-add: a consumer that reproduces the reference bit-for-bit (go-aac's
-// quantize path, #155) depends on the intermediate rounding. See the f32 package
-// doc and #156.
+// singleRoundingKernel names a kernel whose scalar reference computes an
+// element-wise a*b+c (or alpha*x+beta) as two separate roundings: the product
+// rounds to the element type (float32 or float64) before the add. Its body must
+// emit a distinct multiply and add, never a fused multiply-add: a consumer that
+// reproduces the reference bit-for-bit (go-aac's quantize path #155; the f32/f64
+// Affine kernels' bit-identity to Scale then AddScalar, #298) depends on the
+// intermediate rounding. See the package docs and #156.
 type singleRoundingKernel struct {
 	file, fn string
 	mul, add string // the two separate mnemonics that must both appear
@@ -316,6 +317,14 @@ var singleRoundingKernels = []singleRoundingKernel{
 	{"f32/f32_arm64.s", "float32ToInt32ScaleClampSignedNEON", "FMUL", "FADD"},
 	{"f32/f32_amd64.s", "int32ToFloat32ScaleAddAVX", "VMULPS", "VADDPS"},
 	{"f32/f32_arm64.s", "int32ToFloat32ScaleAddNEON", "FMUL", "FADD"},
+	{"f32/f32_amd64.s", "affineAVX", "VMULPS", "VADDPS"},
+	{"f32/f32_amd64.s", "affineAVX512", "VMULPS", "VADDPS"},
+	{"f32/f32_amd64.s", "affineSSE", "MULPS", "ADDPS"},
+	{"f32/f32_arm64.s", "affineNEON", "FMUL", "FADD"},
+	{"f64/f64_amd64.s", "affineAVX", "VMULPD", "VADDPD"},
+	{"f64/f64_amd64.s", "affineAVX512", "VMULPD", "VADDPD"},
+	{"f64/f64_amd64.s", "affineSSE2", "MULPD", "ADDPD"},
+	{"f64/f64_arm64.s", "affineNEON", "FMUL", "FADD"},
 }
 
 // asmFuncBody returns the lines of the TEXT ·fn(...) block, from its TEXT line to
@@ -344,7 +353,7 @@ func asmFuncBody(src, fn string) ([]string, bool) {
 	return lines[start:end], true
 }
 
-// TestNoFMAContract enforces the f32 single-rounding contract (#156): the
+// TestNoFMAContract enforces the single-rounding contract (#156): the
 // listed kernels must contain a separate multiply and add and no fused
 // multiply-add. amd64 instructions are read as mnemonics; arm64 vector-float
 // ops are WORD-encoded, so each WORD is decoded through arm64asm and the decoded
@@ -398,7 +407,7 @@ func TestNoFMAContract(t *testing.T) {
 			}
 			if fmaRe.MatchString(mnem) {
 				t.Errorf("%s ·%s: forbidden fused %s in a single-rounding kernel; emit a "+
-					"separate %s then %s so the product rounds to float32 first (see #156)",
+					"separate %s then %s so the product rounds to the element type first (see #156)",
 					k.file, k.fn, mnem, k.mul, k.add)
 			}
 			switch mnem {

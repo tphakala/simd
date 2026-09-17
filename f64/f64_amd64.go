@@ -34,6 +34,7 @@ type (
 	reduceFunc              func(a []float64) float64
 	fmaFunc                 func(dst, a, b, c []float64)
 	clampFunc               func(dst, a []float64, minVal, maxVal float64)
+	affineFunc              func(dst, a []float64, alpha, beta float64)
 	varianceFunc            func(a []float64, mean float64) float64
 	euclideanDistanceFunc   func(a, b []float64) float64
 	interleave2Func         func(dst, a, b []float64)
@@ -63,6 +64,7 @@ var (
 	roundImpl               unaryOpFunc
 	fmaImpl                 fmaFunc
 	clampImpl               clampFunc
+	affineImpl              affineFunc
 	varianceImpl            varianceFunc
 	euclideanDistanceImpl   euclideanDistanceFunc
 	interleave2Impl         interleave2Func
@@ -109,6 +111,7 @@ func initAVX512() {
 	roundImpl = roundAVX
 	fmaImpl = fmaAVX512
 	clampImpl = clampAVX512
+	affineImpl = affineAVX512
 	varianceImpl = varianceAVX512
 	euclideanDistanceImpl = euclideanDistanceAVX512
 	interleave2Impl = interleave2AVX
@@ -143,6 +146,7 @@ func initAVX() {
 	roundImpl = roundAVX
 	fmaImpl = fmaAVX
 	clampImpl = clampAVX
+	affineImpl = affineAVX
 	varianceImpl = varianceAVX
 	euclideanDistanceImpl = euclideanDistanceAVX
 	interleave2Impl = interleave2AVX
@@ -176,6 +180,7 @@ func initAVXNoFMA() {
 	roundImpl = roundAVX
 	fmaImpl = fmaSSE2
 	clampImpl = clampAVX
+	affineImpl = affineAVX
 	varianceImpl = varianceSSE2
 	euclideanDistanceImpl = euclideanDistanceSSE2
 	interleave2Impl = interleave2AVX
@@ -204,6 +209,7 @@ func initSSE2() {
 	roundImpl = round64Go
 	fmaImpl = fmaSSE2
 	clampImpl = clampSSE2
+	affineImpl = affineSSE2
 	varianceImpl = varianceSSE2
 	euclideanDistanceImpl = euclideanDistanceSSE2
 	interleave2Impl = interleave2SSE2
@@ -232,6 +238,7 @@ func initGo() {
 	roundImpl = round64Go
 	fmaImpl = fmaGo
 	clampImpl = clampGo
+	affineImpl = affineGo
 	varianceImpl = variance64Go
 	euclideanDistanceImpl = euclideanDistance64Go
 	interleave2Impl = interleave2Go
@@ -270,6 +277,19 @@ func scale(dst, a []float64, s float64) {
 func addScalar(dst, a []float64, s float64) {
 	addScalarImpl(dst, a, s)
 }
+
+func affine64(dst, a []float64, alpha, beta float64) {
+	affineImpl(dst, a, alpha, beta)
+}
+
+//go:noescape
+func affineAVX(dst, a []float64, alpha, beta float64)
+
+//go:noescape
+func affineAVX512(dst, a []float64, alpha, beta float64)
+
+//go:noescape
+func affineSSE2(dst, a []float64, alpha, beta float64)
 
 func subFromScalar64(dst, a []float64, s float64) {
 	// Compose using already-dispatched primitives: (s - a) == (-a) + s.

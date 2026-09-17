@@ -258,6 +258,40 @@ addsc_scalar:
 addsc_done:
     RET
 
+// func affineNEON(dst, a []float64, alpha, beta float64)
+// dst[i] = alpha*a[i] + beta. Split rounding (FMUL then FADD); never fuse to FMLA
+// (mirrors the f32 #156 no-fuse guard).
+TEXT ·affineNEON(SB), NOSPLIT, $0-64
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R2
+    MOVD a_base+24(FP), R1
+    FMOVD alpha+48(FP), F3
+    WORD $0x4E080463           // DUP V3.2D, V3.D[0]
+    FMOVD beta+56(FP), F4
+    WORD $0x4E080484           // DUP V4.2D, V4.D[0]
+
+    LSR $1, R2, R3
+    CBZ R3, affine_scalar
+
+affine_loop2:
+    VLD1.P 16(R1), [V0.D2]
+    WORD $0x6E63DC01           // FMUL V1.2D, V0.2D, V3.2D
+    WORD $0x4E64D421           // FADD V1.2D, V1.2D, V4.2D
+    VST1.P [V1.D2], 16(R0)
+    SUB $1, R3
+    CBNZ R3, affine_loop2
+
+affine_scalar:
+    AND $1, R2
+    CBZ R2, affine_done
+    FMOVD (R1), F0
+    FMULD F0, F3, F0
+    FADDD F0, F4, F0
+    FMOVD F0, (R0)
+
+affine_done:
+    RET
+
 // func sumNEON(a []float64) float64
 TEXT ·sumNEON(SB), NOSPLIT, $0-32
     MOVD a_base+0(FP), R0

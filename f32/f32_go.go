@@ -94,6 +94,20 @@ func scaleGo(dst, a []float32, s float32) {
 	}
 }
 
+func affineGo(dst, a []float32, alpha, beta float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = a[len(dst)-1]
+	for i := range dst {
+		// Two roundings: the explicit float32() rounds the product to float32
+		// before the add, so the compiler cannot contract a*alpha+beta into a
+		// single FMADD on FMA-capable backends (arm64, amd64 v3+). This matches scaleGo then
+		// addScalarGo and the split-rounding VMULPS+VADDPS / FMUL+FADD kernels.
+		dst[i] = float32(a[i]*alpha) + beta
+	}
+}
+
 func addScalarGo(dst, a []float32, s float32) {
 	if len(dst) == 0 {
 		return
