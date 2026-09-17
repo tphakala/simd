@@ -11,6 +11,10 @@ func toI32(dst []int32, s []int8) { toI32Go(dst, s) }
 func sumI8(a []int8) int32        { return sumGo(a) }
 func dotI8(a, b []int8) int32     { return dotGo(a, b) }
 
+func dotProductBatchI8(results []int32, rows [][]int8, vec []int8) {
+	dotProductBatchRows(results, rows, vec)
+}
+
 func minMaxI8(a []int8) (minVal, maxVal int8) { return minMaxGo(a) }
 
 func minI8(dst, a, b []int8)                 { minGo(dst, a, b) }

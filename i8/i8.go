@@ -13,8 +13,11 @@
 //   - int32-accumulated reductions (Sum, DotProduct, SumAbs, SAD): widen to
 //     int32 so the running total has headroom. DotProduct is the inner loop of
 //     quantized matmul/conv; it uses ARM64 SDOT (FEAT_DotProd) where available
-//     and AVX2 VPMADDWD otherwise. SumAbs is the L1 norm and SAD the sum of
-//     absolute differences (block matching), both via PSADBW on AVX2.
+//     and AVX2 VPMADDWD otherwise. DotProductBatch scores many int8 weight rows
+//     against one shared int8 activation vector (the quantized matrix-vector
+//     core), keeping the vector resident across the rows in a fused 4-row
+//     kernel. SumAbs is the L1 norm and SAD the sum of absolute differences
+//     (block matching), both via PSADBW on AVX2.
 //   - Signed min/max (MinMax reduction; element-wise two-slice Min/Max).
 //   - Element-wise Clamp (activation clipping) and saturating Abs/Neg, where
 //     -128 maps to 127 (SQABS/SQNEG on NEON; saturating constructions on AVX2).
@@ -192,6 +195,26 @@ func DotProduct(a, b []int8) int32 {
 		return 0
 	}
 	return dotI8(a[:n], b[:n])
+}
+
+// DotProductBatch computes one int32-accumulated dot product per row against a
+// shared vec: results[i] = DotProduct(rows[i], vec) for i in [0, n),
+// n = min(len(results), len(rows)). Each row contributes min(len(rows[i]),
+// len(vec)) elements (the same clamp DotProduct applies); an empty row, or an
+// empty vec, scores 0. It is the matrix-vector core of
+// quantized inference (int8 weight rows against an int8 activation vector).
+// Batching the rows keeps vec resident across them (in registers under the
+// 4-row kernel, in L1 otherwise) instead of re-streaming it per DotProduct call.
+//
+// results, rows and vec must not overlap, and rows and vec are read-only.
+// Trailing capacity in results beyond n is left untouched. The call allocates
+// nothing.
+func DotProductBatch(results []int32, rows [][]int8, vec []int8) {
+	n := min(len(results), len(rows))
+	if n == 0 {
+		return
+	}
+	dotProductBatchI8(results[:n], rows[:n], vec)
 }
 
 // MinMax returns the smallest and largest int8 in a:

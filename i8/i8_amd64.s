@@ -1518,3 +1518,145 @@ requant_tail:
 requant_done:
     VZEROUPPER
     RET
+
+// func dotProduct4AVX2(res []int32, r0, r1, r2, r3, vec []int8)
+// Four-row quantized matrix-vector kernel: res[k] = sum_j r_k[j]*vec[j] (int32,
+// two's-complement wraparound), for k in 0..3. vec is sign-extended to int16
+// once per block and reused across the four rows, so the query stays in
+// registers instead of being re-streamed per row (the DotProductBatch win). Each
+// row is at least len(vec) long (the caller's 4-row group gate), so vec_len
+// drives the element count. Structure mirrors dotAVX2: an 8-wide XMM prelude
+// folds n%16>=8 into the still-zero accumulators, a 16-wide YMM loop does the
+// bulk with VPMOVSXBW+VPMADDWD, each row's YMM accumulator reduces to a dword,
+// and an n%8 scalar tail finishes. int32 addition is associative, so any block
+// order is bit-identical to the scalar dotGo reference.
+TEXT ·dotProduct4AVX2(SB), NOSPLIT, $0-144
+    MOVQ res_base+0(FP), DI
+    MOVQ r0_base+24(FP), R8
+    MOVQ r1_base+48(FP), R9
+    MOVQ r2_base+72(FP), R10
+    MOVQ r3_base+96(FP), R11
+    MOVQ vec_base+120(FP), SI
+    MOVQ vec_len+128(FP), CX
+
+    VPXOR Y8, Y8, Y8           // acc r0 = 0
+    VPXOR Y9, Y9, Y9           // acc r1 = 0
+    VPXOR Y10, Y10, Y10        // acc r2 = 0
+    VPXOR Y11, Y11, Y11        // acc r3 = 0
+
+    // 8-wide XMM block into the still-zero accumulators (the VEX.128 writes that
+    // zero the upper lanes are harmless while the accumulators are zero).
+    TESTQ $8, CX               // n % 16 >= 8?
+    JZ    b4_blocks16
+    VPMOVSXBW (SI), X0         // vec -> 8 int16
+    VPMOVSXBW (R8), X1
+    VPMADDWD X1, X0, X2
+    VPADDD X2, X8, X8
+    VPMOVSXBW (R9), X1
+    VPMADDWD X1, X0, X2
+    VPADDD X2, X9, X9
+    VPMOVSXBW (R10), X1
+    VPMADDWD X1, X0, X2
+    VPADDD X2, X10, X10
+    VPMOVSXBW (R11), X1
+    VPMADDWD X1, X0, X2
+    VPADDD X2, X11, X11
+    ADDQ $8, SI
+    ADDQ $8, R8
+    ADDQ $8, R9
+    ADDQ $8, R10
+    ADDQ $8, R11
+
+b4_blocks16:
+    MOVQ CX, AX
+    SHRQ $4, AX                // AX = n / 16
+    JZ   b4_reduce
+
+b4_loop16:
+    VPMOVSXBW (SI), Y0         // vec -> 16 int16 (loaded once, reused x4)
+    VPMOVSXBW (R8), Y1
+    VPMADDWD Y1, Y0, Y2
+    VPADDD Y2, Y8, Y8
+    VPMOVSXBW (R9), Y1
+    VPMADDWD Y1, Y0, Y2
+    VPADDD Y2, Y9, Y9
+    VPMOVSXBW (R10), Y1
+    VPMADDWD Y1, Y0, Y2
+    VPADDD Y2, Y10, Y10
+    VPMOVSXBW (R11), Y1
+    VPMADDWD Y1, Y0, Y2
+    VPADDD Y2, Y11, Y11
+    ADDQ $16, SI
+    ADDQ $16, R8
+    ADDQ $16, R9
+    ADDQ $16, R10
+    ADDQ $16, R11
+    DECQ AX
+    JNZ  b4_loop16
+
+b4_reduce:
+    // Reduce each row accumulator to a single int32 and store it to res[k].
+    VEXTRACTI128 $1, Y8, X3
+    VPADDD X3, X8, X8
+    VPSHUFD $0x4E, X8, X3
+    VPADDD X3, X8, X8
+    VPSHUFD $0xB1, X8, X3
+    VPADDD X3, X8, X8
+    MOVQ X8, AX
+    MOVL AX, 0(DI)
+
+    VEXTRACTI128 $1, Y9, X3
+    VPADDD X3, X9, X9
+    VPSHUFD $0x4E, X9, X3
+    VPADDD X3, X9, X9
+    VPSHUFD $0xB1, X9, X3
+    VPADDD X3, X9, X9
+    MOVQ X9, AX
+    MOVL AX, 4(DI)
+
+    VEXTRACTI128 $1, Y10, X3
+    VPADDD X3, X10, X10
+    VPSHUFD $0x4E, X10, X3
+    VPADDD X3, X10, X10
+    VPSHUFD $0xB1, X10, X3
+    VPADDD X3, X10, X10
+    MOVQ X10, AX
+    MOVL AX, 8(DI)
+
+    VEXTRACTI128 $1, Y11, X3
+    VPADDD X3, X11, X11
+    VPSHUFD $0x4E, X11, X3
+    VPADDD X3, X11, X11
+    VPSHUFD $0xB1, X11, X3
+    VPADDD X3, X11, X11
+    MOVQ X11, AX
+    MOVL AX, 12(DI)
+
+    ANDQ $7, CX                // the 8-wide block took n % 16 down to n % 8
+    JZ   b4_done
+
+b4_scalar:
+    MOVBLSX (SI), DX           // vec[j], shared across the four rows
+    MOVBLSX (R8), AX
+    IMULL DX, AX
+    ADDL AX, 0(DI)
+    MOVBLSX (R9), AX
+    IMULL DX, AX
+    ADDL AX, 4(DI)
+    MOVBLSX (R10), AX
+    IMULL DX, AX
+    ADDL AX, 8(DI)
+    MOVBLSX (R11), AX
+    IMULL DX, AX
+    ADDL AX, 12(DI)
+    INCQ SI
+    INCQ R8
+    INCQ R9
+    INCQ R10
+    INCQ R11
+    DECQ CX
+    JNZ  b4_scalar
+
+b4_done:
+    VZEROUPPER
+    RET

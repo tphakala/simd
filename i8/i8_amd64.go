@@ -66,6 +66,36 @@ func dotI8(a, b []int8) int32 {
 	return dotGo(a, b)
 }
 
+func dotProductBatchI8(results []int32, rows [][]int8, vec []int8) {
+	vecLen := len(vec)
+	if hasAVX2 && len(rows) >= 4 && vecLen >= blockReduce {
+		dotProductBatch4AVX2(results, rows, vec, vecLen)
+		return
+	}
+	dotProductBatchRows(results, rows, vec)
+}
+
+// dotProductBatch4AVX2 scores rows against vec in groups of four so vec stays in
+// registers across the group instead of being re-loaded per row. A group whose
+// four rows are each at least vecLen long takes the fused 4-row AVX2 kernel; a
+// ragged group (any row shorter than vec) and the trailing rows past the last
+// full group both go through the shared dotProductBatchRows fallback (per-row
+// dotI8, scoring 0 for an empty clamped row). The caller guarantees AVX2,
+// len(rows) >= 4, vecLen >= blockReduce, and len(results) == len(rows).
+func dotProductBatch4AVX2(results []int32, rows [][]int8, vec []int8, vecLen int) {
+	i := 0
+	for i+3 < len(rows) {
+		r0, r1, r2, r3 := rows[i], rows[i+1], rows[i+2], rows[i+3]
+		if len(r0) >= vecLen && len(r1) >= vecLen && len(r2) >= vecLen && len(r3) >= vecLen {
+			dotProduct4AVX2(results[i:i+4], r0, r1, r2, r3, vec)
+		} else {
+			dotProductBatchRows(results[i:i+4], rows[i:i+4], vec)
+		}
+		i += 4
+	}
+	dotProductBatchRows(results[i:], rows[i:], vec)
+}
+
 func minMaxI8(a []int8) (minVal, maxVal int8) {
 	if hasAVX2 && len(a) >= blockMinMax {
 		return minMaxAVX2(a)
@@ -175,6 +205,13 @@ func sumAVX2(a []int8) int32
 
 //go:noescape
 func dotAVX2(a, b []int8) int32
+
+// dotProduct4AVX2 scores four rows (each at least len(vec) long) against vec,
+// writing the four int32 dot products to res[0:4]. vec is expanded to int16 once
+// per 16-byte block and reused across the four rows. res must have len >= 4.
+//
+//go:noescape
+func dotProduct4AVX2(res []int32, r0, r1, r2, r3, vec []int8)
 
 //go:noescape
 func minMaxAVX2(a []int8) (minVal, maxVal int8)

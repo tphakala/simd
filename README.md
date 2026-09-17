@@ -723,7 +723,7 @@ The interleave kernels are pure 16-bit-lane movement (AVX2/SSE2 word unpacks plu
 
 ### `i8` - int8 Operations
 
-SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-128..127` range makes element-wise arithmetic overflow almost immediately, so this package does not mirror the wrapping arithmetic of `i16`/`i32`. It ships the operations that are genuinely high-impact and well-defined at 8-bit width: saturating arithmetic, element-wise min/max/clamp and saturating abs/neg/abs-diff, int32-accumulated reductions, signed min/max, the per-tensor abs-max for dynamic quantization, sign-extending widening, and the `float32 <-> int8` affine quantization boundary (`Quantize`/`Dequantize`/`Requantize`).
+SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-128..127` range makes element-wise arithmetic overflow almost immediately, so this package does not mirror the wrapping arithmetic of `i16`/`i32`. It ships the operations that are genuinely high-impact and well-defined at 8-bit width: saturating arithmetic, element-wise min/max/clamp and saturating abs/neg/abs-diff, int32-accumulated reductions and the batched matrix-vector dot product (`DotProductBatch`), signed min/max, the per-tensor abs-max for dynamic quantization, sign-extending widening, and the `float32 <-> int8` affine quantization boundary (`Quantize`/`Dequantize`/`Requantize`).
 
 | Category       | Function                   | Description                                                    | SIMD Width             |
 | -------------- | -------------------------- | -------------------------------------------------------------- | ---------------------- |
@@ -741,6 +741,7 @@ SIMD-accelerated int8 operations for quantized numeric pipelines. The narrow `-1
 |                | `ToInt32(dst, src)`        | Sign-extend `int8` to `int32`                                  | 8x (AVX2) / 8x (NEON)  |
 | **Reduction**  | `Sum(a) int32`             | int32-accumulated sum                                          | 16x (AVX2) / 16x (NEON)|
 |                | `DotProduct(a, b) int32`   | int32-accumulated dot product (quantized matmul inner loop)    | 16x (AVX2) / 16x (NEON, SDOT)|
+|                | `DotProductBatch(results, rows, vec)`| One int32 dot product per row against a shared vec (quantized matrix-vector); a fused 4-row kernel keeps vec resident, ~1.6-2.6x over a per-row `DotProduct` loop | 16x (AVX2) / 16x (NEON, SDOT)|
 |                | `MinMax(a) (min, max)`     | Signed int8 per-slice minimum and maximum in one pass          | 32x (AVX2) / 16x (NEON)|
 |                | `MaxAbs(a) int`            | Per-tensor abs-max (dynamic-quantization scale), range `[0,128]`| 32x (AVX2) / 16x (NEON)|
 |                | `SumAbs(a) int32`          | Sum of absolute values (L1 norm)                               | 32x (AVX2) / 16x (NEON)|
@@ -770,6 +771,12 @@ i8.AbsDiff(dst, a, b)     // saturating |a - b|, clamped to [0, 127]
 
 dot := i8.DotProduct(a, b) // int32-accumulated sum(a[i]*b[i])
 sum := i8.Sum(a)           // int32-accumulated sum
+
+// Batched matrix-vector: one int32 dot product per weight row against a shared
+// activation vector, with the vector kept resident across the rows.
+rows := [][]int8{ /* int8 weight rows, each len(vec) long */ }
+results := make([]int32, len(rows))
+i8.DotProductBatch(results, rows, a) // results[i] = DotProduct(rows[i], a)
 mn, mx := i8.MinMax(a)     // smallest and largest value in one signed pass
 scale := i8.MaxAbs(a)      // per-tensor abs-max for dynamic quantization
 l1 := i8.SumAbs(a)         // sum of absolute values (L1 norm)

@@ -14,6 +14,19 @@ func ExampleDotProduct() {
 	// Output: 50
 }
 
+func ExampleDotProductBatch() {
+	vec := []int8{10, 20, 30, 40, 50}
+	rows := [][]int8{
+		{1, 2, 3, 4, -5}, // 10 + 40 + 90 + 160 - 250 = 50
+		{1, 0, 0, 0, 0},  // 10
+		{0, 0, 0, 0, 1},  // 50
+	}
+	results := make([]int32, len(rows))
+	i8.DotProductBatch(results, rows, vec)
+	fmt.Println(results)
+	// Output: [50 10 50]
+}
+
 func ExampleAddSaturate() {
 	dst := make([]int8, 3)
 	i8.AddSaturate(dst, []int8{100, -100, 1}, []int8{100, -100, 2})
