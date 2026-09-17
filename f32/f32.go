@@ -356,9 +356,15 @@ func minLen(a, b, c int) int {
 // results[i] = DotProduct(rows[i], vec) for each row.
 // This is more cache-efficient than calling DotProduct in a loop because
 // vec stays hot in L1 cache across all dot products.
+//
+// Processes min(len(results), len(rows)) rows.
+// Each row is processed up to min(len(row), len(vec)) elements.
+// An empty vec (or an empty row) yields the empty-vector dot product, 0, so
+// results[:n] is zeroed rather than left with stale values (see #303, matching
+// the i8, f16 and f64 packages).
 func DotProductBatch(results []float32, rows [][]float32, vec []float32) {
 	n := min(len(results), len(rows))
-	if n == 0 || len(vec) == 0 {
+	if n == 0 {
 		return
 	}
 	dotProductBatch32(results[:n], rows[:n], vec)

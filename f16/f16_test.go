@@ -992,6 +992,31 @@ func TestDotProductBatch(t *testing.T) {
 	}
 }
 
+// TestDotProductBatchEmptyVec verifies the contract that an empty vec zeroes
+// results[:n] rather than leaving stale values (the dot product of an empty
+// vector is 0, consistent with the empty-row rule and the i8/f32/f64 packages).
+// See #303.
+func TestDotProductBatchEmptyVec(t *testing.T) {
+	rows := [][]Float16{
+		{FromFloat32(1), FromFloat32(2), FromFloat32(3)},
+		{FromFloat32(4), FromFloat32(5)},
+		nil,
+		{FromFloat32(6)},
+	}
+	for _, vec := range [][]Float16{nil, {}} {
+		results := []float32{111, 222, 333, 444, 555} // one extra to pin results[:n]
+		DotProductBatch(results, rows, vec)
+		for r := range rows {
+			if results[r] != 0 {
+				t.Fatalf("empty vec (len %d): results[%d] = %g, want 0", len(vec), r, results[r])
+			}
+		}
+		if results[len(rows)] != 555 {
+			t.Fatalf("empty vec (len %d): results beyond n must be untouched, got %g", len(vec), results[len(rows)])
+		}
+	}
+}
+
 func TestAccumulateAdd(t *testing.T) {
 	dst := make([]Float16, 10)
 	for i := range dst {

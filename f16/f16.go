@@ -412,9 +412,15 @@ func CumulativeSum(dst, a []Float16) {
 
 // DotProductBatch computes multiple dot products against the same vector.
 // results[i] = DotProduct(rows[i], vec) for each row.
+//
+// Processes min(len(results), len(rows)) rows.
+// Each row is processed up to min(len(row), len(vec)) elements.
+// An empty vec (or an empty row) yields the empty-vector dot product, 0, so
+// results[:n] is zeroed rather than left with stale values (see #303, matching
+// the i8, f32 and f64 packages).
 func DotProductBatch(results []float32, rows [][]Float16, vec []Float16) {
 	n := min(len(results), len(rows))
-	if n == 0 || len(vec) == 0 {
+	if n == 0 {
 		return
 	}
 	dotProductBatch16(results[:n], rows[:n], vec)
