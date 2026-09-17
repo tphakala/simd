@@ -1268,8 +1268,10 @@ func TestRFFTIRFFTRoundTrip(t *testing.T) {
 func TestIRFFTShortInputs(t *testing.T) {
 	// Cover both the vectorized pack (nfft 32) and the fused scalar pack
 	// (nfft < 32, half < irfftScalarHalfCutoff): the short-vs-zero-filled
-	// bit-exactness contract must hold identically on both paths.
-	for _, nfft := range []int{8, 16, 32} {
+	// bit-exactness contract must hold identically on both paths. nfft 4
+	// (half 2) is the minimal scalar transform, where the single interior bin
+	// is its own mirror (k == half-k).
+	for _, nfft := range []int{4, 8, 16, 32} {
 		t.Run(fmt.Sprintf("nfft%d", nfft), func(t *testing.T) {
 			p, _ := NewSTFTPlan(nfft)
 			spec := randomSpectrum(p.NumBins(), 1.5)
@@ -1297,11 +1299,14 @@ func TestIRFFTShortInputs(t *testing.T) {
 				}
 			}
 
-			// dst clamp: the first 7 samples equal the full transform's first 7.
+			// dst clamp: a partial dst shorter than nfft takes the per-sample
+			// output path, and its samples equal the full transform's. plen stays
+			// below nfft for every size (nfft 4 has only 4 samples).
+			plen := min(7, nfft-1)
 			p.IRFFT(want, spec)
-			part := make([]float64, 7)
-			if n := p.IRFFT(part, spec); n != 7 {
-				t.Fatalf("IRFFT into 7 samples wrote %d", n)
+			part := make([]float64, plen)
+			if n := p.IRFFT(part, spec); n != plen {
+				t.Fatalf("IRFFT into %d samples wrote %d", plen, n)
 			}
 			for i := range part {
 				if part[i] != want[i] {
@@ -1312,17 +1317,27 @@ func TestIRFFTShortInputs(t *testing.T) {
 				t.Fatalf("IRFFT into nil dst wrote %d", n)
 			}
 
-			// An empty spectrum is all zero bins, so the transform is exactly zero.
-			// Dirty the scratch with the full spectrum first so a pack that skipped
-			// its clear would leak the stale bins into the empty result.
+			// An empty spectrum is all zero bins: IRFFT(nil) must equal IRFFT of an
+			// explicit zero-filled spectrum bit for bit (signed zeros included) and
+			// be zero in magnitude. Dirtying the scratch with the full spectrum
+			// first proves a pack that skipped its clear cannot leak the stale bins
+			// into the empty result. The odd output samples are -0.0
+			// (dst[2j+1] = -im*scale with im == +0), which a plain != 0 accepts but
+			// a +0-only bit check would wrongly reject, so the reference keeps the
+			// signed zeros aligned.
+			zeros := make([]complex128, p.NumBins())
+			p.IRFFT(want, zeros)
 			p.IRFFT(got, spec)
 			for i := range got {
 				got[i] = 1
 			}
 			p.IRFFT(got, nil)
-			for i, v := range got {
-				if v != 0 {
-					t.Fatalf("sample %d: empty spec gave %g, want 0", i, v)
+			for i := range got {
+				if math.Float64bits(got[i]) != math.Float64bits(want[i]) {
+					t.Fatalf("sample %d: empty spec %g != zero-filled %g", i, got[i], want[i])
+				}
+				if got[i] != 0 {
+					t.Fatalf("sample %d: empty spec gave %g, want 0", i, got[i])
 				}
 			}
 		})
