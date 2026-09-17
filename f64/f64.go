@@ -163,7 +163,7 @@ func AddScalar(dst, a []float64, s float64) {
 }
 
 // Affine computes the scalar-affine map dst[i] = alpha*src[i] + beta for every
-// element: the fused, single-pass form of Scale (alpha*x) followed by AddScalar
+// element: the fused form of Scale (alpha*x) followed by AddScalar
 // (x + beta). The multiply and the add round separately (two IEEE-754 roundings),
 // so the result is bit-identical to Scale(dst, src, alpha) then
 // AddScalar(dst, dst, beta) on every dispatch path; the kernels never contract
@@ -934,8 +934,11 @@ func Log10(dst, src []float64) {
 // -Inf or NaN; pass a small positive floor (for example a spectrogram noise
 // floor) to keep every result finite.
 //
-// It is the fused form of Clamp(dst, src, floor, +Inf) followed by
-// Log10(dst, dst) and is bit-identical to that pair on each dispatch path.
+// It composes an exact lower clamp with the existing log10 kernel: it is
+// equivalent to Clamp(dst, src, floor, +Inf) then Log10(dst, dst), bit-identical
+// to that pair on each dispatch path. The clamp and the log run as two passes,
+// not a single fused kernel; a fused single-pass floored log10 is deferred (the
+// log dominates, so the extra clamp pass is a small fraction of the cost).
 // Processes min(len(dst), len(src)) elements; in-place safe (dst may alias src).
 func Log10Floored(dst, src []float64, floor float64) {
 	n := min(len(dst), len(src))
