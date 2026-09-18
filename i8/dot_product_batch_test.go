@@ -76,6 +76,34 @@ func TestDotProductBatchRagged(t *testing.T) {
 	}
 }
 
+// TestDotProductBatchRaggedLarge mixes a ragged 4-row group with a full one at a
+// vec length that dispatches to the AVX-VNNI tier (vecLen >= 64 on a VNNI host),
+// so the VNNI driver's own short-row fallback branch is exercised, not just the
+// AVX2 driver's mirror of it. The two drivers are hand-duplicated (each keeps its
+// kernel call direct to preserve //go:noescape), so the VNNI copy needs its own
+// ragged coverage; below vecLen 64 every ragged case only reaches the AVX2 driver.
+func TestDotProductBatchRaggedLarge(t *testing.T) {
+	vec := genI8(64, 21)
+	rows := [][]int8{
+		genI8(64, 22), // == len(vec): kernel-eligible
+		genI8(30, 23), // shorter: forces this group onto the per-row fallback
+		nil,           // nil row -> 0
+		genI8(80, 24), // longer than vec, clamped to 64
+		genI8(64, 25), // second group is all full-length: runs on the kernel
+		genI8(64, 26),
+		genI8(64, 27),
+		genI8(64, 28),
+	}
+	results := make([]int32, len(rows))
+	DotProductBatch(results, rows, vec)
+	want := naiveDotProductBatch(rows, vec)
+	for r := range results {
+		if results[r] != want[r] {
+			t.Fatalf("row %d (len %d): got %d want %d", r, len(rows[r]), results[r], want[r])
+		}
+	}
+}
+
 // TestDotProductBatchFullGroups uses only full-length rows so consecutive 4-row
 // groups run entirely through the kernel, and checks a row count that leaves a
 // non-multiple-of-4 trailing remainder.
