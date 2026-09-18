@@ -187,9 +187,10 @@ func crossCheckObjdump(t *testing.T, file, tool string, deferred []objdumpDirect
 // instructions, which are not covered by a decoder-based check the way the ARM64
 // WORDs are. It logs what it finds and does not fail the build.
 //
-// It is not looking at an empty set: i16's AVX-VNNI kernel carries four BYTE
-// directives, because go1.26 assembles VPDPWSSD to the EVEX form, which faults
-// on Alder Lake, so the VEX bytes are spelled out instead (#169). Those four are
+// It is not looking at an empty set: i16's AVX-VNNI kernel (VPDPWSSD) and i8's
+// (VPDPBUSD, dotProduct4AVXVNNI) both carry BYTE directives, because the
+// assembler knows only the EVEX form of those mnemonics, which faults on
+// Alder Lake, so the VEX bytes are spelled out instead (#169). Those lines are
 // what this test prints on every run. AVX-512 work that the assembler cannot
 // express as mnemonics would land here too.
 func TestNoUncheckedAmd64Encodings(t *testing.T) {

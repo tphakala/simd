@@ -7,9 +7,12 @@
 // All kernels gate on AVX2 in i8_amd64.go and run at least one full vector
 // block (the dispatch guards the minimum length), with a scalar tail for the
 // (n mod block) remainder. The Go assembler's 3-operand AVX order is dst-last:
-// VPSUBSB a, b, c is c = b - a, and VPMADDWD a, b, c is c = madd(b, a). No
-// hand-encoded directives are used; every mnemonic is one the Go assembler
-// emits directly, so TestNoUncheckedAmd64Encodings stays clean.
+// VPSUBSB a, b, c is c = b - a, and VPMADDWD a, b, c is c = madd(b, a). Every
+// mnemonic is one the Go assembler emits directly, except the AVX-VNNI kernel
+// dotProduct4AVXVNNI, which spells VPDPBUSD out as VEX-form BYTE directives (the
+// assembler knows only the EVEX form, which faults on AVX-VNNI-only parts; see
+// that kernel and #169). Those bytes are the only lines this file contributes to
+// TestNoUncheckedAmd64Encodings.
 //
 // Saturating arithmetic (VPADDSB/VPSUBSB) clamps each byte lane to [-128, 127];
 // the scalar tail reproduces that with a widened add/sub and an explicit clamp.
@@ -1658,5 +1661,219 @@ b4_scalar:
     JNZ  b4_scalar
 
 b4_done:
+    VZEROUPPER
+    RET
+
+// dotProduct4AVXVNNI is dotProduct4AVX2's 4-row register-blocked matrix-vector
+// dot product, fused with AVX-VNNI's VPDPBUSD. VPDPBUSD dst, u, s computes
+// dst += madd over 4-byte groups of (unsigned u) * (signed s), the one
+// instruction the AVX2 kernel spells as VPMOVSXBW + VPMADDWD + VPADDD.
+//
+// VPDPBUSD is unsigned x signed, so each signed row byte is biased to unsigned:
+// ur = row XOR 0x80 = row + 128 (0..255). Then, per element,
+//   ur*vec = (row+128)*vec = row*vec + 128*vec,
+// so sum(ur_i*vec_i) = dot(row,vec) + 128*sum(vec_i), and the true signed dot is
+// that VPDPBUSD accumulator minus 128*sum(vec). vec is the signed operand and is
+// shared across the four rows, so the correction 128*sum(vec) is computed once,
+// via a fifth accumulator VPDPBUSD(ones=0x01.., vec) that sums vec over exactly
+// the VNNI-processed prefix. The scalar tail (n % 8) runs directly as
+// signed*signed, so no correction applies there. Every add is int32 modulo 2^32;
+// the bias identity is exact over that ring and wrapping adds are associative,
+// so results are bit-identical to dotGo for all inputs, including forced overflow.
+//
+// VPDPBUSD is HAND-ENCODED as VEX.256/128.66.0F38.W0 50 /r BYTE directives, for
+// the same reason as i16's xcorr4AVXVNNI (see #169): the Go assembler knows only
+// the EVEX form of the mnemonic, which #UDs on AVX-VNNI-only parts such as Alder
+// Lake where AVX-512 is fused off. C4 E2 is the 3-byte VEX prefix with RXB=111,
+// so the destination (ModRM.reg) and the vec operand (ModRM.rm) must be Y0-Y7;
+// VEX.vvvv (the unsigned operand) may use Y8-Y15. The trailing comment on each
+// BYTE line is the {vex} vpdpbusd form objdump decodes it to (dst, unsigned,
+// signed); a wrong byte SIGILLs or missums under the host ParityWithGo test.
+//
+// Registers: Y0 vec (rm/signed), Y1-Y4 row accumulators, Y5 vec-sum accumulator
+// (all dst, hence Y0-Y7), Y6 = 0x80 bias, Y7 = 0x01 ones, Y8/Y9 row load + bias.
+TEXT ·dotProduct4AVXVNNI(SB), NOSPLIT, $0-144
+    MOVQ res_base+0(FP), DI
+    MOVQ r0_base+24(FP), R8
+    MOVQ r1_base+48(FP), R9
+    MOVQ r2_base+72(FP), R10
+    MOVQ r3_base+96(FP), R11
+    MOVQ vec_base+120(FP), SI
+    MOVQ vec_len+128(FP), CX
+
+    VPCMPEQB Y7, Y7, Y7        // 0xFF bytes
+    VPABSB Y7, Y7              // 0x01 bytes: ones, the unsigned operand summing vec
+    VPSLLW $7, Y7, Y6          // 0x0101<<7 = 0x8080 per word -> 0x80 per byte (bias)
+
+    VPXOR Y1, Y1, Y1           // acc r0 = 0
+    VPXOR Y2, Y2, Y2           // acc r1 = 0
+    VPXOR Y3, Y3, Y3           // acc r2 = 0
+    VPXOR Y4, Y4, Y4           // acc r3 = 0
+    VPXOR Y5, Y5, Y5           // acc sum(vec) = 0
+
+    // Two XMM peels (16-wide then 8-wide) run BEFORE the 32-wide YMM loop, into
+    // the still-zero accumulators, so their VEX.128 writes (which zero the upper
+    // YMM lanes) are harmless: the lanes are zero until the YMM loop fills them,
+    // and it accumulates on top afterward. Together they take n % 32 down to
+    // n % 8, matching the AVX2 kernel's 8-wide prelude so the scalar tail is at
+    // most 7 elements rather than 15. Legal to reorder because the int32 sums wrap
+    // and add associatively.
+    TESTQ $16, CX              // n % 32 >= 16?
+    JZ    b4vnni_block8
+    VMOVDQU (SI), X0           // vec[0..16)
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x41; BYTE $0x50; BYTE $0xE8  // vpdpbusd X5, X7, X0 (sum vec)
+    VMOVDQU (R8), X8
+    VPXOR X6, X8, X8           // biased r0
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x39; BYTE $0x50; BYTE $0xC8  // vpdpbusd X1, X8, X0
+    VMOVDQU (R9), X9
+    VPXOR X6, X9, X9
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x31; BYTE $0x50; BYTE $0xD0  // vpdpbusd X2, X9, X0
+    VMOVDQU (R10), X8
+    VPXOR X6, X8, X8
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x39; BYTE $0x50; BYTE $0xD8  // vpdpbusd X3, X8, X0
+    VMOVDQU (R11), X9
+    VPXOR X6, X9, X9
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x31; BYTE $0x50; BYTE $0xE0  // vpdpbusd X4, X9, X0
+    ADDQ $16, SI
+    ADDQ $16, R8
+    ADDQ $16, R9
+    ADDQ $16, R10
+    ADDQ $16, R11
+
+    // 8-wide block via 8-byte VMOVQ loads: the upper 8 bytes of each register are
+    // zeroed by the move, so after the bias XOR the padding row lanes are 0x80
+    // (128) but the padding vec lanes are 0, hence every padding product 128*0 = 0
+    // contributes nothing to a row accumulator or to the vec sum. The same VEX.128
+    // XMM VPDPBUSD encodings as the 16-wide block above.
+b4vnni_block8:
+    TESTQ $8, CX               // (n % 16) >= 8?
+    JZ    b4vnni_loop32_setup
+    VMOVQ (SI), X0             // vec[0..8) in the low 64 bits (upper zeroed)
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x41; BYTE $0x50; BYTE $0xE8  // vpdpbusd X5, X7, X0 (sum vec)
+    VMOVQ (R8), X8
+    VPXOR X6, X8, X8           // biased r0 (padding lanes -> 0x80)
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x39; BYTE $0x50; BYTE $0xC8  // vpdpbusd X1, X8, X0
+    VMOVQ (R9), X9
+    VPXOR X6, X9, X9
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x31; BYTE $0x50; BYTE $0xD0  // vpdpbusd X2, X9, X0
+    VMOVQ (R10), X8
+    VPXOR X6, X8, X8
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x39; BYTE $0x50; BYTE $0xD8  // vpdpbusd X3, X8, X0
+    VMOVQ (R11), X9
+    VPXOR X6, X9, X9
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x31; BYTE $0x50; BYTE $0xE0  // vpdpbusd X4, X9, X0
+    ADDQ $8, SI
+    ADDQ $8, R8
+    ADDQ $8, R9
+    ADDQ $8, R10
+    ADDQ $8, R11
+
+b4vnni_loop32_setup:
+    MOVQ CX, AX
+    SHRQ $5, AX                // AX = n / 32
+    JZ   b4vnni_reduce
+
+b4vnni_loop32:
+    VMOVDQU (SI), Y0           // vec[j..j+32), reused by the four rows and the sum
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x45; BYTE $0x50; BYTE $0xE8  // vpdpbusd Y5, Y7, Y0 (sum vec)
+    VMOVDQU (R8), Y8
+    VPXOR Y6, Y8, Y8           // biased r0 = r0 XOR 0x80
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x3D; BYTE $0x50; BYTE $0xC8  // vpdpbusd Y1, Y8, Y0
+    VMOVDQU (R9), Y9
+    VPXOR Y6, Y9, Y9
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x35; BYTE $0x50; BYTE $0xD0  // vpdpbusd Y2, Y9, Y0
+    VMOVDQU (R10), Y8
+    VPXOR Y6, Y8, Y8
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x3D; BYTE $0x50; BYTE $0xD8  // vpdpbusd Y3, Y8, Y0
+    VMOVDQU (R11), Y9
+    VPXOR Y6, Y9, Y9
+    BYTE $0xC4; BYTE $0xE2; BYTE $0x35; BYTE $0x50; BYTE $0xE0  // vpdpbusd Y4, Y9, Y0
+    ADDQ $32, SI
+    ADDQ $32, R8
+    ADDQ $32, R9
+    ADDQ $32, R10
+    ADDQ $32, R11
+    DECQ AX
+    JNZ  b4vnni_loop32
+
+b4vnni_reduce:
+    // Reduce the vec-sum accumulator to a scalar, then corr = 128*sum(vec) (int32
+    // wrap = left shift 7). X0 is the fold temporary (vec is dead now).
+    VEXTRACTI128 $1, Y5, X0
+    VPADDD X0, X5, X5
+    VPSHUFD $0x4E, X5, X0
+    VPADDD X0, X5, X5
+    VPSHUFD $0xB1, X5, X0
+    VPADDD X0, X5, X5
+    MOVQ X5, BX
+    SHLL $7, BX                // BX = 128 * sum(vec) mod 2^32
+
+    // Reduce each row accumulator, subtract corr, store res[k].
+    VEXTRACTI128 $1, Y1, X0
+    VPADDD X0, X1, X1
+    VPSHUFD $0x4E, X1, X0
+    VPADDD X0, X1, X1
+    VPSHUFD $0xB1, X1, X0
+    VPADDD X0, X1, X1
+    MOVQ X1, AX
+    SUBL BX, AX
+    MOVL AX, 0(DI)
+
+    VEXTRACTI128 $1, Y2, X0
+    VPADDD X0, X2, X2
+    VPSHUFD $0x4E, X2, X0
+    VPADDD X0, X2, X2
+    VPSHUFD $0xB1, X2, X0
+    VPADDD X0, X2, X2
+    MOVQ X2, AX
+    SUBL BX, AX
+    MOVL AX, 4(DI)
+
+    VEXTRACTI128 $1, Y3, X0
+    VPADDD X0, X3, X3
+    VPSHUFD $0x4E, X3, X0
+    VPADDD X0, X3, X3
+    VPSHUFD $0xB1, X3, X0
+    VPADDD X0, X3, X3
+    MOVQ X3, AX
+    SUBL BX, AX
+    MOVL AX, 8(DI)
+
+    VEXTRACTI128 $1, Y4, X0
+    VPADDD X0, X4, X4
+    VPSHUFD $0x4E, X4, X0
+    VPADDD X0, X4, X4
+    VPSHUFD $0xB1, X4, X0
+    VPADDD X0, X4, X4
+    MOVQ X4, AX
+    SUBL BX, AX
+    MOVL AX, 12(DI)
+
+    ANDQ $7, CX                // the 16- and 8-wide blocks took n % 32 down to n % 8
+    JZ   b4vnni_done
+
+b4vnni_scalar:
+    MOVBLSX (SI), DX           // vec[j], shared across the four rows (signed)
+    MOVBLSX (R8), AX
+    IMULL DX, AX
+    ADDL AX, 0(DI)
+    MOVBLSX (R9), AX
+    IMULL DX, AX
+    ADDL AX, 4(DI)
+    MOVBLSX (R10), AX
+    IMULL DX, AX
+    ADDL AX, 8(DI)
+    MOVBLSX (R11), AX
+    IMULL DX, AX
+    ADDL AX, 12(DI)
+    INCQ SI
+    INCQ R8
+    INCQ R9
+    INCQ R10
+    INCQ R11
+    DECQ CX
+    JNZ  b4vnni_scalar
+
+b4vnni_done:
     VZEROUPPER
     RET
