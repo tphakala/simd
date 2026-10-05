@@ -259,8 +259,8 @@ func BenchmarkAffine_1000(b *testing.B) {
 
 // log10FlooredBenchSizes covers one mel frame (128), STFT frames at nfft
 // 512/1024/2048 (257, 513, 1025; ragged, so they reach every kernel tail), about
-// one second of frames (48222, L2-resident) and a larger spectrogram (524800,
-// spills L2).
+// one second of frames (48222) and a larger spectrogram (524800); the last two
+// are where cache residency starts to matter.
 var log10FlooredBenchSizes = []int{128, 257, 513, 1025, 48222, 524800}
 
 // log10FlooredBenchFloor is a -100 dB power floor. The inputs are all positive
