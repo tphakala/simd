@@ -940,8 +940,9 @@ func Log10(dst, src []float64) {
 // It composes an exact lower clamp with the existing log10 kernel: it is
 // equivalent to Clamp(dst, src, floor, +Inf) then Log10(dst, dst), bit-identical
 // to that pair on each dispatch path. The clamp and the log run as two passes,
-// not a single fused kernel; a fused single-pass floored log10 is deferred (the
-// log dominates, so the extra clamp pass is a small fraction of the cost).
+// not a single fused kernel: a fused single-pass kernel was measured and not
+// adopted, since the log dominates and the clamp pass is a small fraction of the
+// cost (see BenchmarkLog10Floored).
 // Processes min(len(dst), len(src)) elements; in-place safe (dst may alias src).
 func Log10Floored(dst, src []float64, floor float64) {
 	n := min(len(dst), len(src))

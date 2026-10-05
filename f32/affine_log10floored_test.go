@@ -1,6 +1,7 @@
 package f32
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -248,15 +249,51 @@ func BenchmarkAffine_1000(b *testing.B) {
 	}
 }
 
-func BenchmarkLog10Floored_1000(b *testing.B) {
-	src := make([]float32, 1000)
-	dst := make([]float32, 1000)
-	for i := range src {
-		src[i] = genF32Pos(i)
+// log10FlooredBenchSizes covers one mel frame (128), STFT frames at nfft
+// 512/1024/2048 (257, 513, 1025; ragged, so they reach every kernel tail), about
+// one second of frames (48222, L2-resident) and a larger spectrogram (524800,
+// spills L2).
+var log10FlooredBenchSizes = []int{128, 257, 513, 1025, 48222, 524800}
+
+const (
+	log10FlooredBenchFloor  = 1e-10 // a -100 dB power floor
+	log10FlooredBenchZeroEv = 16    // every 16th input is 0 so the floor is exercised
+)
+
+// BenchmarkLog10Floored compares Log10Floored with the explicit two-pass
+// composition (ClampLog10, listed first so it is the benchstat base) and with
+// Log10 alone. A fused single-pass kernel does more work than Log10 alone, so
+// 1 - Log10/ClampLog10 is the ceiling on its win (#301). Read it with
+// `benchstat -col /op`.
+func BenchmarkLog10Floored(b *testing.B) {
+	inf := float32(math.Inf(1))
+	variants := []struct {
+		name string
+		fn   func(dst, src []float32)
+	}{
+		{"ClampLog10", func(dst, src []float32) {
+			Clamp(dst, src, log10FlooredBenchFloor, inf)
+			Log10(dst, dst)
+		}},
+		{"Log10Floored", func(dst, src []float32) { Log10Floored(dst, src, log10FlooredBenchFloor) }},
+		{"Log10", Log10},
 	}
-	b.SetBytes(1000 * 4 * 2)
-	for b.Loop() {
-		Log10Floored(dst, src, 1e-4)
+	for _, n := range log10FlooredBenchSizes {
+		src := make([]float32, n)
+		dst := make([]float32, n)
+		for i := range src {
+			if i%log10FlooredBenchZeroEv != 0 {
+				src[i] = genF32Pos(i)
+			}
+		}
+		for _, v := range variants {
+			b.Run(fmt.Sprintf("n=%d/op=%s", n, v.name), func(b *testing.B) {
+				b.SetBytes(int64(n) * 4 * 2) // read src, write dst
+				for b.Loop() {
+					v.fn(dst, src)
+				}
+			})
+		}
 	}
 }
 
