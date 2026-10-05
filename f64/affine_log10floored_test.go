@@ -263,10 +263,10 @@ func BenchmarkAffine_1000(b *testing.B) {
 // spills L2).
 var log10FlooredBenchSizes = []int{128, 257, 513, 1025, 48222, 524800}
 
-const (
-	log10FlooredBenchFloor  = 1e-10 // a -100 dB power floor
-	log10FlooredBenchZeroEv = 16    // every 16th input is 0 so the floor is exercised
-)
+// log10FlooredBenchFloor is a -100 dB power floor. The inputs are all positive
+// and above it, so every variant takes the same path through the log kernel and
+// the three variants differ only in the work they are meant to compare.
+const log10FlooredBenchFloor = 1e-10
 
 // BenchmarkLog10Floored compares Log10Floored with the explicit two-pass
 // composition (ClampLog10, listed first so it is the benchstat base) and with
@@ -290,9 +290,7 @@ func BenchmarkLog10Floored(b *testing.B) {
 		src := make([]float64, n)
 		dst := make([]float64, n)
 		for i := range src {
-			if i%log10FlooredBenchZeroEv != 0 {
-				src[i] = aliasGenF64Pos(i)
-			}
+			src[i] = aliasGenF64Pos(i)
 		}
 		for _, v := range variants {
 			b.Run(fmt.Sprintf("n=%d/op=%s", n, v.name), func(b *testing.B) {
