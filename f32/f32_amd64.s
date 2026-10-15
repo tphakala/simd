@@ -9837,7 +9837,7 @@ bqc4avx_done:
 // in YMM registers; the instruction set it needs is AVX2 (VPERMPS).
 //
 // Lane k holds section k and runs sample t-2k at step t, so section k's input at step t
-// is lane k-1's y2 register (its output two steps ago) moved up one lane (VPERMPS with biquadshift<> then VBLENDPS $1 with the broadcast sample)
+// is lane k-1's y2 register (its output two steps ago) moved up one lane (VPERMPS with biquadshift<> then VBLENDPS $1 with the broadcast sample).
 // A step computes b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with VMULPS,
 // VADDPS and VSUBPS. There is no VFMADD/VFMSUB: every product and every sum rounds to
 // float32 on its own, so the results match biquadCascadeGo and the arm64 kernels bit for
@@ -9846,7 +9846,7 @@ bqc4avx_done:
 // Arguments, all established by the Go wrapper (the kernel does not re-check them):
 // co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1
 // y2), rows 32 bytes apart, lane = section; lanes at or above sections hold zero
-// coefficients and state (the XMM kernel loads and stores only lanes 0..3 of each row).
+// coefficients and state.
 // sel holds sections-1 in every word and is the control of the output select (VPERMPS, then VMOVSS).
 // 1 <= sections, and len(src) == len(dst) = n >= max(1, 2*(sections-1)). st is read on
 // entry and written on exit with each section's state after n samples.
@@ -9866,7 +9866,7 @@ bqc4avx_done:
 //
 // Registers: coefficients b0..a2 in 0..4, state x1 5, x2 6, y1 7, y2 8 (the renamed steps
 // swap 5/6 and 7/8); acc 9, t or output 10, b2*x2 or xin 11, a2*y2 or mask 12, broadcast
-// 13, shift index 14 (YMM kernel only), output control 15. GP: DI dst, SI src, DX n, CX
+// 13, shift index 14, output control 15. GP: DI dst, SI src, DX n, CX
 // co, BX st, R8 sel, R9 sections, R10 j, R11 mask table, R12 pair count, AX scratch.
 // Frame: dst(24) + src(24) + co(8) + st(8) + sel(8) + sections(8) = 80.
 TEXT ·biquadCascade8AVX2(SB), NOSPLIT, $0-80
