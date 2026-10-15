@@ -1306,6 +1306,22 @@ func float32ToInt32ScaleClampSignedAVX(dst []int32, mag, sign []float32, scale, 
 //go:noescape
 func float32ToInt32ScaleClampAVX(dst []int32, src []float32, scale, offset, minV, maxV float32)
 
+// bucketBlock is the 16-lane block of float32ToUint8BucketAVX2; shorter inputs
+// use the Go path.
+const bucketBlock = 16
+
+func float32ToUint8Bucket(dst []uint8, src []float32, scale, offset, hi float32) {
+	// AVX2 path; the 256-bit VPACKSSDW/VPACKUSWB/VPERMQ narrow is AVX2-only.
+	if cpu.X86.AVX2 && len(dst) >= bucketBlock {
+		float32ToUint8BucketAVX2(dst, src, scale, offset, hi)
+		return
+	}
+	float32ToUint8BucketGo(dst, src, scale, offset, hi)
+}
+
+//go:noescape
+func float32ToUint8BucketAVX2(dst []uint8, src []float32, scale, offset, hi float32)
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

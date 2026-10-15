@@ -2457,6 +2457,132 @@ f32toi32s_neon_tail:
 f32toi32s_neon_done:
     RET
 
+// func float32ToUint8BucketNEON(dst []uint8, src []float32, scale, offset, hi float32)
+// dst[i] = uint8(clamp(src[i]*scale + offset, 0, hi)), truncated toward zero, with
+// hi = float32(buckets-1) and every non-finite input (NaN, +Inf, -Inf) forced to 0.
+// len(dst) >= 16.
+//
+// FMUL then FADD are deliberately SEPARATE (not FMLA): the product rounds to
+// float32 before offset is added, matching the Go reference and the AVX2 kernel
+// bit for bit (#156). The clamp runs in the float domain before FCVTZS. ARM
+// FMAX/FMIN (not the FMAXNM/FMINNM forms) PROPAGATE a NaN operand and FCVTZS maps
+// NaN to 0, so a NaN affine lands on 0 without masking. The input mask FACGT
+// (|+Inf| > |x|, false for NaN and +-Inf) is computed from the input before FMUL
+// overwrites it, and ANDed into the clamped float, zeroing non-finite input
+// lanes; because it tests the input and not v, a finite input whose product
+// overflows to +Inf still clamps to hi. The narrow is UZP1 .8H then .16B, not
+// SQXTN: every lane is already in [0, 255], UZP1 keeps the low half of each lane
+// exactly, and a signed saturating narrow would clip 128..255 to 127. The vector
+// float ops, AND and UZP1 are WORD-encoded, as in the neighbouring kernels (the
+// trailing mnemonic is checked by TestArm64WordEncodings); VDUP and VLD1/VST1 use
+// mnemonics. The final 16-block is reprocessed with overlap (rewriting identical
+// bytes); dst ([]uint8) and src ([]float32) cannot alias in safe Go, so this is
+// safe.
+// Frame: dst(24) + src(24) + scale(4)+offset(4)+hi(4) = 60.
+TEXT ·float32ToUint8BucketNEON(SB), NOSPLIT, $0-60
+    MOVD dst_base+0(FP), R0        // R0 = dst pointer (uint8 out)
+    MOVD dst_len+8(FP), R3         // R3 = length (len(dst) == len(src))
+    MOVD src_base+24(FP), R1       // R1 = src pointer (float32 in)
+    FMOVS scale+48(FP), F4         // F4 = scale
+    FMOVS offset+52(FP), F5        // F5 = offset
+    FMOVS hi+56(FP), F7            // F7 = hi
+
+    VDUP V4.S[0], V4.S4            // scale  x4
+    VDUP V5.S[0], V5.S4            // offset x4
+    VDUP V7.S[0], V7.S4            // hi     x4
+    VEOR V6.B16, V6.B16, V6.B16    // V6 = 0.0 x4
+    MOVW $0x7F800000, R5           // +Inf bit pattern
+    FMOVS R5, F16
+    VDUP V16.S[0], V16.S4          // V16 = +Inf x4
+
+    LSR $4, R3, R4                 // R4 = len / 16
+    CBZ R4, f32tou8_neon_tail
+
+f32tou8_neon_loop16:
+    VLD1.P 64(R1), [V0.S4, V1.S4, V2.S4, V3.S4] // 16 x float32
+    WORD $0x6EA0EE11               // FACGT V17.4S, V16.4S, V0.4S  (mask: |+Inf| > |x|; false for NaN and +-Inf)
+    WORD $0x6EA1EE12               // FACGT V18.4S, V16.4S, V1.4S
+    WORD $0x6EA2EE13               // FACGT V19.4S, V16.4S, V2.4S
+    WORD $0x6EA3EE14               // FACGT V20.4S, V16.4S, V3.4S
+    WORD $0x6E24DC00               // FMUL V0.4S, V0.4S, V4.4S   (product rounds to float32)
+    WORD $0x6E24DC21               // FMUL V1.4S, V1.4S, V4.4S
+    WORD $0x6E24DC42               // FMUL V2.4S, V2.4S, V4.4S
+    WORD $0x6E24DC63               // FMUL V3.4S, V3.4S, V4.4S
+    WORD $0x4E25D400               // FADD V0.4S, V0.4S, V5.4S   (+ offset; separate, not FMLA)
+    WORD $0x4E25D421               // FADD V1.4S, V1.4S, V5.4S
+    WORD $0x4E25D442               // FADD V2.4S, V2.4S, V5.4S
+    WORD $0x4E25D463               // FADD V3.4S, V3.4S, V5.4S
+    WORD $0x4E26F400               // FMAX V0.4S, V0.4S, V6.4S   (>= 0; NaN propagates)
+    WORD $0x4E26F421               // FMAX V1.4S, V1.4S, V6.4S
+    WORD $0x4E26F442               // FMAX V2.4S, V2.4S, V6.4S
+    WORD $0x4E26F463               // FMAX V3.4S, V3.4S, V6.4S
+    WORD $0x4EA7F400               // FMIN V0.4S, V0.4S, V7.4S   (<= hi; +Inf -> hi; NaN propagates)
+    WORD $0x4EA7F421               // FMIN V1.4S, V1.4S, V7.4S
+    WORD $0x4EA7F442               // FMIN V2.4S, V2.4S, V7.4S
+    WORD $0x4EA7F463               // FMIN V3.4S, V3.4S, V7.4S
+    WORD $0x4E311C00               // AND V0.16B, V0.16B, V17.16B  (non-finite input lanes -> +0.0)
+    WORD $0x4E321C21               // AND V1.16B, V1.16B, V18.16B
+    WORD $0x4E331C42               // AND V2.16B, V2.16B, V19.16B
+    WORD $0x4E341C63               // AND V3.16B, V3.16B, V20.16B
+    WORD $0x4EA1B800               // FCVTZS V0.4S, V0.4S        (truncate toward zero; NaN -> 0)
+    WORD $0x4EA1B821               // FCVTZS V1.4S, V1.4S
+    WORD $0x4EA1B842               // FCVTZS V2.4S, V2.4S
+    WORD $0x4EA1B863               // FCVTZS V3.4S, V3.4S
+    WORD $0x4E411800               // UZP1 V0.8H, V0.8H, V1.8H   (lanes 0-7 as uint16)
+    WORD $0x4E431842               // UZP1 V2.8H, V2.8H, V3.8H   (lanes 8-15 as uint16)
+    WORD $0x4E021800               // UZP1 V0.16B, V0.16B, V2.16B (lanes 0-15 as bytes, in order)
+    VST1.P [V0.B16], 16(R0)        // store 16 x uint8
+    SUB $1, R4
+    CBNZ R4, f32tou8_neon_loop16
+
+f32tou8_neon_tail:
+    AND $15, R3, R5                // R5 = len % 16
+    CBZ R5, f32tou8_neon_done
+
+    // Back up to the final 16 elements and reprocess them (overlap).
+    SUB $16, R3, R6                // R6 = len - 16
+    LSL $2, R6, R7                 // R7 = (len - 16) * 4 bytes
+    MOVD src_base+24(FP), R1
+    ADD R7, R1, R1                 // R1 = &src[len-16]
+    MOVD dst_base+0(FP), R0
+    ADD R6, R0, R0                 // R0 = &dst[len-16]
+    VLD1 (R1), [V0.S4, V1.S4, V2.S4, V3.S4]     // final 16 x float32
+    WORD $0x6EA0EE11               // FACGT V17.4S, V16.4S, V0.4S  (mask: |+Inf| > |x|; false for NaN and +-Inf)
+    WORD $0x6EA1EE12               // FACGT V18.4S, V16.4S, V1.4S
+    WORD $0x6EA2EE13               // FACGT V19.4S, V16.4S, V2.4S
+    WORD $0x6EA3EE14               // FACGT V20.4S, V16.4S, V3.4S
+    WORD $0x6E24DC00               // FMUL V0.4S, V0.4S, V4.4S   (product rounds to float32)
+    WORD $0x6E24DC21               // FMUL V1.4S, V1.4S, V4.4S
+    WORD $0x6E24DC42               // FMUL V2.4S, V2.4S, V4.4S
+    WORD $0x6E24DC63               // FMUL V3.4S, V3.4S, V4.4S
+    WORD $0x4E25D400               // FADD V0.4S, V0.4S, V5.4S   (+ offset; separate, not FMLA)
+    WORD $0x4E25D421               // FADD V1.4S, V1.4S, V5.4S
+    WORD $0x4E25D442               // FADD V2.4S, V2.4S, V5.4S
+    WORD $0x4E25D463               // FADD V3.4S, V3.4S, V5.4S
+    WORD $0x4E26F400               // FMAX V0.4S, V0.4S, V6.4S   (>= 0; NaN propagates)
+    WORD $0x4E26F421               // FMAX V1.4S, V1.4S, V6.4S
+    WORD $0x4E26F442               // FMAX V2.4S, V2.4S, V6.4S
+    WORD $0x4E26F463               // FMAX V3.4S, V3.4S, V6.4S
+    WORD $0x4EA7F400               // FMIN V0.4S, V0.4S, V7.4S   (<= hi; +Inf -> hi; NaN propagates)
+    WORD $0x4EA7F421               // FMIN V1.4S, V1.4S, V7.4S
+    WORD $0x4EA7F442               // FMIN V2.4S, V2.4S, V7.4S
+    WORD $0x4EA7F463               // FMIN V3.4S, V3.4S, V7.4S
+    WORD $0x4E311C00               // AND V0.16B, V0.16B, V17.16B  (non-finite input lanes -> +0.0)
+    WORD $0x4E321C21               // AND V1.16B, V1.16B, V18.16B
+    WORD $0x4E331C42               // AND V2.16B, V2.16B, V19.16B
+    WORD $0x4E341C63               // AND V3.16B, V3.16B, V20.16B
+    WORD $0x4EA1B800               // FCVTZS V0.4S, V0.4S        (truncate toward zero; NaN -> 0)
+    WORD $0x4EA1B821               // FCVTZS V1.4S, V1.4S
+    WORD $0x4EA1B842               // FCVTZS V2.4S, V2.4S
+    WORD $0x4EA1B863               // FCVTZS V3.4S, V3.4S
+    WORD $0x4E411800               // UZP1 V0.8H, V0.8H, V1.8H   (lanes 0-7 as uint16)
+    WORD $0x4E431842               // UZP1 V2.8H, V2.8H, V3.8H   (lanes 8-15 as uint16)
+    WORD $0x4E021800               // UZP1 V0.16B, V0.16B, V2.16B (lanes 0-15 as bytes, in order)
+    VST1 [V0.B16], (R0)            // store final 16 x uint8
+
+f32tou8_neon_done:
+    RET
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================

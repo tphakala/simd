@@ -84,6 +84,10 @@ func float32ToInt32ScaleClamp(dst []int32, src []float32, scale, offset, minV, m
 	float32ToInt32ScaleClampGo(dst, src, scale, offset, minV, maxV)
 }
 
+func float32ToUint8Bucket(dst []uint8, src []float32, scale, offset, hi float32) {
+	float32ToUint8BucketGo(dst, src, scale, offset, hi)
+}
+
 func float32ToInt32ScaleClampSigned(dst []int32, mag, sign []float32, scale, offset, minV, maxV float32) {
 	float32ToInt32ScaleClampSignedGo(dst, mag, sign, scale, offset, minV, maxV)
 }
