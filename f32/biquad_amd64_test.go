@@ -29,3 +29,35 @@ func TestBiquadCascadeAVX2Direct(t *testing.T) {
 	}
 	runBiquadSuite(t, biquadBlocksFunc(biquadMaxLanes))
 }
+
+// biquadRunnableLanes lists the lane counts the host can execute: 8 needs AVX2
+// and 4 needs AVX. It reads the cpu flags, so when SIMD_DISABLE clears them the
+// direct tests built on it skip and cover nothing on that run.
+func biquadRunnableLanes() []int {
+	var out []int
+	if cpu.X86.AVX2 {
+		out = append(out, biquadMaxLanes)
+	}
+	if cpu.X86.AVX {
+		out = append(out, biquadNarrowLanes)
+	}
+	return out
+}
+
+// TestBiquadKernelLanesMatchesCPU_amd64 pins biquadKernelLanes to the cpu flags,
+// the part TestBiquadCascadeRoutesToKernel takes on trust: a lane count that is
+// too low or zero would send every call down a slower path and still produce the
+// right output. It is white-box and must not call t.Parallel().
+func TestBiquadKernelLanesMatchesCPU_amd64(t *testing.T) {
+	want := 0
+	switch {
+	case cpu.X86.AVX2:
+		want = biquadMaxLanes
+	case cpu.X86.AVX:
+		want = biquadNarrowLanes
+	}
+	if got := biquadKernelLanes(); got != want {
+		t.Fatalf("biquadKernelLanes() = %d, want %d (AVX2=%v AVX=%v)",
+			got, want, cpu.X86.AVX2, cpu.X86.AVX)
+	}
+}
