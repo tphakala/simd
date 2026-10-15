@@ -169,8 +169,8 @@ func expE1AccuracySet() expE1Sample {
 		if testing.Short() {
 			nLog = 1 << 14
 		}
-		var xs []float32
-		lo, hi := math.Log(1e-45), math.Log(88)
+		xs := make([]float32, 0, nLog+20000)
+		lo, hi := math.Log(1e-45), math.Log(expE1Zero)
 		for i := 0; i < nLog; i++ {
 			xs = append(xs, float32(math.Exp(lo+(hi-lo)*float64(i)/float64(nLog-1))))
 		}
@@ -212,10 +212,15 @@ func expE1Lengths() []int {
 // the x <= 0 mask and the zero flush are exercised in every block position.
 func expE1RandomInputs(r *rand.Rand, n int) []float32 {
 	v := make([]float32, n)
+	fillExpE1Random(r, v)
+	return v
+}
+
+// fillExpE1Random overwrites v with the values expE1RandomInputs draws.
+func fillExpE1Random(r *rand.Rand, v []float32) {
 	for i := range v {
 		v[i] = float32(r.Float64()*92 - 2)
 	}
-	return v
 }
 
 // runExpE1Suite runs the whole ExpE1 contract against fn.
@@ -265,18 +270,24 @@ func expE1Edges(t *testing.T, fn expE1Func) {
 		1, 87.68, 87.69, 88, 88.0001, 89, 1e30, math.MaxFloat32,
 	}
 	const fill = 2.0
+	wantFill := e1Oracle(fill)
+	srcBuf := make([]float32, 40)
+	dstBuf := make([]float32, 40)
 	for _, x := range specials {
-		for n := 1; n <= 40; n++ {
-			for p := 0; p < n; p++ {
-				src := make([]float32, n)
+		for n := 1; n <= len(srcBuf); n++ {
+			src, dst := srcBuf[:n], dstBuf[:n]
+			for p := range n {
 				for i := range src {
 					src[i] = fill
 				}
 				src[p] = x
-				dst := make([]float32, n)
 				fn(dst, src)
 				for i := range dst {
-					if msg := e1Check(src[i], dst[i]); msg != "" {
+					msg := e1CheckValue(fill, dst[i], wantFill)
+					if i == p {
+						msg = e1Check(x, dst[i])
+					}
+					if msg != "" {
 						t.Fatalf("n=%d special %v at %d, lane %d: %s", n, x, p, i, msg)
 					}
 				}
@@ -308,14 +319,15 @@ func expE1ElementIndependence(t *testing.T, fn expE1Func) {
 		probes = append(probes, float32(r.Float64()*92-2))
 	}
 	probes = append(probes, 0.5, 1, 87.9, -3)
-	backing := make([]float32, 64+8)
-	out := make([]float32, 64+8)
+	const maxLen, maxOff = 40, 3
+	backing := make([]float32, maxLen+maxOff)
+	out := make([]float32, maxLen+maxOff)
 	for _, x := range probes {
 		base := expE1RandomInputs(r, 64)
 		base[0] = x
 		ref64 := make([]float32, 64)
 		fn(ref64, base)
-		for n := 4; n <= 40; n++ {
+		for n := 4; n <= maxLen; n++ {
 			want := ref64[0]
 			if n < wide {
 				short := append([]float32{x}, expE1RandomInputs(r, n-1)...)
@@ -326,7 +338,7 @@ func expE1ElementIndependence(t *testing.T, fn expE1Func) {
 			for off := range 4 {
 				for p := 0; p < n; p++ {
 					src := backing[off : off+n]
-					copy(src, expE1RandomInputs(r, n))
+					fillExpE1Random(r, src)
 					src[p] = x
 					dst := out[off : off+n]
 					fn(dst, src)
@@ -472,38 +484,14 @@ func TestExpE1TierParity(t *testing.T) {
 }
 
 func TestExpE1AllocFree(t *testing.T) {
-	cases := []struct {
-		name string
-		fn   func()
-	}{
-		{"ExpE1/n=3", func() {
-			var src, dst [3]float32
-			ExpE1(dst[:], src[:])
-		}},
-		{"ExpE1/n=128", func() {
-			var src, dst [128]float32
-			ExpE1(dst[:], src[:])
-		}},
-		{"ExpE1/n=257", func() {
-			var src, dst [257]float32
-			ExpE1(dst[:], src[:])
-		}},
-		{"ExpE1InPlace/n=3", func() {
-			var a [3]float32
-			ExpE1InPlace(a[:])
-		}},
-		{"ExpE1InPlace/n=128", func() {
-			var a [128]float32
-			ExpE1InPlace(a[:])
-		}},
-		{"ExpE1InPlace/n=257", func() {
-			var a [257]float32
-			ExpE1InPlace(a[:])
-		}},
-	}
-	for _, c := range cases {
-		if a := testing.AllocsPerRun(5, c.fn); a != 0 {
-			t.Errorf("%s allocated %v times per run, want 0", c.name, a)
+	for _, n := range []int{3, 128, 257} {
+		src := make([]float32, n)
+		dst := make([]float32, n)
+		if a := testing.AllocsPerRun(5, func() { ExpE1(dst, src) }); a != 0 {
+			t.Errorf("ExpE1/n=%d allocated %v times per run, want 0", n, a)
+		}
+		if a := testing.AllocsPerRun(5, func() { ExpE1InPlace(dst) }); a != 0 {
+			t.Errorf("ExpE1InPlace/n=%d allocated %v times per run, want 0", n, a)
 		}
 	}
 }

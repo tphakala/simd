@@ -9304,9 +9304,8 @@ GLOBL e1_c4<>(SB), RODATA|NOPTR, $32
 // for a NaN lane, so a NaN x becomes 1.0 in the hi branch; the final NaN blend
 // overrides it. Then x <= 0 (including -0 and -Inf) selects +Inf and NaN selects
 // quiet NaN; +Inf and x >= 88 reach +0 through the clamp. The polynomials use
-// VFMADD, so this is not a single-rounding kernel. Relative error is at most
-// 4.7e-7 for every float32 x in (0, 82.9] (measured over every such float32:
-// 4.62e-7 at x = 7.5932312); the result lanes are element independent.
+// VFMADD, so this is not a single-rounding kernel. The accuracy bound is
+// documented on ExpE1 (f32.go); the result lanes are element independent.
 //
 // Block size 8. When n is not a multiple of 8 the last eight source lanes are
 // loaded into Y15 BEFORE the main loop stores anything, and one more pass
