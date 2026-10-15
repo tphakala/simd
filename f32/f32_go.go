@@ -1304,3 +1304,37 @@ func minIdxOfSumRowsGo(vals []float32, idxs []int32, a, k []float32, base, slide
 		idxs[r] = int32(i)
 	}
 }
+
+// biquadCascadeGo is the pure-Go reference for BiquadCascade. It runs the
+// cascade section by section: each section makes one pass with its state in
+// locals, the first over src and the others in place over dst. That order gives
+// the same bits as sample-by-sample, because a section's output depends only on
+// its own input stream and state.
+//
+// The float32 conversion around each product is the mandatory FMA barrier (see
+// #156): the sums need none, since Go evaluates + and - left to right and the
+// converted products cannot fuse.
+func biquadCascadeGo(dst, src, coeffs, state []float32) {
+	src = src[:min(len(dst), len(src))] // never extend dst into its capacity
+	dst = dst[:len(src)]
+	if len(dst) == 0 {
+		return
+	}
+	for k := range len(coeffs) / biquadCoeffs {
+		c := coeffs[biquadCoeffs*k : biquadCoeffs*(k+1)]
+		s := state[biquadStateLen*k : biquadStateLen*(k+1)]
+		b0, b1, b2, a1, a2 := c[0], c[1], c[2], c[3], c[4]
+		x1, x2, y1, y2 := s[0], s[1], s[2], s[3]
+		in := src
+		if k > 0 {
+			in = dst
+		}
+		for i, x := range in[:len(dst)] {
+			y := float32(b0*x) + float32(b1*x1) + float32(b2*x2) - float32(a1*y1) - float32(a2*y2)
+			x2, x1 = x1, x
+			y2, y1 = y1, y
+			dst[i] = y
+		}
+		s[0], s[1], s[2], s[3] = x1, x2, y1, y2
+	}
+}

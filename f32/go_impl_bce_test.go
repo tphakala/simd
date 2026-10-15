@@ -27,4 +27,5 @@ func TestGoFallbacks_EmptyDst(_ *testing.T) {
 	tanh32Go(dst, src)
 	exp32Go(dst, src)
 	expE1Go(dst, src)
+	biquadCascadeGo(dst, src, make([]float32, biquadCoeffs), make([]float32, biquadStateLen))
 }

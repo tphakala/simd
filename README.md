@@ -358,6 +358,20 @@ unless `1 <= buckets <= 256`.
 `ExpE1InPlace` is the in-place form. The kernel is a single pass with its own
 range-reduced exp core, so it does not inherit the roughly 7e-6 error of `Exp`.
 
+**IIR filtering** (f32-specific):
+
+| Function | Description | SIMD Width |
+| --- | --- | --- |
+| `BiquadCascade(dst, src, coeffs, state)` | Direct Form I biquad cascade, state in and out, bit-exact with the scalar no-FMA recurrence (`coeffs` is `[b0 b1 b2 a1 a2]` and `state` is `[x1 x2 y1 y2]` per section) | 8 sections per pass (AVX2, NEON) / 4 (AVX) |
+
+`BiquadCascade` runs one section per vector lane, skewed by two samples, so a
+cascade of up to 8 sections costs a small multiple of one section's time per
+sample rather than 8 times. Each product and sum rounds to float32 on its own (no FMA, no flush of subnormals), so
+every non-NaN result is identical on every path and for any chunking of the
+stream. It may run in place (`dst == src`), processes `min(len(dst), len(src))`
+samples, and panics unless `len(coeffs)` is a positive multiple of 5 and
+`len(state)` is 4 per section.
+
 `InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
 a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
 streams do not map onto a clean register transpose) on top of the shared N=2/4 (AVX)
@@ -1148,7 +1162,9 @@ slides), `Int16ToFloat32Scale`, `Float32ToInt16Scale` and `Float32ToUint8Bucket`
 `Autocorrelate`, `RealFFTUnpack` and `RealFFTPower`. `cpu.Info()` cannot show this: it collapses
 AVX2 into `AMD64 AVX+FMA`, so an AVX+FMA host without AVX2 (AMD Piledriver and
 Steamroller) reports the same string while taking the Go path for those
-operations. `TestAmd64KernelISALevel` and `TestAmd64KernelDispatchRequiresAVX2`
+operations. `f32.BiquadCascade` is the exception: its 8-section kernel (named
+`...AVX2`) needs AVX2, but its 4-section kernel needs only AVX, so an AVX-only
+host runs it in 4-section passes rather than in Go. `TestAmd64KernelISALevel` and `TestAmd64KernelDispatchRequiresAVX2`
 are what keep the names and the guards consistent.
 
 ARM64 runs NEON kernels throughout, with an FP16 (FEAT_FP16) fast path in `f16`

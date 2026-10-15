@@ -5709,3 +5709,556 @@ minidxrows4_write:
     VST1 [V0.S4], (R0)             // vals[0:4]
     VST1 [V1.S4], (R1)             // idxs[0:4]
     RET
+
+// biquadmask<> is 8 all-ones words then 8 zero words. The 16- or 32-byte load at byte
+// offset 4*(8-j) is the prefix mask "lanes < j" (all-ones in lanes 0..j-1), used by
+// the NEON biquad cascade kernels to fill and drain the lane pipeline.
+DATA biquadmask<>+0(SB)/4, $0xffffffff
+DATA biquadmask<>+4(SB)/4, $0xffffffff
+DATA biquadmask<>+8(SB)/4, $0xffffffff
+DATA biquadmask<>+12(SB)/4, $0xffffffff
+DATA biquadmask<>+16(SB)/4, $0xffffffff
+DATA biquadmask<>+20(SB)/4, $0xffffffff
+DATA biquadmask<>+24(SB)/4, $0xffffffff
+DATA biquadmask<>+28(SB)/4, $0xffffffff
+DATA biquadmask<>+32(SB)/4, $0
+DATA biquadmask<>+36(SB)/4, $0
+DATA biquadmask<>+40(SB)/4, $0
+DATA biquadmask<>+44(SB)/4, $0
+DATA biquadmask<>+48(SB)/4, $0
+DATA biquadmask<>+52(SB)/4, $0
+DATA biquadmask<>+56(SB)/4, $0
+DATA biquadmask<>+60(SB)/4, $0
+GLOBL biquadmask<>(SB), RODATA|NOPTR, $64
+
+// func biquadCascade4NEON(dst, src []float32, co, st *float32, sel *uint32, sections int)
+// Lane-pipelined Direct Form I biquad cascade behind BiquadCascade, for 1..4 sections
+// (one Q register per row).
+//
+// Lane k holds section k and runs sample t-2k at step t, so section k's input at step t
+// is lane k-1's y2 register (its output two steps ago) moved up one lane by EXT, with
+// the new src sample entering lane 0 from the broadcast register V26. A step computes
+// b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with FMUL, FADD and FSUB. The
+// vector float ops are never FMLA/FMLS: every product and every sum rounds to float32
+// on its own, so the results match biquadCascadeGo and the amd64 kernels bit for bit
+// (#156), and FPCR is never touched, so subnormals are not flushed.
+//
+// Arguments, all established by the Go wrapper (the kernel does not re-check them):
+// co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1
+// y2), rows 32 bytes apart, lane = section; lanes at or above sections hold zero
+// coefficients and state. sel is 4 words of TBL byte indices that move lane (sections-1)%4 of V16
+// (the last section's y2) to lane 0. 1 <= sections, and len(src) == len(dst) = n >= max(1,
+// 2*(sections-1)). st is read on entry and written on exit with each section's state
+// after n samples.
+//
+// Phases. Fill: for j = 1..sections-1, two steps under the mask "lanes < j" read src and
+// advance only the lanes that already have a sample (BIT blends of the four state rows,
+// no output); the other lanes keep the caller's state. Odd: when n - 2*(sections-1) is
+// odd, one step with plain register moves and an output. Steady: (n - 2*(sections-1))/2
+// pairs of steps that rename instead of move: a step writes the shifted input over the
+// old x2 register and the new y over the old y2 register, so the next step swaps the
+// x1/x2 and y1/y2 roles, and a pair restores them. Drain: the state image is stored (lane
+// 0 is final), the broadcast register is zeroed so no src element past n-1 is read, and
+// for j = 1..sections-1 two more steps produce the last outputs; lane j is final after
+// pair j and BIF copies it into the stored image, keeping the lanes below j.
+// Each step that outputs selects the last section's lane with TBL and stores it with
+// FMOVS.P, which advances dst. The step at index t reads src[t] and writes
+// dst[t-2*(sections-1)], never ahead of the read, so dst may alias src exactly.
+//
+// Registers (low Q of each pair): coefficients b0 V0, b1 V2, b2 V4, a1 V6, a2 V8; state
+// x1 V10, x2 V12, y1 V14, y2 V16 (the renamed steps swap V10/V12 and V14/V16); acc V18,
+// t V20, b2*x2 or xin V22, a2*y2 or capture temp V24, broadcast V26, selector V27,
+// output V28, mask V29. GP: R0 dst, R1 src, R2 n, R3 co, R4 st, R5 sel, R6 sections,
+// R7 j, R8 mask table, R9 scratch, R10 pair count.
+// Frame: dst(24) + src(24) + co(8) + st(8) + sel(8) + sections(8) = 80.
+TEXT ·biquadCascade4NEON(SB), NOSPLIT, $0-80
+    MOVD dst_base+0(FP), R0
+    MOVD src_base+24(FP), R1
+    MOVD src_len+32(FP), R2
+    MOVD co+48(FP), R3
+    MOVD st+56(FP), R4
+    MOVD sel+64(FP), R5
+    MOVD sections+72(FP), R6
+    VLD1 (R3), [V0.S4]
+    ADD $32, R3
+    VLD1 (R3), [V2.S4]
+    ADD $32, R3
+    VLD1 (R3), [V4.S4]
+    ADD $32, R3
+    VLD1 (R3), [V6.S4]
+    ADD $32, R3
+    VLD1 (R3), [V8.S4]
+    MOVD R4, R9
+    VLD1 (R9), [V10.S4]
+    ADD $32, R9
+    VLD1 (R9), [V12.S4]
+    ADD $32, R9
+    VLD1 (R9), [V14.S4]
+    ADD $32, R9
+    VLD1 (R9), [V16.S4]
+    VLD1 (R5), [V27.B16]
+    MOVD $biquadmask<>(SB), R8
+    MOVD $1, R7
+bqc4neon_fill:
+    CMP R6, R7
+    BGE bqc4neon_filldone
+    MOVD $8, R9
+    SUB R7, R9, R9
+    ADD R9<<2, R8, R9
+    VLD1 (R9), [V29.S4]
+    VLD1R.P 4(R1), [V26.S4]
+    VEXT $12, V16.B16, V26.B16, V22.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    VBIT V29.B16, V10.B16, V12.B16
+    VBIT V29.B16, V22.B16, V10.B16
+    VBIT V29.B16, V14.B16, V16.B16
+    VBIT V29.B16, V18.B16, V14.B16
+    VLD1R.P 4(R1), [V26.S4]
+    VEXT $12, V16.B16, V26.B16, V22.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    VBIT V29.B16, V10.B16, V12.B16
+    VBIT V29.B16, V22.B16, V10.B16
+    VBIT V29.B16, V14.B16, V16.B16
+    VBIT V29.B16, V18.B16, V14.B16
+    ADD $1, R7
+    B bqc4neon_fill
+bqc4neon_filldone:
+    SUB $1, R6, R9
+    SUB R9<<1, R2, R10
+    TBZ $0, R10, bqc4neon_even
+    VLD1R.P 4(R1), [V26.S4]
+    VEXT $12, V16.B16, V26.B16, V22.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    VMOV V10.B16, V12.B16
+    VMOV V22.B16, V10.B16
+    VMOV V14.B16, V16.B16
+    VMOV V18.B16, V14.B16
+    VTBL V27.B16, [V14.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+bqc4neon_even:
+    LSR $1, R10, R10
+    CBZ R10, bqc4neon_steadydone
+bqc4neon_steady:
+    VLD1R.P 4(R1), [V26.S4]
+    WORD $0x6E2CDC96 // FMUL V22.4S, V4.4S, V12.4S
+    VEXT $12, V16.B16, V26.B16, V12.B16
+    WORD $0x6E30DD18 // FMUL V24.4S, V8.4S, V16.4S
+    WORD $0x6E2CDC12 // FMUL V18.4S, V0.4S, V12.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB8D650 // FSUB V16.4S, V18.4S, V24.4S
+    VTBL V27.B16, [V16.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    VLD1R.P 4(R1), [V26.S4]
+    WORD $0x6E2ADC96 // FMUL V22.4S, V4.4S, V10.4S
+    VEXT $12, V14.B16, V26.B16, V10.B16
+    WORD $0x6E2EDD18 // FMUL V24.4S, V8.4S, V14.4S
+    WORD $0x6E2ADC12 // FMUL V18.4S, V0.4S, V10.4S
+    WORD $0x6E2CDC54 // FMUL V20.4S, V2.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x6E30DCD4 // FMUL V20.4S, V6.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB8D64E // FSUB V14.4S, V18.4S, V24.4S
+    VTBL V27.B16, [V14.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    SUBS $1, R10, R10
+    BNE bqc4neon_steady
+bqc4neon_steadydone:
+    MOVD R4, R9
+    VST1 [V10.S4], (R9)
+    ADD $32, R9
+    VST1 [V12.S4], (R9)
+    ADD $32, R9
+    VST1 [V14.S4], (R9)
+    ADD $32, R9
+    VST1 [V16.S4], (R9)
+    VEOR V26.B16, V26.B16, V26.B16
+    MOVD $1, R7
+bqc4neon_drain:
+    CMP R6, R7
+    BGE bqc4neon_done
+    WORD $0x6E2CDC96 // FMUL V22.4S, V4.4S, V12.4S
+    VEXT $12, V16.B16, V26.B16, V12.B16
+    WORD $0x6E30DD18 // FMUL V24.4S, V8.4S, V16.4S
+    WORD $0x6E2CDC12 // FMUL V18.4S, V0.4S, V12.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB8D650 // FSUB V16.4S, V18.4S, V24.4S
+    VTBL V27.B16, [V16.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    WORD $0x6E2ADC96 // FMUL V22.4S, V4.4S, V10.4S
+    VEXT $12, V14.B16, V26.B16, V10.B16
+    WORD $0x6E2EDD18 // FMUL V24.4S, V8.4S, V14.4S
+    WORD $0x6E2ADC12 // FMUL V18.4S, V0.4S, V10.4S
+    WORD $0x6E2CDC54 // FMUL V20.4S, V2.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x6E30DCD4 // FMUL V20.4S, V6.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB8D64E // FSUB V14.4S, V18.4S, V24.4S
+    VTBL V27.B16, [V14.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    MOVD $8, R9
+    SUB R7, R9, R9
+    ADD R9<<2, R8, R9
+    VLD1 (R9), [V29.S4]
+    MOVD R4, R9
+    VLD1 (R9), [V24.S4]
+    VBIF V29.B16, V10.B16, V24.B16
+    VST1 [V24.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4]
+    VBIF V29.B16, V12.B16, V24.B16
+    VST1 [V24.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4]
+    VBIF V29.B16, V14.B16, V24.B16
+    VST1 [V24.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4]
+    VBIF V29.B16, V16.B16, V24.B16
+    VST1 [V24.S4], (R9)
+    ADD $1, R7
+    B bqc4neon_drain
+bqc4neon_done:
+    RET
+
+// func biquadCascade8NEON(dst, src []float32, co, st *float32, sel *uint32, sections int)
+// Lane-pipelined Direct Form I biquad cascade behind BiquadCascade, for 5..8 sections
+// (two Q registers per row).
+//
+// Lane k holds section k and runs sample t-2k at step t, so section k's input at step t
+// is lane k-1's y2 register (its output two steps ago) moved up one lane by EXT, with
+// the new src sample entering lane 0 from the broadcast register V26. A step computes
+// b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with FMUL, FADD and FSUB. The
+// vector float ops are never FMLA/FMLS: every product and every sum rounds to float32
+// on its own, so the results match biquadCascadeGo and the amd64 kernels bit for bit
+// (#156), and FPCR is never touched, so subnormals are not flushed.
+//
+// Arguments, all established by the Go wrapper (the kernel does not re-check them):
+// co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1
+// y2), rows 32 bytes apart, lane = section; lanes at or above sections hold zero
+// coefficients and state. sel is 4 words of TBL byte indices that move lane (sections-1)%4 of V17
+// (the last section's y2) to lane 0. 1 <= sections, and len(src) == len(dst) = n >= max(1,
+// 2*(sections-1)). st is read on entry and written on exit with each section's state
+// after n samples.
+//
+// Phases. Fill: for j = 1..sections-1, two steps under the mask "lanes < j" read src and
+// advance only the lanes that already have a sample (BIT blends of the four state rows,
+// no output); the other lanes keep the caller's state. Odd: when n - 2*(sections-1) is
+// odd, one step with plain register moves and an output. Steady: (n - 2*(sections-1))/2
+// pairs of steps that rename instead of move: a step writes the shifted input over the
+// old x2 register and the new y over the old y2 register, so the next step swaps the
+// x1/x2 and y1/y2 roles, and a pair restores them. Drain: the state image is stored (lane
+// 0 is final), the broadcast register is zeroed so no src element past n-1 is read, and
+// for j = 1..sections-1 two more steps produce the last outputs; lane j is final after
+// pair j and BIF copies it into the stored image, keeping the lanes below j.
+// Each step that outputs selects the last section's lane with TBL and stores it with
+// FMOVS.P, which advances dst. The step at index t reads src[t] and writes
+// dst[t-2*(sections-1)], never ahead of the read, so dst may alias src exactly.
+//
+// Registers (Vn low half, Vn+1 high half): coefficients b0 V0, b1 V2, b2 V4, a1 V6, a2
+// V8; state x1 V10, x2 V12, y1 V14, y2 V16 (the renamed steps swap V10/V12 and V14/V16);
+// acc V18, t V20, b2*x2 or xin V22, a2*y2 or capture temp V24, broadcast V26, selector
+// V27, output V28, mask V29/V30. GP: R0 dst, R1 src, R2 n, R3 co, R4 st, R5 sel, R6
+// sections, R7 j, R8 mask table, R9 scratch, R10 pair count.
+// Frame: dst(24) + src(24) + co(8) + st(8) + sel(8) + sections(8) = 80.
+TEXT ·biquadCascade8NEON(SB), NOSPLIT, $0-80
+    MOVD dst_base+0(FP), R0
+    MOVD src_base+24(FP), R1
+    MOVD src_len+32(FP), R2
+    MOVD co+48(FP), R3
+    MOVD st+56(FP), R4
+    MOVD sel+64(FP), R5
+    MOVD sections+72(FP), R6
+    VLD1 (R3), [V0.S4, V1.S4]
+    ADD $32, R3
+    VLD1 (R3), [V2.S4, V3.S4]
+    ADD $32, R3
+    VLD1 (R3), [V4.S4, V5.S4]
+    ADD $32, R3
+    VLD1 (R3), [V6.S4, V7.S4]
+    ADD $32, R3
+    VLD1 (R3), [V8.S4, V9.S4]
+    MOVD R4, R9
+    VLD1 (R9), [V10.S4, V11.S4]
+    ADD $32, R9
+    VLD1 (R9), [V12.S4, V13.S4]
+    ADD $32, R9
+    VLD1 (R9), [V14.S4, V15.S4]
+    ADD $32, R9
+    VLD1 (R9), [V16.S4, V17.S4]
+    VLD1 (R5), [V27.B16]
+    MOVD $biquadmask<>(SB), R8
+    MOVD $1, R7
+bqc8neon_fill:
+    CMP R6, R7
+    BGE bqc8neon_filldone
+    MOVD $8, R9
+    SUB R7, R9, R9
+    ADD R9<<2, R8, R9
+    VLD1 (R9), [V29.S4, V30.S4]
+    VLD1R.P 4(R1), [V26.S4]
+    VEXT $12, V16.B16, V26.B16, V22.B16
+    VEXT $12, V17.B16, V16.B16, V23.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E37DC33 // FMUL V19.4S, V1.4S, V23.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x6E2BDC75 // FMUL V21.4S, V3.4S, V11.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x6E2DDCB5 // FMUL V21.4S, V5.4S, V13.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x6E2FDCF5 // FMUL V21.4S, V7.4S, V15.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x6E31DD35 // FMUL V21.4S, V9.4S, V17.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    VBIT V29.B16, V10.B16, V12.B16
+    VBIT V29.B16, V22.B16, V10.B16
+    VBIT V29.B16, V14.B16, V16.B16
+    VBIT V29.B16, V18.B16, V14.B16
+    VBIT V30.B16, V11.B16, V13.B16
+    VBIT V30.B16, V23.B16, V11.B16
+    VBIT V30.B16, V15.B16, V17.B16
+    VBIT V30.B16, V19.B16, V15.B16
+    VLD1R.P 4(R1), [V26.S4]
+    VEXT $12, V16.B16, V26.B16, V22.B16
+    VEXT $12, V17.B16, V16.B16, V23.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E37DC33 // FMUL V19.4S, V1.4S, V23.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x6E2BDC75 // FMUL V21.4S, V3.4S, V11.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x6E2DDCB5 // FMUL V21.4S, V5.4S, V13.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x6E2FDCF5 // FMUL V21.4S, V7.4S, V15.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x6E31DD35 // FMUL V21.4S, V9.4S, V17.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    VBIT V29.B16, V10.B16, V12.B16
+    VBIT V29.B16, V22.B16, V10.B16
+    VBIT V29.B16, V14.B16, V16.B16
+    VBIT V29.B16, V18.B16, V14.B16
+    VBIT V30.B16, V11.B16, V13.B16
+    VBIT V30.B16, V23.B16, V11.B16
+    VBIT V30.B16, V15.B16, V17.B16
+    VBIT V30.B16, V19.B16, V15.B16
+    ADD $1, R7
+    B bqc8neon_fill
+bqc8neon_filldone:
+    SUB $1, R6, R9
+    SUB R9<<1, R2, R10
+    TBZ $0, R10, bqc8neon_even
+    VLD1R.P 4(R1), [V26.S4]
+    VEXT $12, V16.B16, V26.B16, V22.B16
+    VEXT $12, V17.B16, V16.B16, V23.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E37DC33 // FMUL V19.4S, V1.4S, V23.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x6E2BDC75 // FMUL V21.4S, V3.4S, V11.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x6E2DDCB5 // FMUL V21.4S, V5.4S, V13.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x6E2FDCF5 // FMUL V21.4S, V7.4S, V15.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x6E31DD35 // FMUL V21.4S, V9.4S, V17.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    VMOV V10.B16, V12.B16
+    VMOV V22.B16, V10.B16
+    VMOV V14.B16, V16.B16
+    VMOV V18.B16, V14.B16
+    VMOV V11.B16, V13.B16
+    VMOV V23.B16, V11.B16
+    VMOV V15.B16, V17.B16
+    VMOV V19.B16, V15.B16
+    VTBL V27.B16, [V15.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+bqc8neon_even:
+    LSR $1, R10, R10
+    CBZ R10, bqc8neon_steadydone
+bqc8neon_steady:
+    VLD1R.P 4(R1), [V26.S4]
+    WORD $0x6E2CDC96 // FMUL V22.4S, V4.4S, V12.4S
+    WORD $0x6E2DDCB7 // FMUL V23.4S, V5.4S, V13.4S
+    VEXT $12, V16.B16, V26.B16, V12.B16
+    VEXT $12, V17.B16, V16.B16, V13.B16
+    WORD $0x6E30DD18 // FMUL V24.4S, V8.4S, V16.4S
+    WORD $0x6E31DD39 // FMUL V25.4S, V9.4S, V17.4S
+    WORD $0x6E2CDC12 // FMUL V18.4S, V0.4S, V12.4S
+    WORD $0x6E2DDC33 // FMUL V19.4S, V1.4S, V13.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x6E2BDC75 // FMUL V21.4S, V3.4S, V11.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x4E37D673 // FADD V19.4S, V19.4S, V23.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x6E2FDCF5 // FMUL V21.4S, V7.4S, V15.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    WORD $0x4EB8D650 // FSUB V16.4S, V18.4S, V24.4S
+    WORD $0x4EB9D671 // FSUB V17.4S, V19.4S, V25.4S
+    VTBL V27.B16, [V17.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    VLD1R.P 4(R1), [V26.S4]
+    WORD $0x6E2ADC96 // FMUL V22.4S, V4.4S, V10.4S
+    WORD $0x6E2BDCB7 // FMUL V23.4S, V5.4S, V11.4S
+    VEXT $12, V14.B16, V26.B16, V10.B16
+    VEXT $12, V15.B16, V14.B16, V11.B16
+    WORD $0x6E2EDD18 // FMUL V24.4S, V8.4S, V14.4S
+    WORD $0x6E2FDD39 // FMUL V25.4S, V9.4S, V15.4S
+    WORD $0x6E2ADC12 // FMUL V18.4S, V0.4S, V10.4S
+    WORD $0x6E2BDC33 // FMUL V19.4S, V1.4S, V11.4S
+    WORD $0x6E2CDC54 // FMUL V20.4S, V2.4S, V12.4S
+    WORD $0x6E2DDC75 // FMUL V21.4S, V3.4S, V13.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x4E37D673 // FADD V19.4S, V19.4S, V23.4S
+    WORD $0x6E30DCD4 // FMUL V20.4S, V6.4S, V16.4S
+    WORD $0x6E31DCF5 // FMUL V21.4S, V7.4S, V17.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    WORD $0x4EB8D64E // FSUB V14.4S, V18.4S, V24.4S
+    WORD $0x4EB9D66F // FSUB V15.4S, V19.4S, V25.4S
+    VTBL V27.B16, [V15.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    SUBS $1, R10, R10
+    BNE bqc8neon_steady
+bqc8neon_steadydone:
+    MOVD R4, R9
+    VST1 [V10.S4, V11.S4], (R9)
+    ADD $32, R9
+    VST1 [V12.S4, V13.S4], (R9)
+    ADD $32, R9
+    VST1 [V14.S4, V15.S4], (R9)
+    ADD $32, R9
+    VST1 [V16.S4, V17.S4], (R9)
+    VEOR V26.B16, V26.B16, V26.B16
+    MOVD $1, R7
+bqc8neon_drain:
+    CMP R6, R7
+    BGE bqc8neon_done
+    WORD $0x6E2CDC96 // FMUL V22.4S, V4.4S, V12.4S
+    WORD $0x6E2DDCB7 // FMUL V23.4S, V5.4S, V13.4S
+    VEXT $12, V16.B16, V26.B16, V12.B16
+    VEXT $12, V17.B16, V16.B16, V13.B16
+    WORD $0x6E30DD18 // FMUL V24.4S, V8.4S, V16.4S
+    WORD $0x6E31DD39 // FMUL V25.4S, V9.4S, V17.4S
+    WORD $0x6E2CDC12 // FMUL V18.4S, V0.4S, V12.4S
+    WORD $0x6E2DDC33 // FMUL V19.4S, V1.4S, V13.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x6E2BDC75 // FMUL V21.4S, V3.4S, V11.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x4E37D673 // FADD V19.4S, V19.4S, V23.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x6E2FDCF5 // FMUL V21.4S, V7.4S, V15.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    WORD $0x4EB8D650 // FSUB V16.4S, V18.4S, V24.4S
+    WORD $0x4EB9D671 // FSUB V17.4S, V19.4S, V25.4S
+    VTBL V27.B16, [V17.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    WORD $0x6E2ADC96 // FMUL V22.4S, V4.4S, V10.4S
+    WORD $0x6E2BDCB7 // FMUL V23.4S, V5.4S, V11.4S
+    VEXT $12, V14.B16, V26.B16, V10.B16
+    VEXT $12, V15.B16, V14.B16, V11.B16
+    WORD $0x6E2EDD18 // FMUL V24.4S, V8.4S, V14.4S
+    WORD $0x6E2FDD39 // FMUL V25.4S, V9.4S, V15.4S
+    WORD $0x6E2ADC12 // FMUL V18.4S, V0.4S, V10.4S
+    WORD $0x6E2BDC33 // FMUL V19.4S, V1.4S, V11.4S
+    WORD $0x6E2CDC54 // FMUL V20.4S, V2.4S, V12.4S
+    WORD $0x6E2DDC75 // FMUL V21.4S, V3.4S, V13.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E35D673 // FADD V19.4S, V19.4S, V21.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x4E37D673 // FADD V19.4S, V19.4S, V23.4S
+    WORD $0x6E30DCD4 // FMUL V20.4S, V6.4S, V16.4S
+    WORD $0x6E31DCF5 // FMUL V21.4S, V7.4S, V17.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB5D673 // FSUB V19.4S, V19.4S, V21.4S
+    WORD $0x4EB8D64E // FSUB V14.4S, V18.4S, V24.4S
+    WORD $0x4EB9D66F // FSUB V15.4S, V19.4S, V25.4S
+    VTBL V27.B16, [V15.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    MOVD $8, R9
+    SUB R7, R9, R9
+    ADD R9<<2, R8, R9
+    VLD1 (R9), [V29.S4, V30.S4]
+    MOVD R4, R9
+    VLD1 (R9), [V24.S4, V25.S4]
+    VBIF V29.B16, V10.B16, V24.B16
+    VBIF V30.B16, V11.B16, V25.B16
+    VST1 [V24.S4, V25.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4, V25.S4]
+    VBIF V29.B16, V12.B16, V24.B16
+    VBIF V30.B16, V13.B16, V25.B16
+    VST1 [V24.S4, V25.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4, V25.S4]
+    VBIF V29.B16, V14.B16, V24.B16
+    VBIF V30.B16, V15.B16, V25.B16
+    VST1 [V24.S4, V25.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4, V25.S4]
+    VBIF V29.B16, V16.B16, V24.B16
+    VBIF V30.B16, V17.B16, V25.B16
+    VST1 [V24.S4, V25.S4], (R9)
+    ADD $1, R7
+    B bqc8neon_drain
+bqc8neon_done:
+    RET

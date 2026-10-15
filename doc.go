@@ -90,6 +90,8 @@
 //
 // Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int32ToFloat32ScaleAdd (fused dequantize-accumulate dst[i] = a[i] + float32(src[i])*scale, two roundings), Int16ToFloat32Scale, Float32ToInt16Scale
 //
+// IIR filtering (f32): BiquadCascade (Direct Form I biquad cascade with state in and out; bit-exact with the scalar no-FMA recurrence)
+//
 // Sliding-window argmin (f32): MinIdxOfSum, MinIdxOfSumRows (batched sliding-window argmin of a[i]+k[base+r*slide+i], first-index-wins ties, bit-exact across all paths)
 //
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames, NumBins, NFFT, RFFT, IRFFT, ISTFT) - fused real-input short-time Fourier transform and its inverse, with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
