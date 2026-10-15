@@ -1143,8 +1143,8 @@ AVX2 sits between AVX+FMA and AVX-512 for `f32` and `f64` and is easy to miss,
 because the kernels behind it keep the `...AVX` name and only their dispatch
 guard names AVX2. Both packages gate `Sigmoid`, `Tanh`, `Exp`, `Log`, `Pow`,
 `InterleaveN` and `DeinterleaveN` on it; `f32` adds `MinIdxOfSumRows` (unit
-slides), `Int16ToFloat32Scale`, `Float32ToInt16Scale`, `Float32ToUint8Bucket`
-and `ExpE1` (their kernels are named `...AVX2`; `ExpE1` also needs FMA), and `f64` adds
+slides), `Int16ToFloat32Scale`, `Float32ToInt16Scale` and `Float32ToUint8Bucket`
+(its kernel is named `...AVX2`), and `ExpE1` (its kernel is named `...AVX2` and also needs FMA), and `f64` adds
 `Autocorrelate`, `RealFFTUnpack` and `RealFFTPower`. `cpu.Info()` cannot show this: it collapses
 AVX2 into `AMD64 AVX+FMA`, so an AVX+FMA host without AVX2 (AMD Piledriver and
 Steamroller) reports the same string while taking the Go path for those
