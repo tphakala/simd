@@ -113,37 +113,202 @@ func TestAmd64KernelDispatchRequiresAVX2(t *testing.T) {
 // is not dominated by a condition establishing that feature.
 func checkKernelGated(t *testing.T, file, pkgDir string, k asmcheck.X86Kernel, pf *pkgFuncs, ax gateAxis) {
 	t.Helper()
-	refs := 0
-	for _, name := range sortedFuncNames(pf.funcs) {
-		fn := pf.funcs[name]
-		if name == k.Name || fn.Body == nil {
-			continue
-		}
-		for _, path := range referencePaths(fn, k.Name) {
-			refs++
-			if dominatedByGate(path, bindParams(pf, name), ax.idents) {
-				continue
-			}
-			// The guard may sit one frame up. Two shapes in this repo put it
-			// there: the initXxx tier assigners, whose selecting case lives in
-			// init(), and helpers such as dotProductBatchKernel that take the
-			// tier decision as a bool parameter and are only ever called from an
-			// already-gated branch.
-			if callSitesGated(name, pf, ax.idents, 0) {
-				continue
-			}
-			t.Errorf("%s: kernel %s needs %s, but %s.%s dispatches it from a branch "+
-				"that does not require %s, and not every call site of %s requires it "+
-				"either.\n\tfirst %s use: %s:%d %s\n%s",
-				file, k.Name, ax.name, pkgDir, name, ax.name, name,
-				ax.name, file, ax.firstLine(k), ax.firstText(k), ax.remedy)
-		}
+	ungated, refs := ungatedDispatches(k.Name, pf, ax.idents)
+	for _, name := range ungated {
+		t.Errorf("%s: kernel %s needs %s, but %s.%s dispatches it from a branch "+
+			"that does not require %s, and not every call site of %s requires it "+
+			"either.\n\tfirst %s use: %s:%d %s\n%s",
+			file, k.Name, ax.name, pkgDir, name, ax.name, name,
+			ax.name, file, ax.firstLine(k), ax.firstText(k), ax.remedy)
 	}
 	if refs == 0 {
 		t.Errorf("%s: kernel %s needs %s but nothing in %s references it. "+
 			"Either it is dead code, or its dispatch lives somewhere this test does not "+
 			"parse (only %s/*_amd64.go is read).", file, k.Name, ax.name, pkgDir, pkgDir)
 	}
+}
+
+// ungatedDispatches returns the name of the function holding each reference to
+// kernel that is not gated, one entry per reference, and the total number of
+// references found.
+func ungatedDispatches(kernel string, pf *pkgFuncs, idents map[string]bool) (ungated []string, refs int) {
+	for _, name := range sortedFuncNames(pf.funcs) {
+		fn := pf.funcs[name]
+		if name == kernel || fn.Body == nil {
+			continue
+		}
+		for _, path := range referencePaths(fn, kernel) {
+			refs++
+			if dominatedByGate(path, bindParams(pf, name), idents) {
+				continue
+			}
+			// The guard may sit one frame up. Three shapes in this repo put it
+			// there: the initXxx tier assigners, whose selecting case lives in
+			// init(); helpers such as dotProductBatchKernel that take the tier
+			// decision as a bool parameter and are only ever called from an
+			// already-gated branch; and a bool-parameter helper that is also
+			// called with a literal false from the non-SIMD tiers, which
+			// interleave2Kernels is in f32.
+			if callSitesGated(name, pf, idents, 0) || deadArgSitesGated(fn, path, pf, idents) {
+				continue
+			}
+			ungated = append(ungated, name)
+		}
+	}
+	return ungated, refs
+}
+
+// guardParams returns the indices of fn's bool parameters that are a bare
+// identifier among the top-level && conjuncts of an `if` condition on path whose
+// then-branch holds the reference. When such a parameter is false the reference
+// is unreachable. A parameter the body assigns, redefines, shadows or takes the
+// address of is dropped, because then its value at the `if` is not the argument.
+func guardParams(fn *ast.FuncDecl, path []ast.Node) []int {
+	idx := map[string]int{}
+	n := 0
+	if fn.Type.Params != nil {
+		for _, field := range fn.Type.Params.List {
+			isBool := false
+			if id, ok := field.Type.(*ast.Ident); ok {
+				isBool = id.Name == "bool"
+			}
+			for _, id := range field.Names {
+				if isBool && id.Name != "_" {
+					idx[id.Name] = n
+				}
+				n++
+			}
+		}
+	}
+	for name := range rebound(fn) {
+		delete(idx, name)
+	}
+
+	var out []int
+	var conjuncts func(e ast.Expr)
+	conjuncts = func(e ast.Expr) {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			conjuncts(x.X)
+		case *ast.BinaryExpr:
+			if x.Op == token.LAND {
+				conjuncts(x.X)
+				conjuncts(x.Y)
+			}
+		case *ast.Ident:
+			if i, ok := idx[x.Name]; ok {
+				out = append(out, i)
+			}
+		}
+	}
+	// Only an IfStmt counts. In a tagged switch the case expressions are values
+	// compared against the tag, not conditions.
+	for i, nd := range path {
+		if ifs, ok := nd.(*ast.IfStmt); ok && i+1 < len(path) && path[i+1] == ast.Node(ifs.Body) {
+			conjuncts(ifs.Cond)
+		}
+	}
+	return out
+}
+
+// rebound returns every name fn's body assigns, declares, ranges over, binds as
+// a closure parameter, or takes the address of.
+func rebound(fn *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	mark := func(e ast.Expr) {
+		if id, ok := e.(*ast.Ident); ok {
+			out[id.Name] = true
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				mark(l)
+			}
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				out[id.Name] = true
+			}
+		case *ast.RangeStmt:
+			if x.Key != nil {
+				mark(x.Key)
+			}
+			if x.Value != nil {
+				mark(x.Value)
+			}
+		case *ast.FuncLit:
+			for _, field := range x.Type.Params.List {
+				for _, id := range field.Names {
+					out[id.Name] = true
+				}
+			}
+		case *ast.UnaryExpr:
+			if x.Op == token.AND {
+				mark(x.X)
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// deadArgSitesGated reports whether the reference at the end of path, inside fn,
+// is unreachable at every call site that is not itself gated: each call site of
+// fn either passes the literal false for a parameter guardParams found, or is
+// gated as callSitesGated understands it. At least one call site must exist, and
+// a use of fn as a value is never excused.
+func deadArgSitesGated(fn *ast.FuncDecl, path []ast.Node, pf *pkgFuncs, idents map[string]bool) bool {
+	guard := guardParams(fn, path)
+	if len(guard) == 0 {
+		return false
+	}
+	name := fn.Name.Name
+	sites := 0
+	for _, caller := range sortedFuncNames(pf.funcs) {
+		cf := pf.funcs[caller]
+		if cf.Body == nil || caller == name {
+			continue
+		}
+		for _, p := range referencePaths(cf, name) {
+			sites++
+			if call := enclosingCall(p); call != nil && passesLiteralFalse(call, guard) {
+				continue
+			}
+			if dominatedByGate(p, bindParams(pf, caller), idents) ||
+				callSitesGated(caller, pf, idents, 1) {
+				continue
+			}
+			return false
+		}
+	}
+	return sites > 0
+}
+
+// enclosingCall returns the call whose function expression is the identifier at
+// the end of path, or nil when that identifier is used as a value.
+func enclosingCall(path []ast.Node) *ast.CallExpr {
+	if len(path) < 2 {
+		return nil
+	}
+	call, ok := path[len(path)-2].(*ast.CallExpr)
+	if !ok || call.Fun != path[len(path)-1] {
+		return nil
+	}
+	return call
+}
+
+// passesLiteralFalse reports whether call passes the literal false at any of the
+// given argument indices.
+func passesLiteralFalse(call *ast.CallExpr, indices []int) bool {
+	for _, i := range indices {
+		if i < len(call.Args) {
+			if id, ok := call.Args[i].(*ast.Ident); ok && id.Name == "false" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // callSiteDepth bounds the walk up the call graph. This repo's deepest gated
@@ -292,10 +457,16 @@ func dominatedByGate(path []ast.Node, pf *pkgFuncs, idents map[string]bool) bool
 				return true
 			}
 		case *ast.CaseClause:
-			for _, expr := range node.List {
-				if positiveGate(expr, pf, idents) {
-					return true
-				}
+			// In a tagless switch a case list is an implicit ||: any one
+			// expression selects the case, so every one of them has to require
+			// the feature. The default clause (an empty list) is reached when
+			// none held. A tagged switch compares its case values with the tag
+			// instead of evaluating them, and a fallthrough from the clause
+			// before enters this one without testing its list, so neither
+			// counts.
+			if len(node.List) > 0 && i >= 2 && tagless(path[i-2]) &&
+				!fallsIntoClause(path[i-1], node) && allPositiveGates(node.List, pf, idents) {
+				return true
 			}
 		case *ast.BlockStmt:
 			if i+1 < len(path) && earlyOutGuardBefore(node, path[i+1], pf, idents) {
@@ -357,84 +528,159 @@ func negativeGate(cond ast.Expr, pf *pkgFuncs, idents map[string]bool) bool {
 	return gatePolarity(cond, pf, idents, true)
 }
 
+// tagless reports whether n is an expression switch with no tag, whose case
+// expressions are conditions.
+func tagless(n ast.Node) bool {
+	sw, ok := n.(*ast.SwitchStmt)
+	return ok && sw.Tag == nil
+}
+
+// fallsIntoClause reports whether the clause before cc in the switch body ends
+// with a fallthrough.
+func fallsIntoClause(body ast.Node, cc *ast.CaseClause) bool {
+	block, ok := body.(*ast.BlockStmt)
+	if !ok {
+		return true
+	}
+	for i, st := range block.List {
+		if st != ast.Stmt(cc) {
+			continue
+		}
+		if i == 0 {
+			return false
+		}
+		prev, ok := block.List[i-1].(*ast.CaseClause)
+		if !ok || len(prev.Body) == 0 {
+			return false
+		}
+		br, ok := prev.Body[len(prev.Body)-1].(*ast.BranchStmt)
+		return ok && br.Tok == token.FALLTHROUGH
+	}
+	return true
+}
+
+// allPositiveGates reports whether every expression in list requires the
+// feature when true.
+func allPositiveGates(list []ast.Expr, pf *pkgFuncs, idents map[string]bool) bool {
+	for _, expr := range list {
+		if !positiveGate(expr, pf, idents) {
+			return false
+		}
+	}
+	return true
+}
+
 // gateWalkDepth bounds the recursion through cached vars and predicate
 // functions. Two hops covers every shape in this repo (`hasAVX2` resolving to
 // cpu.X86.AVX2, and logSIMDOK32 returning a conjunction of them); the bound
-// exists so a var or predicate that refers to itself cannot spin.
+// exists so a var or predicate that refers to itself cannot spin. The depth is
+// carried into a predicate's return expressions rather than restarted there.
 const gateWalkDepth = 4
 
 // gatePolarity walks cond looking for a gate in idents whose sense matches want
 // (want=false: the gate as written; want=true: the gate under a `!`).
 func gatePolarity(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool) bool {
-	found := false
-	var walk func(e ast.Expr, negated bool, depth int)
-	walk = func(e ast.Expr, negated bool, depth int) {
-		if e == nil || found || depth > gateWalkDepth {
-			return
+	return gateWalk(cond, pf, idents, want, 0)
+}
+
+// gateWalk is gatePolarity starting at a given recursion depth.
+func gateWalk(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool, depth int) bool {
+	// walk reports whether e, assumed to evaluate to the value the walk is
+	// tracking, implies the feature. holds is that assumed value: true when an
+	// even number of `!` sit above e and want is false, or an odd number and
+	// want is true. A conjunction assumed true implies the feature when either
+	// side does; a disjunction assumed true needs both sides, since either alone
+	// can make it true. Assumed false, the two swap (De Morgan).
+	var walk func(e ast.Expr, negated bool, depth int) bool
+	walk = func(e ast.Expr, negated bool, depth int) bool {
+		if e == nil || depth > gateWalkDepth {
+			return false
 		}
+		holds := negated == want
 		switch x := e.(type) {
 		case *ast.UnaryExpr:
 			if x.Op == token.NOT {
-				walk(x.X, !negated, depth)
-				return
+				return walk(x.X, !negated, depth)
 			}
-			walk(x.X, negated, depth)
+			return walk(x.X, negated, depth)
 		case *ast.BinaryExpr:
-			walk(x.X, negated, depth)
-			walk(x.Y, negated, depth)
-		case *ast.ParenExpr:
-			walk(x.X, negated, depth)
-		case *ast.SelectorExpr:
-			if idents[x.Sel.Name] && negated == want {
-				found = true
+			switch {
+			case x.Op == token.LAND && holds, x.Op == token.LOR && !holds:
+				return walk(x.X, negated, depth) || walk(x.Y, negated, depth)
+			case x.Op == token.LOR && holds, x.Op == token.LAND && !holds:
+				return walk(x.X, negated, depth) && walk(x.Y, negated, depth)
 			}
+			return false
+		case *ast.ParenExpr:
+			return walk(x.X, negated, depth)
+		case *ast.SelectorExpr:
+			return idents[x.Sel.Name] && holds
 		case *ast.Ident:
-			if idents[x.Name] && negated == want {
-				found = true
-				return
+			if idents[x.Name] {
+				return holds
 			}
 			// A cached gate such as `var hasAVX2 = cpu.X86.AVX2`. Resolving the
 			// initializer rather than trusting the name is what makes redefining
 			// it as cpu.X86.AVX fail the check.
 			if init, ok := pf.varInits[x.Name]; ok {
-				walk(init, negated, depth+1)
+				return walk(init, negated, depth+1)
 			}
 		case *ast.CallExpr:
 			// A predicate such as logSIMDOK32(n) whose body returns the gate.
 			id, ok := x.Fun.(*ast.Ident)
-			if ok && negated == want && predicateGates(id.Name, pf, idents, depth+1) {
-				found = true
-			}
+			return ok && holds && predicateGates(id.Name, pf, idents, depth+1)
 		}
-	}
-	walk(cond, false, 0)
-	return found
-}
-
-// predicateGates reports whether a same-package function returns an expression
-// that requires the feature, which is how the log and pow family keeps its guard.
-func predicateGates(name string, pf *pkgFuncs, idents map[string]bool, depth int) bool {
-	fn := pf.funcs[name]
-	if fn == nil || fn.Body == nil || depth > gateWalkDepth {
 		return false
 	}
-	found := false
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		ret, ok := n.(*ast.ReturnStmt)
-		if !ok {
+	return walk(cond, false, depth)
+}
+
+// hasNamedResults reports whether fn names its results. A bare return, or a
+// deferred closure, can then set the result without a return expression the
+// walk could check, so such a function is never accepted as a predicate gate.
+func hasNamedResults(fn *ast.FuncDecl) bool {
+	if fn.Type.Results == nil {
+		return false
+	}
+	for _, f := range fn.Type.Results.List {
+		if len(f.Names) > 0 {
 			return true
 		}
-		for _, r := range ret.Results {
-			if gatePolarity(r, pf, idents, false) {
-				found = true
+	}
+	return false
+}
+
+// predicateGates reports whether a same-package function only returns true when
+// the feature is present, which is how the log and pow family keeps its guard.
+// Every return must be a gate, except a literal false, which never makes the
+// caller's condition hold; a single ungated `return true` would let the kernel
+// run without the feature. Returns inside nested function literals belong to
+// those literals and are skipped.
+func predicateGates(name string, pf *pkgFuncs, idents map[string]bool, depth int) bool {
+	fn := pf.funcs[name]
+	if fn == nil || fn.Body == nil || depth > gateWalkDepth || hasNamedResults(fn) {
+		return false
+	}
+	gated, ungated := false, false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			for _, r := range x.Results {
+				if id, ok := r.(*ast.Ident); ok && id.Name == "false" {
+					continue
+				}
+				if gateWalk(r, pf, idents, false, depth) {
+					gated = true
+				} else {
+					ungated = true
+				}
 			}
 		}
 		return true
 	})
-	return found
+	return gated && !ungated
 }
 
 // sortedFuncNames returns the map's keys in a stable order so that a failure

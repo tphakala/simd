@@ -91,11 +91,11 @@ way in.
 ## AMD64: ISA-level and dispatch checks on kernels
 
 Beyond spelling, an amd64 kernel is machine-checked against the CPU features its
-name claims and its dispatch actually guards. All three checks below are pure
+name claims and its dispatch actually guards. All four checks below are pure
 source analysis, so they run on any host and fail the suite with an actionable
 message rather than letting a mis-gated kernel SIGILL on hardware CI does not own.
 The authoritative write-up is the `CLAUDE.md` section "AMD64: the dispatch guard is
-machine-checked, on two axes", and the enforcing tests named below are the source
+machine-checked, on three axes", and the enforcing tests named below are the source
 of truth for the exact encodings and tiers each one covers. This is the short
 pointer version, so a contributor adding a kernel meets the constraints here in the
 assembly guide and follows the reference for the full rationale:
@@ -116,6 +116,11 @@ assembly guide and follows the reference for the full rationale:
   needs its own conjunct in the guard. A kernel using one may not be assigned by
   `initAVXNoFMA`, `initSSE`, `initSSE2` or `initGo`, nor dispatched from a branch
   testing only `cpu.X86.AVX`.
+- **Dispatch versus body, AVX** (`TestAmd64KernelDispatchRequiresAVX`,
+  `asmcheck_amd64_avx_test.go`). A kernel with any VEX or EVEX encoding, including
+  a 128-bit one such as `VMOVD`, must be dispatched only behind `cpu.X86.AVX` or a
+  flag implying it (`AVX2`, `AVX512F`, `AVX512VL`, `AVXVNNI`, `F16C`). `cpu.X86.FMA`
+  does not imply AVX.
 
 `TestNoFMAContract` is unrelated despite the name. It forbids fusing in the kernels
 listed in `singleRoundingKernels`, which is the #156 contract about where rounding

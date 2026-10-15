@@ -3,7 +3,9 @@ package asmcheck
 // This file adds a static ISA-level check for the AMD64 assembly. For every TEXT
 // symbol it reports the instructions that need more than AVX1, so a test can
 // assert that a kernel's body never outruns the CPU feature its dispatch guard
-// requires.
+// requires. It also records the first instruction that needs AVX at all (any VEX
+// or EVEX encoding), so a test can assert the same of a kernel that stays within
+// AVX1 but is dispatched without an AVX guard.
 //
 // The bug class it exists to catch is real and has shipped twice (#196, #197): a
 // kernel named ...AVX, selected behind a plain cpu.X86.AVX guard, whose body in
@@ -83,7 +85,19 @@ type X86Kernel struct {
 	Line  int      // 1-based line of the TEXT directive
 	Level X86Level // the highest level any instruction in the body needs
 	Uses  []X86Use // qualifying instructions, in source order; nil when clean
+
+	// AVX is the first instruction in the body that needs AVX state: a
+	// V-prefixed mnemonic (VEX or EVEX, whatever the vector width), a YMM or ZMM
+	// operand, or anything above AVX1 (including opaque hand-encoded
+	// directives). It is nil when the body has none. It is recorded separately
+	// from Uses, which lists only what exceeds AVX1, so a plain AVX1 kernel still
+	// has no Uses. It is a pointer so that X86Kernel stays cheap to pass by value.
+	AVX *X86Use
 }
+
+// NeedsAVX reports whether the kernel's body contains an instruction that
+// faults on a CPU, or an OS configuration, without AVX.
+func (k X86Kernel) NeedsAVX() bool { return k.AVX != nil }
 
 // Needs reports whether the kernel's body uses an instruction requiring f.
 func (k X86Kernel) Needs(f X86Feature) bool {
@@ -186,6 +200,10 @@ var noFeatureMnemonics = map[string]bool{
 	"PCDATA": true, "RET": true, "NOP": true,
 }
 
+// nonVEXVMnemonics are V-prefixed mnemonics that are not VEX-encoded: VERR and
+// VERW test segment readability and writability.
+var nonVEXVMnemonics = map[string]bool{"VERR": true, "VERW": true}
+
 // stripAsmComment removes a trailing // comment and surrounding whitespace from
 // one line of Go assembly.
 func stripAsmComment(line string) string {
@@ -245,6 +263,28 @@ func x86InstrLevel(instr string) (level X86Level, reason string) {
 	return X86LevelAVX, ""
 }
 
+// x86InstrNeedsAVX reports whether one AMD64 instruction needs AVX state, with a
+// short reason. That is every instruction x86InstrLevel puts above AVX1, every
+// V-prefixed mnemonic except VERR and VERW (a 128-bit VEX form such as VMOVD
+// faults without AVX just as a YMM one does), and any YMM or ZMM operand.
+func x86InstrNeedsAVX(instr string) (needs bool, reason string) {
+	if level, lreason := x86InstrLevel(instr); level > X86LevelAVX {
+		return true, lreason
+	}
+	m := instrRe.FindStringSubmatch(instr)
+	if m == nil {
+		return false, ""
+	}
+	mnem, operands := m[1], m[3]
+	if strings.HasPrefix(mnem, "V") && !nonVEXVMnemonics[mnem] {
+		return true, "VEX-encoded " + mnem
+	}
+	if ymmRe.MatchString(operands) || zmmRe.MatchString(operands) {
+		return true, "YMM or ZMM operand"
+	}
+	return false, ""
+}
+
 // x86InstrFeature reports the off-ladder CPUID feature one AMD64 instruction
 // needs, or "" if it needs none. It is deliberately independent of
 // x86InstrLevel: an FMA3 instruction is AVX1-legal as far as the level ladder is
@@ -292,6 +332,13 @@ func ScanX86Source(src string) []X86Kernel {
 			}
 			level, reason := x86InstrLevel(stmt)
 			feature, freason := x86InstrFeature(stmt)
+			// Recorded before the AVX1 skip below, so Uses keeps listing only
+			// what exceeds AVX1.
+			if k := &out[cur]; k.AVX == nil {
+				if needs, areason := x86InstrNeedsAVX(stmt); needs {
+					k.AVX = &X86Use{Line: i + 1, Text: stmt, Level: level, Reason: areason}
+				}
+			}
 			if level == X86LevelAVX && feature == "" {
 				continue
 			}

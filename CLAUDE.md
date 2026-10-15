@@ -56,10 +56,10 @@ suite cross-checks every `WORD` against `golang.org/x/arch/arm64asm` (see
 `asmcheck_test.go` / the public `asmcheck` package). When you add or change a `WORD`,
 verify the encoding with `aarch64-linux-gnu-as` + objdump or `arm64asm`.
 
-### AMD64: the dispatch guard is machine-checked, on two axes
+### AMD64: the dispatch guard is machine-checked, on three axes
 
 An amd64 kernel's body is checked against the CPU features its dispatch actually
-requires. A guard that is merely documented is not enough; both of these fail the
+requires. A guard that is merely documented is not enough; all of these fail the
 suite rather than SIGILLing on hardware CI does not own.
 
 - **AVX2** (`asmcheck_amd64_isa_test.go`, `asmcheck_amd64_gate_test.go`, #200). The
@@ -74,11 +74,19 @@ suite rather than SIGILLing on hardware CI does not own.
   `initSSE2` or `initGo`, and may not be dispatched from a branch testing only
   `cpu.X86.AVX`. f64 and c128 keep an `initAVXNoFMA` tier precisely for the parts
   that have AVX and no FMA3.
+- **AVX** (`asmcheck_amd64_avx_test.go`). A kernel with any VEX or EVEX encoding (a
+  `V...` mnemonic at any width, a YMM or ZMM operand, or a hand-encoded byte run)
+  must be dispatched from a branch that requires `cpu.X86.AVX` or a flag implying
+  it: `AVX2`, `AVX512F`, `AVX512VL`, `AVXVNNI` or `F16C`. `cpu.X86.FMA` does not
+  count, because golang.org/x/sys/cpu sets it from the CPUID bit without checking
+  that the OS enabled YMM state. A helper that takes the tier as a bool parameter,
+  such as `interleave2Kernels(avx bool)`, passes when every call site is either
+  gated or passes the literal `false` for that parameter.
 
-Both checks are pure source analysis, so they run on any host. Both resolve a
+All three checks are pure source analysis, so they run on any host. They resolve a
 guard spelled through a cached package var, a function parameter or a local, so
-write the dispatch in whatever shape reads best. Neither can see across a package
-boundary: only `<pkg>/*_amd64.go` is parsed.
+write the dispatch in whatever shape reads best. None of them can see across a
+package boundary: only `<pkg>/*_amd64.go` is parsed.
 
 Separately, `TestNoFMAContract` forbids fusing in the kernels listed in
 `singleRoundingKernels`. That is the #156 numerical contract about where rounding

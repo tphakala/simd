@@ -1164,8 +1164,8 @@ AVX2 into `AMD64 AVX+FMA`, so an AVX+FMA host without AVX2 (AMD Piledriver and
 Steamroller) reports the same string while taking the Go path for those
 operations. `f32.BiquadCascade` is the exception: its 8-section kernel (named
 `...AVX2`) needs AVX2, but its 4-section kernel needs only AVX, so an AVX-only
-host runs it in 4-section passes rather than in Go. `TestAmd64KernelISALevel` and `TestAmd64KernelDispatchRequiresAVX2`
-are what keep the names and the guards consistent.
+host runs it in 4-section passes rather than in Go. `TestAmd64KernelISALevel`, `TestAmd64KernelDispatchRequiresAVX2` and
+`TestAmd64KernelDispatchRequiresAVX` are what keep the names and the guards consistent.
 
 ARM64 runs NEON kernels throughout, with an FP16 (FEAT_FP16) fast path in `f16`
 and FP16-widened variants elsewhere, plus an SDOT (FEAT_DotProd) fast path for

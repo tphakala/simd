@@ -235,3 +235,82 @@ func TestScanX86SourceSplitsStatements(t *testing.T) {
 			"classified", kernels[0].Level, X86LevelAVX2)
 	}
 }
+
+func TestX86InstrNeedsAVX(t *testing.T) {
+	cases := []struct {
+		instr string
+		want  bool
+	}{
+		// VEX at any width, and anything above AVX1.
+		{"VADDPS X1, X2, X0", true}, // 128-bit VEX still faults without AVX
+		{"VZEROUPPER", true},
+		{"VMOVD AX, X0", true},
+		{"VPXOR X0, X0, X0", true},
+		{"VADDPS Y1, Y2, Y0", true},
+		{"BYTE $0xc4", true},
+		{"VADDPS.Z Z1, Z2, K1, Z0", true},
+		{"KMOVW K1, AX", true},
+
+		// Legacy SSE, scalar, and the V-prefixed instructions that are not VEX.
+		{"ADDPS X1, X0", false},
+		{"PXOR X0, X0", false},
+		{"MOVUPS (SI), X0", false},
+		{"PCLMULQDQ $0, X1, X0", false},
+		{"VERR AX", false},
+		{"VERW AX", false},
+		{"RET", false},
+		{"MOVQ AX, BX", false},
+		{"loop:", false},
+	}
+	for _, c := range cases {
+		if got, _ := x86InstrNeedsAVX(c.instr); got != c.want {
+			t.Errorf("x86InstrNeedsAVX(%q) = %v, want %v", c.instr, got, c.want)
+		}
+	}
+}
+
+const avxScanFixture = `#include "textflag.h"
+
+TEXT ·sseOnly(SB), NOSPLIT, $0-8
+    MOVUPS (SI), X0
+    ADDPS X1, X0
+    RET
+
+TEXT ·plainAVX(SB), NOSPLIT, $0-8
+    MOVQ a+0(FP), SI
+    VMOVUPS (SI), Y0
+    VADDPS Y1, Y0, Y0
+    RET
+
+TEXT ·narrowVEX(SB), NOSPLIT, $0-8
+    MOVD AX, X0
+    VMOVD AX, X0
+    RET
+`
+
+// TestScanX86SourceRecordsFirstAVXUse pins the AVX field and that adding it did
+// not change Uses: a plain AVX1 kernel still reports no Uses.
+func TestScanX86SourceRecordsFirstAVXUse(t *testing.T) {
+	kernels := ScanX86Source(avxScanFixture)
+	if len(kernels) != 3 {
+		t.Fatalf("got %d kernels, want 3: %+v", len(kernels), kernels)
+	}
+
+	if k := kernels[0]; k.NeedsAVX() || k.AVX != nil {
+		t.Errorf("sseOnly: NeedsAVX = %v, AVX = %+v; want none", k.NeedsAVX(), k.AVX)
+	}
+
+	plain := kernels[1]
+	if !plain.NeedsAVX() || plain.AVX.Line != 10 || plain.AVX.Text != "VMOVUPS (SI), Y0" {
+		t.Fatalf("plainAVX AVX = %+v, want line 10 VMOVUPS (SI), Y0", plain.AVX)
+	}
+	if len(plain.Uses) != 0 || plain.Level != X86LevelAVX {
+		t.Errorf("plainAVX Uses = %+v, Level = %v; the AVX field must not alter either",
+			plain.Uses, plain.Level)
+	}
+
+	narrow := kernels[2]
+	if !narrow.NeedsAVX() || narrow.AVX.Line != 16 {
+		t.Fatalf("narrowVEX AVX = %+v, want line 16 (the VEX-encoded VMOVD, not the legacy MOVD)", narrow.AVX)
+	}
+}
