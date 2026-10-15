@@ -8,17 +8,6 @@ import (
 	"github.com/tphakala/simd/cpu"
 )
 
-// biquadKernelLanes is the widest pass the host runs on a kernel, or 0.
-func biquadKernelLanes() int {
-	switch {
-	case cpu.X86.AVX2:
-		return biquadMaxLanes
-	case cpu.X86.AVX:
-		return biquadNarrowLanes
-	}
-	return 0
-}
-
 // TestBiquadCascadeAVXDirect runs the suite against the 4-section AVX kernel only:
 // lanes 4 makes every cascade, including N = 5..8, run in passes of 4 sections,
 // the path an AVX-only host takes. It skips when cpu.X86.AVX is false, which is

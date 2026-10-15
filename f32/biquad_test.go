@@ -41,12 +41,6 @@ func biquadOracle(dst, src, coeffs, state []float32) {
 	}
 }
 
-// biquadSame compares two float32 values as the contract promises: equal bits,
-// or both NaN (the NaN payload and sign differ between architectures).
-func biquadSame(a, b float32) bool {
-	return math.Float32bits(a) == math.Float32bits(b) || (a != a && b != b)
-}
-
 // biquadCompare fails the test on the first mismatches between a result and the
 // oracle, for both the output and the final state.
 func biquadCompare(t *testing.T, tag string, wantDst, gotDst, wantSt, gotSt []float32) {
@@ -60,12 +54,12 @@ func biquadCompare(t *testing.T, tag string, wantDst, gotDst, wantSt, gotSt []fl
 		bad++
 	}
 	for i := range wantDst {
-		if !biquadSame(wantDst[i], gotDst[i]) {
+		if !bitsEqF32(wantDst[i], gotDst[i]) {
 			report("dst", i, gotDst[i], wantDst[i])
 		}
 	}
 	for i := range wantSt {
-		if !biquadSame(wantSt[i], gotSt[i]) {
+		if !bitsEqF32(wantSt[i], gotSt[i]) {
 			report("state", i, gotSt[i], wantSt[i])
 		}
 	}
@@ -205,8 +199,6 @@ var biquadLengths = func() []int {
 
 const biquadLongLength = 48000
 
-func biquadClone(s []float32) []float32 { return slices.Clone(s) }
-
 // biquadCheckExact runs fn against the oracle for every section count, length,
 // signal and initial state, out of place and in place.
 func biquadCheckExact(t *testing.T, fn biquadFunc) {
@@ -228,17 +220,17 @@ func biquadCheckExact(t *testing.T, fn biquadFunc) {
 						st0 = biquadRandState(sections, r)
 					}
 					want := make([]float32, n)
-					wantSt := biquadClone(st0)
+					wantSt := slices.Clone(st0)
 					biquadOracle(want, src, coeffs, wantSt)
 
 					tag := fmt.Sprintf("N=%d n=%d %s zeroState=%v", sections, n, sig.name, zeroState)
 					got := make([]float32, n)
-					gotSt := biquadClone(st0)
+					gotSt := slices.Clone(st0)
 					fn(got, src, coeffs, gotSt)
 					biquadCompare(t, tag+" out-of-place", want, got, wantSt, gotSt)
 
-					inPlace := biquadClone(src)
-					gotSt = biquadClone(st0)
+					inPlace := slices.Clone(src)
+					gotSt = slices.Clone(st0)
 					fn(inPlace, inPlace, coeffs, gotSt)
 					biquadCompare(t, tag+" in-place", want, inPlace, wantSt, gotSt)
 				}
@@ -290,11 +282,11 @@ func biquadCheckChunked(t *testing.T, fn biquadFunc) {
 			}
 			st0 := biquadRandState(sections, r)
 			want := make([]float32, n)
-			wantSt := biquadClone(st0)
+			wantSt := slices.Clone(st0)
 			biquadOracle(want, src, coeffs, wantSt)
 
 			got := make([]float32, n)
-			gotSt := biquadClone(st0)
+			gotSt := slices.Clone(st0)
 			calls := 0
 			for i := 0; i < n; {
 				c := min(biquadChunkLen(r, sections), n-i)
@@ -328,14 +320,14 @@ func biquadCheckUnaligned(t *testing.T, fn biquadFunc) {
 				src := srcBuf[srcOff : srcOff+n]
 				st0 := biquadRandState(sections, r)
 				want := make([]float32, n)
-				wantSt := biquadClone(st0)
+				wantSt := slices.Clone(st0)
 				biquadOracle(want, src, coeffs, wantSt)
 
 				dstBuf := make([]float32, bufLen)
 				for i := range dstBuf {
 					dstBuf[i] = guard
 				}
-				gotSt := biquadClone(st0)
+				gotSt := slices.Clone(st0)
 				fn(dstBuf[dstOff:dstOff+n], src, coeffs, gotSt)
 				tag := fmt.Sprintf("unaligned N=%d srcOff=%d dstOff=%d", sections, srcOff, dstOff)
 				biquadCompare(t, tag, want, dstBuf[dstOff:dstOff+n], wantSt, gotSt)
@@ -364,14 +356,14 @@ func biquadCheckLengthMismatch(t *testing.T, fn biquadFunc) {
 			src := biquadNoise(ns, r)
 			st0 := biquadRandState(sections, r)
 			want := make([]float32, n)
-			wantSt := biquadClone(st0)
+			wantSt := slices.Clone(st0)
 			biquadOracle(want, src[:n], coeffs, wantSt)
 
 			dst := make([]float32, nd)
 			for i := range dst {
 				dst[i] = sentinel
 			}
-			gotSt := biquadClone(st0)
+			gotSt := slices.Clone(st0)
 			fn(dst, src, coeffs, gotSt)
 			tag := fmt.Sprintf("mismatch N=%d len(dst)=%d len(src)=%d", sections, nd, ns)
 			biquadCompare(t, tag, want, dst[:n], wantSt, gotSt)
@@ -579,11 +571,11 @@ func FuzzBiquadCascade(f *testing.F) {
 			coeffs, state, src = raw(biquadCoeffs*sections), raw(biquadStateLen*sections), raw(n)
 		}
 		want := make([]float32, n)
-		wantSt := biquadClone(state)
+		wantSt := slices.Clone(state)
 		biquadOracle(want, src, coeffs, wantSt)
 
 		got := make([]float32, n)
-		gotSt := biquadClone(state)
+		gotSt := slices.Clone(state)
 		for i := 0; i < n; {
 			c := min(biquadChunkLen(r, sections), n-i)
 			BiquadCascade(got[i:i+c], src[i:i+c], coeffs, gotSt)
@@ -626,15 +618,15 @@ func BenchmarkBiquadCascade(b *testing.B) {
 			coeffs = biquadKWeighting48k()
 		}
 		for _, n := range []int{480, 4800, 48000} {
-			for _, sig := range []string{"noise", "silence"} {
-				src := biquadNoise(n, r)
-				if sig == "silence" {
-					clear(src[n/10:])
+			for _, sig := range biquadSignals {
+				if sig.name == "wide" {
+					continue
 				}
+				src := sig.gen(n, r)
 				dst := make([]float32, n)
 				state := make([]float32, biquadStateLen*sections)
 				for _, v := range variants {
-					b.Run(fmt.Sprintf("N=%d/n=%d/%s/%s", sections, n, sig, v.name), func(b *testing.B) {
+					b.Run(fmt.Sprintf("N=%d/n=%d/%s/%s", sections, n, sig.name, v.name), func(b *testing.B) {
 						for b.Loop() {
 							clear(state)
 							v.fn(dst, src, coeffs, state)

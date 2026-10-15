@@ -13,9 +13,8 @@
 // [Float32ToInt32ScaleClamp], [Float32ToInt32ScaleClampSigned],
 // [Float32ToUint8Bucket] and the Int*ToFloat32Scale family) and the recurrence
 // [BiquadCascade] never contract a multiply and a following add into a fused
-// multiply-add: a consumer that
-// reproduces a scalar reference bit-for-bit depends on the product rounding to
-// float32 before the add. Where fusion is wanted, use [FMA], the AXPY
+// multiply-add: a consumer that reproduces a scalar reference bit-for-bit
+// depends on the product rounding to float32 before the add. Where fusion is wanted, use [FMA], the AXPY
 // [AddScaled], or the multiply-accumulate [MulAdd], whose names say so.
 // Reductions and math functions such as
 // [DotProduct] and the exp/log family do use FMA, where a single fused rounding

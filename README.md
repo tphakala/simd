@@ -366,8 +366,7 @@ range-reduced exp core, so it does not inherit the roughly 7e-6 error of `Exp`.
 
 `BiquadCascade` runs one section per vector lane, skewed by two samples, so a
 cascade of up to 8 sections costs a small multiple of one section's time per
-sample rather than 8 times. Each
-product and sum rounds to float32 on its own (no FMA, no flush of subnormals), so
+sample rather than 8 times. Each product and sum rounds to float32 on its own (no FMA, no flush of subnormals), so
 every non-NaN result is identical on every path and for any chunking of the
 stream. It may run in place (`dst == src`), processes `min(len(dst), len(src))`
 samples, and panics unless `len(coeffs)` is a positive multiple of 5 and
@@ -1159,12 +1158,13 @@ because the kernels behind it keep the `...AVX` name and only their dispatch
 guard names AVX2. Both packages gate `Sigmoid`, `Tanh`, `Exp`, `Log`, `Pow`,
 `InterleaveN` and `DeinterleaveN` on it; `f32` adds `MinIdxOfSumRows` (unit
 slides), `Int16ToFloat32Scale`, `Float32ToInt16Scale` and `Float32ToUint8Bucket`
-(its kernel is named `...AVX2`), `ExpE1` (its kernel is named `...AVX2` and also needs FMA) and
-`BiquadCascade` (8-section passes use the `...AVX2` kernel; with AVX alone it runs 4-section passes), and `f64` adds
+(its kernel is named `...AVX2`) and `ExpE1` (its kernel is named `...AVX2` and also needs FMA), and `f64` adds
 `Autocorrelate`, `RealFFTUnpack` and `RealFFTPower`. `cpu.Info()` cannot show this: it collapses
 AVX2 into `AMD64 AVX+FMA`, so an AVX+FMA host without AVX2 (AMD Piledriver and
 Steamroller) reports the same string while taking the Go path for those
-operations. `TestAmd64KernelISALevel` and `TestAmd64KernelDispatchRequiresAVX2`
+operations. `f32.BiquadCascade` is the exception: its 8-section kernel (named
+`...AVX2`) needs AVX2, but its 4-section kernel needs only AVX, so an AVX-only
+host runs it in 4-section passes rather than in Go. `TestAmd64KernelISALevel` and `TestAmd64KernelDispatchRequiresAVX2`
 are what keep the names and the guards consistent.
 
 ARM64 runs NEON kernels throughout, with an FP16 (FEAT_FP16) fast path in `f16`

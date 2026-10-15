@@ -7,14 +7,6 @@ import (
 	"testing"
 )
 
-// biquadKernelLanes is the widest pass the host runs on a kernel, or 0.
-func biquadKernelLanes() int {
-	if hasNEON {
-		return biquadMaxLanes
-	}
-	return 0
-}
-
 // TestBiquadCascadeNEONDirect runs the suite against the NEON kernels through
 // biquadCascadeBlocks, which does not consult hasNEON, so it stays covered when
 // SIMD_DISABLE sends the public path to Go. Lanes 8 uses the 4-section kernel for

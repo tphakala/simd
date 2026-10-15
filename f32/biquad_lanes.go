@@ -27,8 +27,12 @@ type biquadLanes struct {
 	sel [biquadMaxLanes]uint32 // output-lane selector, same value in every word
 }
 
-// pack transposes the per-section coeffs and state of one block into lanes.
-func (l *biquadLanes) pack(coeffs, state []float32) {
+// pack transposes the per-section coeffs and state of one block into lanes and
+// sets every word of the output-lane selector to sel.
+func (l *biquadLanes) pack(coeffs, state []float32, sel uint32) {
+	for i := range l.sel {
+		l.sel[i] = sel
+	}
 	for k := range len(coeffs) / biquadCoeffs {
 		for r := range biquadCoeffs {
 			l.co[r*biquadMaxLanes+k] = coeffs[biquadCoeffs*k+r]
@@ -48,12 +52,13 @@ func (l *biquadLanes) unpack(state []float32) {
 	}
 }
 
-// fillSel sets every word of the output-lane selector.
-func (l *biquadLanes) fillSel(v uint32) {
-	for i := range l.sel {
-		l.sel[i] = v
-	}
-}
+// biquadMinWork is the smallest n*sections for which a block runs on a kernel.
+// Below it the per-call cost of packing the lanes and of filling and draining
+// the pipeline outweighs the kernel's gain over the Go path. The value comes
+// from BenchmarkBiquadCascadeShort on a Kaby Lake core and on a Cortex-A76: on
+// both, at n*sections = 64 the kernel beat Go for 2 and 4 sections; at 32 it
+// lost for 1, 2 and 4.
+const biquadMinWork = 64
 
 // biquadKernelOK reports whether a block of the given section count runs on a
 // kernel for n samples. The kernel precondition is n >= 1 and n >= biquadSkew *
