@@ -2473,9 +2473,9 @@ f32toi32s_neon_done:
 // overflows to +Inf still clamps to hi. The narrow is UZP1 .8H then .16B, not
 // SQXTN: every lane is already in [0, 255], UZP1 keeps the low half of each lane
 // exactly, and a signed saturating narrow would clip 128..255 to 127. The vector
-// float ops have no Go-assembler spelling, so they and UZP1 are WORD-encoded (the
-// trailing mnemonic is checked by TestArm64WordEncodings); VDUP and VLD1/VST1 are
-// native. The final 16-block is reprocessed with overlap (rewriting identical
+// float ops, AND and UZP1 are WORD-encoded, as in the neighbouring kernels (the
+// trailing mnemonic is checked by TestArm64WordEncodings); VDUP and VLD1/VST1 use
+// mnemonics. The final 16-block is reprocessed with overlap (rewriting identical
 // bytes); dst ([]uint8) and src ([]float32) cannot alias in safe Go, so this is
 // safe.
 // Frame: dst(24) + src(24) + scale(4)+offset(4)+hi(4) = 60.
