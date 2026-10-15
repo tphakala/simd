@@ -16,8 +16,7 @@ func expE1NEONFunc(dst, src []float32) {
 	expE1NEON(dst[:n], src[:n])
 }
 
-// TestExpE1NEONDirect runs the suite against the NEON kernel itself, so the
-// kernel stays covered when SIMD_DISABLE sends the public path to Go.
+// TestExpE1NEONDirect runs the suite against the NEON kernel itself.
 func TestExpE1NEONDirect(t *testing.T) {
 	if !hasNEON {
 		t.Skip("NEON not available")

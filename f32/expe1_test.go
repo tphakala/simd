@@ -460,8 +460,7 @@ func TestExpE1InPlaceMatchesExpE1(t *testing.T) {
 
 // TestExpE1TierParity compares the dispatched ExpE1 with the Go fallback on the
 // accuracy set. It is vacuous on a leg where the dispatcher selects the Go path
-// (both sides are then the same function); the direct-kernel tests are what
-// cover the kernels there.
+// (both sides are then the same function).
 func TestExpE1TierParity(t *testing.T) {
 	s := expE1AccuracySet()
 	got := make([]float32, len(s.x))
