@@ -745,6 +745,67 @@ func powElemGo(dst, base, exp []float32) {
 	}
 }
 
+// Abramowitz and Stegun coefficients for E1. expE1A0..A5 are the 5.1.53
+// polynomial (E1(x) + ln x for 0 < x < 1), highest degree first. expE1N0..N3 and
+// expE1D0..D3 complete the 5.1.56 numerator and denominator, each of the form
+// x^4 + N0*x^3 + N1*x^2 + N2*x + N3, whose ratio approximates x*exp(x)*E1(x)
+// for x >= 1. The SIMD kernels hold the same values rounded to float32.
+const (
+	expE1A0 = 0.00107857
+	expE1A1 = -0.00976004
+	expE1A2 = 0.05519968
+	expE1A3 = -0.24991055
+	expE1A4 = 0.99999193
+	expE1A5 = -0.57721566
+
+	expE1N0 = 8.5733287401
+	expE1N1 = 18.0590169730
+	expE1N2 = 8.6347608925
+	expE1N3 = 0.2677737343
+
+	expE1D0 = 9.5733223454
+	expE1D1 = 25.6329561486
+	expE1D2 = 21.0996530827
+	expE1D3 = 3.9584969228
+
+	// expE1ZeroCutoff is the argument from which every path returns 0: E1(88)
+	// is 6.8e-41, deep in the float32 subnormal range.
+	expE1ZeroCutoff = 88.0
+)
+
+// expE1Scalar evaluates E1 by the Abramowitz and Stegun approximations in
+// float64: 5.1.53 for 0 < x < 1 and 5.1.56 from 1 up to expE1ZeroCutoff.
+// x <= 0 gives +Inf, x >= expE1ZeroCutoff (including +Inf) gives 0, and NaN
+// stays NaN.
+func expE1Scalar(x float64) float64 {
+	switch {
+	case x <= 0:
+		return math.Inf(1)
+	case x < 1:
+		return -math.Log(x) + (((((expE1A0*x+expE1A1)*x+expE1A2)*x+expE1A3)*x+expE1A4)*x + expE1A5)
+	case x < expE1ZeroCutoff:
+		num := (((x+expE1N0)*x+expE1N1)*x+expE1N2)*x + expE1N3
+		den := (((x+expE1D0)*x+expE1D1)*x+expE1D2)*x + expE1D3
+		return num / den * math.Exp(-x) / x
+	case x >= expE1ZeroCutoff:
+		return 0
+	default:
+		return x // NaN
+	}
+}
+
+// expE1Go computes the exponential integral E1 elementwise through float64
+// and rounds to float32. It is the fallback when no SIMD E1 kernel is selected.
+func expE1Go(dst, src []float32) {
+	if len(dst) == 0 {
+		return
+	}
+	_ = src[len(dst)-1]
+	for i := range dst {
+		dst[i] = float32(expE1Scalar(float64(src[i])))
+	}
+}
+
 // int32ToFloat32ScaleGo converts int32 samples to float32 and scales.
 // dst[i] = float32(src[i]) * scale
 // Uses loop unrolling for better performance.

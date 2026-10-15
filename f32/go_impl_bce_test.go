@@ -26,4 +26,5 @@ func TestGoFallbacks_EmptyDst(_ *testing.T) {
 	clampScale32Go(dst, src, 0, 1, 1)
 	tanh32Go(dst, src)
 	exp32Go(dst, src)
+	expE1Go(dst, src)
 }

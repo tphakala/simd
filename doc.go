@@ -86,7 +86,7 @@
 // Activation functions: Sigmoid, ReLU, Tanh, Exp, ClampScale
 //
 // Transcendental (f32/f64): Log, Log2, Log10, Pow, PowElem (plus LogInPlace, PowInPlace),
-// SIMD-accelerated on AVX2+FMA and NEON
+// SIMD-accelerated on AVX2+FMA and NEON; ExpE1 (f32 only, plus ExpE1InPlace)
 //
 // Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int32ToFloat32ScaleAdd (fused dequantize-accumulate dst[i] = a[i] + float32(src[i])*scale, two roundings), Int16ToFloat32Scale, Float32ToInt16Scale
 //

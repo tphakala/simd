@@ -121,6 +121,7 @@ func addSub32(sumDst, diffDst, a, b []float32) { addSub32Go(sumDst, diffDst, a, 
 
 func log32(dst, src []float32)              { logGo(dst, src) }
 func log2_32(dst, src []float32)            { log2Go(dst, src) }
+func expE1_32(dst, src []float32)           { expE1Go(dst, src) }
 func log10_32(dst, src []float32)           { log10Go(dst, src) }
 func pow32(dst, src []float32, exp float32) { powGo(dst, src, exp) }
 func powElem32(dst, base, exp []float32)    { powElemGo(dst, base, exp) }

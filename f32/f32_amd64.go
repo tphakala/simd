@@ -1229,6 +1229,19 @@ func powAVX(dst, src []float32, exp float32)
 //go:noescape
 func powElemAVX(dst, base, exp []float32)
 
+func expE1_32(dst, src []float32) {
+	// logSIMDOK32 is AVX2 (256-bit integer exponent ops) and FMA (polynomials)
+	// with n >= minAVXElements; expE1AVX2 needs all three.
+	if logSIMDOK32(len(dst)) {
+		expE1AVX2(dst, src)
+		return
+	}
+	expE1Go(dst, src)
+}
+
+//go:noescape
+func expE1AVX2(dst, src []float32)
+
 func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 	// Use AVX if available and have enough elements
 	if cpu.X86.AVX && len(dst) >= minAVXElements {

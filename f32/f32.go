@@ -27,9 +27,9 @@
 //
 // The element-wise maps may be used fully in place: the destination may alias an
 // input exactly, element for element. This holds for the unary maps (Abs, Neg,
-// Round, Sqrt, Reciprocal, Exp, Log, Log2, Log10, Log10Floored, ReLU, Sigmoid,
-// Tanh, AbsPow34, Scale, AddScalar, Affine, SubFromScalar, Clamp, ClampScale,
-// Pow), for the two-pass
+// Round, Sqrt, Reciprocal, Exp, Log, Log2, Log10, Log10Floored, ExpE1, ReLU,
+// Sigmoid, Tanh, AbsPow34, Scale, AddScalar, Affine, SubFromScalar, Clamp,
+// ClampScale, Pow), for the two-pass
 // CumulativeSum and Normalize (dst==a), for the binary maps (Add, Sub, Mul, Div,
 // PowElem, CopySign, AbsSqComplex, where dst may alias any input, or all of them
 // at once), for the fused multiply-add FMA (dst may alias a, b or c), and for the
@@ -37,9 +37,10 @@
 // overwrite either input vector (dstRe==aRe with dstIm==aIm, or dstRe==bRe with
 // dstIm==bIm). The guarantee is mechanical: each SIMD block reads its whole block
 // of inputs into registers before storing any output lane, and the scalar tail
-// reads each lane before it writes that lane, so an exact overlay is well defined
-// lane by lane on every dispatch path (amd64 SSE, AVX and AVX-512, arm64 NEON, and
-// the pure-Go fallback).
+// reads each lane before it writes that lane (the ExpE1 SIMD kernels have no
+// scalar tail: their overlapping final block is loaded before the first store),
+// so an exact overlay is well defined lane by lane on every dispatch path
+// (amd64 SSE, AVX and AVX-512, arm64 NEON, and the pure-Go fallback).
 //
 // A destination must not overlap an input at a shifted offset. A SIMD load pulls
 // a whole block of an input ahead of the stores, so a shifted overlay clobbers
@@ -1107,6 +1108,39 @@ func PowElem(dst, base, exp []float32) {
 		return
 	}
 	powElem32(dst[:n], base[:n], exp[:n])
+}
+
+// ExpE1 computes the exponential integral elementwise: dst[i] = E1(src[i]),
+// where E1(x) is the integral of e^-t/t from t = x to +Inf. Processes
+// min(len(dst), len(src)) elements.
+//
+// It evaluates the Abramowitz and Stegun approximations 5.1.53 (x < 1) and
+// 5.1.56 (x >= 1). For every float32 x in (0, 82.9], where E1(x) is at least the
+// smallest normal float32 (subnormal x included), the relative error against
+// the exact E1 is at most 4.7e-7 on every dispatch path. Above 82.9 the exact
+// result is subnormal and the absolute error is below 1e-40: the SIMD paths
+// return 0 from about x = 87.68 on, the Go path returns the rounded subnormal
+// up to x = 88, and every path returns exactly 0 for x >= 88 and for +Inf.
+// E1(x) = +Inf for x <= 0 (including -0 and -Inf), and NaN for NaN.
+//
+// Uses a fused AVX2+FMA kernel on AMD64 (8x float32) and NEON on ARM64 (4x
+// float32); other hosts, and slices shorter than one vector, use a float64
+// evaluation of the same approximations rounded to float32. Allocation-free and
+// safe for concurrent use on disjoint buffers.
+func ExpE1(dst, src []float32) {
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	expE1_32(dst[:n], src[:n])
+}
+
+// ExpE1InPlace computes the exponential integral in place: a[i] = E1(a[i]).
+func ExpE1InPlace(a []float32) {
+	if len(a) == 0 {
+		return
+	}
+	expE1_32(a, a)
 }
 
 // Int32ToFloat32Scale converts int32 samples to float32 and scales in one pass.

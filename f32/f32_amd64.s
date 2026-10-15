@@ -9097,6 +9097,344 @@ DATA log32_powclamp_lo<>+0x18(SB)/4, $0xc2d00000
 DATA log32_powclamp_lo<>+0x1c(SB)/4, $0xc2d00000
 GLOBL log32_powclamp_lo<>(SB), RODATA|NOPTR, $32
 
+// expE1AVX2 coefficient tables (8 lanes each): a0..a5 are A&S 5.1.53, n0..n3 and
+// d0..d3 the A&S 5.1.56 numerator and denominator, c0..c4 the Cephes expf
+// polynomial (c5 = 0.5 reuses exp_half).
+DATA e1_a0<>+0x00(SB)/4, $0x3a8d5ece  // +1.0785700288e-03
+DATA e1_a0<>+0x04(SB)/4, $0x3a8d5ece
+DATA e1_a0<>+0x08(SB)/4, $0x3a8d5ece
+DATA e1_a0<>+0x0c(SB)/4, $0x3a8d5ece
+DATA e1_a0<>+0x10(SB)/4, $0x3a8d5ece
+DATA e1_a0<>+0x14(SB)/4, $0x3a8d5ece
+DATA e1_a0<>+0x18(SB)/4, $0x3a8d5ece
+DATA e1_a0<>+0x1c(SB)/4, $0x3a8d5ece
+GLOBL e1_a0<>(SB), RODATA|NOPTR, $32
+
+DATA e1_a1<>+0x00(SB)/4, $0xbc1fe893  // -9.7600398585e-03
+DATA e1_a1<>+0x04(SB)/4, $0xbc1fe893
+DATA e1_a1<>+0x08(SB)/4, $0xbc1fe893
+DATA e1_a1<>+0x0c(SB)/4, $0xbc1fe893
+DATA e1_a1<>+0x10(SB)/4, $0xbc1fe893
+DATA e1_a1<>+0x14(SB)/4, $0xbc1fe893
+DATA e1_a1<>+0x18(SB)/4, $0xbc1fe893
+DATA e1_a1<>+0x1c(SB)/4, $0xbc1fe893
+GLOBL e1_a1<>(SB), RODATA|NOPTR, $32
+
+DATA e1_a2<>+0x00(SB)/4, $0x3d62190f  // +5.5199678987e-02
+DATA e1_a2<>+0x04(SB)/4, $0x3d62190f
+DATA e1_a2<>+0x08(SB)/4, $0x3d62190f
+DATA e1_a2<>+0x0c(SB)/4, $0x3d62190f
+DATA e1_a2<>+0x10(SB)/4, $0x3d62190f
+DATA e1_a2<>+0x14(SB)/4, $0x3d62190f
+DATA e1_a2<>+0x18(SB)/4, $0x3d62190f
+DATA e1_a2<>+0x1c(SB)/4, $0x3d62190f
+GLOBL e1_a2<>(SB), RODATA|NOPTR, $32
+
+DATA e1_a3<>+0x00(SB)/4, $0xbe7fe88d  // -2.4991054833e-01
+DATA e1_a3<>+0x04(SB)/4, $0xbe7fe88d
+DATA e1_a3<>+0x08(SB)/4, $0xbe7fe88d
+DATA e1_a3<>+0x0c(SB)/4, $0xbe7fe88d
+DATA e1_a3<>+0x10(SB)/4, $0xbe7fe88d
+DATA e1_a3<>+0x14(SB)/4, $0xbe7fe88d
+DATA e1_a3<>+0x18(SB)/4, $0xbe7fe88d
+DATA e1_a3<>+0x1c(SB)/4, $0xbe7fe88d
+GLOBL e1_a3<>(SB), RODATA|NOPTR, $32
+
+DATA e1_a4<>+0x00(SB)/4, $0x3f7fff79  // +9.9999195337e-01
+DATA e1_a4<>+0x04(SB)/4, $0x3f7fff79
+DATA e1_a4<>+0x08(SB)/4, $0x3f7fff79
+DATA e1_a4<>+0x0c(SB)/4, $0x3f7fff79
+DATA e1_a4<>+0x10(SB)/4, $0x3f7fff79
+DATA e1_a4<>+0x14(SB)/4, $0x3f7fff79
+DATA e1_a4<>+0x18(SB)/4, $0x3f7fff79
+DATA e1_a4<>+0x1c(SB)/4, $0x3f7fff79
+GLOBL e1_a4<>(SB), RODATA|NOPTR, $32
+
+DATA e1_a5<>+0x00(SB)/4, $0xbf13c468  // -5.7721567154e-01
+DATA e1_a5<>+0x04(SB)/4, $0xbf13c468
+DATA e1_a5<>+0x08(SB)/4, $0xbf13c468
+DATA e1_a5<>+0x0c(SB)/4, $0xbf13c468
+DATA e1_a5<>+0x10(SB)/4, $0xbf13c468
+DATA e1_a5<>+0x14(SB)/4, $0xbf13c468
+DATA e1_a5<>+0x18(SB)/4, $0xbf13c468
+DATA e1_a5<>+0x1c(SB)/4, $0xbf13c468
+GLOBL e1_a5<>(SB), RODATA|NOPTR, $32
+
+DATA e1_n0<>+0x00(SB)/4, $0x41092c5b  // +8.5733289719e+00
+DATA e1_n0<>+0x04(SB)/4, $0x41092c5b
+DATA e1_n0<>+0x08(SB)/4, $0x41092c5b
+DATA e1_n0<>+0x0c(SB)/4, $0x41092c5b
+DATA e1_n0<>+0x10(SB)/4, $0x41092c5b
+DATA e1_n0<>+0x14(SB)/4, $0x41092c5b
+DATA e1_n0<>+0x18(SB)/4, $0x41092c5b
+DATA e1_n0<>+0x1c(SB)/4, $0x41092c5b
+GLOBL e1_n0<>(SB), RODATA|NOPTR, $32
+
+DATA e1_n1<>+0x00(SB)/4, $0x419078de  // +1.8059017181e+01
+DATA e1_n1<>+0x04(SB)/4, $0x419078de
+DATA e1_n1<>+0x08(SB)/4, $0x419078de
+DATA e1_n1<>+0x0c(SB)/4, $0x419078de
+DATA e1_n1<>+0x10(SB)/4, $0x419078de
+DATA e1_n1<>+0x14(SB)/4, $0x419078de
+DATA e1_n1<>+0x18(SB)/4, $0x419078de
+DATA e1_n1<>+0x1c(SB)/4, $0x419078de
+GLOBL e1_n1<>(SB), RODATA|NOPTR, $32
+
+DATA e1_n2<>+0x00(SB)/4, $0x410a27fb  // +8.6347608566e+00
+DATA e1_n2<>+0x04(SB)/4, $0x410a27fb
+DATA e1_n2<>+0x08(SB)/4, $0x410a27fb
+DATA e1_n2<>+0x0c(SB)/4, $0x410a27fb
+DATA e1_n2<>+0x10(SB)/4, $0x410a27fb
+DATA e1_n2<>+0x14(SB)/4, $0x410a27fb
+DATA e1_n2<>+0x18(SB)/4, $0x410a27fb
+DATA e1_n2<>+0x1c(SB)/4, $0x410a27fb
+GLOBL e1_n2<>(SB), RODATA|NOPTR, $32
+
+DATA e1_n3<>+0x00(SB)/4, $0x3e8919a4  // +2.6777374744e-01
+DATA e1_n3<>+0x04(SB)/4, $0x3e8919a4
+DATA e1_n3<>+0x08(SB)/4, $0x3e8919a4
+DATA e1_n3<>+0x0c(SB)/4, $0x3e8919a4
+DATA e1_n3<>+0x10(SB)/4, $0x3e8919a4
+DATA e1_n3<>+0x14(SB)/4, $0x3e8919a4
+DATA e1_n3<>+0x18(SB)/4, $0x3e8919a4
+DATA e1_n3<>+0x1c(SB)/4, $0x3e8919a4
+GLOBL e1_n3<>(SB), RODATA|NOPTR, $32
+
+DATA e1_d0<>+0x00(SB)/4, $0x41192c54  // +9.5733222961e+00
+DATA e1_d0<>+0x04(SB)/4, $0x41192c54
+DATA e1_d0<>+0x08(SB)/4, $0x41192c54
+DATA e1_d0<>+0x0c(SB)/4, $0x41192c54
+DATA e1_d0<>+0x10(SB)/4, $0x41192c54
+DATA e1_d0<>+0x14(SB)/4, $0x41192c54
+DATA e1_d0<>+0x18(SB)/4, $0x41192c54
+DATA e1_d0<>+0x1c(SB)/4, $0x41192c54
+GLOBL e1_d0<>(SB), RODATA|NOPTR, $32
+
+DATA e1_d1<>+0x00(SB)/4, $0x41cd104b  // +2.5632955551e+01
+DATA e1_d1<>+0x04(SB)/4, $0x41cd104b
+DATA e1_d1<>+0x08(SB)/4, $0x41cd104b
+DATA e1_d1<>+0x0c(SB)/4, $0x41cd104b
+DATA e1_d1<>+0x10(SB)/4, $0x41cd104b
+DATA e1_d1<>+0x14(SB)/4, $0x41cd104b
+DATA e1_d1<>+0x18(SB)/4, $0x41cd104b
+DATA e1_d1<>+0x1c(SB)/4, $0x41cd104b
+GLOBL e1_d1<>(SB), RODATA|NOPTR, $32
+
+DATA e1_d2<>+0x00(SB)/4, $0x41a8cc17  // +2.1099653244e+01
+DATA e1_d2<>+0x04(SB)/4, $0x41a8cc17
+DATA e1_d2<>+0x08(SB)/4, $0x41a8cc17
+DATA e1_d2<>+0x0c(SB)/4, $0x41a8cc17
+DATA e1_d2<>+0x10(SB)/4, $0x41a8cc17
+DATA e1_d2<>+0x14(SB)/4, $0x41a8cc17
+DATA e1_d2<>+0x18(SB)/4, $0x41a8cc17
+DATA e1_d2<>+0x1c(SB)/4, $0x41a8cc17
+GLOBL e1_d2<>(SB), RODATA|NOPTR, $32
+
+DATA e1_d3<>+0x00(SB)/4, $0x407d5803  // +3.9584968090e+00
+DATA e1_d3<>+0x04(SB)/4, $0x407d5803
+DATA e1_d3<>+0x08(SB)/4, $0x407d5803
+DATA e1_d3<>+0x0c(SB)/4, $0x407d5803
+DATA e1_d3<>+0x10(SB)/4, $0x407d5803
+DATA e1_d3<>+0x14(SB)/4, $0x407d5803
+DATA e1_d3<>+0x18(SB)/4, $0x407d5803
+DATA e1_d3<>+0x1c(SB)/4, $0x407d5803
+GLOBL e1_d3<>(SB), RODATA|NOPTR, $32
+
+DATA e1_c0<>+0x00(SB)/4, $0x39506967  // +1.9875691214e-04
+DATA e1_c0<>+0x04(SB)/4, $0x39506967
+DATA e1_c0<>+0x08(SB)/4, $0x39506967
+DATA e1_c0<>+0x0c(SB)/4, $0x39506967
+DATA e1_c0<>+0x10(SB)/4, $0x39506967
+DATA e1_c0<>+0x14(SB)/4, $0x39506967
+DATA e1_c0<>+0x18(SB)/4, $0x39506967
+DATA e1_c0<>+0x1c(SB)/4, $0x39506967
+GLOBL e1_c0<>(SB), RODATA|NOPTR, $32
+
+DATA e1_c1<>+0x00(SB)/4, $0x3ab743ce  // +1.3981999364e-03
+DATA e1_c1<>+0x04(SB)/4, $0x3ab743ce
+DATA e1_c1<>+0x08(SB)/4, $0x3ab743ce
+DATA e1_c1<>+0x0c(SB)/4, $0x3ab743ce
+DATA e1_c1<>+0x10(SB)/4, $0x3ab743ce
+DATA e1_c1<>+0x14(SB)/4, $0x3ab743ce
+DATA e1_c1<>+0x18(SB)/4, $0x3ab743ce
+DATA e1_c1<>+0x1c(SB)/4, $0x3ab743ce
+GLOBL e1_c1<>(SB), RODATA|NOPTR, $32
+
+DATA e1_c2<>+0x00(SB)/4, $0x3c088908  // +8.3334520459e-03
+DATA e1_c2<>+0x04(SB)/4, $0x3c088908
+DATA e1_c2<>+0x08(SB)/4, $0x3c088908
+DATA e1_c2<>+0x0c(SB)/4, $0x3c088908
+DATA e1_c2<>+0x10(SB)/4, $0x3c088908
+DATA e1_c2<>+0x14(SB)/4, $0x3c088908
+DATA e1_c2<>+0x18(SB)/4, $0x3c088908
+DATA e1_c2<>+0x1c(SB)/4, $0x3c088908
+GLOBL e1_c2<>(SB), RODATA|NOPTR, $32
+
+DATA e1_c3<>+0x00(SB)/4, $0x3d2aa9c1  // +4.1665796191e-02
+DATA e1_c3<>+0x04(SB)/4, $0x3d2aa9c1
+DATA e1_c3<>+0x08(SB)/4, $0x3d2aa9c1
+DATA e1_c3<>+0x0c(SB)/4, $0x3d2aa9c1
+DATA e1_c3<>+0x10(SB)/4, $0x3d2aa9c1
+DATA e1_c3<>+0x14(SB)/4, $0x3d2aa9c1
+DATA e1_c3<>+0x18(SB)/4, $0x3d2aa9c1
+DATA e1_c3<>+0x1c(SB)/4, $0x3d2aa9c1
+GLOBL e1_c3<>(SB), RODATA|NOPTR, $32
+
+DATA e1_c4<>+0x00(SB)/4, $0x3e2aaaaa  // +1.6666665673e-01
+DATA e1_c4<>+0x04(SB)/4, $0x3e2aaaaa
+DATA e1_c4<>+0x08(SB)/4, $0x3e2aaaaa
+DATA e1_c4<>+0x0c(SB)/4, $0x3e2aaaaa
+DATA e1_c4<>+0x10(SB)/4, $0x3e2aaaaa
+DATA e1_c4<>+0x14(SB)/4, $0x3e2aaaaa
+DATA e1_c4<>+0x18(SB)/4, $0x3e2aaaaa
+DATA e1_c4<>+0x1c(SB)/4, $0x3e2aaaaa
+GLOBL e1_c4<>(SB), RODATA|NOPTR, $32
+
+// func expE1AVX2(dst, src []float32)
+// Fused single-pass exponential integral E1 (see ExpE1). Per lane both branches
+// are computed and selected by mask: x < 1 uses A&S 5.1.53,
+// E1 = P(x) - ln(x), with the Cephes logf core copied from powAVX (subnormal
+// inputs are pre-scaled by 2^32); x >= 1 uses A&S 5.1.56,
+// E1 = num/den * exp(-x) / x. exp(-x) is 2^-k * exp(r) with k = round(x*log2e),
+// r = k*ln2 - x from a Cody-Waite hi/lo split of ln2, exp(r) = 1 + r + r^2*P(r)
+// (Cephes expf degree 5 in r, c5 = 0.5), and 2^-k applied as the last multiply
+// so every intermediate stays normal. The hi branch clamps x to [1, 88]: k stays
+// at most 127, so 2^-k is a normal power of two or exactly +0 (x above about
+// 87.68), and the denominator never reaches 0. VMAXPS returns its second source
+// for a NaN lane, so a NaN x becomes 1.0 in the hi branch; the final NaN blend
+// overrides it. Then x <= 0 (including -0 and -Inf) selects +Inf and NaN selects
+// quiet NaN; +Inf and x >= 88 reach +0 through the clamp. The polynomials use
+// VFMADD, so this is not a single-rounding kernel. The accuracy bound is
+// documented on ExpE1 (f32.go); the result lanes are element independent.
+//
+// Block size 8. When n is not a multiple of 8 the last eight source lanes are
+// loaded into Y15 BEFORE the main loop stores anything, and one more pass
+// computes them into the last eight dst lanes. The overlap lanes are recomputed
+// from the original inputs by the same instruction sequence, so they are
+// rewritten with the same bits, and an exact dst == src overlay stays correct
+// because the final block's input was read before the first store (loading it
+// after the loop would read already overwritten lanes). Precondition:
+// len(dst) >= 8 and len(src) >= len(dst); the dispatcher guarantees both, and a
+// direct call with fewer than eight elements would read before src. Requires
+// AVX2 and FMA.
+TEXT ·expE1AVX2(SB), NOSPLIT, $0-48
+    MOVQ dst_base+0(FP), DX
+    MOVQ dst_len+8(FP), CX
+    MOVQ src_base+24(FP), SI
+
+    VMOVUPS exp_one<>(SB), Y12         // Y12 = 1.0
+    VMOVUPS exp_clamp_hi<>(SB), Y13    // Y13 = 88.0
+    VXORPS Y14, Y14, Y14               // Y14 = 0.0
+    MOVQ CX, R8
+    SHRQ $3, R8                        // R8 = number of 8-lane blocks
+    MOVQ CX, R9
+    ANDQ $7, R9                        // R9 = n % 8
+    JZ   expe1_loop
+    VMOVUPS -32(SI)(CX*4), Y15         // preload the last eight source lanes
+
+expe1_loop:
+    VMOVUPS (SI), Y0                   // Y0 = x
+expe1_body:
+    // --- log core (copied from powAVX; the pre-scaled x goes to Y7 so that
+    // Y0 survives for the lo polynomial, the clamp and the masks) ---
+    VCMPPS $17, log32_fltmin<>(SB), Y0, Y1
+    VMULPS log32_two32<>(SB), Y0, Y2
+    VBLENDVPS Y1, Y2, Y0, Y7           // x, subnormals pre-scaled
+    VANDPS log32_negsc<>(SB), Y1, Y1   // ebias
+    VPSUBD log32_off<>(SB), Y7, Y2     // tmp
+    VPAND log32_expmask<>(SB), Y2, Y3
+    VPSUBD Y3, Y7, Y3                  // m
+    VPSRAD $23, Y2, Y2
+    VCVTDQ2PS Y2, Y2
+    VADDPS Y1, Y2, Y2                  // e
+    VSUBPS Y12, Y3, Y5                 // z = m - 1
+    VMULPS Y5, Y5, Y4                  // zz
+    VMOVUPS log32_p0<>(SB), Y3
+    VFMADD213PS log32_p1<>(SB), Y5, Y3
+    VFMADD213PS log32_p2<>(SB), Y5, Y3
+    VFMADD213PS log32_p3<>(SB), Y5, Y3
+    VFMADD213PS log32_p4<>(SB), Y5, Y3
+    VFMADD213PS log32_p5<>(SB), Y5, Y3
+    VFMADD213PS log32_p6<>(SB), Y5, Y3
+    VFMADD213PS log32_p7<>(SB), Y5, Y3
+    VFMADD213PS log32_p8<>(SB), Y5, Y3 // P(z)
+    VMULPS Y5, Y4, Y6                  // z^3
+    VMULPS Y6, Y3, Y3                  // z^3*P(z)
+    VFNMADD231PS exp_half<>(SB), Y4, Y3 // -= 0.5*zz
+    VADDPS Y5, Y3, Y3                  // lnm
+    VMULPS log32_ln2lo<>(SB), Y2, Y4   // e*ln2lo
+    VADDPS Y3, Y4, Y4                  // + lnm
+    VFMADD231PS log32_ln2hi<>(SB), Y2, Y4 // Y4 = ln(x)
+
+    // --- lo branch: P(x) - ln(x), Horner a0..a5 ---
+    VMOVUPS e1_a0<>(SB), Y1
+    VFMADD213PS e1_a1<>(SB), Y0, Y1
+    VFMADD213PS e1_a2<>(SB), Y0, Y1
+    VFMADD213PS e1_a3<>(SB), Y0, Y1
+    VFMADD213PS e1_a4<>(SB), Y0, Y1
+    VFMADD213PS e1_a5<>(SB), Y0, Y1
+    VSUBPS Y4, Y1, Y7                  // Y7 = lo
+
+    // --- hi branch ---
+    VMAXPS Y12, Y0, Y1                 // xh = min(max(x, 1), 88); NaN gives 1.0
+    VMINPS Y13, Y1, Y1
+    VADDPS e1_n0<>(SB), Y1, Y2         // num
+    VFMADD213PS e1_n1<>(SB), Y1, Y2
+    VFMADD213PS e1_n2<>(SB), Y1, Y2
+    VFMADD213PS e1_n3<>(SB), Y1, Y2
+    VADDPS e1_d0<>(SB), Y1, Y3         // den
+    VFMADD213PS e1_d1<>(SB), Y1, Y3
+    VFMADD213PS e1_d2<>(SB), Y1, Y3
+    VFMADD213PS e1_d3<>(SB), Y1, Y3
+    VMULPS Y1, Y3, Y3                  // dx = den*xh
+    VMULPS exp_log2e<>(SB), Y1, Y4
+    VADDPS exp_magic<>(SB), Y4, Y4
+    VSUBPS exp_magic<>(SB), Y4, Y4     // Y4 = k = round(xh*log2e)
+    VFMSUB231PS log32_ln2hi<>(SB), Y4, Y1 // Y1 = k*C1 - xh
+    VFMADD231PS log32_ln2lo<>(SB), Y4, Y1 // Y1 = r = k*C2 + (k*C1 - xh)
+    VMOVUPS e1_c0<>(SB), Y5
+    VFMADD213PS e1_c1<>(SB), Y1, Y5
+    VFMADD213PS e1_c2<>(SB), Y1, Y5
+    VFMADD213PS e1_c3<>(SB), Y1, Y5
+    VFMADD213PS e1_c4<>(SB), Y1, Y5
+    VFMADD213PS exp_half<>(SB), Y1, Y5 // P(r), c5 = 0.5
+    VMULPS Y1, Y1, Y6                  // r^2
+    VFMADD213PS Y1, Y6, Y5             // r + r^2*P(r)
+    VADDPS Y12, Y5, Y5                 // exp(r)
+    VCVTPS2DQ Y4, Y4
+    VPSLLD $23, Y4, Y4
+    VPSUBD Y4, Y12, Y4                 // bits(2^-k) = bits(1.0) - (k << 23)
+    VMULPS Y5, Y2, Y2                  // num*exp(r)
+    VDIVPS Y3, Y2, Y2                  // / dx
+    VMULPS Y4, Y2, Y2                  // * 2^-k = hi
+
+    // --- select: x < 1 ? lo : hi, then x <= 0 -> +Inf, then NaN -> NaN ---
+    VCMPPS $17, Y12, Y0, Y1            // LT_OQ: x < 1
+    VBLENDVPS Y1, Y7, Y2, Y2
+    VCMPPS $18, Y14, Y0, Y1            // LE_OQ: x <= 0
+    VBLENDVPS Y1, log32_posinf<>(SB), Y2, Y2
+    VCMPPS $3, Y0, Y0, Y1              // UNORD: x is NaN
+    VBLENDVPS Y1, log32_nan<>(SB), Y2, Y2
+
+    VMOVUPS Y2, (DX)
+    ADDQ $32, SI
+    ADDQ $32, DX
+    DECQ R8
+    JNZ  expe1_loop
+
+    TESTQ R9, R9
+    JZ   expe1_done
+    XORQ R9, R9                        // run the tail pass once
+    MOVQ dst_base+0(FP), DX
+    LEAQ -32(DX)(CX*4), DX             // &dst[n-8]
+    VMOVUPS Y15, Y0
+    MOVQ $1, R8
+    JMP  expe1_body
+
+expe1_done:
+    VZEROUPPER
+    RET
+
 // minidxones is dup(int32 1): the curIdx increment for VPADDD. The 8-wide kernel
 // loads all 32 bytes (Y7); the 4-wide kernel loads the low 16 bytes (X7).
 DATA minidxones<>+0x00(SB)/4, $0x00000001

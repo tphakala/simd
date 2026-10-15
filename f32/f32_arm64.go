@@ -804,6 +804,18 @@ func powNEON32(dst, src []float32, exp float32)
 //go:noescape
 func powElemNEON32(dst, base, exp []float32)
 
+func expE1_32(dst, src []float32) {
+	// Assumes len(src) >= len(dst); caller ensures this via public API
+	if hasNEON && len(dst) >= 4 {
+		expE1NEON(dst, src)
+		return
+	}
+	expE1Go(dst, src)
+}
+
+//go:noescape
+func expE1NEON(dst, src []float32)
+
 func int32ToFloat32Scale(dst []float32, src []int32, scale float32) {
 	if hasNEON && len(dst) >= 4 {
 		int32ToFloat32ScaleNEON(dst, src, scale)
