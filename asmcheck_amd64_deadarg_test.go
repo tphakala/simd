@@ -24,7 +24,9 @@ func parseDispatchSource(t *testing.T, src string) *pkgFuncs {
 	for _, d := range f.Decls {
 		switch decl := d.(type) {
 		case *ast.FuncDecl:
-			pf.funcs[decl.Name.Name] = decl
+			if decl.Recv == nil {
+				pf.funcs[decl.Name.Name] = decl
+			}
 		case *ast.GenDecl:
 			collectVarInits(decl, pf.varInits)
 		}
