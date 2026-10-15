@@ -104,6 +104,81 @@ func gated() { if cpu.X86.AVX { k(true) } }
 			wantUngated: 1,
 		},
 		{
+			name: "a parameter redeclared by a var in a nested block is refused",
+			body: `
+func k(avx bool) { { var avx = true; _ = avx }; if avx { kernel() } }
+func ungated() { k(false) }
+func gated() { if cpu.X86.AVX { k(true) } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a parameter reused as a range variable is refused",
+			body: `
+func k(avx bool, xs []int) { for avx := range xs { _ = avx }; if avx { kernel() } }
+func ungated() { k(false, nil) }
+func gated() { if cpu.X86.AVX { k(true, nil) } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a parameter reused as a range value is refused",
+			body: `
+func k(avx bool, xs []bool) { for _, avx := range xs { _ = avx }; if avx { kernel() } }
+func ungated() { k(false, nil) }
+func gated() { if cpu.X86.AVX { k(true, nil) } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a parameter reused as a closure parameter is refused",
+			body: `
+func k(avx bool) { f := func(avx bool) {}; f(true); if avx { kernel() } }
+func ungated() { k(false) }
+func gated() { if cpu.X86.AVX { k(true) } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a guard parameter that is not the first bool is accepted",
+			body: `
+func k(first, avx bool, n int) { if avx { kernel() } }
+func ungated() { k(true, false, 1) }
+func gated() { if cpu.X86.AVX { k(true, true, 1) } }
+`,
+		},
+		{
+			name: "a guard parameter after a non-bool parameter is accepted",
+			body: `
+func k(n int, avx bool) { if avx { kernel() } }
+func ungated() { k(1, false) }
+func gated() { if cpu.X86.AVX { k(1, true) } }
+`,
+		},
+		{
+			name: "unrelated rebinding does not disable the excusal",
+			body: `
+func k(avx bool, xs []int) {
+	var other int
+	for i, x := range xs { other += i + x }
+	f := func(m int) int { return m + other }
+	_ = f(1)
+	if avx { kernel() }
+}
+func ungated() { k(false, nil) }
+func gated() { if cpu.X86.AVX { k(true, nil) } }
+`,
+		},
+		{
+			name: "a false literal at an unrelated parameter index is refused",
+			body: `
+func k(first, avx bool) { if avx { kernel() } }
+func ungated() { k(false, true) }
+func gated() { if cpu.X86.AVX { k(true, true) } }
+`,
+			wantUngated: 1,
+		},
+		{
 			name: "the else branch of the parameter test is refused",
 			body: `
 func k(avx bool) { if avx { return } else { kernel() } }
