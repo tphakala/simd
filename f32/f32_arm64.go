@@ -1043,3 +1043,79 @@ func reverseNEON(dst, src []float32)
 
 //go:noescape
 func addSubNEON(sumDst, diffDst, a, b []float32)
+
+// ============================================================================
+// BIQUAD CASCADE
+// ============================================================================
+
+// biquadMinWork is the smallest n*sections for which a block runs on a kernel.
+// Below it the per-call cost of packing the lanes and of filling and draining
+// the pipeline outweighs the kernel's gain over the Go path. The value comes
+// from BenchmarkBiquadCascadeShort on a Cortex-A76: at n*sections = 64 the
+// kernel beat Go for 2 and 4 sections; at 32 it lost for 1, 2 and 4.
+const biquadMinWork = 64
+
+//go:noescape
+func biquadCascade4NEON(dst, src []float32, co, st *float32, sel *uint32, sections int)
+
+//go:noescape
+func biquadCascade8NEON(dst, src []float32, co, st *float32, sel *uint32, sections int)
+
+func biquadCascade32(dst, src, coeffs, state []float32) {
+	lanes := 0
+	if hasNEON {
+		lanes = biquadMaxLanes
+	}
+	biquadCascadeBlocks(dst, src, coeffs, state, lanes, biquadMinWork)
+}
+
+// biquadCascadeBlocks runs the cascade in passes of up to lanes sections: the
+// first pass reads src, later ones run in place over dst. lanes is 8 (the
+// 8-section kernel, and the 4-section one for blocks of up to 4), 4 (only the
+// 4-section kernel), or 0 (no kernel: the whole cascade runs in Go). A block
+// takes a kernel only when biquadKernelOK holds for it, otherwise the Go path.
+// len(dst) == len(src) >= 1 is the caller's contract.
+func biquadCascadeBlocks(dst, src, coeffs, state []float32, lanes, minWork int) {
+	n := len(dst)
+	sections := len(coeffs) / biquadCoeffs
+	if lanes <= 0 {
+		biquadCascadeGo(dst, src, coeffs, state)
+		return
+	}
+	for s := 0; s < sections; s += lanes {
+		b := min(lanes, sections-s)
+		in := src
+		if s > 0 {
+			in = dst
+		}
+		co := coeffs[biquadCoeffs*s : biquadCoeffs*(s+b)]
+		st := state[biquadStateLen*s : biquadStateLen*(s+b)]
+		var l biquadLanes
+		switch {
+		case b > biquadNarrowLanes && lanes >= biquadMaxLanes && biquadKernelOK(n, b, minWork):
+			l.pack(co, st)
+			l.fillSel(neonSelector(b))
+			biquadCascade8NEON(dst, in, &l.co[0], &l.st[0], &l.sel[0], b)
+			l.unpack(st)
+		case b <= biquadNarrowLanes && lanes >= biquadNarrowLanes && biquadKernelOK(n, b, minWork):
+			l.pack(co, st)
+			l.fillSel(neonSelector(b))
+			biquadCascade4NEON(dst, in, &l.co[0], &l.st[0], &l.sel[0], b)
+			l.unpack(st)
+		default:
+			// No pack or unpack here: the Go path works on the caller's state.
+			biquadCascadeGo(dst, in, co, st)
+		}
+	}
+}
+
+// neonSelector is the TBL byte-index word that moves lane (sections-1)%4 of a Q
+// register to lane 0: bytes 4L, 4L+1, 4L+2, 4L+3 with L = (sections-1)%4.
+func neonSelector(sections int) uint32 {
+	const (
+		laneWidth = 4
+		bytes0123 = 0x03020100
+		fourEach  = 0x04040404
+	)
+	return bytes0123 + fourEach*uint32((sections-1)%laneWidth)
+}

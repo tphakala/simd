@@ -49,6 +49,12 @@ const (
 	aliasLog10Floor = 0.5
 )
 
+// Two stable sections and a nonzero state for the BiquadCascade aliasing case.
+var (
+	biquadAliasCoeffs = [2 * biquadCoeffs]float32{0.2, 0.4, 0.2, -0.3, 0.1, 0.3, 0.1, 0.05, -0.2, 0.05}
+	biquadAliasState  = [2 * biquadStateLen]float32{0.1, -0.2, 0.05, 0.3, -0.15, 0.25, 0.2, -0.1}
+)
+
 func f32AliasCases() []aliastest.Case {
 	return []aliastest.Case{
 		// Element-wise unary maps (dst may overlay a exactly).
@@ -69,6 +75,10 @@ func f32AliasCases() []aliastest.Case {
 		aliastest.UnaryCase("CumulativeSum", aliasEqF32, genF32, CumulativeSum),
 		aliastest.UnaryCase("Normalize", aliasEqF32, genF32, Normalize),
 		aliastest.UnaryCase("Reverse", aliasEqF32, genF32, Reverse),
+		aliastest.UnaryCase("BiquadCascade", aliasEqF32, genF32, func(dst, a []float32) {
+			st := biquadAliasState // fresh copy per call: every run starts from the same state
+			BiquadCascade(dst, a, biquadAliasCoeffs[:], st[:])
+		}),
 
 		// Element-wise unary maps with a scalar parameter.
 		aliastest.UnaryCase("Scale", aliasEqF32, genF32, func(dst, a []float32) { Scale(dst, a, aliasScaleK) }),

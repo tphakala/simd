@@ -1516,3 +1516,73 @@ func reverseAVX(dst, src []float32)
 
 //go:noescape
 func addSubAVX(sumDst, diffDst, a, b []float32)
+
+// ============================================================================
+// BIQUAD CASCADE
+// ============================================================================
+
+// biquadMinWork is the smallest n*sections for which a block runs on a kernel.
+// Below it the per-call cost of packing the lanes and of filling and draining
+// the pipeline outweighs the kernel's gain over the Go path. The value comes
+// from BenchmarkBiquadCascadeShort on a Kaby Lake core: at n*sections = 64 the
+// kernel beat Go for 2 and 4 sections; at 32 it lost for 1, 2 and 4.
+const biquadMinWork = 64
+
+//go:noescape
+func biquadCascade4AVX(dst, src []float32, co, st *float32, sel *uint32, sections int)
+
+//go:noescape
+func biquadCascade8AVX2(dst, src []float32, co, st *float32, sel *uint32, sections int)
+
+func biquadCascade32(dst, src, coeffs, state []float32) {
+	lanes := 0
+	switch {
+	case cpu.X86.AVX2:
+		lanes = biquadMaxLanes
+	case cpu.X86.AVX:
+		lanes = biquadNarrowLanes
+	}
+	biquadCascadeBlocks(dst, src, coeffs, state, lanes, biquadMinWork)
+}
+
+// biquadCascadeBlocks runs the cascade in passes of up to lanes sections: the
+// first pass reads src, later ones run in place over dst. lanes is 8 (AVX2: the
+// 8-section kernel, and the 4-section one for blocks of up to 4), 4 (AVX only:
+// the 4-section kernel in passes of 4) or 0 (no kernel: the whole cascade runs
+// in Go). A block takes a kernel only when its CPU feature is present and
+// biquadKernelOK holds for it, otherwise the Go path. len(dst) == len(src) >= 1
+// is the caller's contract.
+func biquadCascadeBlocks(dst, src, coeffs, state []float32, lanes, minWork int) {
+	n := len(dst)
+	sections := len(coeffs) / biquadCoeffs
+	if lanes <= 0 {
+		biquadCascadeGo(dst, src, coeffs, state)
+		return
+	}
+	for s := 0; s < sections; s += lanes {
+		b := min(lanes, sections-s)
+		in := src
+		if s > 0 {
+			in = dst
+		}
+		co := coeffs[biquadCoeffs*s : biquadCoeffs*(s+b)]
+		st := state[biquadStateLen*s : biquadStateLen*(s+b)]
+		var l biquadLanes
+		// The 8-lane kernel's VPERMPS is AVX2-only; the 4-lane kernel is AVX.
+		switch {
+		case b > biquadNarrowLanes && lanes >= biquadMaxLanes && cpu.X86.AVX2 && biquadKernelOK(n, b, minWork):
+			l.pack(co, st)
+			l.fillSel(uint32(b - 1))
+			biquadCascade8AVX2(dst, in, &l.co[0], &l.st[0], &l.sel[0], b)
+			l.unpack(st)
+		case b <= biquadNarrowLanes && lanes >= biquadNarrowLanes && cpu.X86.AVX && biquadKernelOK(n, b, minWork):
+			l.pack(co, st)
+			l.fillSel(uint32(b - 1))
+			biquadCascade4AVX(dst, in, &l.co[0], &l.st[0], &l.sel[0], b)
+			l.unpack(st)
+		default:
+			// No pack or unpack here: the Go path works on the caller's state.
+			biquadCascadeGo(dst, in, co, st)
+		}
+	}
+}

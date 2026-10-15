@@ -299,12 +299,13 @@ func TestNoGoroutineRegisterClobber(t *testing.T) {
 	}
 }
 
-// singleRoundingKernel names a kernel whose scalar reference computes an
-// element-wise a*b+c (or alpha*x+beta) as two separate roundings: the product
-// rounds to the element type (float32 or float64) before the add. Its body must
-// emit a distinct multiply and add, never a fused multiply-add: a consumer that
-// reproduces the reference bit-for-bit (go-aac's quantize path #155; the f32/f64
-// Affine kernels' bit-identity to Scale then AddScalar, #298) depends on the
+// singleRoundingKernel names a kernel whose scalar reference computes a*b+c
+// (element-wise alpha*x+beta, or the products of a recurrence such as the biquad
+// cascade's) as separate roundings: each product rounds to the element type
+// (float32 or float64) before it is added. Its body must emit a distinct
+// multiply and add, never a fused multiply-add: a consumer that reproduces the
+// reference bit-for-bit (go-aac's quantize path #155; the f32/f64 Affine
+// kernels' bit-identity to Scale then AddScalar, #298) depends on the
 // intermediate rounding. See the package docs and #156.
 type singleRoundingKernel struct {
 	file, fn string
@@ -324,6 +325,10 @@ var singleRoundingKernels = []singleRoundingKernel{
 	{"f32/f32_amd64.s", "affineAVX512", "VMULPS", "VADDPS"},
 	{"f32/f32_amd64.s", "affineSSE", "MULPS", "ADDPS"},
 	{"f32/f32_arm64.s", "affineNEON", "FMUL", "FADD"},
+	{"f32/f32_amd64.s", "biquadCascade4AVX", "VMULPS", "VADDPS"},
+	{"f32/f32_amd64.s", "biquadCascade8AVX2", "VMULPS", "VADDPS"},
+	{"f32/f32_arm64.s", "biquadCascade4NEON", "FMUL", "FADD"},
+	{"f32/f32_arm64.s", "biquadCascade8NEON", "FMUL", "FADD"},
 	{"f64/f64_amd64.s", "affineAVX", "VMULPD", "VADDPD"},
 	{"f64/f64_amd64.s", "affineAVX512", "VMULPD", "VADDPD"},
 	{"f64/f64_amd64.s", "affineSSE2", "MULPD", "ADDPD"},

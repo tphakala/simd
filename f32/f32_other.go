@@ -128,3 +128,7 @@ func powElem32(dst, base, exp []float32)    { powElemGo(dst, base, exp) }
 func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
 	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
 }
+
+func biquadCascade32(dst, src, coeffs, state []float32) {
+	biquadCascadeGo(dst, src, coeffs, state)
+}

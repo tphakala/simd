@@ -11,8 +11,9 @@
 // rounded instruction. The elementwise scale, offset, clamp and float-to-fixed
 // conversion primitives (for example [Scale], [AddScalar], [Affine], [ClampScale],
 // [Float32ToInt32ScaleClamp], [Float32ToInt32ScaleClampSigned],
-// [Float32ToUint8Bucket] and the Int*ToFloat32Scale family) never contract a
-// multiply and a following add into a fused multiply-add: a consumer that
+// [Float32ToUint8Bucket] and the Int*ToFloat32Scale family) and the recurrence
+// [BiquadCascade] never contract a multiply and a following add into a fused
+// multiply-add: a consumer that
 // reproduces a scalar reference bit-for-bit depends on the product rounding to
 // float32 before the add. Where fusion is wanted, use [FMA], the AXPY
 // [AddScaled], or the multiply-accumulate [MulAdd], whose names say so.
@@ -56,6 +57,9 @@
 //   - AddScaled and AccumulateAdd read and rewrite dst in place (they are
 //     accumulators); their source slice must be disjoint from the destination
 //     window, except that AddScaled also permits s==dst exactly.
+//   - BiquadCascade may be used in place (dst==src exactly) but is stateful: it
+//     reads and rewrites its state slice, so state must not overlap dst or src,
+//     and coeffs must not overlap them either.
 //   - ButterflyComplex, ButterflyComplexStage and ButterflyComplexStage4 update
 //     their data slices in place; those slices must not overlap one another, and
 //     the twiddles must not overlap them.

@@ -358,6 +358,21 @@ unless `1 <= buckets <= 256`.
 `ExpE1InPlace` is the in-place form. The kernel is a single pass with its own
 range-reduced exp core, so it does not inherit the roughly 7e-6 error of `Exp`.
 
+**IIR filtering** (f32-specific):
+
+| Function | Description | SIMD Width |
+| --- | --- | --- |
+| `BiquadCascade(dst, src, coeffs, state)` | Direct Form I biquad cascade, state in and out, bit-exact with the scalar no-FMA recurrence (`coeffs` is `[b0 b1 b2 a1 a2]` and `state` is `[x1 x2 y1 y2]` per section) | 8 sections per pass (AVX2, NEON) / 4 (AVX) |
+
+`BiquadCascade` runs one section per vector lane, skewed by two samples, so a
+cascade of up to 8 sections costs a small multiple of one section's time per
+sample rather than 8 times. Each
+product and sum rounds to float32 on its own (no FMA, no flush of subnormals), so
+every non-NaN result is identical on every path and for any chunking of the
+stream. It may run in place (`dst == src`), processes `min(len(dst), len(src))`
+samples, and panics unless `len(coeffs)` is a positive multiple of 5 and
+`len(state)` is 4 per section.
+
 `InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
 a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
 streams do not map onto a clean register transpose) on top of the shared N=2/4 (AVX)
@@ -1144,7 +1159,8 @@ because the kernels behind it keep the `...AVX` name and only their dispatch
 guard names AVX2. Both packages gate `Sigmoid`, `Tanh`, `Exp`, `Log`, `Pow`,
 `InterleaveN` and `DeinterleaveN` on it; `f32` adds `MinIdxOfSumRows` (unit
 slides), `Int16ToFloat32Scale`, `Float32ToInt16Scale` and `Float32ToUint8Bucket`
-(its kernel is named `...AVX2`) and `ExpE1` (its kernel is named `...AVX2` and also needs FMA), and `f64` adds
+(its kernel is named `...AVX2`), `ExpE1` (its kernel is named `...AVX2` and also needs FMA) and
+`BiquadCascade` (8-section passes use the `...AVX2` kernel; with AVX alone it runs 4-section passes), and `f64` adds
 `Autocorrelate`, `RealFFTUnpack` and `RealFFTPower`. `cpu.Info()` cannot show this: it collapses
 AVX2 into `AMD64 AVX+FMA`, so an AVX+FMA host without AVX2 (AMD Piledriver and
 Steamroller) reports the same string while taking the Go path for those
