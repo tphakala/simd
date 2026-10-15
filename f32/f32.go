@@ -10,8 +10,8 @@
 // Rounding and fusion: each floating-point operation is a single IEEE-754
 // rounded instruction. The elementwise scale, offset, clamp and float-to-fixed
 // conversion primitives (for example [Scale], [AddScalar], [Affine], [ClampScale],
-// [Float32ToInt32ScaleClamp], [Float32ToInt32ScaleClampSigned] and the
-// Int*ToFloat32Scale family) never contract a
+// [Float32ToInt32ScaleClamp], [Float32ToInt32ScaleClampSigned],
+// [Float32ToUint8Bucket] and the Int*ToFloat32Scale family) never contract a
 // multiply and a following add into a fused multiply-add: a consumer that
 // reproduces a scalar reference bit-for-bit depends on the product rounding to
 // float32 before the add. Where fusion is wanted, use [FMA], the AXPY
@@ -1353,6 +1353,56 @@ func Float32ToInt32ScaleClampSignedUnsafe(dst []int32, mag, sign []float32, scal
 	// Slice dst and sign to len(mag) so SIMD implementations neither write past dst
 	// nor read past sign.
 	float32ToInt32ScaleClampSigned(dst[:len(mag)], mag, sign[:len(mag)], scale, offset, minV, maxV)
+}
+
+// maxBuckets is the largest bucket count Float32ToUint8Bucket accepts: a bucket
+// index must fit a uint8.
+const maxBuckets = 256
+
+// Float32ToUint8Bucket quantizes float32 values to uint8 bucket indices in one
+// pass:
+//
+//	dst[i] = uint8(clamp(src[i]*scale + offset, 0, buckets-1))   // truncated toward zero
+//
+// It is the affine "value to histogram bin" step: scale and offset map src onto
+// bucket coordinates, and the result is an index in [0, buckets-1]. Behavior is
+// fully specified and identical on every architecture:
+//   - the arithmetic is float32: the multiply and the add are two separate
+//     roundings (the product rounds to float32 before offset is added) and are
+//     never contracted into an FMA. Near a bucket edge this can differ from a
+//     float64 evaluation of src*scale+offset: with scale 5, offset 65 and
+//     src = -1e-7 the float32 sum 65 - 5e-7 rounds to 65, so the result is
+//     bucket 65, while the float64 form gives bucket 64;
+//   - truncation is toward zero, so every value below 1 after the affine,
+//     including everything in (-1, 0) and all negatives, gives bucket 0;
+//   - every non-finite input (NaN, +Inf and -Inf) gives bucket 0, whatever the
+//     sign of scale. The test is on the input, before the affine, so a finite
+//     input whose product overflows to +Inf (for example src = 1e38 with
+//     scale 5) is not special and clamps to buckets-1;
+//   - a NaN affine from a finite input (a NaN scale or offset, or zero times an
+//     infinite scale) also gives bucket 0;
+//   - large values clamp to buckets-1 rather than wrapping.
+//
+// scale and offset may be any float32. buckets must satisfy 1 <= buckets <= 256
+// or Float32ToUint8Bucket panics; the check runs even when there is nothing to
+// process. Processes min(len(dst), len(src)) elements and leaves the rest of dst
+// untouched. dst and src have different element types, so they cannot overlap in
+// safe Go; do not build overlapping views with unsafe.
+//
+// There is no Unsafe variant: the buckets check is the only validation, and a
+// variant would still need it.
+//
+// Uses AVX2 on AMD64 and NEON on ARM64 (16 elements per block); inputs shorter
+// than 16 use the Go path.
+func Float32ToUint8Bucket(dst []uint8, src []float32, scale, offset float32, buckets int) {
+	if buckets < 1 || buckets > maxBuckets {
+		panic("simd: buckets must be in [1, 256]")
+	}
+	n := min(len(dst), len(src))
+	if n == 0 {
+		return
+	}
+	float32ToUint8Bucket(dst[:n], src[:n], scale, offset, float32(buckets-1))
 }
 
 // ============================================================================

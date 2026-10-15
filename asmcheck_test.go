@@ -316,6 +316,8 @@ var singleRoundingKernels = []singleRoundingKernel{
 	{"f32/f32_arm64.s", "float32ToInt32ScaleClampNEON", "FMUL", "FADD"},
 	{"f32/f32_amd64.s", "float32ToInt32ScaleClampSignedAVX", "VMULPS", "VADDPS"},
 	{"f32/f32_arm64.s", "float32ToInt32ScaleClampSignedNEON", "FMUL", "FADD"},
+	{"f32/f32_amd64.s", "float32ToUint8BucketAVX2", "VMULPS", "VADDPS"},
+	{"f32/f32_arm64.s", "float32ToUint8BucketNEON", "FMUL", "FADD"},
 	{"f32/f32_amd64.s", "int32ToFloat32ScaleAddAVX", "VMULPS", "VADDPS"},
 	{"f32/f32_arm64.s", "int32ToFloat32ScaleAddNEON", "FMUL", "FADD"},
 	{"f32/f32_amd64.s", "affineAVX", "VMULPS", "VADDPS"},

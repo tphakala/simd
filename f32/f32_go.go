@@ -894,6 +894,40 @@ func float32ToInt32ScaleClampSignedGo(dst []int32, mag, sign []float32, scale, o
 	}
 }
 
+// float32ToUint8BucketGo is the pure-Go reference for Float32ToUint8Bucket; hi is
+// float32(buckets-1). Any non-finite input (NaN, +Inf, -Inf) is tested on the
+// input, before the affine, and maps to bucket 0. A finite input whose affine
+// overflows to +Inf is not special: it clamps to hi like any large value.
+//
+// The multiply and the add are two SEPARATE float32 roundings (see #156): the
+// float32(x*scale) conversion is the same mandatory FMA barrier as in
+// float32ToInt32ScaleClampGo, so this matches the SIMD kernels bit for bit.
+// A NaN affine (a NaN scale or offset, or 0 times an infinite scale) maps to 0,
+// as on both kernels. The clamp order mirrors the kernels' max(v, 0) then
+// min(v, hi), and v is then in [0, 255], so the truncating conversion is exact.
+func float32ToUint8BucketGo(dst []uint8, src []float32, scale, offset, hi float32) {
+	src = src[:min(len(dst), len(src))] // never extend dst into its capacity
+	dst = dst[:len(src)]                // BCE hint
+	for i, x := range src {
+		if x != x || x == posInf || x == negInf { // non-finite input -> bucket 0
+			dst[i] = 0
+			continue
+		}
+		v := float32(x*scale) + offset // two roundings; the conversion blocks FMA fusion
+		if v != v {                    // NaN affine -> 0, as on both kernels
+			dst[i] = 0
+			continue
+		}
+		if v < 0 {
+			v = 0
+		}
+		if v > hi {
+			v = hi
+		}
+		dst[i] = uint8(v) // truncate toward zero; v is in [0, 255]
+	}
+}
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS (Pure Go)
 // ============================================================================

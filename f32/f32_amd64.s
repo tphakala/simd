@@ -5111,6 +5111,110 @@ f32toi32s_done:
     VZEROUPPER
     RET
 
+// func float32ToUint8BucketAVX2(dst []uint8, src []float32, scale, offset, hi float32)
+// dst[i] = uint8(clamp(src[i]*scale + offset, 0, hi)), truncated toward zero, with
+// hi = float32(buckets-1) and every non-finite input (NaN, +Inf, -Inf) forced to 0.
+// Requires AVX2 (256-bit VPACKUSWB/VPERMQ/VPACKSSDW); len(dst) >= 16.
+//
+// VMULPS then VADDPS are deliberately SEPARATE (not VFMADD): the product rounds to
+// float32 before offset is added, matching the Go reference and the NEON kernel
+// bit for bit (#156). The clamp runs in the float domain before the convert, so
+// VCVTTPS2DQ never sees an out-of-range value (its overflow result 0x80000000
+// never decides a lane). x86 VMAXPS/VMINPS return the SECOND source when either
+// operand is NaN, so a NaN affine becomes 0 at the VMAXPS against zero. The input
+// mask (|x| < +Inf, an ordered compare that is false for NaN) is ANDed into the
+// clamped float, zeroing non-finite input lanes; it is computed from the input,
+// not from v, so a finite input whose product overflows to +Inf still clamps to
+// hi. The narrow is VPACKSSDW then VPACKUSWB with a VPERMQ before and after:
+// every lane is already in [0, 255], and the UNSIGNED byte pack keeps 128..255
+// (the signed VPACKSSWB would clip them to 127). The final 16-block is
+// reprocessed with overlap (rewriting identical bytes); dst ([]uint8) and src
+// ([]float32) cannot alias in safe Go, so this is safe.
+// Frame: dst(24) + src(24) + scale(4)+offset(4)+hi(4) = 60.
+TEXT ·float32ToUint8BucketAVX2(SB), NOSPLIT, $0-60
+    MOVQ dst_base+0(FP), DX        // DX = dst pointer (uint8 out)
+    MOVQ dst_len+8(FP), CX         // CX = length (len(dst) == len(src))
+    MOVQ src_base+24(FP), SI       // SI = src pointer (float32 in)
+
+    VBROADCASTSS scale+48(FP), Y3  // Y3 = scale  x8
+    VBROADCASTSS offset+52(FP), Y4 // Y4 = offset x8
+    VXORPS Y5, Y5, Y5              // Y5 = 0.0
+    VBROADCASTSS hi+56(FP), Y6     // Y6 = hi     x8
+    VMOVUPS log32_posinf<>(SB), Y7 // Y7 = +Inf x8
+    VMOVUPS absf32mask<>(SB), Y10  // Y10 = 0x7fffffff x8 (|x| mask)
+
+    MOVQ CX, AX
+    SHRQ $4, AX                    // len / 16
+    JZ f32tou8_tail
+
+f32tou8_loop16:
+    VMOVUPS (SI), Y0               // src[0:8]
+    VMOVUPS 32(SI), Y1             // src[8:16]
+    VANDPS Y10, Y0, Y8             // |x|
+    VANDPS Y10, Y1, Y9
+    VCMPPS $0x11, Y7, Y8, Y8       // LT_OQ: Y8 = |x| < +Inf (false for NaN and +-Inf)
+    VCMPPS $0x11, Y7, Y9, Y9
+    VMULPS Y3, Y0, Y0              // product, rounds to float32
+    VMULPS Y3, Y1, Y1
+    VADDPS Y4, Y0, Y0              // + offset, a separate rounding (NOT VFMADD)
+    VADDPS Y4, Y1, Y1
+    VMAXPS Y5, Y0, Y0              // >= 0; a NaN v returns the second source (0)
+    VMAXPS Y5, Y1, Y1
+    VMINPS Y6, Y0, Y0              // <= hi; +Inf v -> hi
+    VMINPS Y6, Y1, Y1
+    VANDPS Y8, Y0, Y0              // non-finite input lanes -> +0.0
+    VANDPS Y9, Y1, Y1
+    VCVTTPS2DQ Y0, Y0              // truncate; v is in [0, 255] so exact
+    VCVTTPS2DQ Y1, Y1
+    VPACKSSDW Y1, Y0, Y2           // int32 -> int16 (lane-interleaved)
+    VPERMQ $0xD8, Y2, Y2           // linearize the int16s
+    VPACKUSWB Y2, Y2, Y2           // int16 -> UNSIGNED uint8 (VPACKSSWB would clip 128..255)
+    VPERMQ $0xD8, Y2, Y2           // low 128 bits = 16 bytes in source order
+    VMOVDQU X2, (DX)               // store 16 x uint8
+    ADDQ $64, SI
+    ADDQ $16, DX
+    DECQ AX
+    JNZ f32tou8_loop16
+
+f32tou8_tail:
+    ANDQ $15, CX                   // len % 16
+    JZ f32tou8_done
+
+    // Back up to the final 16 elements and reprocess them (overlap).
+    MOVQ src_base+24(FP), SI
+    MOVQ dst_len+8(FP), AX
+    LEAQ -16(AX), BX               // BX = len - 16
+    LEAQ (SI)(BX*4), SI            // SI = &src[len-16]
+    MOVQ dst_base+0(FP), DX
+    ADDQ BX, DX                    // DX = &dst[len-16]
+    VMOVUPS (SI), Y0               // src[0:8]
+    VMOVUPS 32(SI), Y1             // src[8:16]
+    VANDPS Y10, Y0, Y8             // |x|
+    VANDPS Y10, Y1, Y9
+    VCMPPS $0x11, Y7, Y8, Y8       // LT_OQ: Y8 = |x| < +Inf (false for NaN and +-Inf)
+    VCMPPS $0x11, Y7, Y9, Y9
+    VMULPS Y3, Y0, Y0              // product, rounds to float32
+    VMULPS Y3, Y1, Y1
+    VADDPS Y4, Y0, Y0              // + offset, a separate rounding (NOT VFMADD)
+    VADDPS Y4, Y1, Y1
+    VMAXPS Y5, Y0, Y0              // >= 0; a NaN v returns the second source (0)
+    VMAXPS Y5, Y1, Y1
+    VMINPS Y6, Y0, Y0              // <= hi; +Inf v -> hi
+    VMINPS Y6, Y1, Y1
+    VANDPS Y8, Y0, Y0              // non-finite input lanes -> +0.0
+    VANDPS Y9, Y1, Y1
+    VCVTTPS2DQ Y0, Y0              // truncate; v is in [0, 255] so exact
+    VCVTTPS2DQ Y1, Y1
+    VPACKSSDW Y1, Y0, Y2           // int32 -> int16 (lane-interleaved)
+    VPERMQ $0xD8, Y2, Y2           // linearize the int16s
+    VPACKUSWB Y2, Y2, Y2           // int16 -> UNSIGNED uint8 (VPACKSSWB would clip 128..255)
+    VPERMQ $0xD8, Y2, Y2           // low 128 bits = 16 bytes in source order
+    VMOVDQU X2, (DX)               // store 16 x uint8
+
+f32tou8_done:
+    VZEROUPPER
+    RET
+
 // ============================================================================
 // SPLIT-FORMAT COMPLEX OPERATIONS
 // ============================================================================
