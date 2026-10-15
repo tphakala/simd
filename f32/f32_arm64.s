@@ -4562,6 +4562,87 @@ DATA log32neon_expc<>+0x38(SB)/4, $0x3e2aaaab
 DATA log32neon_expc<>+0x3c(SB)/4, $0x3e2aaaab
 GLOBL log32neon_expc<>(SB), RODATA|NOPTR, $64
 
+// expE1NEON coefficient table: 19 quads, each value repeated across the four lanes,
+// in load order a0..a5 (A&S 5.1.53), n0..n3, d0..d3 (A&S 5.1.56 numerator and
+// denominator), c0..c4 (Cephes expf polynomial, c5 = 0.5 is the shared constant).
+DATA e1neon_coef<>+0x000(SB)/4, $0x3a8d5ece  // a0 = +1.0785700288e-03
+DATA e1neon_coef<>+0x004(SB)/4, $0x3a8d5ece
+DATA e1neon_coef<>+0x008(SB)/4, $0x3a8d5ece
+DATA e1neon_coef<>+0x00c(SB)/4, $0x3a8d5ece
+DATA e1neon_coef<>+0x010(SB)/4, $0xbc1fe893  // a1 = -9.7600398585e-03
+DATA e1neon_coef<>+0x014(SB)/4, $0xbc1fe893
+DATA e1neon_coef<>+0x018(SB)/4, $0xbc1fe893
+DATA e1neon_coef<>+0x01c(SB)/4, $0xbc1fe893
+DATA e1neon_coef<>+0x020(SB)/4, $0x3d62190f  // a2 = +5.5199678987e-02
+DATA e1neon_coef<>+0x024(SB)/4, $0x3d62190f
+DATA e1neon_coef<>+0x028(SB)/4, $0x3d62190f
+DATA e1neon_coef<>+0x02c(SB)/4, $0x3d62190f
+DATA e1neon_coef<>+0x030(SB)/4, $0xbe7fe88d  // a3 = -2.4991054833e-01
+DATA e1neon_coef<>+0x034(SB)/4, $0xbe7fe88d
+DATA e1neon_coef<>+0x038(SB)/4, $0xbe7fe88d
+DATA e1neon_coef<>+0x03c(SB)/4, $0xbe7fe88d
+DATA e1neon_coef<>+0x040(SB)/4, $0x3f7fff79  // a4 = +9.9999195337e-01
+DATA e1neon_coef<>+0x044(SB)/4, $0x3f7fff79
+DATA e1neon_coef<>+0x048(SB)/4, $0x3f7fff79
+DATA e1neon_coef<>+0x04c(SB)/4, $0x3f7fff79
+DATA e1neon_coef<>+0x050(SB)/4, $0xbf13c468  // a5 = -5.7721567154e-01
+DATA e1neon_coef<>+0x054(SB)/4, $0xbf13c468
+DATA e1neon_coef<>+0x058(SB)/4, $0xbf13c468
+DATA e1neon_coef<>+0x05c(SB)/4, $0xbf13c468
+DATA e1neon_coef<>+0x060(SB)/4, $0x41092c5b  // n0 = +8.5733289719e+00
+DATA e1neon_coef<>+0x064(SB)/4, $0x41092c5b
+DATA e1neon_coef<>+0x068(SB)/4, $0x41092c5b
+DATA e1neon_coef<>+0x06c(SB)/4, $0x41092c5b
+DATA e1neon_coef<>+0x070(SB)/4, $0x419078de  // n1 = +1.8059017181e+01
+DATA e1neon_coef<>+0x074(SB)/4, $0x419078de
+DATA e1neon_coef<>+0x078(SB)/4, $0x419078de
+DATA e1neon_coef<>+0x07c(SB)/4, $0x419078de
+DATA e1neon_coef<>+0x080(SB)/4, $0x410a27fb  // n2 = +8.6347608566e+00
+DATA e1neon_coef<>+0x084(SB)/4, $0x410a27fb
+DATA e1neon_coef<>+0x088(SB)/4, $0x410a27fb
+DATA e1neon_coef<>+0x08c(SB)/4, $0x410a27fb
+DATA e1neon_coef<>+0x090(SB)/4, $0x3e8919a4  // n3 = +2.6777374744e-01
+DATA e1neon_coef<>+0x094(SB)/4, $0x3e8919a4
+DATA e1neon_coef<>+0x098(SB)/4, $0x3e8919a4
+DATA e1neon_coef<>+0x09c(SB)/4, $0x3e8919a4
+DATA e1neon_coef<>+0x0a0(SB)/4, $0x41192c54  // d0 = +9.5733222961e+00
+DATA e1neon_coef<>+0x0a4(SB)/4, $0x41192c54
+DATA e1neon_coef<>+0x0a8(SB)/4, $0x41192c54
+DATA e1neon_coef<>+0x0ac(SB)/4, $0x41192c54
+DATA e1neon_coef<>+0x0b0(SB)/4, $0x41cd104b  // d1 = +2.5632955551e+01
+DATA e1neon_coef<>+0x0b4(SB)/4, $0x41cd104b
+DATA e1neon_coef<>+0x0b8(SB)/4, $0x41cd104b
+DATA e1neon_coef<>+0x0bc(SB)/4, $0x41cd104b
+DATA e1neon_coef<>+0x0c0(SB)/4, $0x41a8cc17  // d2 = +2.1099653244e+01
+DATA e1neon_coef<>+0x0c4(SB)/4, $0x41a8cc17
+DATA e1neon_coef<>+0x0c8(SB)/4, $0x41a8cc17
+DATA e1neon_coef<>+0x0cc(SB)/4, $0x41a8cc17
+DATA e1neon_coef<>+0x0d0(SB)/4, $0x407d5803  // d3 = +3.9584968090e+00
+DATA e1neon_coef<>+0x0d4(SB)/4, $0x407d5803
+DATA e1neon_coef<>+0x0d8(SB)/4, $0x407d5803
+DATA e1neon_coef<>+0x0dc(SB)/4, $0x407d5803
+DATA e1neon_coef<>+0x0e0(SB)/4, $0x39506967  // c0 = +1.9875691214e-04
+DATA e1neon_coef<>+0x0e4(SB)/4, $0x39506967
+DATA e1neon_coef<>+0x0e8(SB)/4, $0x39506967
+DATA e1neon_coef<>+0x0ec(SB)/4, $0x39506967
+DATA e1neon_coef<>+0x0f0(SB)/4, $0x3ab743ce  // c1 = +1.3981999364e-03
+DATA e1neon_coef<>+0x0f4(SB)/4, $0x3ab743ce
+DATA e1neon_coef<>+0x0f8(SB)/4, $0x3ab743ce
+DATA e1neon_coef<>+0x0fc(SB)/4, $0x3ab743ce
+DATA e1neon_coef<>+0x100(SB)/4, $0x3c088908  // c2 = +8.3334520459e-03
+DATA e1neon_coef<>+0x104(SB)/4, $0x3c088908
+DATA e1neon_coef<>+0x108(SB)/4, $0x3c088908
+DATA e1neon_coef<>+0x10c(SB)/4, $0x3c088908
+DATA e1neon_coef<>+0x110(SB)/4, $0x3d2aa9c1  // c3 = +4.1665796191e-02
+DATA e1neon_coef<>+0x114(SB)/4, $0x3d2aa9c1
+DATA e1neon_coef<>+0x118(SB)/4, $0x3d2aa9c1
+DATA e1neon_coef<>+0x11c(SB)/4, $0x3d2aa9c1
+DATA e1neon_coef<>+0x120(SB)/4, $0x3e2aaaaa  // c4 = +1.6666665673e-01
+DATA e1neon_coef<>+0x124(SB)/4, $0x3e2aaaaa
+DATA e1neon_coef<>+0x128(SB)/4, $0x3e2aaaaa
+DATA e1neon_coef<>+0x12c(SB)/4, $0x3e2aaaaa
+GLOBL e1neon_coef<>(SB), RODATA|NOPTR, $304
+
 // func logNEON32(dst, src []float32, k1hi, k1lo, k2 float32)
 // Shared kernel for Log, Log2, and Log10: per lane it computes
 // result = e*k1hi + (lnm*k2 + e*k1lo), with x = m*2^e, m in
@@ -5335,6 +5416,229 @@ powelem32_neon_scalar_normal:
     CBNZ R3, powelem32_neon_scalar_loop
 
 powelem32_neon_done:
+    RET
+
+// func expE1NEON(dst, src []float32)
+// Fused single-pass exponential integral E1 (see ExpE1). Per lane both branches
+// are computed and selected by mask: x < 1 uses A&S 5.1.53,
+// E1 = P(x) - ln(x), with the Cephes logf core copied unchanged from powNEON32
+// (subnormal inputs are pre-scaled by 2^32); x >= 1 uses A&S 5.1.56,
+// E1 = num/den * exp(-x) / x. exp(-x) is 2^-k * exp(r) with k = round(x*log2e),
+// r = k*ln2 - x from a Cody-Waite hi/lo split of ln2, exp(r) = 1 + r + r^2*P(r)
+// (Cephes expf degree 5 in r, c5 = 0.5), and 2^-k applied as the last multiply
+// so every intermediate stays normal. The hi branch clamps x to [1, 88]: k stays
+// at most 127, so 2^-k is a normal power of two or exactly +0 (x above about
+// 87.68), and the denominator never reaches 0. Then x <= 0 (including -0 and
+// -Inf) selects +Inf and NaN selects quiet NaN; +Inf and x >= 88 reach +0
+// through the clamp. FMLA is a fused multiply-add, so this is not a
+// single-rounding kernel. Relative error is at most 4.7e-7 for every float32
+// x in (0, 82.9] (measured over every such float32: 4.62e-7 at x = 7.5932312);
+// the result lanes are element independent.
+//
+// Block size 4. When n is not a multiple of 4 the last four source lanes are
+// loaded into R12/R13 BEFORE the main loop stores anything, and one more pass
+// computes them into the last four dst lanes. The overlap lanes are recomputed
+// from the original inputs by the same instruction sequence, so they are
+// rewritten with the same bits, and an exact dst == src overlay stays correct
+// because the final block's input was read before the first store. The tail
+// LDP address is only 4-byte aligned for an offset slice. Precondition:
+// len(dst) >= 4 and len(src) >= len(dst); the dispatcher guarantees both, and a
+// direct call with fewer than four elements would read before src.
+TEXT ·expE1NEON(SB), NOSPLIT, $0-48
+    MOVD dst_base+0(FP), R0
+    MOVD dst_len+8(FP), R3
+    MOVD src_base+24(FP), R1
+    MOVD $log32neon_p78<>(SB), R5     // p7/p8 table base
+    ADD $16, R5, R6                   // p8 base
+    MOVD $e1neon_coef<>(SB), R7       // A&S and exp-core coefficient table
+
+    // E1 constants: 88 (zero flush), +Inf (x <= 0), quiet NaN (NaN in)
+    MOVW $0x42b00000, R10
+    VMOV R10, V12.S[0]
+    VDUP V12.S[0], V12.S4             // V12 = 88.0
+    MOVW $0x7f800000, R10
+    VMOV R10, V13.S[0]
+    VDUP V13.S[0], V13.S4             // V13 = +Inf
+    MOVW $0x7fc00000, R10
+    VMOV R10, V14.S[0]
+    VDUP V14.S[0], V14.S4             // V14 = quiet NaN
+
+    // Log-core reduction constants (see logNEON32)
+    MOVW $0x3f350000, R10
+    VMOV R10, V15.S[0]
+    VDUP V15.S[0], V15.S4             // V15 = reduction offset
+    MOVW $0xff800000, R10
+    VMOV R10, V16.S[0]
+    VDUP V16.S[0], V16.S4             // V16 = exponent mask
+    MOVW $0x00800000, R10
+    VMOV R10, V17.S[0]
+    VDUP V17.S[0], V17.S4             // V17 = FLT_MIN
+    MOVW $0x4f800000, R10
+    VMOV R10, V18.S[0]
+    VDUP V18.S[0], V18.S4             // V18 = 2^32
+    MOVW $0xc2000000, R10
+    VMOV R10, V19.S[0]
+    VDUP V19.S[0], V19.S4             // V19 = -32.0
+    FMOVS $1.0, F20
+    VDUP V20.S[0], V20.S4             // V20 = 1.0
+    FMOVS $0.5, F21
+    VDUP V21.S[0], V21.S4             // V21 = 0.5
+
+    // Cephes logf ln(2) hi/lo split and log2(e)
+    MOVW $0x3f318000, R10
+    VMOV R10, V22.S[0]
+    VDUP V22.S[0], V22.S4             // V22 = ln2 hi
+    MOVW $0xb95e8083, R10
+    VMOV R10, V23.S[0]
+    VDUP V23.S[0], V23.S4             // V23 = ln2 lo
+    MOVW $0x3fb8aa3b, R10
+    VMOV R10, V24.S[0]
+    VDUP V24.S[0], V24.S4             // V24 = log2(e)
+
+    // Cephes logf coefficients p0..p6 (p7/p8 from the table)
+    MOVW $0x3d9021bb, R10
+    VMOV R10, V25.S[0]
+    VDUP V25.S[0], V25.S4             // V25 = p0
+    MOVW $0xbdebd1b8, R10
+    VMOV R10, V26.S[0]
+    VDUP V26.S[0], V26.S4             // V26 = p1
+    MOVW $0x3def251a, R10
+    VMOV R10, V27.S[0]
+    VDUP V27.S[0], V27.S4             // V27 = p2
+    MOVW $0xbdfe5d4f, R10
+    VMOV R10, V28.S[0]
+    VDUP V28.S[0], V28.S4             // V28 = p3
+    MOVW $0x3e11e9bf, R10
+    VMOV R10, V29.S[0]
+    VDUP V29.S[0], V29.S4             // V29 = p4
+    MOVW $0xbe2aae50, R10
+    VMOV R10, V30.S[0]
+    VDUP V30.S[0], V30.S4             // V30 = p5
+    MOVW $0x3e4cceac, R10
+    VMOV R10, V31.S[0]
+    VDUP V31.S[0], V31.S4             // V31 = p6
+
+    LSR $2, R3, R4                    // R4 = number of 4-lane blocks
+    AND $3, R3, R9                    // R9 = n % 4
+    CBZ R9, expe1neon_loop
+    SUB $4, R3, R10
+    ADD R10<<2, R1, R11               // &src[n-4]
+    LDP (R11), (R12, R13)             // preload the last four source lanes
+
+expe1neon_loop:
+    VLD1.P 16(R1), [V0.S4]            // V0 = x
+expe1neon_body:
+    MOVD R7, R8                       // R8 = coefficient cursor
+    VLD1 (R5), [V10.S4]               // V10 = p7
+    VLD1 (R6), [V11.S4]               // V11 = p8
+
+    // --- log core (copied unchanged from powNEON32); V0 is read only ---
+    WORD $0x6ea0e621                  // FCMGT V1.4S, V17.4S, V0.4S   mask: x < FLT_MIN
+    WORD $0x6e32dc02                  // FMUL V2.4S, V0.4S, V18.4S    x * 2^32
+    WORD $0x4ea11c23                  // MOV V3.16B, V1.16B
+    WORD $0x6e601c43                  // BSL V3.16B, V2.16B, V0.16B   xs
+    WORD $0x4e331c24                  // AND V4.16B, V1.16B, V19.16B  ebias
+    WORD $0x6eaf8465                  // SUB V5.4S, V3.4S, V15.4S     tmp
+    WORD $0x4e301ca6                  // AND V6.16B, V5.16B, V16.16B
+    WORD $0x6ea68466                  // SUB V6.4S, V3.4S, V6.4S      bits(m)
+    WORD $0x4f2904a5                  // SSHR V5.4S, V5.4S, #23       e (int32)
+    WORD $0x4e21d8a5                  // SCVTF V5.4S, V5.4S           e as float32
+    WORD $0x4e24d4a4                  // FADD V4.4S, V5.4S, V4.4S     e = e + ebias
+    WORD $0x4eb4d4c7                  // FSUB V7.4S, V6.4S, V20.4S    z
+    WORD $0x6e27dce6                  // FMUL V6.4S, V7.4S, V7.4S     zz
+    WORD $0x4eb91f28                  // MOV V8.16B, V25.16B          acc = p0
+    WORD $0x4eba1f49                  // MOV V9.16B, V26.16B
+    WORD $0x4e27cd09                  // FMLA V9.4S, V8.4S, V7.4S     p1 + acc*z
+    WORD $0x4ebb1f68                  // MOV V8.16B, V27.16B
+    WORD $0x4e27cd28                  // FMLA V8.4S, V9.4S, V7.4S     p2 + acc*z
+    WORD $0x4ebc1f89                  // MOV V9.16B, V28.16B
+    WORD $0x4e27cd09                  // FMLA V9.4S, V8.4S, V7.4S     p3 + acc*z
+    WORD $0x4ebd1fa8                  // MOV V8.16B, V29.16B
+    WORD $0x4e27cd28                  // FMLA V8.4S, V9.4S, V7.4S     p4 + acc*z
+    WORD $0x4ebe1fc9                  // MOV V9.16B, V30.16B
+    WORD $0x4e27cd09                  // FMLA V9.4S, V8.4S, V7.4S     p5 + acc*z
+    WORD $0x4ebf1fe8                  // MOV V8.16B, V31.16B
+    WORD $0x4e27cd28                  // FMLA V8.4S, V9.4S, V7.4S     p6 + acc*z
+    WORD $0x4eaa1d49                  // MOV V9.16B, V10.16B
+    WORD $0x4e27cd09                  // FMLA V9.4S, V8.4S, V7.4S     p7 + acc*z
+    WORD $0x4eab1d68                  // MOV V8.16B, V11.16B
+    WORD $0x4e27cd28                  // FMLA V8.4S, V9.4S, V7.4S     P(z)
+    WORD $0x6e26dcea                  // FMUL V10.4S, V7.4S, V6.4S    z^3
+    WORD $0x6e28dd4a                  // FMUL V10.4S, V10.4S, V8.4S   z^3 * P(z)
+    WORD $0x4eb5ccca                  // FMLS V10.4S, V6.4S, V21.4S   -= 0.5*zz
+    WORD $0x4e27d54a                  // FADD V10.4S, V10.4S, V7.4S   lnm
+
+    // ln(x) = e*ln2hi + (e*ln2lo + lnm)
+    WORD $0x6e37dc8b                  // FMUL V11.4S, V4.4S, V23.4S   e * ln2lo
+    WORD $0x4e2ad56b                  // FADD V11.4S, V11.4S, V10.4S  + lnm
+    WORD $0x4e36cc8b                  // FMLA V11.4S, V4.4S, V22.4S   += e * ln2hi
+
+    // --- lo branch: P(x) - ln(x), Horner a0..a5 ---
+    VLD1.P 64(R8), [V1.S4, V2.S4, V3.S4, V4.S4]  // a0..a3
+    WORD $0x4e20cc22                  // FMLA V2.4S, V1.4S, V0.4S
+    WORD $0x4e20cc43                  // FMLA V3.4S, V2.4S, V0.4S
+    WORD $0x4e20cc64                  // FMLA V4.4S, V3.4S, V0.4S
+    VLD1.P 32(R8), [V5.S4, V6.S4]     // a4, a5
+    WORD $0x4e20cc85                  // FMLA V5.4S, V4.4S, V0.4S
+    WORD $0x4e20cca6                  // FMLA V6.4S, V5.4S, V0.4S
+    WORD $0x4eabd4ca                  // FSUB V10.4S, V6.4S, V11.4S       lo = P53(x) - ln(x)
+    WORD $0x4e34f40b                  // FMAX V11.4S, V0.4S, V20.4S
+    WORD $0x4eacf56b                  // FMIN V11.4S, V11.4S, V12.4S      xh
+    VLD1.P 64(R8), [V1.S4, V2.S4, V3.S4, V4.S4]  // n0..n3
+    WORD $0x4e2bd421                  // FADD V1.4S, V1.4S, V11.4S
+    WORD $0x4e2bcc22                  // FMLA V2.4S, V1.4S, V11.4S
+    WORD $0x4e2bcc43                  // FMLA V3.4S, V2.4S, V11.4S
+    WORD $0x4e2bcc64                  // FMLA V4.4S, V3.4S, V11.4S        num
+    VLD1.P 64(R8), [V5.S4, V6.S4, V7.S4, V8.S4]  // d0..d3
+    WORD $0x4e2bd4a5                  // FADD V5.4S, V5.4S, V11.4S
+    WORD $0x4e2bcca6                  // FMLA V6.4S, V5.4S, V11.4S
+    WORD $0x4e2bccc7                  // FMLA V7.4S, V6.4S, V11.4S
+    WORD $0x4e2bcce8                  // FMLA V8.4S, V7.4S, V11.4S        den
+    WORD $0x6e2bdd08                  // FMUL V8.4S, V8.4S, V11.4S        dx = den*xh
+    WORD $0x6e38dd69                  // FMUL V9.4S, V11.4S, V24.4S
+    WORD $0x4e218929                  // FRINTN V9.4S, V9.4S              k
+    WORD $0x6ea0f961                  // FNEG V1.4S, V11.4S
+    WORD $0x4e36cd21                  // FMLA V1.4S, V9.4S, V22.4S
+    WORD $0x4e37cd21                  // FMLA V1.4S, V9.4S, V23.4S        r
+    VLD1.P 48(R8), [V5.S4, V6.S4, V7.S4]  // c0, c1, c2
+    WORD $0x4e21cca6                  // FMLA V6.4S, V5.4S, V1.4S
+    WORD $0x4e21ccc7                  // FMLA V7.4S, V6.4S, V1.4S
+    VLD1.P 32(R8), [V2.S4, V3.S4]     // c3, c4
+    WORD $0x4e21cce2                  // FMLA V2.4S, V7.4S, V1.4S
+    WORD $0x4e21cc43                  // FMLA V3.4S, V2.4S, V1.4S
+    WORD $0x4eb51ea5                  // MOV V5.16B, V21.16B              c5 = 0.5
+    WORD $0x4e21cc65                  // FMLA V5.4S, V3.4S, V1.4S         P(r)
+    WORD $0x6e21dc26                  // FMUL V6.4S, V1.4S, V1.4S         r^2
+    WORD $0x4e26cca1                  // FMLA V1.4S, V5.4S, V6.4S
+    WORD $0x4e34d421                  // FADD V1.4S, V1.4S, V20.4S        exp(r)
+    WORD $0x4ea1b929                  // FCVTZS V9.4S, V9.4S
+    WORD $0x4f375529                  // SHL V9.4S, V9.4S, #23
+    WORD $0x6ea98689                  // SUB V9.4S, V20.4S, V9.4S         bits(2^-k)
+    WORD $0x6e21dc84                  // FMUL V4.4S, V4.4S, V1.4S
+    WORD $0x6e28fc84                  // FDIV V4.4S, V4.4S, V8.4S
+    WORD $0x6e29dc84                  // FMUL V4.4S, V4.4S, V9.4S         hi
+    WORD $0x6ea0e682                  // FCMGT V2.4S, V20.4S, V0.4S       mask: x < 1
+    WORD $0x6ea21d44                  // BIT V4.16B, V10.16B, V2.16B
+    WORD $0x6ea0d802                  // FCMLE V2.4S, V0.4S, #0           mask: x <= 0
+    WORD $0x6ea21da4                  // BIT V4.16B, V13.16B, V2.16B
+    WORD $0x4e20e402                  // FCMEQ V2.4S, V0.4S, V0.4S        mask: x ordered
+    WORD $0x6ee21dc4                  // BIF V4.16B, V14.16B, V2.16B
+    VST1.P [V4.S4], 16(R0)
+
+    SUB $1, R4
+    CBNZ R4, expe1neon_loop
+
+    CBZ R9, expe1neon_done
+    MOVD $0, R9                       // run the tail pass once
+    MOVD dst_base+0(FP), R0
+    SUB $4, R3, R10
+    ADD R10<<2, R0, R0                // &dst[n-4]
+    VMOV R12, V0.D[0]
+    VMOV R13, V0.D[1]
+    MOVD $1, R4
+    B expe1neon_body
+
+expe1neon_done:
     RET
 
 // func minIdxOfSumRows4NEON(vals []float32, idxs []int32, a, k []float32, rev int)

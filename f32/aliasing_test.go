@@ -64,6 +64,7 @@ func f32AliasCases() []aliastest.Case {
 		aliastest.UnaryCase("Log", aliasEqF32, genF32Pos, Log),
 		aliastest.UnaryCase("Log2", aliasEqF32, genF32Pos, Log2),
 		aliastest.UnaryCase("Log10", aliasEqF32, genF32Pos, Log10),
+		aliastest.UnaryCase("ExpE1", aliasEqF32, genF32, ExpE1),
 		aliastest.UnaryCase("AbsPow34", aliasEqF32, genF32, AbsPow34),
 		aliastest.UnaryCase("CumulativeSum", aliasEqF32, genF32, CumulativeSum),
 		aliastest.UnaryCase("Normalize", aliasEqF32, genF32, Normalize),

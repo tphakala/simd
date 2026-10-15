@@ -349,6 +349,15 @@ reference bit-for-bit.
 roundings like `Float32ToInt32ScaleClamp`, has no `Unsafe` variant, and panics
 unless `1 <= buckets <= 256`.
 
+**Special functions** (f32-specific; no f64 equivalent):
+
+| Function | Description | SIMD Width |
+| --- | --- | --- |
+| `ExpE1(dst, src)` | Exponential integral E1(x) (Abramowitz and Stegun 5.1.53 and 5.1.56); max relative error 4.7e-7 for 0 < x <= 82.9, +Inf for x <= 0, 0 for x >= 88 | 8x (AVX2+FMA) / 4x (NEON) |
+
+`ExpE1InPlace` is the in-place form. The kernel is a single pass with its own
+range-reduced exp core, so it does not inherit the roughly 7e-6 error of `Exp`.
+
 `InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
 a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
 streams do not map onto a clean register transpose) on top of the shared N=2/4 (AVX)
@@ -1134,8 +1143,8 @@ AVX2 sits between AVX+FMA and AVX-512 for `f32` and `f64` and is easy to miss,
 because the kernels behind it keep the `...AVX` name and only their dispatch
 guard names AVX2. Both packages gate `Sigmoid`, `Tanh`, `Exp`, `Log`, `Pow`,
 `InterleaveN` and `DeinterleaveN` on it; `f32` adds `MinIdxOfSumRows` (unit
-slides), `Int16ToFloat32Scale`, `Float32ToInt16Scale` and `Float32ToUint8Bucket`
-(its kernel is named `...AVX2`), and `f64` adds
+slides), `Int16ToFloat32Scale`, `Float32ToInt16Scale`, `Float32ToUint8Bucket`
+and `ExpE1` (their kernels are named `...AVX2`; `ExpE1` also needs FMA), and `f64` adds
 `Autocorrelate`, `RealFFTUnpack` and `RealFFTPower`. `cpu.Info()` cannot show this: it collapses
 AVX2 into `AMD64 AVX+FMA`, so an AVX+FMA host without AVX2 (AMD Piledriver and
 Steamroller) reports the same string while taking the Go path for those
