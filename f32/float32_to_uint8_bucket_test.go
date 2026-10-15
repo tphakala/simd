@@ -169,7 +169,7 @@ func bucketCheckLengths(t *testing.T, fn bucketFunc) {
 			if i%3 == 0 {
 				src[i] = math.Float32frombits(rng.Uint32()) // any bit pattern
 			} else {
-				src[i] = float32(rng.Float64()*60 - 14) // the in-range band for scale 5, offset 65
+				src[i] = float32(rng.Float64()*60 - 14) // values from -14 to 46
 			}
 		}
 		for _, s := range bucketSettings[:5] {
@@ -428,7 +428,7 @@ func FuzzFloat32ToUint8Bucket(f *testing.F) {
 		for i := range src {
 			bits := seed*uint32(i+1) ^ offsetBits
 			if i%4 == 0 {
-				src[i] = float32(int32(bits>>8)%4000) / 100 // in-range band
+				src[i] = float32(int32(bits>>8)%4000) / 100 // magnitudes below 40
 			} else {
 				src[i] = math.Float32frombits(bits)
 			}
