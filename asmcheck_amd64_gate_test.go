@@ -531,49 +531,54 @@ const gateWalkDepth = 4
 // gatePolarity walks cond looking for a gate in idents whose sense matches want
 // (want=false: the gate as written; want=true: the gate under a `!`).
 func gatePolarity(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool) bool {
-	found := false
-	var walk func(e ast.Expr, negated bool, depth int)
-	walk = func(e ast.Expr, negated bool, depth int) {
-		if e == nil || found || depth > gateWalkDepth {
-			return
+	// walk reports whether e, assumed to evaluate to the value the walk is
+	// tracking, implies the feature. holds is that assumed value: true when an
+	// even number of `!` sit above e and want is false, or an odd number and
+	// want is true. A conjunction assumed true implies the feature when either
+	// side does; a disjunction assumed true needs both sides, since either alone
+	// can make it true. Assumed false, the two swap (De Morgan).
+	var walk func(e ast.Expr, negated bool, depth int) bool
+	walk = func(e ast.Expr, negated bool, depth int) bool {
+		if e == nil || depth > gateWalkDepth {
+			return false
 		}
+		holds := negated == want
 		switch x := e.(type) {
 		case *ast.UnaryExpr:
 			if x.Op == token.NOT {
-				walk(x.X, !negated, depth)
-				return
+				return walk(x.X, !negated, depth)
 			}
-			walk(x.X, negated, depth)
+			return walk(x.X, negated, depth)
 		case *ast.BinaryExpr:
-			walk(x.X, negated, depth)
-			walk(x.Y, negated, depth)
-		case *ast.ParenExpr:
-			walk(x.X, negated, depth)
-		case *ast.SelectorExpr:
-			if idents[x.Sel.Name] && negated == want {
-				found = true
+			switch {
+			case x.Op == token.LAND && holds, x.Op == token.LOR && !holds:
+				return walk(x.X, negated, depth) || walk(x.Y, negated, depth)
+			case x.Op == token.LOR && holds, x.Op == token.LAND && !holds:
+				return walk(x.X, negated, depth) && walk(x.Y, negated, depth)
 			}
+			return false
+		case *ast.ParenExpr:
+			return walk(x.X, negated, depth)
+		case *ast.SelectorExpr:
+			return idents[x.Sel.Name] && holds
 		case *ast.Ident:
-			if idents[x.Name] && negated == want {
-				found = true
-				return
+			if idents[x.Name] {
+				return holds
 			}
 			// A cached gate such as `var hasAVX2 = cpu.X86.AVX2`. Resolving the
 			// initializer rather than trusting the name is what makes redefining
 			// it as cpu.X86.AVX fail the check.
 			if init, ok := pf.varInits[x.Name]; ok {
-				walk(init, negated, depth+1)
+				return walk(init, negated, depth+1)
 			}
 		case *ast.CallExpr:
 			// A predicate such as logSIMDOK32(n) whose body returns the gate.
 			id, ok := x.Fun.(*ast.Ident)
-			if ok && negated == want && predicateGates(id.Name, pf, idents, depth+1) {
-				found = true
-			}
+			return ok && holds && predicateGates(id.Name, pf, idents, depth+1)
 		}
+		return false
 	}
-	walk(cond, false, 0)
-	return found
+	return walk(cond, false, 0)
 }
 
 // predicateGates reports whether a same-package function returns an expression

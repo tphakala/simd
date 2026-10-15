@@ -219,3 +219,41 @@ func gated() { if cpu.X86.AVX { k(true) } }
 		})
 	}
 }
+
+// TestGatePolarityBooleanStructure pins how the shared gate walk reads && and
+// ||. A disjunction only gates when both sides do, since either side alone can
+// make it true; under a negation the roles of && and || swap. Before this rule
+// was written down, `cpu.X86.AVX || x` counted as an AVX gate.
+func TestGatePolarityBooleanStructure(t *testing.T) {
+	idents := map[string]bool{"AVX": true, "AVX2": true}
+	pf := &pkgFuncs{funcs: map[string]*ast.FuncDecl{}, varInits: map[string]ast.Expr{}}
+	cases := []struct {
+		cond     string
+		positive bool // the then-branch of `if cond` requires the feature
+		negative bool // code after `if cond { return }` requires the feature
+	}{
+		{cond: "cpu.X86.AVX", positive: true},
+		{cond: "cpu.X86.AVX && n > 8", positive: true},
+		{cond: "cpu.X86.AVX || n > 8"},
+		{cond: "cpu.X86.AVX || cpu.X86.AVX2", positive: true},
+		{cond: "!(!cpu.X86.AVX || n < 8)", positive: true},
+		{cond: "!(!cpu.X86.AVX && n < 8)"},
+		{cond: "!cpu.X86.AVX", negative: true},
+		{cond: "!cpu.X86.AVX || n < 8", negative: true},
+		{cond: "!cpu.X86.AVX && n < 8"},
+		{cond: "!(cpu.X86.AVX && n > 8)", negative: true},
+		{cond: "!(cpu.X86.AVX || n > 8)"},
+	}
+	for _, c := range cases {
+		e, err := parser.ParseExpr(c.cond)
+		if err != nil {
+			t.Fatalf("parse %q: %v", c.cond, err)
+		}
+		if got := positiveGate(e, pf, idents); got != c.positive {
+			t.Errorf("positiveGate(%s) = %v, want %v", c.cond, got, c.positive)
+		}
+		if got := negativeGate(e, pf, idents); got != c.negative {
+			t.Errorf("negativeGate(%s) = %v, want %v", c.cond, got, c.negative)
+		}
+	}
+}
