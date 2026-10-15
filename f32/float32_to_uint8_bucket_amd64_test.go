@@ -21,10 +21,8 @@ func bucketAVX2Func(dst []uint8, src []float32, scale, offset float32, buckets i
 }
 
 // TestFloat32ToUint8BucketAVX2Direct runs the suite against the AVX2 kernel
-// itself. The public path picks its kernel from cpu.X86.AVX2 directly, so the
-// tier-forcing helper does not steer it; this test is what keeps the kernel
-// covered when SIMD_DISABLE sends the public path to Go. It skips without AVX2
-// so the sub-AVX2 legs never execute a VEX.256 integer op.
+// itself. It skips without AVX2 so the sub-AVX2 legs never execute a VEX.256
+// integer op.
 func TestFloat32ToUint8BucketAVX2Direct(t *testing.T) {
 	if !cpu.X86.AVX2 {
 		t.Skip("AVX2 not available")

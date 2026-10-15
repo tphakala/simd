@@ -303,7 +303,7 @@ func expE1Edges(t *testing.T, fn expE1Func) {
 	}
 }
 
-// expE1ElementIndependence pins invariant 1: a lane's result does not depend on
+// expE1ElementIndependence checks that a lane's result does not depend on
 // the lane position, the slice offset or the neighbours, and, once the slice is
 // at least one widest vector (8 lanes) long, not on the length either. Slices
 // shorter than a vector take the Go path on a SIMD host, which may differ from
@@ -352,7 +352,7 @@ func expE1ElementIndependence(t *testing.T, fn expE1Func) {
 	}
 }
 
-// expE1Ragged pins invariant 3 and ragged-length correctness: every length and
+// expE1Ragged checks ragged-length correctness: every length and
 // offset, canaries on both sides of dst untouched, every element right. Inputs
 // are random, since a ramp hides an in-place or lane-mixup defect by coincidence.
 func expE1Ragged(t *testing.T, fn expE1Func) {
@@ -387,7 +387,7 @@ func expE1Ragged(t *testing.T, fn expE1Func) {
 	}
 }
 
-// expE1InPlace pins invariant 2: fn(a, a) equals fn(b, a) bit for bit.
+// expE1InPlace checks that fn(a, a) equals fn(b, a) bit for bit.
 func expE1InPlace(t *testing.T, fn expE1Func) {
 	t.Helper()
 	r := rand.New(rand.NewPCG(311, 3))
