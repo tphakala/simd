@@ -457,10 +457,11 @@ func dominatedByGate(path []ast.Node, pf *pkgFuncs, idents map[string]bool) bool
 				return true
 			}
 		case *ast.CaseClause:
-			for _, expr := range node.List {
-				if positiveGate(expr, pf, idents) {
-					return true
-				}
+			// A case list is an implicit ||: any one expression selects the
+			// case, so every one of them has to require the feature. The
+			// default clause (an empty list) is reached when none held.
+			if len(node.List) > 0 && allPositiveGates(node.List, pf, idents) {
+				return true
 			}
 		case *ast.BlockStmt:
 			if i+1 < len(path) && earlyOutGuardBefore(node, path[i+1], pf, idents) {
@@ -522,15 +523,32 @@ func negativeGate(cond ast.Expr, pf *pkgFuncs, idents map[string]bool) bool {
 	return gatePolarity(cond, pf, idents, true)
 }
 
+// allPositiveGates reports whether every expression in list requires the
+// feature when true.
+func allPositiveGates(list []ast.Expr, pf *pkgFuncs, idents map[string]bool) bool {
+	for _, expr := range list {
+		if !positiveGate(expr, pf, idents) {
+			return false
+		}
+	}
+	return true
+}
+
 // gateWalkDepth bounds the recursion through cached vars and predicate
 // functions. Two hops covers every shape in this repo (`hasAVX2` resolving to
 // cpu.X86.AVX2, and logSIMDOK32 returning a conjunction of them); the bound
-// exists so a var or predicate that refers to itself cannot spin.
+// exists so a var or predicate that refers to itself cannot spin. The depth is
+// carried into a predicate's return expressions rather than restarted there.
 const gateWalkDepth = 4
 
 // gatePolarity walks cond looking for a gate in idents whose sense matches want
 // (want=false: the gate as written; want=true: the gate under a `!`).
 func gatePolarity(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool) bool {
+	return gateWalk(cond, pf, idents, want, 0)
+}
+
+// gateWalk is gatePolarity starting at a given recursion depth.
+func gateWalk(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool, depth int) bool {
 	// walk reports whether e, assumed to evaluate to the value the walk is
 	// tracking, implies the feature. holds is that assumed value: true when an
 	// even number of `!` sit above e and want is false, or an odd number and
@@ -578,33 +596,40 @@ func gatePolarity(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool
 		}
 		return false
 	}
-	return walk(cond, false, 0)
+	return walk(cond, false, depth)
 }
 
-// predicateGates reports whether a same-package function returns an expression
-// that requires the feature, which is how the log and pow family keeps its guard.
+// predicateGates reports whether a same-package function only returns true when
+// the feature is present, which is how the log and pow family keeps its guard.
+// Every return must be a gate, except a literal false, which never makes the
+// caller's condition hold; a single ungated `return true` would let the kernel
+// run without the feature. Returns inside nested function literals belong to
+// those literals and are skipped.
 func predicateGates(name string, pf *pkgFuncs, idents map[string]bool, depth int) bool {
 	fn := pf.funcs[name]
 	if fn == nil || fn.Body == nil || depth > gateWalkDepth {
 		return false
 	}
-	found := false
+	gated, ungated := false, false
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if found {
+		switch x := n.(type) {
+		case *ast.FuncLit:
 			return false
-		}
-		ret, ok := n.(*ast.ReturnStmt)
-		if !ok {
-			return true
-		}
-		for _, r := range ret.Results {
-			if gatePolarity(r, pf, idents, false) {
-				found = true
+		case *ast.ReturnStmt:
+			for _, r := range x.Results {
+				if id, ok := r.(*ast.Ident); ok && id.Name == "false" {
+					continue
+				}
+				if gateWalk(r, pf, idents, false, depth) {
+					gated = true
+				} else {
+					ungated = true
+				}
 			}
 		}
 		return true
 	})
-	return found
+	return gated && !ungated
 }
 
 // sortedFuncNames returns the map's keys in a stable order so that a failure

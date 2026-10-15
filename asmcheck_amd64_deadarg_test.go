@@ -257,3 +257,82 @@ func TestGatePolarityBooleanStructure(t *testing.T) {
 		}
 	}
 }
+
+// TestGateShapesThatOnlySometimesRequireTheFeature pins three shapes that read
+// like a gate but let the kernel run without the feature: a predicate with an
+// ungated `return true`, a case list where one expression is ungated (a case
+// list is an implicit ||), and a predicate that calls itself, which must be
+// refused rather than recursing without bound.
+func TestGateShapesThatOnlySometimesRequireTheFeature(t *testing.T) {
+	const prelude = "package p\n\nvar cpu struct{ X86 struct{ AVX bool } }\n\nfunc kernel() {}\n\n"
+	cases := []struct {
+		name        string
+		body        string
+		wantUngated int
+	}{
+		{
+			name: "a predicate whose every non-false return is a gate is accepted",
+			body: `
+func ok(n int) bool { if n < 4 { return false }; return cpu.X86.AVX }
+func d(n int) { if ok(n) { kernel() } }
+`,
+		},
+		{
+			name: "a predicate with an ungated return true is refused",
+			body: `
+func leaky(n int) bool { if n < 4 { return true }; return cpu.X86.AVX }
+func d(n int) { if leaky(n) { kernel() } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a return inside a nested function literal does not count",
+			body: `
+func p(n int) bool { f := func() bool { return true }; _ = f; return cpu.X86.AVX }
+func d(n int) { if p(n) { kernel() } }
+`,
+		},
+		{
+			name: "a self-recursive predicate is refused",
+			body: `
+func p(n int) bool { return p(n) }
+func d(n int) { if p(n) { kernel() } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "mutually recursive predicates are refused",
+			body: `
+func p(n int) bool { return q(n) }
+func q(n int) bool { return p(n) }
+func d(n int) { if p(n) { kernel() } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a case list where every expression is a gate is accepted",
+			body: `
+func d(n int) { switch { case cpu.X86.AVX && n > 8, cpu.X86.AVX: kernel() } }
+`,
+		},
+		{
+			name: "a case list with one ungated expression is refused",
+			body: `
+func d(n int) { switch { case cpu.X86.AVX, n > 8: kernel() } }
+`,
+			wantUngated: 1,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pf := parseDispatchSource(t, prelude+c.body)
+			ungated, refs := ungatedDispatches("kernel", pf, map[string]bool{"AVX": true})
+			if refs == 0 {
+				t.Fatal("no reference to kernel found; the fixture is broken")
+			}
+			if len(ungated) != c.wantUngated {
+				t.Errorf("ungated references = %v, want %d", ungated, c.wantUngated)
+			}
+		})
+	}
+}
