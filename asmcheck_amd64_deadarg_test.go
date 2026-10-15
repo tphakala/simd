@@ -310,6 +310,64 @@ func d(n int) { if p(n) { kernel() } }
 			wantUngated: 1,
 		},
 		{
+			name: "a predicate with named results is refused",
+			body: `
+func ok3(n int) (r bool) { if n < 2 { r = true; return }; return cpu.X86.AVX }
+func d(n int) { if ok3(n) { kernel() } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a predicate returning a cached gate is accepted",
+			body: `
+var hasAVX = cpu.X86.AVX
+func p(n int) bool { return hasAVX && n > 8 }
+func d(n int) { if p(n) { kernel() } }
+`,
+		},
+		{
+			name: "a predicate calling a predicate is accepted",
+			body: `
+func inner() bool { return cpu.X86.AVX }
+func outer(n int) bool { return n > 8 && inner() }
+func d(n int) { if outer(n) { kernel() } }
+`,
+		},
+		{
+			name: "a cached var initialized from a predicate is accepted",
+			body: `
+func inner() bool { return cpu.X86.AVX }
+var ok = inner()
+func d() { if ok { kernel() } }
+`,
+		},
+		{
+			name: "a chain of predicates deeper than the walk bound is refused",
+			body: `
+func p1() bool { return p2() }
+func p2() bool { return p3() }
+func p3() bool { return p4() }
+func p4() bool { return p5() }
+func p5() bool { return cpu.X86.AVX }
+func d() { if p1() { kernel() } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a tagged switch case is refused",
+			body: `
+func d(v bool) { switch v { case cpu.X86.AVX: kernel() } }
+`,
+			wantUngated: 1,
+		},
+		{
+			name: "a case entered by fallthrough is refused",
+			body: `
+func d(n int) { switch { case n > 8: fallthrough; case cpu.X86.AVX: kernel() } }
+`,
+			wantUngated: 1,
+		},
+		{
 			name: "a case list where every expression is a gate is accepted",
 			body: `
 func d(n int) { switch { case cpu.X86.AVX && n > 8, cpu.X86.AVX: kernel() } }

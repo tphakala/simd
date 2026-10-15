@@ -457,10 +457,15 @@ func dominatedByGate(path []ast.Node, pf *pkgFuncs, idents map[string]bool) bool
 				return true
 			}
 		case *ast.CaseClause:
-			// A case list is an implicit ||: any one expression selects the
-			// case, so every one of them has to require the feature. The
-			// default clause (an empty list) is reached when none held.
-			if len(node.List) > 0 && allPositiveGates(node.List, pf, idents) {
+			// In a tagless switch a case list is an implicit ||: any one
+			// expression selects the case, so every one of them has to require
+			// the feature. The default clause (an empty list) is reached when
+			// none held. A tagged switch compares its case values with the tag
+			// instead of evaluating them, and a fallthrough from the clause
+			// before enters this one without testing its list, so neither
+			// counts.
+			if len(node.List) > 0 && i >= 2 && tagless(path[i-2]) &&
+				!fallsIntoClause(path[i-1], node) && allPositiveGates(node.List, pf, idents) {
 				return true
 			}
 		case *ast.BlockStmt:
@@ -521,6 +526,37 @@ func positiveGate(cond ast.Expr, pf *pkgFuncs, idents map[string]bool) bool {
 // negativeGate reports whether cond is true when the feature is ABSENT.
 func negativeGate(cond ast.Expr, pf *pkgFuncs, idents map[string]bool) bool {
 	return gatePolarity(cond, pf, idents, true)
+}
+
+// tagless reports whether n is an expression switch with no tag, whose case
+// expressions are conditions.
+func tagless(n ast.Node) bool {
+	sw, ok := n.(*ast.SwitchStmt)
+	return ok && sw.Tag == nil
+}
+
+// fallsIntoClause reports whether the clause before cc in the switch body ends
+// with a fallthrough.
+func fallsIntoClause(body ast.Node, cc *ast.CaseClause) bool {
+	block, ok := body.(*ast.BlockStmt)
+	if !ok {
+		return true
+	}
+	for i, st := range block.List {
+		if st != ast.Stmt(cc) {
+			continue
+		}
+		if i == 0 {
+			return false
+		}
+		prev, ok := block.List[i-1].(*ast.CaseClause)
+		if !ok || len(prev.Body) == 0 {
+			return false
+		}
+		br, ok := prev.Body[len(prev.Body)-1].(*ast.BranchStmt)
+		return ok && br.Tok == token.FALLTHROUGH
+	}
+	return true
 }
 
 // allPositiveGates reports whether every expression in list requires the
@@ -599,6 +635,21 @@ func gateWalk(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool, de
 	return walk(cond, false, depth)
 }
 
+// hasNamedResults reports whether fn names its results. A bare return, or a
+// deferred closure, can then set the result without a return expression the
+// walk could check, so such a function is never accepted as a predicate gate.
+func hasNamedResults(fn *ast.FuncDecl) bool {
+	if fn.Type.Results == nil {
+		return false
+	}
+	for _, f := range fn.Type.Results.List {
+		if len(f.Names) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // predicateGates reports whether a same-package function only returns true when
 // the feature is present, which is how the log and pow family keeps its guard.
 // Every return must be a gate, except a literal false, which never makes the
@@ -607,7 +658,7 @@ func gateWalk(cond ast.Expr, pf *pkgFuncs, idents map[string]bool, want bool, de
 // those literals and are skipped.
 func predicateGates(name string, pf *pkgFuncs, idents map[string]bool, depth int) bool {
 	fn := pf.funcs[name]
-	if fn == nil || fn.Body == nil || depth > gateWalkDepth {
+	if fn == nil || fn.Body == nil || depth > gateWalkDepth || hasNamedResults(fn) {
 		return false
 	}
 	gated, ungated := false, false
