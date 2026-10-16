@@ -375,10 +375,11 @@ samples, and panics unless `len(coeffs)` is a positive multiple of 5 and
 
 `BiquadCascadeN` filters several channels through the same cascade. For one or
 two sections it puts channels 0 and 1, 2 and 3, and so on into the four lanes of
-one kernel, so two channels cost about what one does. Every channel's output and state are exactly what `BiquadCascade`
-gives it (NaN bit patterns aside), so a stream can switch between the two at any chunk boundary; an odd
-last channel, longer cascades and pairs too short to pay for the kernel run
-per channel through `BiquadCascade`'s path.
+one kernel, so two channels cost about what one does. Every channel's output and
+state are exactly what `BiquadCascade` gives it (NaN bit patterns aside), so a
+stream can switch between the two at any chunk boundary; an odd last channel,
+longer cascades and pairs too short to pay for the kernel run per channel
+through `BiquadCascade`'s path.
 
 `InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
 a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
