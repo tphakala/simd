@@ -5741,7 +5741,8 @@ GLOBL biquadmask<>(SB), RODATA|NOPTR, $64
 // b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with FMUL, FADD and FSUB. The
 // vector float ops are never FMLA/FMLS: every product and every sum rounds to float32
 // on its own, so the results match biquadCascadeGo and the amd64 kernels bit for bit
-// (#156), and FPCR is never touched, so subnormals are not flushed.
+// (#156; NaN bit patterns aside), and FPCR is never touched, so subnormals are not
+// flushed.
 //
 // Arguments, all established by the Go wrapper (the kernel does not re-check them):
 // co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1
@@ -6207,7 +6208,8 @@ bqpair4neon_done:
 // b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with FMUL, FADD and FSUB. The
 // vector float ops are never FMLA/FMLS: every product and every sum rounds to float32
 // on its own, so the results match biquadCascadeGo and the amd64 kernels bit for bit
-// (#156), and FPCR is never touched, so subnormals are not flushed.
+// (#156; NaN bit patterns aside), and FPCR is never touched, so subnormals are not
+// flushed.
 //
 // Arguments, all established by the Go wrapper (the kernel does not re-check them):
 // co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1

@@ -1599,7 +1599,8 @@ func biquadPairSel(sections int) (sel0, sel1 uint32) {
 // biquadKernelOK accepts at pairMinWork, the pair kernel filters the first m
 // samples of each; the remainder of the longer channel, or both whole channels
 // when there is no kernel run, then go through biquadCascadeChannel from the
-// written-back state, which gives the bits of one uninterrupted call.
+// written-back state, which gives the bits of one uninterrupted call (NaN bit
+// patterns aside).
 func biquadCascadePair(dst, src [][]float32, coeffs []float32, state [][]float32, c, lanes, minWork, pairMinWork int) {
 	d0, d1, s0, s1 := dst[c], dst[c+1], src[c], src[c+1]
 	n0, n1 := min(len(d0), len(s0)), min(len(d1), len(s1))
