@@ -9628,7 +9628,8 @@ GLOBL biquadshift<>(SB), RODATA|NOPTR, $32
 // A step computes b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with VMULPS,
 // VADDPS and VSUBPS. There is no VFMADD/VFMSUB: every product and every sum rounds to
 // float32 on its own, so the results match biquadCascadeGo and the arm64 kernels bit for
-// bit (#156), and MXCSR is never touched, so subnormals are not flushed.
+// bit (#156; NaN bit patterns aside), and MXCSR is never touched, so subnormals are
+// not flushed.
 //
 // Arguments, all established by the Go wrapper (the kernel does not re-check them):
 // co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1
@@ -10090,7 +10091,8 @@ bqpair4avx_done:
 // A step computes b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with VMULPS,
 // VADDPS and VSUBPS. There is no VFMADD/VFMSUB: every product and every sum rounds to
 // float32 on its own, so the results match biquadCascadeGo and the arm64 kernels bit for
-// bit (#156), and MXCSR is never touched, so subnormals are not flushed.
+// bit (#156; NaN bit patterns aside), and MXCSR is never touched, so subnormals are
+// not flushed.
 //
 // Arguments, all established by the Go wrapper (the kernel does not re-check them):
 // co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1
