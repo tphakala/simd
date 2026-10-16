@@ -39,6 +39,26 @@ func TestBiquadCascadeNGo(t *testing.T) {
 	runBiquadNSuite(t, biquadNBlocksFunc(0, 0, 0))
 }
 
+// TestBiquadCascadeNPairDirect runs the multichannel suite with both floors
+// off at every lane count the host can execute, so every pair of channels of a
+// 1- or 2-section cascade that has a sample reaches the pair kernel at its
+// shortest legal length. Lanes 4 and 8 differ only in the kernels the leftover
+// channels and longer cascades use. biquadCascadeNBlocks takes the lane count as
+// an argument, so on arm64 this stays covered when SIMD_DISABLE sends the public
+// path to Go; on amd64 biquadRunnableLanes reads the cpu flags and the test
+// skips when SIMD_DISABLE clears AVX.
+func TestBiquadCascadeNPairDirect(t *testing.T) {
+	lanesList := biquadRunnableLanes()
+	if len(lanesList) == 0 {
+		t.Skip("no biquad kernel can run on this CPU")
+	}
+	for _, lanes := range lanesList {
+		t.Run(fmt.Sprintf("lanes=%d", lanes), func(t *testing.T) {
+			runBiquadNSuite(t, biquadNBlocksFunc(lanes, 0, 0))
+		})
+	}
+}
+
 // BenchmarkBiquadCascadeShort sweeps short chunks with the kernel forced on
 // (minWork 0) against the Go path, to find the n*sections where the kernel pays;
 // biquadMinWork is set from this sweep. Combinations below the kernel

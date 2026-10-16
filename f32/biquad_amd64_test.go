@@ -3,7 +3,6 @@
 package f32
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/tphakala/simd/cpu"
@@ -60,27 +59,6 @@ func TestBiquadKernelLanesMatchesCPU_amd64(t *testing.T) {
 	if got := biquadKernelLanes(); got != want {
 		t.Fatalf("biquadKernelLanes() = %d, want %d (AVX2=%v AVX=%v)",
 			got, want, cpu.X86.AVX2, cpu.X86.AVX)
-	}
-}
-
-// TestBiquadCascadeNPairAVXDirect runs the multichannel suite with both floors
-// off, so every pair of channels of a 1- or 2-section cascade that has a sample
-// reaches the AVX pair kernel at its shortest legal length. Lanes 4 and 8 differ
-// only in the kernels the leftover channels and longer cascades use. It skips
-// when cpu.X86.AVX is false, which is also the case when SIMD_DISABLE clears the
-// flag.
-func TestBiquadCascadeNPairAVXDirect(t *testing.T) {
-	if !cpu.X86.AVX {
-		t.Skip("AVX not available")
-	}
-	lanesList := []int{biquadNarrowLanes}
-	if cpu.X86.AVX2 {
-		lanesList = append(lanesList, biquadMaxLanes)
-	}
-	for _, lanes := range lanesList {
-		t.Run(fmt.Sprintf("lanes=%d", lanes), func(t *testing.T) {
-			runBiquadNSuite(t, biquadNBlocksFunc(lanes, 0, 0))
-		})
 	}
 }
 
