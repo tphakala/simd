@@ -5958,7 +5958,7 @@ bqc4neon_done:
 // Lane-pipelined Direct Form I biquad cascade for two channels at once behind
 // BiquadCascadeN, for 1 or 2 sections (one Q register per row). The two channels share
 // the coefficients and have their own state; each channel's output and state are bit for
-// bit what biquadCascade4NEON gives it alone.
+// bit (NaN bit patterns aside) what biquadCascade4NEON gives it alone.
 //
 // Lane 2k+ch holds section k of channel ch and runs sample t-2k at step t, so section
 // k's input at step t is the same channel's lane 2(k-1)+ch y2 register (its output two
@@ -5968,8 +5968,8 @@ bqc4neon_done:
 // a2*y2 left to right with FMUL, FADD and FSUB, lane-wise, with the same register
 // allocation and the same arithmetic WORDs as biquadCascade4NEON. The vector float ops
 // are never FMLA/FMLS: every product and every sum rounds to float32 on its own, so the
-// results match biquadCascadeGo and the amd64 kernels bit for bit (#156), and FPCR is
-// never touched, so subnormals are not flushed.
+// results match biquadCascadeGo and the amd64 kernels bit for bit (#156; NaN bit patterns
+// aside), and FPCR is never touched, so subnormals are not flushed.
 //
 // Arguments, all established by the Go wrapper (the kernel does not re-check them):
 // co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1

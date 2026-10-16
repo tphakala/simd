@@ -363,7 +363,7 @@ range-reduced exp core, so it does not inherit the roughly 7e-6 error of `Exp`.
 | Function | Description | SIMD Width |
 | --- | --- | --- |
 | `BiquadCascade(dst, src, coeffs, state)` | Direct Form I biquad cascade, state in and out, bit-exact with the scalar no-FMA recurrence (`coeffs` is `[b0 b1 b2 a1 a2]` and `state` is `[x1 x2 y1 y2]` per section) | 8 sections per pass (AVX2, NEON) / 4 (AVX) |
-| `BiquadCascadeN(dst, src, coeffs, state)` | Multichannel `BiquadCascade`: planar `[][]float32` channels, shared `coeffs`, one `state` per channel; each channel is exactly what `BiquadCascade` gives it | 2 channels x 1-2 sections per pass (AVX, NEON); other shapes per channel |
+| `BiquadCascadeN(dst, src, coeffs, state)` | Multichannel `BiquadCascade`: planar `[][]float32` channels, shared `coeffs`, one `state` per channel; each channel is exactly what `BiquadCascade` gives it, NaN bit patterns aside | 2 channels x 1-2 sections per pass (AVX, NEON); other shapes per channel |
 
 `BiquadCascade` runs one section per vector lane, skewed by two samples, so a
 cascade of up to 8 sections costs a small multiple of one section's time per
@@ -376,7 +376,7 @@ samples, and panics unless `len(coeffs)` is a positive multiple of 5 and
 `BiquadCascadeN` filters several channels through the same cascade. For one or
 two sections it puts channels 0 and 1, 2 and 3, and so on into the four lanes of
 one kernel, so two channels cost about what one does. Every channel's output and state are exactly what `BiquadCascade`
-gives it, so a stream can switch between the two at any chunk boundary; an odd
+gives it (NaN bit patterns aside), so a stream can switch between the two at any chunk boundary; an odd
 last channel, longer cascades and pairs too short to pay for the kernel run
 per channel through `BiquadCascade`'s path.
 

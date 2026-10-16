@@ -9836,8 +9836,8 @@ bqc4avx_done:
 // Lane-pipelined Direct Form I biquad cascade for two channels at once behind
 // BiquadCascadeN, for 1 or 2 sections in XMM registers; the instruction set it needs
 // is AVX (no AVX2 instruction). The two channels share the coefficients and have
-// their own state; each channel's output and state are bit for bit what
-// biquadCascade4AVX gives it alone.
+// their own state; each channel's output and state are bit for bit (NaN bit patterns
+// aside) what biquadCascade4AVX gives it alone.
 //
 // Lane 2k+ch holds section k of channel ch and runs sample t-2k at step t, so section
 // k's input at step t is the same channel's lane 2(k-1)+ch y2 register (its output two
@@ -9846,8 +9846,8 @@ bqc4avx_done:
 // A step computes b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with VMULPS,
 // VADDPS and VSUBPS, lane-wise, in the order of biquadCascade4AVX's step. There is no
 // VFMADD/VFMSUB: every product and every sum rounds to float32 on its own, so the
-// results match biquadCascadeGo bit for bit (#156), and MXCSR is never touched, so
-// subnormals are not flushed. Every vector instruction is VEX, so no legacy-SSE write meets
+// results match biquadCascadeGo bit for bit (#156; NaN bit patterns aside), and MXCSR is
+// never touched, so subnormals are not flushed. Every vector instruction is VEX, so no legacy-SSE write meets
 // the dirty upper state.
 //
 // Arguments, all established by the Go wrapper (the kernel does not re-check them):
