@@ -132,3 +132,15 @@ func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide
 func biquadCascade32(dst, src, coeffs, state []float32) {
 	biquadCascadeGo(dst, src, coeffs, state)
 }
+
+// biquadCascadeN32 runs each channel through biquadCascadeGo. It does not
+// reimplement the recurrence: biquadCascadeGo's float32 conversions around each
+// product are the FMA barrier (f32_go.go, #156) that keeps every channel exactly
+// what BiquadCascade gives.
+func biquadCascadeN32(dst, src [][]float32, coeffs []float32, state [][]float32) {
+	for c := range dst {
+		if n := min(len(dst[c]), len(src[c])); n > 0 {
+			biquadCascadeGo(dst[c][:n], src[c][:n], coeffs, state[c])
+		}
+	}
+}

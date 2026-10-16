@@ -5954,6 +5954,249 @@ bqc4neon_drain:
 bqc4neon_done:
     RET
 
+// func biquadCascadePair4NEON(dst0, dst1, src0, src1 []float32, co, st *float32, sel *uint32, sections int)
+// Lane-pipelined Direct Form I biquad cascade for two channels at once behind
+// BiquadCascadeN, for 1 or 2 sections (one Q register per row). The two channels share
+// the coefficients and have their own state; each channel's output and state are bit for
+// bit (NaN bit patterns aside) what biquadCascade4NEON gives it alone.
+//
+// Lane 2k+ch holds section k of channel ch and runs sample t-2k at step t, so section
+// k's input at step t is the same channel's lane 2(k-1)+ch y2 register (its output two
+// steps ago) moved up two lanes by EXT #8, with the two channels' new samples entering
+// lanes 2 and 3 of the sample register V26 (VLD1 lane loads from src0 and src1; EXT
+// takes them from the high half of V26). A step computes b0*x + b1*x1 + b2*x2 - a1*y1 -
+// a2*y2 left to right with FMUL, FADD and FSUB, lane-wise, with the same register
+// allocation and the same arithmetic WORDs as biquadCascade4NEON. The vector float ops
+// are never FMLA/FMLS: every product and every sum rounds to float32 on its own, so the
+// results match biquadCascadeGo and the amd64 kernels bit for bit (#156; NaN bit patterns
+// aside), and FPCR is never touched, so subnormals are not flushed.
+//
+// Arguments, all established by the Go wrapper (the kernel does not re-check them):
+// co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1
+// y2), rows 32 bytes apart, lane = 2*section + channel with the coefficients repeated in
+// both channel lanes of a section; lanes at or above 2*sections hold zero coefficients
+// and state. sel is 4 words of TBL byte indices, alternating the bytes of lane
+// 2*(sections-1) and of lane 2*(sections-1)+1 of V16 (the last section's y2 for channels
+// 0 and 1), so the TBL result has channel 0's output in lane 0 and channel 1's in lane 1;
+// FMOVS.P stores lane 0 to dst0 and VST1.P stores lane 1 to dst1. 1 <= sections <= 2, and
+// len(src0) == len(src1) == len(dst0) == len(dst1) = n >= max(1, 2*(sections-1)). st is
+// read on entry and written on exit with each lane's state after n samples.
+//
+// Phases, as in biquadCascade4NEON with two lanes per section. Fill: for j = 1..sections-1
+// (at most once), two steps under the mask "lanes < 2j" advance only the lanes that
+// already have a sample (BIT blends of the four state rows, no output); the other lanes
+// keep the caller's state. Odd: when n - 2*(sections-1) is odd, one step with plain
+// register moves and an output. Steady: (n - 2*(sections-1))/2 pairs of steps that rename
+// instead of move. Drain: the state image is stored, V26 is zeroed so no src element past
+// n-1 is read in either channel, and for j = 1..sections-1 two more steps produce the
+// last outputs; lanes 2j and 2j+1 are final after pair j and BIF copies them into the
+// stored image, keeping the lanes below 2j. The mask "lanes < 2j" is read from
+// biquadmask<> at byte offset 4*(8-2j).
+// The step at index t reads src0[t] and src1[t] and writes dst0 and dst1 at
+// t-2*(sections-1), never ahead of the reads, so dst0 may alias src0 and dst1 may alias
+// src1 exactly.
+//
+// Registers (low Q of each pair): as biquadCascade4NEON. GP: R0 dst0, R11 dst1, R1 src0,
+// R12 src1, R2 n, R3 co, R4 st, R5 sel, R6 sections, R7 j, R8 mask table, R9 scratch,
+// R10 pair count.
+// Frame: dst0(24) + dst1(24) + src0(24) + src1(24) + co(8) + st(8) + sel(8) + sections(8) = 128.
+TEXT ·biquadCascadePair4NEON(SB), NOSPLIT, $0-128
+    MOVD dst0_base+0(FP), R0
+    MOVD dst1_base+24(FP), R11
+    MOVD src0_base+48(FP), R1
+    MOVD src0_len+56(FP), R2
+    MOVD src1_base+72(FP), R12
+    MOVD co+96(FP), R3
+    MOVD st+104(FP), R4
+    MOVD sel+112(FP), R5
+    MOVD sections+120(FP), R6
+    VLD1 (R3), [V0.S4]
+    ADD $32, R3
+    VLD1 (R3), [V2.S4]
+    ADD $32, R3
+    VLD1 (R3), [V4.S4]
+    ADD $32, R3
+    VLD1 (R3), [V6.S4]
+    ADD $32, R3
+    VLD1 (R3), [V8.S4]
+    MOVD R4, R9
+    VLD1 (R9), [V10.S4]
+    ADD $32, R9
+    VLD1 (R9), [V12.S4]
+    ADD $32, R9
+    VLD1 (R9), [V14.S4]
+    ADD $32, R9
+    VLD1 (R9), [V16.S4]
+    VLD1 (R5), [V27.B16]
+    MOVD $biquadmask<>(SB), R8
+    MOVD $1, R7
+bqpair4neon_fill:
+    CMP R6, R7
+    BGE bqpair4neon_filldone
+    MOVD $8, R9
+    SUB R7, R9, R9
+    SUB R7, R9, R9
+    ADD R9<<2, R8, R9
+    VLD1 (R9), [V29.S4]
+    VLD1.P 4(R1), V26.S[2]
+    VLD1.P 4(R12), V26.S[3]
+    VEXT $8, V16.B16, V26.B16, V22.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    VBIT V29.B16, V10.B16, V12.B16
+    VBIT V29.B16, V22.B16, V10.B16
+    VBIT V29.B16, V14.B16, V16.B16
+    VBIT V29.B16, V18.B16, V14.B16
+    VLD1.P 4(R1), V26.S[2]
+    VLD1.P 4(R12), V26.S[3]
+    VEXT $8, V16.B16, V26.B16, V22.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    VBIT V29.B16, V10.B16, V12.B16
+    VBIT V29.B16, V22.B16, V10.B16
+    VBIT V29.B16, V14.B16, V16.B16
+    VBIT V29.B16, V18.B16, V14.B16
+    ADD $1, R7
+    B bqpair4neon_fill
+bqpair4neon_filldone:
+    SUB $1, R6, R9
+    SUB R9<<1, R2, R10
+    TBZ $0, R10, bqpair4neon_even
+    VLD1.P 4(R1), V26.S[2]
+    VLD1.P 4(R12), V26.S[3]
+    VEXT $8, V16.B16, V26.B16, V22.B16
+    WORD $0x6E36DC12 // FMUL V18.4S, V0.4S, V22.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2CDC94 // FMUL V20.4S, V4.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x6E30DD14 // FMUL V20.4S, V8.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    VMOV V10.B16, V12.B16
+    VMOV V22.B16, V10.B16
+    VMOV V14.B16, V16.B16
+    VMOV V18.B16, V14.B16
+    VTBL V27.B16, [V14.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    VST1.P V28.S[1], 4(R11)
+bqpair4neon_even:
+    LSR $1, R10, R10
+    CBZ R10, bqpair4neon_steadydone
+bqpair4neon_steady:
+    VLD1.P 4(R1), V26.S[2]
+    VLD1.P 4(R12), V26.S[3]
+    WORD $0x6E2CDC96 // FMUL V22.4S, V4.4S, V12.4S
+    VEXT $8, V16.B16, V26.B16, V12.B16
+    WORD $0x6E30DD18 // FMUL V24.4S, V8.4S, V16.4S
+    WORD $0x6E2CDC12 // FMUL V18.4S, V0.4S, V12.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB8D650 // FSUB V16.4S, V18.4S, V24.4S
+    VTBL V27.B16, [V16.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    VST1.P V28.S[1], 4(R11)
+    VLD1.P 4(R1), V26.S[2]
+    VLD1.P 4(R12), V26.S[3]
+    WORD $0x6E2ADC96 // FMUL V22.4S, V4.4S, V10.4S
+    VEXT $8, V14.B16, V26.B16, V10.B16
+    WORD $0x6E2EDD18 // FMUL V24.4S, V8.4S, V14.4S
+    WORD $0x6E2ADC12 // FMUL V18.4S, V0.4S, V10.4S
+    WORD $0x6E2CDC54 // FMUL V20.4S, V2.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x6E30DCD4 // FMUL V20.4S, V6.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB8D64E // FSUB V14.4S, V18.4S, V24.4S
+    VTBL V27.B16, [V14.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    VST1.P V28.S[1], 4(R11)
+    SUBS $1, R10, R10
+    BNE bqpair4neon_steady
+bqpair4neon_steadydone:
+    MOVD R4, R9
+    VST1 [V10.S4], (R9)
+    ADD $32, R9
+    VST1 [V12.S4], (R9)
+    ADD $32, R9
+    VST1 [V14.S4], (R9)
+    ADD $32, R9
+    VST1 [V16.S4], (R9)
+    VEOR V26.B16, V26.B16, V26.B16
+    MOVD $1, R7
+bqpair4neon_drain:
+    CMP R6, R7
+    BGE bqpair4neon_done
+    WORD $0x6E2CDC96 // FMUL V22.4S, V4.4S, V12.4S
+    VEXT $8, V16.B16, V26.B16, V12.B16
+    WORD $0x6E30DD18 // FMUL V24.4S, V8.4S, V16.4S
+    WORD $0x6E2CDC12 // FMUL V18.4S, V0.4S, V12.4S
+    WORD $0x6E2ADC54 // FMUL V20.4S, V2.4S, V10.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x6E2EDCD4 // FMUL V20.4S, V6.4S, V14.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB8D650 // FSUB V16.4S, V18.4S, V24.4S
+    VTBL V27.B16, [V16.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    VST1.P V28.S[1], 4(R11)
+    WORD $0x6E2ADC96 // FMUL V22.4S, V4.4S, V10.4S
+    VEXT $8, V14.B16, V26.B16, V10.B16
+    WORD $0x6E2EDD18 // FMUL V24.4S, V8.4S, V14.4S
+    WORD $0x6E2ADC12 // FMUL V18.4S, V0.4S, V10.4S
+    WORD $0x6E2CDC54 // FMUL V20.4S, V2.4S, V12.4S
+    WORD $0x4E34D652 // FADD V18.4S, V18.4S, V20.4S
+    WORD $0x4E36D652 // FADD V18.4S, V18.4S, V22.4S
+    WORD $0x6E30DCD4 // FMUL V20.4S, V6.4S, V16.4S
+    WORD $0x4EB4D652 // FSUB V18.4S, V18.4S, V20.4S
+    WORD $0x4EB8D64E // FSUB V14.4S, V18.4S, V24.4S
+    VTBL V27.B16, [V14.B16], V28.B16
+    FMOVS.P F28, 4(R0)
+    VST1.P V28.S[1], 4(R11)
+    MOVD $8, R9
+    SUB R7, R9, R9
+    SUB R7, R9, R9
+    ADD R9<<2, R8, R9
+    VLD1 (R9), [V29.S4]
+    MOVD R4, R9
+    VLD1 (R9), [V24.S4]
+    VBIF V29.B16, V10.B16, V24.B16
+    VST1 [V24.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4]
+    VBIF V29.B16, V12.B16, V24.B16
+    VST1 [V24.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4]
+    VBIF V29.B16, V14.B16, V24.B16
+    VST1 [V24.S4], (R9)
+    ADD $32, R9
+    VLD1 (R9), [V24.S4]
+    VBIF V29.B16, V16.B16, V24.B16
+    VST1 [V24.S4], (R9)
+    ADD $1, R7
+    B bqpair4neon_drain
+bqpair4neon_done:
+    RET
+
 // func biquadCascade8NEON(dst, src []float32, co, st *float32, sel *uint32, sections int)
 // Lane-pipelined Direct Form I biquad cascade behind BiquadCascade, for 5..8 sections
 // (two Q registers per row).

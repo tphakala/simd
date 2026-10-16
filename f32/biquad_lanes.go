@@ -18,13 +18,14 @@ const biquadNarrowLanes = 4
 const biquadSkew = 2
 
 // biquadLanes is the transposed coefficient and state image a kernel works on.
-// Row r holds one value per section (lane = section), rows are biquadMaxLanes
-// float32 apart for every kernel width. A zero value leaves the unused lanes at
-// zero coefficients and state, which the kernels never unpack.
+// Row r holds one value per section (lane = section; the pair kernels use lane =
+// 2*section + channel), rows are biquadMaxLanes float32 apart for every kernel
+// width. A zero value leaves the unused lanes at zero coefficients and state,
+// which the kernels never unpack.
 type biquadLanes struct {
 	co  [biquadCoeffs * biquadMaxLanes]float32
 	st  [biquadStateLen * biquadMaxLanes]float32
-	sel [biquadMaxLanes]uint32 // output-lane selector, same value in every word
+	sel [biquadMaxLanes]uint32 // output-lane selector: pack sets every word alike, packPair alternates two values
 }
 
 // pack transposes the per-section coeffs and state of one block into lanes and

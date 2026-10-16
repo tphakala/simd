@@ -79,6 +79,14 @@ func f32AliasCases() []aliastest.Case {
 			st := biquadAliasState // fresh copy per call: every run starts from the same state
 			BiquadCascade(dst, a, biquadAliasCoeffs[:], st[:])
 		}),
+		// Two channels (the halves of dst and a), each with its own fresh state;
+		// dst[c] is the same slice as src[c] in the overlay run.
+		aliastest.UnaryCase("BiquadCascadeN", aliasEqF32, genF32, func(dst, a []float32) {
+			h := len(dst) / 2
+			st := [2][2 * biquadStateLen]float32{biquadAliasState, biquadAliasState}
+			BiquadCascadeN([][]float32{dst[:h], dst[h:]}, [][]float32{a[:h], a[h:]},
+				biquadAliasCoeffs[:], [][]float32{st[0][:], st[1][:]})
+		}),
 
 		// Element-wise unary maps with a scalar parameter.
 		aliastest.UnaryCase("Scale", aliasEqF32, genF32, func(dst, a []float32) { Scale(dst, a, aliasScaleK) }),

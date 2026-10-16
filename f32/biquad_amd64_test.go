@@ -61,3 +61,13 @@ func TestBiquadKernelLanesMatchesCPU_amd64(t *testing.T) {
 			got, want, cpu.X86.AVX2, cpu.X86.AVX)
 	}
 }
+
+// TestBiquadPairSel_amd64 pins the VPERMILPS control words: the pair of lanes
+// that hold the last section of channels 0 and 1.
+func TestBiquadPairSel_amd64(t *testing.T) {
+	for sections, want := range map[int][2]uint32{1: {0, 1}, 2: {2, 3}} {
+		if s0, s1 := biquadPairSel(sections); s0 != want[0] || s1 != want[1] {
+			t.Errorf("biquadPairSel(%d) = (%d, %d), want (%d, %d)", sections, s0, s1, want[0], want[1])
+		}
+	}
+}

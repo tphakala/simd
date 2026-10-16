@@ -363,6 +363,7 @@ range-reduced exp core, so it does not inherit the roughly 7e-6 error of `Exp`.
 | Function | Description | SIMD Width |
 | --- | --- | --- |
 | `BiquadCascade(dst, src, coeffs, state)` | Direct Form I biquad cascade, state in and out, bit-exact with the scalar no-FMA recurrence (`coeffs` is `[b0 b1 b2 a1 a2]` and `state` is `[x1 x2 y1 y2]` per section) | 8 sections per pass (AVX2, NEON) / 4 (AVX) |
+| `BiquadCascadeN(dst, src, coeffs, state)` | Multichannel `BiquadCascade`: planar `[][]float32` channels, shared `coeffs`, one `state` per channel; each channel is exactly what `BiquadCascade` gives it, NaN bit patterns aside | 2 channels x 1-2 sections per pass (AVX, NEON); other shapes per channel |
 
 `BiquadCascade` runs one section per vector lane, skewed by two samples, so a
 cascade of up to 8 sections costs a small multiple of one section's time per
@@ -371,6 +372,14 @@ every non-NaN result is identical on every path and for any chunking of the
 stream. It may run in place (`dst == src`), processes `min(len(dst), len(src))`
 samples, and panics unless `len(coeffs)` is a positive multiple of 5 and
 `len(state)` is 4 per section.
+
+`BiquadCascadeN` filters several channels through the same cascade. For one or
+two sections it puts channels 0 and 1, 2 and 3, and so on into the four lanes of
+one kernel, so two channels cost about what one does. Every channel's output and
+state are exactly what `BiquadCascade` gives it (NaN bit patterns aside), so a
+stream can switch between the two at any chunk boundary; an odd last channel,
+longer cascades and pairs too short to pay for the kernel run per channel
+through `BiquadCascade`'s path.
 
 `InterleaveN`/`DeinterleaveN` add an 8-stream AVX path (8x8 register transpose) and
 a 3-stream AVX2 path (per-stream `VPERMPS` gathers merged with `VPBLENDD`, since 3
@@ -1164,7 +1173,7 @@ AVX2 into `AMD64 AVX+FMA`, so an AVX+FMA host without AVX2 (AMD Piledriver and
 Steamroller) reports the same string while taking the Go path for those
 operations. `f32.BiquadCascade` is the exception: its 8-section kernel (named
 `...AVX2`) needs AVX2, but its 4-section kernel needs only AVX, so an AVX-only
-host runs it in 4-section passes rather than in Go. `TestAmd64KernelISALevel`, `TestAmd64KernelDispatchRequiresAVX2` and
+host runs it in 4-section passes rather than in Go. `f32.BiquadCascadeN`'s pair kernel needs only AVX. `TestAmd64KernelISALevel`, `TestAmd64KernelDispatchRequiresAVX2` and
 `TestAmd64KernelDispatchRequiresAVX` are what keep the names and the guards consistent.
 
 ARM64 runs NEON kernels throughout, with an FP16 (FEAT_FP16) fast path in `f16`
