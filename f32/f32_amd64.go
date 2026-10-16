@@ -1527,6 +1527,9 @@ func biquadCascade4AVX(dst, src []float32, co, st *float32, sel *uint32, section
 //go:noescape
 func biquadCascade8AVX2(dst, src []float32, co, st *float32, sel *uint32, sections int)
 
+//go:noescape
+func biquadCascadePair4AVX(dst0, dst1, src0, src1 []float32, co, st *float32, sel *uint32, sections int)
+
 // biquadKernelLanes is the widest pass the host runs on a kernel, or 0.
 func biquadKernelLanes() int {
 	switch {
@@ -1581,4 +1584,35 @@ func biquadCascadeBlocks(dst, src, coeffs, state []float32, lanes, minWork int) 
 			biquadCascadeGo(dst, in, co, st)
 		}
 	}
+}
+
+// biquadPairSel returns the VPERMILPS control words that move the last section's
+// lanes for channels 0 and 1 (lanes L and L+1, L = 2*(sections-1)) to lanes 0 and
+// 1. The variable control reads bits 1:0 of each word.
+func biquadPairSel(sections int) (sel0, sel1 uint32) {
+	lane := uint32(biquadPairChannels * (sections - 1))
+	return lane, lane + 1
+}
+
+// biquadCascadePair runs channels c and c+1 of a cascade of at most
+// biquadPairSections sections. When both channels have a common length m that
+// biquadKernelOK accepts at pairMinWork, the pair kernel filters the first m
+// samples of each; the remainder of the longer channel, or both whole channels
+// when there is no kernel run, then go through biquadCascadeChannel from the
+// written-back state, which gives the bits of one uninterrupted call.
+func biquadCascadePair(dst, src [][]float32, coeffs []float32, state [][]float32, c, lanes, minWork, pairMinWork int) {
+	d0, d1, s0, s1 := dst[c], dst[c+1], src[c], src[c+1]
+	n0, n1 := min(len(d0), len(s0)), min(len(d1), len(s1))
+	m := min(n0, n1)
+	sections := len(coeffs) / biquadCoeffs
+	if sections <= biquadPairSections && cpu.X86.AVX && biquadKernelOK(m, sections, pairMinWork) {
+		var l biquadLanes
+		sel0, sel1 := biquadPairSel(sections)
+		l.packPair(coeffs, state[c], state[c+1], sel0, sel1)
+		biquadCascadePair4AVX(d0[:m], d1[:m], s0[:m], s1[:m], &l.co[0], &l.st[0], &l.sel[0], sections)
+		l.unpackPair(state[c], state[c+1])
+		d0, s0, d1, s1 = d0[m:n0], s0[m:n0], d1[m:n1], s1[m:n1]
+	}
+	biquadCascadeChannel(d0, s0, coeffs, state[c], lanes, minWork)
+	biquadCascadeChannel(d1, s1, coeffs, state[c+1], lanes, minWork)
 }

@@ -23,6 +23,22 @@ func biquadBlocksFunc(lanes int) biquadFunc {
 	}
 }
 
+// biquadNBlocksFunc adapts biquadCascadeNBlocks to biquadNFunc with the given
+// lane count and floors. Lanes 0 sends everything to the Go path; floors of 0
+// reach the pair kernel with the shortest legal inputs.
+func biquadNBlocksFunc(lanes, minWork, pairMinWork int) biquadNFunc {
+	return func(dst, src [][]float32, coeffs []float32, state [][]float32) {
+		biquadCascadeNBlocks(dst, src, coeffs, state, lanes, minWork, pairMinWork)
+	}
+}
+
+// TestBiquadCascadeNGo runs the multichannel suite with every channel on the Go
+// path, so the driver's pairing and tails are covered when dispatch lands on a
+// kernel, and a compiler-fused multiply-add in the fallback (arm64) is caught.
+func TestBiquadCascadeNGo(t *testing.T) {
+	runBiquadNSuite(t, biquadNBlocksFunc(0, 0, 0))
+}
+
 // BenchmarkBiquadCascadeShort sweeps short chunks with the kernel forced on
 // (minWork 0) against the Go path, to find the n*sections where the kernel pays;
 // biquadMinWork is set from this sweep. Combinations below the kernel
@@ -55,6 +71,47 @@ func BenchmarkBiquadCascadeShort(b *testing.B) {
 						v.fn()
 					}
 					b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(n), "ns/sample")
+				})
+			}
+		}
+	}
+}
+
+// BenchmarkBiquadCascadePairShort sweeps short two-channel chunks with the pair
+// kernel forced on (pair floor 0) against two production BiquadCascade calls,
+// the baseline the pair path has to beat; biquadPairMinWork is set from this
+// sweep. Mono2 includes the mono path's own Go fallback below biquadMinWork.
+func BenchmarkBiquadCascadePairShort(b *testing.B) {
+	lanes := biquadKernelLanes()
+	if lanes == 0 {
+		b.Skip("no biquad kernel on this CPU")
+	}
+	r := rand.New(rand.NewPCG(45, 46))
+	for _, sections := range []int{1, 2} {
+		coeffs := biquadRBJ(sections, r)
+		for _, m := range []int{2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 256} {
+			if !biquadKernelOK(m, sections, 0) {
+				continue
+			}
+			src := [][]float32{biquadNoise(m, r), biquadNoise(m, r)}
+			dst := [][]float32{make([]float32, m), make([]float32, m)}
+			state := [][]float32{make([]float32, biquadStateLen*sections), make([]float32, biquadStateLen*sections)}
+			variants := []struct {
+				name string
+				fn   func()
+			}{
+				{"Pair", func() { biquadCascadeNBlocks(dst, src, coeffs, state, lanes, biquadMinWork, 0) }},
+				{"Mono2", func() {
+					BiquadCascade(dst[0], src[0], coeffs, state[0])
+					BiquadCascade(dst[1], src[1], coeffs, state[1])
+				}},
+			}
+			for _, v := range variants {
+				b.Run(fmt.Sprintf("sec=%d/m=%d/impl=%s", sections, m, v.name), func(b *testing.B) {
+					for b.Loop() {
+						v.fn()
+					}
+					b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(2*m), "ns/chsample")
 				})
 			}
 		}

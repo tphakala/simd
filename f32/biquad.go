@@ -55,12 +55,11 @@ const (
 // Uses AVX2 on AMD64 (8 sections per pass; AVX alone gives passes of 4) and NEON
 // on ARM64 (8 sections per pass). A longer cascade runs as several passes, each
 // over dst. Chunks too short to pay for a kernel call, and other architectures,
-// use the Go path.
+// use the Go path. For several channels sharing coefficients, see
+// [BiquadCascadeN].
 func BiquadCascade(dst, src, coeffs, state []float32) {
-	if len(coeffs) == 0 || len(coeffs)%biquadCoeffs != 0 {
-		panic("simd: len(coeffs) must be a positive multiple of 5")
-	}
-	if len(state) != len(coeffs)/biquadCoeffs*biquadStateLen {
+	sections := biquadSectionCount(coeffs)
+	if len(state) != sections*biquadStateLen {
 		panic("simd: len(state) must be 4 per section")
 	}
 	n := min(len(dst), len(src))
@@ -68,4 +67,52 @@ func BiquadCascade(dst, src, coeffs, state []float32) {
 		return
 	}
 	biquadCascade32(dst[:n], src[:n], coeffs, state)
+}
+
+// BiquadCascadeN filters several channels through the same cascade, each with
+// its own state: channel c reads src[c], writes dst[c] and advances state[c].
+// coeffs and each state[c] have BiquadCascade's layout, and coeffs is shared by
+// every channel. Each channel's output and final state are exactly what
+// BiquadCascade(dst[c], src[c], coeffs, state[c]) produces, including
+// BiquadCascade's NaN exception, so a channel's result does not depend on the
+// other channels, on their lengths, or on the channel order. A stream can
+// therefore switch between BiquadCascade and BiquadCascadeN at any chunk
+// boundary.
+//
+// Channel c processes min(len(dst[c]), len(src[c])) samples, leaves the rest of
+// dst[c] untouched and advances state[c] by exactly that many samples; channels
+// may have different lengths. dst[c] may be the same slice as src[c] (the
+// channel then runs in place); otherwise no dst[c] may overlap any src or dst
+// slice of any channel. src slices may overlap each other. coeffs and the state
+// slices must not overlap dst, src or each other.
+//
+// BiquadCascadeN panics unless len(src) and len(state) equal len(dst),
+// len(coeffs) is a positive multiple of 5 and every state[c] holds 4 per
+// section. All checks run before any channel is processed, even when there is
+// nothing to process.
+//
+// For a cascade of one or two sections, channels 0 and 1, 2 and 3, and so on run
+// in pairs on one kernel that holds both channels (AVX on AMD64, NEON on ARM64).
+// An odd last channel, longer cascades, and pairs too short to pay for the
+// kernel run each channel as BiquadCascade does.
+func BiquadCascadeN(dst, src [][]float32, coeffs []float32, state [][]float32) {
+	sections := biquadSectionCount(coeffs)
+	if len(src) != len(dst) || len(state) != len(dst) {
+		panic("simd: dst, src and state must have the same number of channels")
+	}
+	for _, st := range state {
+		if len(st) != sections*biquadStateLen {
+			panic("simd: len(state[c]) must be 4 per section in every channel")
+		}
+	}
+	biquadCascadeN32(dst, src, coeffs, state)
+}
+
+// biquadSectionCount is the number of sections in coeffs. It panics unless
+// len(coeffs) is a positive multiple of 5.
+func biquadSectionCount(coeffs []float32) int {
+	if len(coeffs) == 0 || len(coeffs)%biquadCoeffs != 0 {
+		panic("simd: len(coeffs) must be a positive multiple of 5")
+	}
+	return len(coeffs) / biquadCoeffs
 }

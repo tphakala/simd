@@ -90,7 +90,7 @@
 //
 // Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int32ToFloat32ScaleAdd (fused dequantize-accumulate dst[i] = a[i] + float32(src[i])*scale, two roundings), Int16ToFloat32Scale, Float32ToInt16Scale
 //
-// IIR filtering (f32): BiquadCascade (Direct Form I biquad cascade with state in and out; bit-exact with the scalar no-FMA recurrence)
+// IIR filtering (f32): BiquadCascade (Direct Form I biquad cascade with state in and out; bit-exact with the scalar no-FMA recurrence), BiquadCascadeN (planar multichannel form with shared coefficients and per-channel state; each channel is identical to BiquadCascade)
 //
 // Sliding-window argmin (f32): MinIdxOfSum, MinIdxOfSumRows (batched sliding-window argmin of a[i]+k[base+r*slide+i], first-index-wins ties, bit-exact across all paths)
 //

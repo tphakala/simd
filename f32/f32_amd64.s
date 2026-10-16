@@ -9832,6 +9832,255 @@ bqc4avx_done:
     VZEROUPPER
     RET
 
+// func biquadCascadePair4AVX(dst0, dst1, src0, src1 []float32, co, st *float32, sel *uint32, sections int)
+// Lane-pipelined Direct Form I biquad cascade for two channels at once behind
+// BiquadCascadeN, for 1 or 2 sections in XMM registers; the instruction set it needs
+// is AVX (no AVX2 instruction). The two channels share the coefficients and have
+// their own state; each channel's output and state are bit for bit what
+// biquadCascade4AVX gives it alone.
+//
+// Lane 2k+ch holds section k of channel ch and runs sample t-2k at step t, so section
+// k's input at step t is the same channel's lane 2(k-1)+ch y2 register (its output two
+// steps ago) moved up two lanes (VMOVLHPS), with the two channels' new samples entering
+// lanes 0 and 1 (X13 = [src0[t], src1[t], 0, 0], built by VMOVSS and VINSERTPS).
+// A step computes b0*x + b1*x1 + b2*x2 - a1*y1 - a2*y2 left to right with VMULPS,
+// VADDPS and VSUBPS, lane-wise, in the order of biquadCascade4AVX's step. There is no
+// VFMADD/VFMSUB: every product and every sum rounds to float32 on its own, so the
+// results match biquadCascadeGo bit for bit (#156), and MXCSR is never touched, so
+// subnormals are not flushed. Every instruction is VEX, so no legacy-SSE write meets
+// the dirty upper state.
+//
+// Arguments, all established by the Go wrapper (the kernel does not re-check them):
+// co is five rows of 8 float32 (b0 b1 b2 a1 a2), st is four rows of 8 float32 (x1 x2 y1
+// y2), rows 32 bytes apart, lane = 2*section + channel with the coefficients repeated in
+// both channel lanes of a section; lanes at or above 2*sections hold zero coefficients
+// and state (the kernel loads and stores only lanes 0..3 of each row). sel holds
+// 2*(sections-1) in the even words and 2*(sections-1)+1 in the odd words, the control of
+// the output select (VPERMILPS with a variable control): lane 0 of the result is channel
+// 0's output and lane 1 is channel 1's, stored by VMOVSS to dst0 and VEXTRACTPS to dst1.
+// 1 <= sections <= 2, and len(src0) == len(src1) == len(dst0) == len(dst1) = n >=
+// max(1, 2*(sections-1)). st is read on entry and written on exit with each lane's state
+// after n samples.
+//
+// Phases, as in biquadCascade4AVX with two lanes per section. Fill: for j = 1..sections-1
+// (at most once), two steps under the mask "lanes < 2j" advance only the lanes that
+// already have a sample (VBLENDVPS of the four state rows, no output); the other lanes
+// keep the caller's state. Odd: when n - 2*(sections-1) is odd, one step with plain
+// register moves and an output. Steady: (n - 2*(sections-1))/2 pairs of steps that
+// rename instead of move. Drain: the state image is stored, X13 is zeroed so no src
+// element past n-1 is read in either channel, and for j = 1..sections-1 two more steps
+// produce the last outputs; lanes 2j and 2j+1 are final after pair j and VBLENDVPS
+// copies them into the stored image, keeping the lanes below 2j. The mask "lanes < 2j" is
+// read from biquadmask<> at byte offset 4*(8-2j).
+// The step at index t reads src0[t] and src1[t] and writes dst0 and dst1 at
+// t-2*(sections-1), never ahead of the reads, so dst0 may alias src0 and dst1 may alias
+// src1 exactly.
+//
+// Registers: coefficients b0..a2 in 0..4, state x1 5, x2 6, y1 7, y2 8 (the renamed steps
+// swap 5/6 and 7/8); acc 9, t or output 10, b2*x2 or xin 11, a2*y2 or mask 12, new samples
+// 13, output control 15 (14 is unused). GP: DI dst0, SI src0, R8 dst1, CX src1, DX n,
+// BX st, R9 sections, R10 j, R11 mask table, R12 pair count, AX scratch.
+// Frame: dst0(24) + dst1(24) + src0(24) + src1(24) + co(8) + st(8) + sel(8) + sections(8) = 128.
+TEXT ·biquadCascadePair4AVX(SB), NOSPLIT, $0-128
+    MOVQ dst0_base+0(FP), DI
+    MOVQ src0_base+48(FP), SI
+    MOVQ src0_len+56(FP), DX
+    MOVQ co+96(FP), CX
+    MOVQ st+104(FP), BX
+    MOVQ sel+112(FP), R8
+    MOVQ sections+120(FP), R9
+    VMOVUPS 0(CX), X0
+    VMOVUPS 32(CX), X1
+    VMOVUPS 64(CX), X2
+    VMOVUPS 96(CX), X3
+    VMOVUPS 128(CX), X4
+    VMOVUPS 0(BX), X5
+    VMOVUPS 32(BX), X6
+    VMOVUPS 64(BX), X7
+    VMOVUPS 96(BX), X8
+    VMOVUPS (R8), X15
+    MOVQ src1_base+72(FP), CX
+    MOVQ dst1_base+24(FP), R8
+    MOVQ $1, R10
+bqpair4avx_fill:
+    CMPQ R10, R9
+    JGE bqpair4avx_filldone
+    MOVQ $8, AX
+    SUBQ R10, AX
+    SUBQ R10, AX
+    LEAQ biquadmask<>(SB), R11
+    VMOVUPS (R11)(AX*4), X12
+    VMOVSS (SI), X13
+    VINSERTPS $0x10, (CX), X13, X13
+    ADDQ $4, SI
+    ADDQ $4, CX
+    VMOVLHPS X8, X13, X11
+    VMULPS X0, X11, X9
+    VMULPS X1, X5, X10
+    VADDPS X10, X9, X9
+    VMULPS X2, X6, X10
+    VADDPS X10, X9, X9
+    VMULPS X3, X7, X10
+    VSUBPS X10, X9, X9
+    VMULPS X4, X8, X10
+    VSUBPS X10, X9, X9
+    VBLENDVPS X12, X5, X6, X6
+    VBLENDVPS X12, X11, X5, X5
+    VBLENDVPS X12, X7, X8, X8
+    VBLENDVPS X12, X9, X7, X7
+    VMOVSS (SI), X13
+    VINSERTPS $0x10, (CX), X13, X13
+    ADDQ $4, SI
+    ADDQ $4, CX
+    VMOVLHPS X8, X13, X11
+    VMULPS X0, X11, X9
+    VMULPS X1, X5, X10
+    VADDPS X10, X9, X9
+    VMULPS X2, X6, X10
+    VADDPS X10, X9, X9
+    VMULPS X3, X7, X10
+    VSUBPS X10, X9, X9
+    VMULPS X4, X8, X10
+    VSUBPS X10, X9, X9
+    VBLENDVPS X12, X5, X6, X6
+    VBLENDVPS X12, X11, X5, X5
+    VBLENDVPS X12, X7, X8, X8
+    VBLENDVPS X12, X9, X7, X7
+    INCQ R10
+    JMP bqpair4avx_fill
+bqpair4avx_filldone:
+    LEAQ -1(R9), AX
+    SHLQ $1, AX
+    MOVQ DX, R12
+    SUBQ AX, R12
+    TESTQ $1, R12
+    JZ bqpair4avx_even
+    VMOVSS (SI), X13
+    VINSERTPS $0x10, (CX), X13, X13
+    ADDQ $4, SI
+    ADDQ $4, CX
+    VMOVLHPS X8, X13, X11
+    VMULPS X0, X11, X9
+    VMULPS X1, X5, X10
+    VADDPS X10, X9, X9
+    VMULPS X2, X6, X10
+    VADDPS X10, X9, X9
+    VMULPS X3, X7, X10
+    VSUBPS X10, X9, X9
+    VMULPS X4, X8, X10
+    VSUBPS X10, X9, X9
+    VMOVAPS X5, X6
+    VMOVAPS X11, X5
+    VMOVAPS X7, X8
+    VMOVAPS X9, X7
+    VPERMILPS X15, X7, X10
+    VMOVSS X10, (DI)
+    ADDQ $4, DI
+    VEXTRACTPS $1, X10, (R8)
+    ADDQ $4, R8
+bqpair4avx_even:
+    SHRQ $1, R12
+    JZ bqpair4avx_steadydone
+bqpair4avx_steady:
+    VMOVSS (SI), X13
+    VINSERTPS $0x10, (CX), X13, X13
+    ADDQ $4, SI
+    ADDQ $4, CX
+    VMULPS X2, X6, X11
+    VMOVLHPS X8, X13, X6
+    VMULPS X4, X8, X12
+    VMULPS X0, X6, X9
+    VMULPS X1, X5, X10
+    VADDPS X10, X9, X9
+    VADDPS X11, X9, X9
+    VMULPS X3, X7, X10
+    VSUBPS X10, X9, X9
+    VSUBPS X12, X9, X8
+    VPERMILPS X15, X8, X10
+    VMOVSS X10, (DI)
+    ADDQ $4, DI
+    VEXTRACTPS $1, X10, (R8)
+    ADDQ $4, R8
+    VMOVSS (SI), X13
+    VINSERTPS $0x10, (CX), X13, X13
+    ADDQ $4, SI
+    ADDQ $4, CX
+    VMULPS X2, X5, X11
+    VMOVLHPS X7, X13, X5
+    VMULPS X4, X7, X12
+    VMULPS X0, X5, X9
+    VMULPS X1, X6, X10
+    VADDPS X10, X9, X9
+    VADDPS X11, X9, X9
+    VMULPS X3, X8, X10
+    VSUBPS X10, X9, X9
+    VSUBPS X12, X9, X7
+    VPERMILPS X15, X7, X10
+    VMOVSS X10, (DI)
+    ADDQ $4, DI
+    VEXTRACTPS $1, X10, (R8)
+    ADDQ $4, R8
+    DECQ R12
+    JNZ bqpair4avx_steady
+bqpair4avx_steadydone:
+    VMOVUPS X5, 0(BX)
+    VMOVUPS X6, 32(BX)
+    VMOVUPS X7, 64(BX)
+    VMOVUPS X8, 96(BX)
+    VXORPS X13, X13, X13
+    MOVQ $1, R10
+bqpair4avx_drain:
+    CMPQ R10, R9
+    JGE bqpair4avx_done
+    VMULPS X2, X6, X11
+    VMOVLHPS X8, X13, X6
+    VMULPS X4, X8, X12
+    VMULPS X0, X6, X9
+    VMULPS X1, X5, X10
+    VADDPS X10, X9, X9
+    VADDPS X11, X9, X9
+    VMULPS X3, X7, X10
+    VSUBPS X10, X9, X9
+    VSUBPS X12, X9, X8
+    VPERMILPS X15, X8, X10
+    VMOVSS X10, (DI)
+    ADDQ $4, DI
+    VEXTRACTPS $1, X10, (R8)
+    ADDQ $4, R8
+    VMULPS X2, X5, X11
+    VMOVLHPS X7, X13, X5
+    VMULPS X4, X7, X12
+    VMULPS X0, X5, X9
+    VMULPS X1, X6, X10
+    VADDPS X10, X9, X9
+    VADDPS X11, X9, X9
+    VMULPS X3, X8, X10
+    VSUBPS X10, X9, X9
+    VSUBPS X12, X9, X7
+    VPERMILPS X15, X7, X10
+    VMOVSS X10, (DI)
+    ADDQ $4, DI
+    VEXTRACTPS $1, X10, (R8)
+    ADDQ $4, R8
+    MOVQ $8, AX
+    SUBQ R10, AX
+    SUBQ R10, AX
+    LEAQ biquadmask<>(SB), R11
+    VMOVUPS (R11)(AX*4), X12
+    VBLENDVPS X12, 0(BX), X5, X9
+    VMOVUPS X9, 0(BX)
+    VBLENDVPS X12, 32(BX), X6, X9
+    VMOVUPS X9, 32(BX)
+    VBLENDVPS X12, 64(BX), X7, X9
+    VMOVUPS X9, 64(BX)
+    VBLENDVPS X12, 96(BX), X8, X9
+    VMOVUPS X9, 96(BX)
+    INCQ R10
+    JMP bqpair4avx_drain
+bqpair4avx_done:
+    VZEROUPPER
+    RET
+
 // func biquadCascade8AVX2(dst, src []float32, co, st *float32, sel *uint32, sections int)
 // Lane-pipelined Direct Form I biquad cascade behind BiquadCascade, for 5..8 sections
 // in YMM registers; the instruction set it needs is AVX2 (VPERMPS).

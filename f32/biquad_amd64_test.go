@@ -3,6 +3,7 @@
 package f32
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/tphakala/simd/cpu"
@@ -59,5 +60,36 @@ func TestBiquadKernelLanesMatchesCPU_amd64(t *testing.T) {
 	if got := biquadKernelLanes(); got != want {
 		t.Fatalf("biquadKernelLanes() = %d, want %d (AVX2=%v AVX=%v)",
 			got, want, cpu.X86.AVX2, cpu.X86.AVX)
+	}
+}
+
+// TestBiquadCascadeNPairAVXDirect runs the multichannel suite with both floors
+// off, so every pair of channels of a 1- or 2-section cascade that has a sample
+// reaches the AVX pair kernel at its shortest legal length. Lanes 4 and 8 differ
+// only in the kernels the leftover channels and longer cascades use. It skips
+// when cpu.X86.AVX is false, which is also the case when SIMD_DISABLE clears the
+// flag.
+func TestBiquadCascadeNPairAVXDirect(t *testing.T) {
+	if !cpu.X86.AVX {
+		t.Skip("AVX not available")
+	}
+	lanesList := []int{biquadNarrowLanes}
+	if cpu.X86.AVX2 {
+		lanesList = append(lanesList, biquadMaxLanes)
+	}
+	for _, lanes := range lanesList {
+		t.Run(fmt.Sprintf("lanes=%d", lanes), func(t *testing.T) {
+			runBiquadNSuite(t, biquadNBlocksFunc(lanes, 0, 0))
+		})
+	}
+}
+
+// TestBiquadPairSel_amd64 pins the VPERMILPS control words: the pair of lanes
+// that hold the last section of channels 0 and 1.
+func TestBiquadPairSel_amd64(t *testing.T) {
+	for sections, want := range map[int][2]uint32{1: {0, 1}, 2: {2, 3}} {
+		if s0, s1 := biquadPairSel(sections); s0 != want[0] || s1 != want[1] {
+			t.Errorf("biquadPairSel(%d) = (%d, %d), want (%d, %d)", sections, s0, s1, want[0], want[1])
+		}
 	}
 }

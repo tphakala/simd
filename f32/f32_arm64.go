@@ -1054,6 +1054,9 @@ func biquadCascade4NEON(dst, src []float32, co, st *float32, sel *uint32, sectio
 //go:noescape
 func biquadCascade8NEON(dst, src []float32, co, st *float32, sel *uint32, sections int)
 
+//go:noescape
+func biquadCascadePair4NEON(dst0, dst1, src0, src1 []float32, co, st *float32, sel *uint32, sections int)
+
 // biquadKernelLanes is the widest pass the host runs on a kernel, or 0.
 func biquadKernelLanes() int {
 	if hasNEON {
@@ -1108,10 +1111,49 @@ func biquadCascadeBlocks(dst, src, coeffs, state []float32, lanes, minWork int) 
 // neonSelector is the TBL byte-index word that moves lane (sections-1)%4 of a Q
 // register to lane 0: bytes 4L, 4L+1, 4L+2, 4L+3 with L = (sections-1)%4.
 func neonSelector(sections int) uint32 {
+	const laneWidth = 4
+	return neonLaneBytes((sections - 1) % laneWidth)
+}
+
+// neonLaneBytes is the TBL byte-index word that moves lane of a Q register to
+// lane 0: bytes 4*lane to 4*lane+3.
+func neonLaneBytes(lane int) uint32 {
 	const (
-		laneWidth = 4
 		bytes0123 = 0x03020100
 		fourEach  = 0x04040404
 	)
-	return bytes0123 + fourEach*uint32((sections-1)%laneWidth)
+	return bytes0123 + fourEach*uint32(lane)
+}
+
+// biquadPairSel returns the TBL byte-index words that move the last section's
+// lanes for channels 0 and 1 (lanes L and L+1, L = 2*(sections-1)) to lanes 0
+// and 1.
+func biquadPairSel(sections int) (sel0, sel1 uint32) {
+	lane := biquadPairChannels * (sections - 1)
+	return neonLaneBytes(lane), neonLaneBytes(lane + 1)
+}
+
+// biquadCascadePair runs channels c and c+1 of a cascade of at most
+// biquadPairSections sections. When both channels have a common length m that
+// biquadKernelOK accepts at pairMinWork, the pair kernel filters the first m
+// samples of each; the remainder of the longer channel, or both whole channels
+// when there is no kernel run, then go through biquadCascadeChannel from the
+// written-back state, which gives the bits of one uninterrupted call. Like
+// biquadCascadeBlocks it does not consult hasNEON: the caller's lanes carries
+// that.
+func biquadCascadePair(dst, src [][]float32, coeffs []float32, state [][]float32, c, lanes, minWork, pairMinWork int) {
+	d0, d1, s0, s1 := dst[c], dst[c+1], src[c], src[c+1]
+	n0, n1 := min(len(d0), len(s0)), min(len(d1), len(s1))
+	m := min(n0, n1)
+	sections := len(coeffs) / biquadCoeffs
+	if sections <= biquadPairSections && biquadKernelOK(m, sections, pairMinWork) {
+		var l biquadLanes
+		sel0, sel1 := biquadPairSel(sections)
+		l.packPair(coeffs, state[c], state[c+1], sel0, sel1)
+		biquadCascadePair4NEON(d0[:m], d1[:m], s0[:m], s1[:m], &l.co[0], &l.st[0], &l.sel[0], sections)
+		l.unpackPair(state[c], state[c+1])
+		d0, s0, d1, s1 = d0[m:n0], s0[m:n0], d1[m:n1], s1[m:n1]
+	}
+	biquadCascadeChannel(d0, s0, coeffs, state[c], lanes, minWork)
+	biquadCascadeChannel(d1, s1, coeffs, state[c+1], lanes, minWork)
 }
