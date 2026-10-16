@@ -21,10 +21,14 @@ import (
 // The probe therefore gives channel 1 a state slice whose first element is the
 // last element of dst[0]: x1 of its first section. The layout deliberately
 // violates BiquadCascadeN's rule that state must not overlap dst, because it is
-// what makes the route observable. The mirror overlap (channel 0's state on
-// dst[1]) makes the probe symmetric. The last element of each dst is left out
-// of the comparison: the final state write-back lands there on every route. The
-// rest of dst equals one of two references:
+// what makes the route observable. The mirror overlap (channel 0's state on the
+// last element of dst[1]) makes the probe symmetric. The two channels may have
+// different lengths n0 and n1: the pair kernel then takes the common prefix and
+// the longer channel's tail runs per channel from the written-back state. The
+// last element of each dst is left out of the comparison: it is the first
+// element of the other channel's state slice, so depending on the route it holds
+// a state write-back or a tail output. The rest of dst equals one of two
+// references:
 //
 //   - a Go run over clean (zero, non-aliased) states, when the pair kernel packed
 //     both states up front: the pair route;
@@ -51,44 +55,44 @@ func (r biquadPairRoute) String() string {
 	}
 }
 
-// biquadPairAliasRun runs fn on two channels of m samples each, with state[1]
+// biquadPairAliasRun runs fn on two channels of n0 and n1 samples, with state[1]
 // starting at the last element of dst[0] and state[0] at the last element of
-// dst[1], and returns copies of dst[0][:m-1] and dst[1][:m-1].
-func biquadPairAliasRun(fn biquadNFunc, m, sections int, coeffs []float32, src [][]float32) (d0, d1 []float32) {
-	big0 := make([]float32, m-1+biquadStateLen*sections)
-	big1 := make([]float32, m-1+biquadStateLen*sections)
-	dst := [][]float32{big0[:m:m], big1[:m:m]}
-	state := [][]float32{big1[m-1:], big0[m-1:]}
+// dst[1], and returns copies of dst[0][:n0-1] and dst[1][:n1-1].
+func biquadPairAliasRun(fn biquadNFunc, n0, n1, sections int, coeffs []float32, src [][]float32) (d0, d1 []float32) {
+	big0 := make([]float32, n0-1+biquadStateLen*sections)
+	big1 := make([]float32, n1-1+biquadStateLen*sections)
+	dst := [][]float32{big0[:n0:n0], big1[:n1:n1]}
+	state := [][]float32{big1[n1-1:], big0[n0-1:]}
 	fn(dst, src, coeffs, state)
-	return slices.Clone(dst[0][:m-1]), slices.Clone(dst[1][:m-1])
+	return slices.Clone(dst[0][:n0-1]), slices.Clone(dst[1][:n1-1])
 }
 
-// biquadPairClassifyRoute reports which route fn takes for two channels of m
-// samples through the given number of sections.
-func biquadPairClassifyRoute(t *testing.T, fn biquadNFunc, m, sections int) biquadPairRoute {
+// biquadPairClassifyRoute reports which route fn takes for two channels of n0
+// and n1 samples through the given number of sections.
+func biquadPairClassifyRoute(t *testing.T, fn biquadNFunc, n0, n1, sections int) biquadPairRoute {
 	t.Helper()
-	r := rand.New(rand.NewPCG(uint64(m), uint64(sections)))
+	r := rand.New(rand.NewPCG(uint64(n0)<<32|uint64(n1), uint64(sections)))
 	coeffs := biquadRBJ(sections, r)
-	src := [][]float32{biquadNoise(m, r), biquadNoise(m, r)}
+	src := [][]float32{biquadNoise(n0, r), biquadNoise(n1, r)}
 
 	var clean [2][]float32
 	for c := range clean {
-		clean[c] = make([]float32, m)
+		clean[c] = make([]float32, len(src[c]))
 		biquadCascadeGo(clean[c], src[c], coeffs, make([]float32, biquadStateLen*sections))
-		clean[c] = clean[c][:m-1]
+		clean[c] = clean[c][:len(src[c])-1]
 	}
 	goFn := biquadNBlocksFunc(0, 0, 0)
-	seq0, seq1 := biquadPairAliasRun(goFn, m, sections, coeffs, src)
+	seq0, seq1 := biquadPairAliasRun(goFn, n0, n1, sections, coeffs, src)
 
 	// The premise: with per-channel Go calls the overlap changes channel 1's
 	// result. If it did not, the probe could not tell the routes apart, and it
 	// must fail here instead of passing blindly.
 	if slices.EqualFunc(clean[1], seq1, bitsEqF32) {
-		t.Fatalf("probe premise broken at sections=%d m=%d: the aliased sequential result "+
-			"equals the clean one, so the route cannot be told from the output", sections, m)
+		t.Fatalf("probe premise broken at sections=%d n0=%d n1=%d: the aliased sequential result "+
+			"equals the clean one, so the route cannot be told from the output", sections, n0, n1)
 	}
 
-	got0, got1 := biquadPairAliasRun(fn, m, sections, coeffs, src)
+	got0, got1 := biquadPairAliasRun(fn, n0, n1, sections, coeffs, src)
 	switch {
 	case slices.EqualFunc(got0, clean[0], bitsEqF32) && slices.EqualFunc(got1, clean[1], bitsEqF32):
 		return biquadRoutePair
@@ -101,8 +105,8 @@ func biquadPairClassifyRoute(t *testing.T, fn biquadNFunc, m, sections int) biqu
 // biquadPairRouteRow is one probe input with the route it must take on a host
 // with a kernel. A host without one (lanes 0) is sequential for every row.
 type biquadPairRouteRow struct {
-	sections, m int
-	want        biquadPairRoute
+	sections, n0, n1 int
+	want             biquadPairRoute
 }
 
 // biquadPairRouteRows derives the rows from biquadPairMinWork, so a retune of the
@@ -116,15 +120,28 @@ func biquadPairRouteRows(t *testing.T) []biquadPairRouteRow {
 		t.Fatalf("biquadPairMinWork = %d: the route table assumes an even value of at least %d; "+
 			"rederive the rows", pm, 2*biquadSkew)
 	}
+	const tail, long = 9, 200
 	return []biquadPairRouteRow{
-		// Floor on m*sections.
-		{1, pm - 1, biquadRouteSequential},
-		{1, pm, biquadRoutePair},
-		{2, pm/2 - 1, biquadRouteSequential},
-		{2, pm / 2, biquadRoutePair},
+		// Floor on m*sections, equal lengths.
+		{1, pm - 1, pm - 1, biquadRouteSequential},
+		{1, pm, pm, biquadRoutePair},
+		{2, pm/2 - 1, pm/2 - 1, biquadRouteSequential},
+		{2, pm / 2, pm / 2, biquadRoutePair},
+		// Ragged: the floor applies to the common length. At the floor, either
+		// channel may be the longer one and the pair kernel still takes the
+		// common prefix.
+		{1, pm, pm + tail, biquadRoutePair},
+		{1, pm + tail, pm, biquadRoutePair},
+		{2, pm / 2, pm/2 + tail, biquadRoutePair},
+		{2, pm/2 + tail, pm / 2, biquadRoutePair},
+		// Just under the floor on the shorter channel, however long its partner.
+		{1, pm - 1, long, biquadRouteSequential},
+		{1, long, pm - 1, biquadRouteSequential},
+		{2, pm/2 - 1, long, biquadRouteSequential},
+		{2, long, pm/2 - 1, biquadRouteSequential},
 		// Three sections never take the pair kernel, however long.
-		{3, 200, biquadRouteSequential},
-		{8, 200, biquadRouteSequential},
+		{3, long, long, biquadRouteSequential},
+		{8, long, long, biquadRouteSequential},
 	}
 }
 
@@ -135,8 +152,8 @@ func checkBiquadPairRoutes(t *testing.T, name string, fn biquadNFunc, lanes int)
 		if lanes == 0 {
 			want = biquadRouteSequential
 		}
-		if got := biquadPairClassifyRoute(t, fn, row.m, row.sections); got != want {
-			t.Errorf("%s lanes=%d sections=%d m=%d: route %v, want %v", name, lanes, row.sections, row.m, got, want)
+		if got := biquadPairClassifyRoute(t, fn, row.n0, row.n1, row.sections); got != want {
+			t.Errorf("%s lanes=%d sections=%d n0=%d n1=%d: route %v, want %v", name, lanes, row.sections, row.n0, row.n1, got, want)
 		}
 	}
 }
