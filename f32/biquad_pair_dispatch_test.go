@@ -26,9 +26,8 @@ import (
 // different lengths n0 and n1: the pair kernel then takes the common prefix and
 // the longer channel's tail runs per channel from the written-back state. The
 // last element of each dst is left out of the comparison: it is the first
-// element of the other channel's state slice, so depending on the route it holds
-// a state write-back or a tail output. The rest of dst equals one of two
-// references:
+// element of the other channel's state slice, and its content depends on the
+// route. The rest of dst equals one of two references:
 //
 //   - a Go run over clean (zero, non-aliased) states, when the pair kernel packed
 //     both states up front: the pair route;

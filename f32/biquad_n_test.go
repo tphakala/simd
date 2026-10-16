@@ -91,7 +91,7 @@ func biquadNCheck(t *testing.T, fn biquadNFunc, tag string, coeffs []float32, in
 
 // biquadNLengthSets returns per-channel length vectors: equal lengths across the
 // channels, independent random lengths, and pairs whose lengths differ by 1 and
-// by 2 so the longer channel has a 1 to 2 sample tail after the pair kernel.
+// by 2.
 func biquadNLengthSets(chans int, r *rand.Rand) [][]int {
 	equal := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 63, 64, 65, 255, 256, 257, 1000}
 	const raggedSets, deltaSets = 4, 4
@@ -147,9 +147,10 @@ func biquadNCheckExact(t *testing.T, fn biquadNFunc) {
 }
 
 // biquadNCheckFillDrainEdges runs every pair of lengths in [0, 10] on two
-// channels, so the pair kernel meets its shortest legal inputs (one sample for
-// one section, two for two), odd and even remainders, and an empty channel next
-// to a long one. The extra-length variants make len(dst) and len(src) differ.
+// channels. With the floors at zero (TestBiquadCascadeNPairDirect) the pair
+// kernel meets its shortest legal inputs (one sample for one section, two for
+// two), odd and even remainders, and an empty channel next to a long one. The
+// extra-length variants make len(dst) and len(src) differ.
 func biquadNCheckFillDrainEdges(t *testing.T, fn biquadNFunc) {
 	t.Helper()
 	r := rand.New(rand.NewPCG(23, 24))
@@ -201,7 +202,7 @@ func biquadNCheckLengthMismatch(t *testing.T, fn biquadNFunc) {
 
 // biquadNStreamCheck feeds one stream per channel through fn in chunks. Every
 // call gives each channel its own random chunk length, so a pair constantly has
-// ragged lengths and a tail. With subsets, each call passes a random subset of
+// ragged lengths. With subsets, each call passes a random subset of
 // the channels in random order, so a channel meets different partners, becomes
 // the odd leftover, and leaves and rejoins; with monoMix, some calls run mono
 // BiquadCascade per channel instead, so a stream switches between the two forms
