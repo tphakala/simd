@@ -166,8 +166,9 @@ func TestBiquadCascadeNBlocksRoutes(t *testing.T) {
 	}
 }
 
-// TestBiquadCascadeNPairFloor pins the floor straight on the predicate the pair
-// driver uses, including the kernel precondition.
+// TestBiquadCascadeNPairFloor pins biquadKernelOK at biquadPairMinWork,
+// including the kernel precondition. Which floor the driver passes is pinned by
+// the route rows.
 func TestBiquadCascadeNPairFloor(t *testing.T) {
 	pm := biquadPairMinWork
 	cases := []struct {

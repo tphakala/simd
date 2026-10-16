@@ -9847,7 +9847,7 @@ bqc4avx_done:
 // VADDPS and VSUBPS, lane-wise, in the order of biquadCascade4AVX's step. There is no
 // VFMADD/VFMSUB: every product and every sum rounds to float32 on its own, so the
 // results match biquadCascadeGo bit for bit (#156), and MXCSR is never touched, so
-// subnormals are not flushed. Every instruction is VEX, so no legacy-SSE write meets
+// subnormals are not flushed. Every vector instruction is VEX, so no legacy-SSE write meets
 // the dirty upper state.
 //
 // Arguments, all established by the Go wrapper (the kernel does not re-check them):

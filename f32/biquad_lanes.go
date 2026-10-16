@@ -25,7 +25,7 @@ const biquadSkew = 2
 type biquadLanes struct {
 	co  [biquadCoeffs * biquadMaxLanes]float32
 	st  [biquadStateLen * biquadMaxLanes]float32
-	sel [biquadMaxLanes]uint32 // output-lane selector, same value in every word
+	sel [biquadMaxLanes]uint32 // output-lane selector: pack sets every word alike, packPair alternates two values
 }
 
 // pack transposes the per-section coeffs and state of one block into lanes and

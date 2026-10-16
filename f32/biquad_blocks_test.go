@@ -32,9 +32,9 @@ func biquadNBlocksFunc(lanes, minWork, pairMinWork int) biquadNFunc {
 	}
 }
 
-// TestBiquadCascadeNGo runs the multichannel suite with every channel on the Go
-// path, so the driver's pairing and tails are covered when dispatch lands on a
-// kernel, and a compiler-fused multiply-add in the fallback (arm64) is caught.
+// TestBiquadCascadeNGo runs the multichannel suite with lanes 0, so every channel
+// runs whole on the Go path, and a compiler-fused multiply-add in the fallback
+// (arm64) is caught.
 func TestBiquadCascadeNGo(t *testing.T) {
 	runBiquadNSuite(t, biquadNBlocksFunc(0, 0, 0))
 }
