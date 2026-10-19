@@ -189,7 +189,8 @@ func TestDFTPlanLengthSequenceBitIdentical(t *testing.T) {
 
 // TestDFTPlanForwardLargeLength covers a length whose chirp index t*t exceeds
 // the range of a 32-bit int (t >= 46341, so n >= 46342), where a 32-bit
-// product would give the wrong phase.
+// product would give the wrong phase. With a 64-bit int it fails only when the
+// reduction is narrowed explicitly, for example to int32.
 func TestDFTPlanForwardLargeLength(t *testing.T) {
 	const n = 46349
 	p, err := NewDFTPlan(n)
