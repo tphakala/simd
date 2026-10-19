@@ -126,7 +126,7 @@ func fftSampledBins(n int) []int {
 
 // TestFFTPlanForwardMatchesCompensatedDFT pins the transform's value: a wrong
 // stage schedule, twiddle slice or offset, sign, or bit-reversal shift moves bins
-// by O(1), and a recurrence-based twiddle would exceed the O(u*log2 n) bound.
+// by O(1).
 // Measured relL2/(u*max(1, log2 n)) is at most 0.60 for n <= 4096 on an Apple M5
 // Pro (NEON) and 0.58 with SIMD_DISABLE=all; on an Intel i5-7260U it is at most
 // 0.64 with AVX+FMA and with SIMD_DISABLE=avx or all. Tier agreement comes from
@@ -320,8 +320,8 @@ func TestFFTPlanInvalidLengthIsNoOp(t *testing.T) {
 		lenRe, lenIm int
 	}{
 		{"empty", 0, 0},
-		{"length mismatch", 8, 9},
-		{"length mismatch other way", 9, 8},
+		{"im longer than re", 8, 9},
+		{"im shorter than re", 8, 4},
 		{"not a power of two 3", 3, 3},
 		{"not a power of two 6", 6, 6},
 		{"above MaxLen", 2 * maxN, 2 * maxN},
