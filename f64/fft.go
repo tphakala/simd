@@ -81,12 +81,10 @@ func newFFTCore(maxN int) fftCore {
 		stage4Tw3Im: make([]float64, stage4Tw3Len),
 	}
 
-	// Bit-reversal permutation for a size-maxN FFT (the single entry 0 when maxN
-	// is 1).
-	if logMax > 0 {
-		for i := range c.bitrev {
-			c.bitrev[i] = int32(bits.Reverse32(uint32(i)) >> (uint32Bits - logMax))
-		}
+	// Bit-reversal permutation for a size-maxN FFT. For maxN = 1 the shift is the
+	// full width of the uint32, which Go defines as 0, so the single entry is 0.
+	for i := range c.bitrev {
+		c.bitrev[i] = int32(bits.Reverse32(uint32(i)) >> (uint32Bits - logMax))
 	}
 
 	// Per-stage contiguous FFT twiddles: stage m in {2,4,...,maxN} writes its

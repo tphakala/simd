@@ -211,11 +211,11 @@ func TestFFTPlanSubSizeBitIdentical(t *testing.T) {
 			br, bi := append([]float64(nil), xr...), append([]float64(nil), xi...)
 			run(big, ar, ai)
 			run(small, br, bi)
-			for i := range ar {
-				if math.Float64bits(ar[i]) != math.Float64bits(br[i]) ||
-					math.Float64bits(ai[i]) != math.Float64bits(bi[i]) {
-					t.Fatalf("n=%d %s: element %d differs between the %d plan and a dedicated plan", n, name, i, maxN)
-				}
+			if i, ok := bitsDiff(ar, br); !ok {
+				t.Fatalf("n=%d %s: re[%d] differs between the %d plan and a dedicated plan", n, name, i, maxN)
+			}
+			if i, ok := bitsDiff(ai, bi); !ok {
+				t.Fatalf("n=%d %s: im[%d] differs between the %d plan and a dedicated plan", n, name, i, maxN)
 			}
 		}
 	}
@@ -246,12 +246,8 @@ func TestFFTPlanConcurrentUse(t *testing.T) {
 		wants[g] = w
 	}
 	same := func(a, b []float64) bool {
-		for i := range a {
-			if math.Float64bits(a[i]) != math.Float64bits(b[i]) {
-				return false
-			}
-		}
-		return true
+		_, ok := bitsDiff(a, b)
+		return ok
 	}
 	var wg sync.WaitGroup
 	for g, n := range sizes {
@@ -339,15 +335,11 @@ func TestFFTPlanInvalidLengthIsNoOp(t *testing.T) {
 			if got := run(re, im); got != 0 {
 				t.Errorf("%s %s: returned %d, want 0", name, c.name, got)
 			}
-			for i := range re {
-				if math.Float64bits(re[i]) != math.Float64bits(wantRe[i]) {
-					t.Fatalf("%s %s: re[%d] was modified", name, c.name, i)
-				}
+			if i, ok := bitsDiff(re, wantRe); !ok {
+				t.Fatalf("%s %s: re[%d] was modified", name, c.name, i)
 			}
-			for i := range im {
-				if math.Float64bits(im[i]) != math.Float64bits(wantIm[i]) {
-					t.Fatalf("%s %s: im[%d] was modified", name, c.name, i)
-				}
+			if i, ok := bitsDiff(im, wantIm); !ok {
+				t.Fatalf("%s %s: im[%d] was modified", name, c.name, i)
 			}
 		}
 		re, im := fftTestInput(maxN, 7)

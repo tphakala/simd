@@ -164,7 +164,7 @@ func ExampleFFTPlan() {
 	// Inverse is unscaled, so divide by n to recover the input.
 	plan.Inverse(re, im)
 	f64.Scale(re, re, 1.0/n)
-	fmt.Printf("%.3f\n", math.Round(re[1]*1e3)/1e3+0)
+	fmt.Printf("%.3f\n", re[1])
 	// Output:
 	// [0.000 4.000 0.000 0.000 0.000 0.000 0.000 4.000]
 	// 0.707
