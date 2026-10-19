@@ -3,8 +3,10 @@ package f64
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"testing"
 )
 
@@ -48,9 +50,14 @@ func cmplxClose(t *testing.T, ctx string, got, want complex128, scale float64) {
 }
 
 func TestNewSTFTPlanErrors(t *testing.T) {
-	for _, bad := range []int{0, 1, 3, 5, 6, 7, 9, 100, 1000} {
-		if _, err := NewSTFTPlan(bad); err == nil {
-			t.Errorf("NewSTFTPlan(%d) = nil error, want ErrNotPowerOfTwo", bad)
+	bads := []int{0, 1, 3, 5, 6, 7, 9, 100, 1000}
+	if strconv.IntSize == 64 {
+		sh := uint(31) // 2^31 is the first power of two above the 1<<30 cap
+		bads = append(bads, 1<<sh)
+	}
+	for _, bad := range bads {
+		if _, err := NewSTFTPlan(bad); !errors.Is(err, ErrNotPowerOfTwo) {
+			t.Errorf("NewSTFTPlan(%d) error = %v, want ErrNotPowerOfTwo", bad, err)
 		}
 	}
 	for _, good := range []int{2, 4, 8, 16, 1024} {

@@ -29,11 +29,11 @@ import (
 // frame runs through the package's vector primitives: the frame is packed with
 // Deinterleave2 and Mul, the size-half FFT core is radix-4
 // (ButterflyComplexStage4, with at most one trailing radix-2
-// ButterflyComplexStage), and the real-input unravel is RealFFTUnpack or, for the
-// power spectrum, RealFFTPower. Each takes the AVX+FMA / NEON vector path where
-// its size justifies it and falls back to scalar Go otherwise; the bit-reversal
-// reorder, padded edge frames and rows shorter than NumBins stay scalar. See
-// #108, #205, #243 and #257.
+// ButterflyComplexStage; the core lives in fft.go), and the real-input unravel
+// is RealFFTUnpack or, for the power spectrum, RealFFTPower. Each takes the
+// AVX+FMA / NEON vector path where its size justifies it and falls back to scalar
+// Go otherwise; the bit-reversal reorder, padded edge frames and rows shorter
+// than NumBins stay scalar. See #108, #205, #243 and #257.
 //
 // The inverse runs on the same primitives. IRFFT packs the conjugated spectrum
 // through RealFFTUnpack (or a fused scalar pack below a small-nfft cutoff, #295),
@@ -47,8 +47,8 @@ import (
 
 // ErrSTFT* describe invalid STFTPlan configurations.
 var (
-	// ErrNotPowerOfTwo is returned when nfft is not a power of two >= 2.
-	ErrNotPowerOfTwo = errors.New("f64: STFT nfft must be a power of two >= 2")
+	// ErrNotPowerOfTwo is returned when nfft is not a power of two in [2, 1<<30].
+	ErrNotPowerOfTwo = errors.New("f64: STFT nfft must be a power of two in [2, 1<<30]")
 )
 
 // rfftHalf is the 1/2 factor in the real-FFT even/odd half-spectrum split.
@@ -99,23 +99,9 @@ type STFTPlan struct {
 	nfft int // transform size (power of two)
 	half int // nfft / 2: size of the packed complex FFT
 
-	bitrev []int // bit-reversal permutation for the size-half FFT
-
-	// Per-stage contiguous twiddles of the size-half FFT, laid out per radix-2
-	// stage: stage m in {2,4,...,half} uses span = m/2 factors W_m^j =
-	// exp(-i*2*pi*j/m) for j in [0, span); the stage with span s occupies
-	// stageTwRe[s-1 : 2*s-1], and the tables total half-1 entries. fftHalf slices
-	// them as the tw1/tw2 inputs of ButterflyComplexStage4 and as the twiddles of
-	// the trailing ButterflyComplexStage (both read contiguous j over [0, span)).
-	stageTwRe, stageTwIm []float64
-
-	// Extra twiddle for the radix-4 FFT core: the w^(3j) power ButterflyComplexStage4
-	// needs beyond the two it can slice from stageTwRe/stageTwIm (tw1 = w^(2j) is the
-	// span-s radix-2 table, tw2 = w^j is the first s entries of the span-2s table).
-	// The radix-4 stage with span s (s in {1,4,16,...}) occupies stage4Tw3Re[(s-1)/3 :
-	// (s-1)/3 + s]; the offset (s-1)/3 is exact because s is a power of four. Empty
-	// when half < 4 (no radix-4 stage runs).
-	stage4Tw3Re, stage4Tw3Im []float64
+	// Resident bit-reversal, per-stage and radix-4 twiddle tables of the size-half
+	// FFT, built for maxN = half (see fft.go).
+	fftCore
 
 	// Unravel twiddles W_N^k = exp(-i*2*pi*k/nfft) for k in [0, half], used to
 	// recombine the even/odd half-spectra into the real-input spectrum.
@@ -158,86 +144,29 @@ func (p *STFTPlan) NumBins() int { return p.half + 1 }
 // NFFT returns the transform size the plan was built for.
 func (p *STFTPlan) NFFT() int { return p.nfft }
 
-// stage4Tw3Power is the twiddle power of the radix-4 stage's third factor: tw3 =
-// w^(3j) (tw1 = w^(2j) and tw2 = w^(1j) are sliced from the radix-2 tables).
-const stage4Tw3Power = 3
-
 // NewSTFTPlan builds a reusable plan for nfft-point real-input STFTs. nfft must
-// be a power of two and at least 2; otherwise ErrNotPowerOfTwo is returned.
+// be a power of two in [2, 1<<30]; otherwise ErrNotPowerOfTwo is returned.
 func NewSTFTPlan(nfft int) (*STFTPlan, error) {
-	if nfft < 2 || nfft&(nfft-1) != 0 {
+	if nfft < 2 || nfft&(nfft-1) != 0 || nfft > 2*maxFFTSize {
 		return nil, ErrNotPowerOfTwo
 	}
 	half := nfft >> 1
 
-	// Size the radix-4 tw3 table: the radix-4 core runs stages at spans 1, 4, 16, ...
-	// while 4*span <= half, and stage span s holds s entries, so they sum to
-	// (4^numStages - 1)/3. Zero when half < 4.
-	stage4Tw3Len := 0
-	for s := 1; butterflyStage4Radix*s <= half; s *= butterflyStage4Radix {
-		stage4Tw3Len += s
-	}
-
 	p := &STFTPlan{
-		nfft:        nfft,
-		half:        half,
-		bitrev:      make([]int, half),
-		stageTwRe:   make([]float64, max(half-1, 0)),
-		stageTwIm:   make([]float64, max(half-1, 0)),
-		stage4Tw3Re: make([]float64, stage4Tw3Len),
-		stage4Tw3Im: make([]float64, stage4Tw3Len),
-		unRe:        make([]float64, half+1),
-		unIm:        make([]float64, half+1),
-		re:          make([]float64, half),
-		im:          make([]float64, half),
-		outRe:       make([]float64, half),
-		outIm:       make([]float64, half),
-		winRe:       make([]float64, half),
-		winIm:       make([]float64, half),
-		frame:       make([]float64, nfft),
-		altScale:    make([]float64, nfft),
-		pw:          make([]float64, nfft),
-	}
-
-	// Bit-reversal permutation for a size-half FFT.
-	logHalf := 0
-	for (1 << logHalf) < half {
-		logHalf++
-	}
-	for i := range p.bitrev {
-		r := 0
-		for b := range logHalf {
-			r |= ((i >> b) & 1) << (logHalf - 1 - b)
-		}
-		p.bitrev[i] = r
-	}
-
-	// Per-stage contiguous FFT twiddles: stage m in {2,4,...,half} writes its
-	// span = m/2 factors W_m^j = exp(-i*2*pi*j/m) starting at offset span-1.
-	for m := 2; m <= half; m <<= 1 {
-		span := m >> 1
-		off := span - 1
-		for j := range span {
-			ang := 2 * math.Pi * float64(j) / float64(m)
-			s, c := math.Sincos(ang)
-			p.stageTwRe[off+j] = c
-			p.stageTwIm[off+j] = -s
-		}
-	}
-
-	// Radix-4 tw3 = w^(3j) with w = exp(-i*2*pi/(4*span)), for each radix-4 stage
-	// span s in {1,4,16,...}. tw1 = w^(2j) and tw2 = w^j are the span-s and span-2s
-	// radix-2 tables above, sliced in fftHalf; only w^(3j) is not already present.
-	// The offset (s-1)/(radix4-1) is the exact running sum of the earlier stage
-	// lengths because each s is a power of butterflyStage4Radix.
-	for s := 1; butterflyStage4Radix*s <= half; s *= butterflyStage4Radix {
-		off := (s - 1) / (butterflyStage4Radix - 1)
-		for j := range s {
-			ang := 2 * math.Pi * float64(stage4Tw3Power*j) / float64(butterflyStage4Radix*s)
-			sin, cos := math.Sincos(ang)
-			p.stage4Tw3Re[off+j] = cos
-			p.stage4Tw3Im[off+j] = -sin
-		}
+		nfft:     nfft,
+		half:     half,
+		fftCore:  newFFTCore(half),
+		unRe:     make([]float64, half+1),
+		unIm:     make([]float64, half+1),
+		re:       make([]float64, half),
+		im:       make([]float64, half),
+		outRe:    make([]float64, half),
+		outIm:    make([]float64, half),
+		winRe:    make([]float64, half),
+		winIm:    make([]float64, half),
+		frame:    make([]float64, nfft),
+		altScale: make([]float64, nfft),
+		pw:       make([]float64, nfft),
 	}
 
 	// Real-input unravel twiddles W_N^k.
@@ -265,43 +194,8 @@ func NewSTFTPlan(nfft int) (*STFTPlan, error) {
 }
 
 // fftHalf runs an in-place size-half decimation-in-time complex FFT on the plan's
-// scratch (p.re, p.im), using the resident bit-reversal and per-stage twiddles.
-// The core is radix-4: each ButterflyComplexStage4 call advances two radix-2
-// stages at once, with at most one trailing ButterflyComplexStage when half is
-// not a power of four, so the butterflies take the AVX+FMA / NEON vector paths
-// where the span and block count justify them.
-func (p *STFTPlan) fftHalf() {
-	re, im := p.re, p.im
-	// Bit-reversal reorder.
-	for i, j := range p.bitrev {
-		if j > i {
-			re[i], re[j] = re[j], re[i]
-			im[i], im[j] = im[j], im[i]
-		}
-	}
-	// Butterfly stages via the radix-4 core: a radix-4 stage at span s advances the
-	// transform two radix-2 stages at once (span s then span 2s), so it runs spans
-	// 1, 4, 16, ... while a full radix-4 block fits (4*s <= half). tw1 = w^(2j) is the
-	// span-s radix-2 table at stageTw[s-1 : 2s-1], tw2 = w^j is the first s entries of
-	// the span-2s table at stageTw[2s-1 : 3s-1], and tw3 = w^(3j) is the dedicated
-	// stage4Tw3 table at [(s-1)/3 : (s-1)/3 + s]. A single trailing radix-2 stage
-	// finishes the transform when half is not a power of four (odd log2(half)).
-	s := 1
-	for butterflyStage4Radix*s <= p.half {
-		o1 := s - 1                                // span-s radix-2 table
-		o2 := butterflyStageRadix*s - 1            // span-2s radix-2 table, first s taken
-		o3 := (s - 1) / (butterflyStage4Radix - 1) // dedicated w^(3j) table
-		ButterflyComplexStage4(re, im, s,
-			p.stageTwRe[o1:o1+s], p.stageTwIm[o1:o1+s],
-			p.stageTwRe[o2:o2+s], p.stageTwIm[o2:o2+s],
-			p.stage4Tw3Re[o3:o3+s], p.stage4Tw3Im[o3:o3+s])
-		s *= butterflyStage4Radix
-	}
-	if s < p.half {
-		off := s - 1
-		ButterflyComplexStage(re, im, s, p.stageTwRe[off:off+s], p.stageTwIm[off:off+s])
-	}
-}
+// scratch (p.re, p.im) with the resident core tables.
+func (p *STFTPlan) fftHalf() { p.transform(p.re, p.im) }
 
 // stftWindow is one call's analysis window in the form the frame pack consumes:
 // the even window samples w[2j] in re and the odd samples w[2j+1] in im, both
