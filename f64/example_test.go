@@ -169,3 +169,24 @@ func ExampleFFTPlan() {
 	// [0.000 4.000 0.000 0.000 0.000 0.000 0.000 4.000]
 	// 0.707
 }
+
+func ExampleDFTPlan() {
+	const n = 6 // not a power of two
+	plan, err := f64.NewDFTPlan(n)
+	if err != nil {
+		panic(err)
+	}
+	re := make([]float64, n)
+	im := make([]float64, n)
+	for j := range re {
+		re[j] = math.Cos(2 * math.Pi * float64(j) / n)
+	}
+	plan.Forward(re, im)
+
+	mag := make([]float64, n)
+	for k := range mag {
+		mag[k] = math.Hypot(re[k], im[k])
+	}
+	fmt.Printf("%.3f\n", mag)
+	// Output: [0.000 3.000 0.000 0.000 0.000 3.000]
+}

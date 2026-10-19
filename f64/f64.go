@@ -4,7 +4,8 @@
 // runtime CPU feature detection. Functions gracefully fall back to pure Go
 // implementations on unsupported architectures.
 //
-// Thread Safety: All functions are safe for concurrent use.
+// Thread Safety: All functions are safe for concurrent use. The plan types state
+// their own rules: STFTPlan and DFTPlan are not safe for concurrent use, FFTPlan is.
 // Memory: All functions are zero-allocation (no heap allocations).
 //
 // Rounding and fusion: the elementwise scale, offset and affine primitives
@@ -43,7 +44,9 @@
 //   - ButterflyComplex, ButterflyComplexStage and ButterflyComplexStage4 update
 //     their data slices in place; those slices must not overlap one another, and
 //     the twiddles must not overlap them. FFTPlan.Forward and FFTPlan.Inverse
-//     run those butterflies, so their re and im must not overlap either.
+//     run those butterflies, so their re and im must not overlap either, and
+//     neither may those of DFTPlan.Forward and DFTPlan.Inverse, whose
+//     power-of-two lengths do the same.
 //   - The mirror, window, stride, interleave, batch and resample operations
 //     (Interleave2/N, Deinterleave2/N, ConvolveValid and ConvolveValidMulti,
 //     ConvolveDecimate, DotProductBatch, Autocorrelate, RealFFTUnpack and RealFFTPower)
