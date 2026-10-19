@@ -4,7 +4,8 @@
 // runtime CPU feature detection. Functions gracefully fall back to pure Go
 // implementations on unsupported architectures.
 //
-// Thread Safety: All functions are safe for concurrent use.
+// Thread Safety: All functions are safe for concurrent use. STFTPlan is not; see
+// its documentation.
 // Memory: All functions are zero-allocation (no heap allocations).
 //
 // Rounding and fusion: each floating-point operation is a single IEEE-754

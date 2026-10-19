@@ -15,7 +15,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 - **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/AVX/SSE2, c64 needs SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
 - **Half-precision support** - Native FP16 SIMD on ARM64 with FP16 extension (Apple Silicon, Cortex-A55+); F16C-accelerated conversions on AMD64
 - **Tunable dispatch** - `SIMD_DISABLE` env var masks feature tiers at startup (avoid AVX-512 downclocking, exercise lower tiers, benchmark tier-vs-tier)
-- **Thread-safe** - All functions are safe for concurrent use
+- **Thread-safe**: all functions are safe for concurrent use; plan types state their own rules (`STFTPlan` and `DFTPlan` are not safe for concurrent use, `FFTPlan` is)
 
 ## Installation
 
@@ -159,7 +159,8 @@ including `Autocorrelate` (lag-vectorized LPC autocorrelation) and the split-for
 FFT butterfly building blocks (`ButterflyComplex`, `ButterflyComplexStage`,
 `ButterflyComplexStage4`, `RealFFTUnpack`, `RealFFTPower`) that a
 double-precision FFT/STFT path needs, plus `FFTPlan`, an in-place power-of-two
-complex FFT built on them. The broader
+complex FFT built on them, and `DFTPlan`, an in-place complex DFT of any length
+built on that. The broader
 audio/ML helpers (PCM conversions, the general split-format complex ops such as
 `MulComplex` / `AbsSqComplex`, indexed/strided dot products) live in `f32`
 instead, so the two float surfaces remain intentionally asymmetric.
@@ -225,6 +226,7 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 |                 | `ButterflyComplexStage(re,im,span,twRe,twIm)` | One whole radix-2 DIT stage (any span) | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `ButterflyComplexStage4(re,im,span,tw1..tw3)` | One whole radix-4 DIT stage (two radix-2 stages in one pass) | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `FFTPlan.Forward(re,im)` / `.Inverse(re,im)` (`NewFFTPlan(maxN)`, `.MaxLen()`) | In-place power-of-two complex FFT, split re/im, unscaled inverse | 4x (AVX+FMA) / 2x (NEON)   |
+|                 | `DFTPlan.Forward(re,im)` / `.Inverse(re,im)` (`NewDFTPlan(capacity)`, `.Capacity()`) | In-place complex DFT of any length (Bluestein over the FFTPlan core), split re/im, unscaled inverse | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real-FFT even/odd unpack step | 4x (AVX2+FMA) / 2x (NEON)   |
 |                 | `RealFFTPower(dst,zRe,zIm,twRe,twIm)`         | Fused real-FFT power spectrum \|X_k\|^2 (single pass) | 4x (AVX2+FMA) / 2x (NEON)   |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
@@ -336,6 +338,40 @@ bytes per unit of `maxN` when log2(`maxN`) is even and 23 when it is odd (742,72
 bytes at 32768, 1,660,224 bytes at 65536). Building one is O(`maxN`):
 `BenchmarkNewFFTPlan` on an Apple M5 Pro takes about 0.16 ms at 32768 and 0.35 ms
 at 65536.
+
+`f64.DFTPlan` transforms any length `n` from 1 to a capacity chosen at
+construction, with the same definition and an unscaled `Inverse`. A power-of-two
+`n` runs the `FFTPlan` core and matches `FFTPlan` bit for bit; any other `n` uses
+Bluestein's chirp-z algorithm over power-of-two FFTs of size `nextpow2(2n-1)`.
+
+```go
+plan, _ := f64.NewDFTPlan(32769)  // serves every length from 1 to 32769
+n := plan.Forward(re, im)         // any length: prime, odd, composite or power of two
+```
+
+The result for `n` depends only on `n` and the CPU tier, not on the capacity or on
+earlier calls. The first call with a new non-power-of-two `n` retargets the plan
+(`n` `math.Sincos` calls and one FFT into preallocated scratch, no allocation),
+which costs 0.6 to 0.9 of a `Forward` call; alternating between two
+non-power-of-two lengths retargets on every call, so keep one plan per length
+there. Unlike `FFTPlan`, a `DFTPlan` holds scratch and is not safe for concurrent
+use: use one plan per goroutine. Lengths above the capacity, and mismatched `re`
+and `im`, return 0 and leave the data untouched.
+
+A plan holds the `FFTPlan` tables for `Mc = nextpow2(2*capacity-1)` plus
+`16*capacity + 32*Mc` bytes of chirp, kernel and work buffers, about
+`57.3*Mc + 16*capacity` bytes when log2(`Mc`) is even and `54.7*Mc + 16*capacity`
+when it is odd:
+
+| capacity | `Mc`   | bytes     |
+|---------:|-------:|----------:|
+| 4097     | 16384  | 1,004,880 |
+| 8193     | 32768  | 1,922,384 |
+| 32769    | 131072 | 7,689,552 |
+
+`BenchmarkNewDFTPlan` on an Apple M5 Pro takes about 0.12 ms at capacity 4097 and
+0.66 ms at 32769; a `Forward` call takes about 12 us at `n` = 1000, 1.1 ms at 32767 and
+2.4 ms at 32769, and 0.23 ms at 32768.
 
 ### `f32` - float32 Operations
 
