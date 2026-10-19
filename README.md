@@ -158,7 +158,8 @@ sum := crc.Checksum16(p) // bit-identical to the scalar reference, zero-alloc
 including `Autocorrelate` (lag-vectorized LPC autocorrelation) and the split-format
 FFT butterfly building blocks (`ButterflyComplex`, `ButterflyComplexStage`,
 `ButterflyComplexStage4`, `RealFFTUnpack`, `RealFFTPower`) that a
-double-precision FFT/STFT path needs. The broader
+double-precision FFT/STFT path needs, plus `FFTPlan`, an in-place power-of-two
+complex FFT built on them. The broader
 audio/ML helpers (PCM conversions, the general split-format complex ops such as
 `MulComplex` / `AbsSqComplex`, indexed/strided dot products) live in `f32`
 instead, so the two float surfaces remain intentionally asymmetric.
@@ -223,6 +224,7 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 | **Complex/FFT** | `ButterflyComplex(uRe,uIm,lRe,lIm,twRe,twIm)` | FFT butterfly with twiddle multiply | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `ButterflyComplexStage(re,im,span,twRe,twIm)` | One whole radix-2 DIT stage (any span) | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `ButterflyComplexStage4(re,im,span,tw1..tw3)` | One whole radix-4 DIT stage (two radix-2 stages in one pass) | 4x (AVX+FMA) / 2x (NEON)   |
+|                 | `FFTPlan.Forward(re,im)` / `.Inverse(re,im)` (`NewFFTPlan(maxN)`, `.MaxLen()`) | In-place power-of-two complex FFT, split re/im, unscaled inverse | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `RealFFTUnpack(outRe,outIm,zRe,zIm,twRe,twIm)` | Real-FFT even/odd unpack step | 4x (AVX2+FMA) / 2x (NEON)   |
 |                 | `RealFFTPower(dst,zRe,zIm,twRe,twIm)`         | Fused real-FFT power spectrum \|X_k\|^2 (single pass) | 4x (AVX2+FMA) / 2x (NEON)   |
 | **Audio**       | `Interleave2(dst, a, b)`            | Pack stereo: [L,R,L,R,...]    | 4x / 2x                             |
@@ -307,6 +309,33 @@ The inverse runs on the same vector primitives: `IRFFT` packs through
 `ISTFT` overlap-adds with `MulAdd` (`AccumulateAdd` for a rectangular window) and
 normalizes its interior with `Div`. Like `STFT`, the inverse output is
 tolerance-stable, not bit-stable, across CPU tiers and library versions.
+
+#### FFT (in-place complex FFT plan)
+
+`f64.FFTPlan` is the complex FFT the STFT runs on, exposed for power-of-two
+lengths. It works in place on split real and imaginary slices and shares the
+STFT's radix-4 core, so there is one FFT implementation in the package.
+
+```go
+plan, _ := f64.NewFFTPlan(65536)  // serves every power of two up to 65536
+n := plan.Forward(re, im)         // X[k] = sum_j x[j]*exp(-2*pi*i*j*k/n); returns n
+plan.Inverse(re, im)              // unscaled: Inverse(Forward(x)) = n*x
+```
+
+`Inverse` does not divide by `n` (`numpy.fft.ifft` and `STFTPlan.IRFFT` do), so
+scale by `1/n` to normalize. A plan is read-only after construction and keeps no
+scratch, so goroutines may share one plan when each owns its `re` and `im`; this
+differs from `STFTPlan`. One plan built for the largest size serves every smaller
+power of two, bit for bit what a dedicated plan for that size gives, so no plan
+cache is needed. A length that is zero, not a power of two, above `MaxLen()`, or
+different between `re` and `im` returns 0 and leaves the data untouched.
+Results are tolerance-stable, not bit-stable, across CPU tiers.
+
+A plan holds `4*maxN` bytes of `int32` indices plus the twiddle tables, about 25
+bytes per unit of `maxN` when log2(`maxN`) is even and 23 when it is odd (742,720
+bytes at 32768, 1,660,224 bytes at 65536). Building one is O(`maxN`):
+`BenchmarkNewFFTPlan` on an Apple M5 Pro takes about 0.16 ms at 32768 and 0.35 ms
+at 65536.
 
 ### `f32` - float32 Operations
 

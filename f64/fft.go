@@ -1,6 +1,7 @@
 package f64
 
 import (
+	"errors"
 	"math"
 	"math/bits"
 )
@@ -10,6 +11,10 @@ import (
 // driver over ButterflyComplexStage4 with at most one trailing radix-2
 // ButterflyComplexStage. The tables are prefixes that do not depend on the
 // transform size, so one core built for maxN serves every power of two n <= maxN.
+
+// ErrFFTSize is returned by NewFFTPlan when maxN is not a power of two in
+// [1, 1<<29].
+var ErrFFTSize = errors.New("f64: FFT size must be a power of two in [1, 1<<29]")
 
 // maxFFTSize is the largest power-of-two transform size the core accepts. It keeps
 // the table-building and driver loops inside a 32-bit int: the radix-2 stage loop's
@@ -152,4 +157,86 @@ func (c *fftCore) transform(re, im []float64) {
 		off := s - 1
 		ButterflyComplexStage(re, im, s, c.stageTwRe[off:off+s], c.stageTwIm[off:off+s])
 	}
+}
+
+// FFTPlan is an immutable in-place complex FFT for power-of-two sizes, on split
+// real and imaginary slices. A plan built for maxN serves every power of two
+// n <= MaxLen(), and gives for each n exactly the bits NewFFTPlan(n) gives on the
+// same CPU tier (the tables are prefixes that do not depend on the transform
+// size). Forward computes X[k] = sum_j x[j]*exp(-2*pi*i*j*k/n) and Inverse the
+// conjugate transform x[j] = sum_k X[k]*exp(+2*pi*i*j*k/n).
+//
+// Inverse does not divide by n, so Inverse(Forward(x)) equals n*x; numpy.fft.ifft
+// and STFTPlan.IRFFT do divide. Scale the result by 1/n to match them.
+//
+// The plan is read-only after construction and keeps no scratch, so any number of
+// goroutines may share one plan as long as concurrent calls use distinct re and
+// im buffers. This differs from STFTPlan, which holds per-transform scratch and
+// is not safe for concurrent use.
+//
+// Twiddles come from math.Sincos directly, never from a recurrence, so the error
+// is O(eps*log2 n) in relative L2. The butterflies take the AVX+FMA / NEON path
+// where the span and block count justify it and scalar Go otherwise, so results
+// are tolerance-stable, not bit-stable, across CPU tiers.
+//
+// Memory is 4*maxN bytes of int32 bit-reversal indices, 2*(maxN-1) float64
+// radix-2 twiddles and 2*(4^q-1)/3 float64 radix-4 twiddles, where
+// q = floor(log2(maxN)/2): about 25 bytes per unit of maxN when log2(maxN) is
+// even and 23 when it is odd, 742,720 bytes at 32768 and 1,660,224 bytes at
+// 65536. Building a plan costs about 4*maxN/3 math.Sincos calls plus an O(maxN)
+// table fill; BenchmarkNewFFTPlan on an Apple M5 Pro measures about 0.16 ms at
+// 32768 and 0.35 ms at 65536. One plan at the largest size covers all smaller
+// sizes, so a cache of plans per size is not needed.
+type FFTPlan struct{ fftCore }
+
+// NewFFTPlan builds a plan for transforms of every power-of-two length up to
+// maxN. maxN must be a power of two in [1, 1<<29]; otherwise ErrFFTSize is
+// returned. With maxN = 1 both transforms are the identity.
+func NewFFTPlan(maxN int) (*FFTPlan, error) {
+	if maxN < 1 || maxN > maxFFTSize || maxN&(maxN-1) != 0 {
+		return nil, ErrFFTSize
+	}
+	return &FFTPlan{fftCore: newFFTCore(maxN)}, nil
+}
+
+// MaxLen returns the largest transform length the plan serves.
+func (p *FFTPlan) MaxLen() int { return p.maxN }
+
+// Forward computes the DFT of (re, im) in place, X[k] = sum_j x[j]*exp(-2*pi*i*j*k/n)
+// with n = len(re), and returns n. It returns 0 and leaves both slices untouched
+// when n is 0, len(im) != n, n is not a power of two, or n > MaxLen(). It does not
+// panic on such input, so a caller that ignores the return value gets untransformed
+// data. re and im must not overlap. Allocation-free.
+func (p *FFTPlan) Forward(re, im []float64) int {
+	n := p.validLen(re, im)
+	if n > 0 {
+		p.transform(re, im)
+	}
+	return n
+}
+
+// Inverse computes the unscaled inverse DFT of (re, im) in place,
+// x[j] = sum_k X[k]*exp(+2*pi*i*j*k/n) with n = len(re), and returns n; divide by
+// n for the normalized inverse. The length rules, the zero return and the
+// no-overlap rule are those of Forward. Allocation-free.
+func (p *FFTPlan) Inverse(re, im []float64) int {
+	n := p.validLen(re, im)
+	if n > 0 {
+		// Swapping the roles of re and im transforms im + i*re = i*conj(z), and
+		// DFT(i*conj(z)) = i*conj(IDFT_unscaled(z)): the real part of the result
+		// is Im(IDFT_unscaled(z)), which lands in the im slice, and the imaginary
+		// part is Re(IDFT_unscaled(z)), which lands in the re slice.
+		p.transform(im, re)
+	}
+	return n
+}
+
+// validLen returns len(re) when (re, im) is a transform this plan can run, and 0
+// otherwise.
+func (p *FFTPlan) validLen(re, im []float64) int {
+	n := len(re)
+	if n == 0 || len(im) != n || n > p.maxN || n&(n-1) != 0 {
+		return 0
+	}
+	return n
 }

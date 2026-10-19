@@ -96,6 +96,8 @@
 //
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames, NumBins, NFFT, RFFT, IRFFT, ISTFT) - fused real-input short-time Fourier transform and its inverse, with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //
+// Complex FFT (f64 only): FFTPlan (NewFFTPlan, MaxLen, Forward, Inverse) - immutable in-place power-of-two complex FFT on split real and imaginary slices, concurrency-safe; one plan serves every smaller power of two
+//
 // FFT primitives (f64, f32): ButterflyComplex (radix-2 butterfly with twiddle multiply, split-complex), RealFFTUnpack (real-FFT even/odd unpack step), RealFFTPower (the fused power-writing counterpart of RealFFTUnpack that emits the |X_k|^2 power spectrum in one pass), ButterflyComplexStage (one whole radix-2 decimation-in-time stage at any span, which picks its vectorization axis from the span) and ButterflyComplexStage4 (one whole radix-4 stage, two radix-2 stages in one pass)
 //
 // Integer DSP (i16): Interleave2, Deinterleave2, DotProduct, DotProductUnsafe, XCorr (widening int16 x int16 -> wrapping int32; ARM64 SMLAL/SMLAL2, amd64 PMADDWD/VPMADDWD; XCorr evaluates 4 correlation lags per kernel call), Abs, MaxAbs, MulQ15 (wrapping 16-bit absolute value, widened abs-max, rounding Q15 multiply)

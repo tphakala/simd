@@ -2,6 +2,7 @@ package f64_test
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/tphakala/simd/f64"
 )
@@ -139,4 +140,32 @@ func ExampleConvolveValidMaxAbsMulti() {
 	peak := f64.ConvolveValidMaxAbsMulti(signal, kernels)
 	fmt.Printf("%.0f\n", peak)
 	// Output: 9
+}
+
+func ExampleFFTPlan() {
+	const n = 8
+	plan, err := f64.NewFFTPlan(n)
+	if err != nil {
+		panic(err)
+	}
+	re := make([]float64, n)
+	im := make([]float64, n)
+	for j := range re {
+		re[j] = math.Cos(2 * math.Pi * float64(j) / n)
+	}
+	plan.Forward(re, im)
+
+	mag := make([]float64, n)
+	for k := range mag {
+		mag[k] = math.Hypot(re[k], im[k])
+	}
+	fmt.Printf("%.3f\n", mag)
+
+	// Inverse is unscaled, so divide by n to recover the input.
+	plan.Inverse(re, im)
+	f64.Scale(re, re, 1.0/n)
+	fmt.Printf("%.3f\n", math.Round(re[1]*1e3)/1e3+0)
+	// Output:
+	// [0.000 4.000 0.000 0.000 0.000 0.000 0.000 4.000]
+	// 0.707
 }
