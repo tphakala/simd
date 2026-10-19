@@ -39,7 +39,7 @@ const maxDFTCapacity = maxFFTSize / 2
 // use one plan per length.
 //
 // The chirp phase t^2 mod 2n is reduced in 64-bit integer arithmetic before it is
-// scaled by pi/n, so it is exact for every allowed n, on 32-bit targets too.
+// scaled by pi/n, so the reduction is exact for every allowed n, on 32-bit targets too.
 //
 // A DFTPlan is NOT safe for concurrent use: it holds scratch and the current
 // target. Use one plan per goroutine. re and im must not overlap each other.
