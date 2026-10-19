@@ -15,7 +15,7 @@ A high-performance SIMD (Single Instruction, Multiple Data) library for Go provi
 - **Multi-architecture** - AMD64 (AVX-512/AVX+FMA/AVX/SSE2, c64 needs SSE4.1) and ARM64 (NEON/NEON+FP16) with pure Go fallback
 - **Half-precision support** - Native FP16 SIMD on ARM64 with FP16 extension (Apple Silicon, Cortex-A55+); F16C-accelerated conversions on AMD64
 - **Tunable dispatch** - `SIMD_DISABLE` env var masks feature tiers at startup (avoid AVX-512 downclocking, exercise lower tiers, benchmark tier-vs-tier)
-- **Thread-safe** - All functions are safe for concurrent use; plan types state their own rules (`STFTPlan` and `DFTPlan` are not safe for concurrent use, `FFTPlan` is)
+- **Thread-safe**: all functions are safe for concurrent use; plan types state their own rules (`STFTPlan` and `DFTPlan` are not safe for concurrent use, `FFTPlan` is)
 
 ## Installation
 
