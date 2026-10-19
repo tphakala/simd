@@ -37,19 +37,11 @@ func dftBins(n int) []int {
 		spaced       = 29
 	)
 	if n <= allBinsLimit {
-		return allBins(n)
+		return fftSampledBins(n) // every bin up to 1024
 	}
 	bins := []int{0, 1, n - 1}
 	for i := 1; i <= spaced; i++ {
 		bins = append(bins, i*n/(spaced+1))
-	}
-	return bins
-}
-
-func allBins(n int) []int {
-	bins := make([]int, n)
-	for k := range bins {
-		bins[k] = k
 	}
 	return bins
 }
@@ -441,7 +433,7 @@ func TestDFTPlanDolphChebyshevWindow(t *testing.T) {
 				idx = append(idx, i)
 			}
 		} else {
-			idx = append(idx, allBins(m)...)
+			idx = append(idx, fftSampledBins(m)...)
 		}
 		for _, i := range idx {
 			e := math.Abs(w[i]-tab.direct(ps, i)) / peak

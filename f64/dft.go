@@ -138,25 +138,23 @@ func (p *DFTPlan) retarget(n int) {
 	m := nextPow2(2*n - 1)
 	p.n, p.m = n, m
 
+	kr, ki := p.kerRe[:m], p.kerIm[:m]
+	clear(kr)
+	clear(ki)
+
 	// c[t] = exp(-i*pi*t^2/n). t^2 mod 2n is reduced exactly before the angle is
-	// formed; t < 2^28 keeps t^2 inside uint64.
+	// formed; t < 2^28 keeps t^2 inside uint64. The kernel is conj(c[t]) at
+	// indices t and m-t, so the circular convolution over m points sees
+	// conj(c[k-j]) for every k-j in (-n, n).
 	period := uint64(n) + uint64(n)
 	for t := range n {
 		r := uint64(t) * uint64(t) % period
 		s, c := math.Sincos(math.Pi * float64(r) / float64(n))
 		p.chirpRe[t], p.chirpIm[t] = c, -s
-	}
-
-	// The kernel is conj(c[t]) at indices t and m-t, so the circular convolution
-	// over m points sees conj(c[k-j]) for every k-j in (-n, n).
-	kr, ki := p.kerRe[:m], p.kerIm[:m]
-	clear(kr)
-	clear(ki)
-	for t := range n {
-		kr[t], ki[t] = p.chirpRe[t], -p.chirpIm[t]
-	}
-	for t := 1; t < n; t++ {
-		kr[m-t], ki[m-t] = p.chirpRe[t], -p.chirpIm[t]
+		kr[t], ki[t] = c, s
+		if t > 0 {
+			kr[m-t], ki[m-t] = c, s
+		}
 	}
 	p.core.transform(kr, ki)
 	// 1/m is exact because m is a power of two.
