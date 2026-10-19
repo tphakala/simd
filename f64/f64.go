@@ -42,7 +42,8 @@
 //     window, except that AddScaled also permits s==dst exactly.
 //   - ButterflyComplex, ButterflyComplexStage and ButterflyComplexStage4 update
 //     their data slices in place; those slices must not overlap one another, and
-//     the twiddles must not overlap them.
+//     the twiddles must not overlap them. FFTPlan.Forward and FFTPlan.Inverse
+//     run those butterflies, so their re and im must not overlap either.
 //   - The mirror, window, stride, interleave, batch and resample operations
 //     (Interleave2/N, Deinterleave2/N, ConvolveValid and ConvolveValidMulti,
 //     ConvolveDecimate, DotProductBatch, Autocorrelate, RealFFTUnpack and RealFFTPower)
