@@ -129,8 +129,9 @@ const (
 )
 
 // dftLengthSequence revisits lengths, interleaves powers of two with
-// non-powers of two, and both shrinks and grows the Bluestein target.
-var dftLengthSequence = []int{1000, 7, 32769, 1000, 4096, 6, 32749, 7, 1000, 3, 2, 1, 32769}
+// non-powers of two, both shrinks and grows the Bluestein target, and has two
+// consecutive lengths (6 and 7) that share the inner size 16.
+var dftLengthSequence = []int{1000, 7, 32769, 1000, 4096, 6, 7, 32749, 7, 1000, 3, 2, 1, 32769}
 
 // TestDFTPlanLengthSequenceBitIdentical pins that a result depends only on n and
 // the CPU tier: one plan driven through a sequence of lengths must match a plan
@@ -183,6 +184,33 @@ func TestDFTPlanLengthSequenceBitIdentical(t *testing.T) {
 		if i, ok := bitsDiff(im, fi); !ok {
 			t.Fatalf("step %d, n=%d: im[%d] differs from FFTPlan", step, n, i)
 		}
+	}
+}
+
+// TestDFTPlanForwardLargeLength covers a length whose chirp index t*t exceeds
+// the range of a 32-bit int (t >= 46341, so n >= 46342), where a 32-bit
+// product would give the wrong phase.
+func TestDFTPlanForwardLargeLength(t *testing.T) {
+	const n = 46349
+	p, err := NewDFTPlan(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	xr, xi := fftTestInput(n, 30)
+	re := append([]float64(nil), xr...)
+	im := append([]float64(nil), xi...)
+	if got := p.Forward(re, im); got != n {
+		t.Fatalf("Forward returned %d", got)
+	}
+	bins := dftBins(n)
+	wantRe, wantIm := compensatedDFT(xr, xi, bins)
+	gotRe := make([]float64, len(bins))
+	gotIm := make([]float64, len(bins))
+	for b, k := range bins {
+		gotRe[b], gotIm[b] = re[k], im[k]
+	}
+	if e, tol := relL2(gotRe, gotIm, wantRe, wantIm), dftTolerance(n, dftAccuracyFactor); e > tol {
+		t.Errorf("n=%d: relL2 = %g, want <= %g", n, e, tol)
 	}
 }
 
