@@ -36,7 +36,7 @@ func refBaseSlideForRevW(rev, width int) (base, slide int) {
 // NaN/+Inf in BOTH operands, including NaN at a[0] and a[n-1] so the broadcast
 // operand's NaN-stickiness is exercised (no prior kernel-path test put NaN in
 // a). Every lane must be bit-identical to the Go reference.
-func runRowsAVX2Parity(t *testing.T, width int, kernel func([]float32, []int32, []float32, []float32, int)) {
+func runRowsAVX2Parity(t *testing.T, width int, kernel func([]float32, []int32, []float32, []float32, int, []float32, float32, float32)) {
 	t.Helper()
 	set := quant025Set()
 	nan := float32(math.NaN())
@@ -63,7 +63,7 @@ func runRowsAVX2Parity(t *testing.T, width int, kernel func([]float32, []int32, 
 
 				vals := make([]float32, width)
 				idxs := make([]int32, width)
-				kernel(vals, idxs, a, kUnion, rev)
+				kernel(vals, idxs, a, kUnion, rev, nil, 0, 0)
 
 				refVals := make([]float32, width)
 				refIdxs := make([]int32, width)
@@ -89,7 +89,7 @@ func runRowsAVX2Parity(t *testing.T, width int, kernel func([]float32, []int32, 
 // over-read is caught by runRowsAVX2OverReadPoison (a small heap over-read alone
 // neither faults nor trips -race on hand-written asm loads, so exact length is a
 // parity check, not an over-read detector). Both rev values.
-func runRowsAVX2LengthExact(t *testing.T, width int, kernel func([]float32, []int32, []float32, []float32, int)) {
+func runRowsAVX2LengthExact(t *testing.T, width int, kernel func([]float32, []int32, []float32, []float32, int, []float32, float32, float32)) {
 	t.Helper()
 	set := quant025Set()
 	nan := float32(math.NaN())
@@ -109,7 +109,7 @@ func runRowsAVX2LengthExact(t *testing.T, width int, kernel func([]float32, []in
 
 			vals := make([]float32, width)
 			idxs := make([]int32, width)
-			kernel(vals, idxs, a, kUnion, rev)
+			kernel(vals, idxs, a, kUnion, rev, nil, 0, 0)
 
 			refVals := make([]float32, width)
 			refIdxs := make([]int32, width)
@@ -136,7 +136,7 @@ func runRowsAVX2LengthExact(t *testing.T, width int, kernel func([]float32, []in
 // loudly. This is the detector the +Inf-padded parity and LengthExact tests
 // cannot be: +Inf is the min-reduction identity (an over-read into it never wins,
 // so it stays invisible), and a small heap over-read does not fault.
-func runRowsAVX2OverReadPoison(t *testing.T, width int, kernel func([]float32, []int32, []float32, []float32, int)) {
+func runRowsAVX2OverReadPoison(t *testing.T, width int, kernel func([]float32, []int32, []float32, []float32, int, []float32, float32, float32)) {
 	t.Helper()
 	neginf := float32(math.Inf(-1))
 
@@ -161,7 +161,7 @@ func runRowsAVX2OverReadPoison(t *testing.T, width int, kernel func([]float32, [
 
 			vals := make([]float32, width)
 			idxs := make([]int32, width)
-			kernel(vals, idxs, a, k, rev)
+			kernel(vals, idxs, a, k, rev, nil, 0, 0)
 
 			// Reference over ONLY the valid window (poison sliced off) is what a
 			// non-over-reading kernel must reproduce.
@@ -272,7 +272,7 @@ func TestMinIdxOfSumRowsDispatch_ReachesAVX2(t *testing.T) {
 // directly at the dispatcher's exact slicing for a slide +1 block (rev 0,
 // base 0): k is the n+(width-1) union of the block's row windows, matching
 // what minIdxOfSumRows32 in f32_amd64.go passes for r == 0.
-func runMinIdxOfSumRowsKernelBench(b *testing.B, width int, kernel func([]float32, []int32, []float32, []float32, int)) {
+func runMinIdxOfSumRowsKernelBench(b *testing.B, width int, kernel func([]float32, []int32, []float32, []float32, int, []float32, float32, float32)) {
 	b.Helper()
 	for _, n := range []int{11, 14, 17} {
 		a := make([]float32, n)
@@ -287,7 +287,7 @@ func runMinIdxOfSumRowsKernelBench(b *testing.B, width int, kernel func([]float3
 		idxs := make([]int32, width)
 		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				kernel(vals, idxs, a, kUnion, 0)
+				kernel(vals, idxs, a, kUnion, 0, nil, 0, 0)
 			}
 		})
 	}

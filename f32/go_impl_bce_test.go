@@ -18,6 +18,7 @@ func TestGoFallbacks_EmptyDst(_ *testing.T) {
 	absGo(dst, src)
 	negGo(dst, src)
 	fmaGo(dst, src, src, src)
+	pairSumScaleAddGo(dst, src, src, src, 2)
 	clampGo(dst, src, 0, 1)
 	sqrt32Go(dst, src)
 	reciprocal32Go(dst, src)

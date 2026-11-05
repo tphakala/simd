@@ -34,6 +34,9 @@ func TestAliasingDirectKernels(t *testing.T) {
 	for _, n := range aliastest.Sizes {
 		aliastest.Binary(t, n, aliasEqF32, genF32, copySign32Go)
 		aliastest.Unary(t, n, aliasEqF32, genF32, absPow34Go)
+		aliastest.Ternary(t, n, aliasEqF32, genF32, func(d, x, y, z []float32) {
+			pairSumScaleAddGo(d, x, y, z, aliasScaleK)
+		})
 		if cpu.X86.SSE2 {
 			aliastest.Binary(t, n, aliasEqF32, genF32, copySignSSE)
 			aliastest.Unary(t, n, aliasEqF32, genF32, absPow34SSE)
@@ -41,6 +44,9 @@ func TestAliasingDirectKernels(t *testing.T) {
 		if cpu.X86.AVX {
 			aliastest.Binary(t, n, aliasEqF32, genF32, copySignAVX)
 			aliastest.Unary(t, n, aliasEqF32, genF32, absPow34AVX)
+			aliastest.Ternary(t, n, aliasEqF32, genF32, func(d, x, y, z []float32) {
+				pairSumScaleAddAVX(d, x, y, z, aliasScaleK)
+			})
 		}
 	}
 }

@@ -394,6 +394,7 @@ streaming DSP. These are f32-specific and have no f64 equivalent by design.
 | Function | Description | SIMD Width |
 | --- | --- | --- |
 | `Int32ToFloat32Scale(dst, src, s)` | PCM int32 to normalized float | 8x (AVX2) / 4x (NEON) |
+| `Int32ToFloat32ScaleAdd(dst, a, src, s)` | Fused dequantize-accumulate `a[i] + float32(src[i])*s`, two roundings, never an FMA | 8x (AVX) / 4x (NEON) |
 | `Int16ToFloat32Scale(dst, src, s)` | PCM int16 to normalized float | 8x (AVX2) / 4x (NEON) |
 | `Float32ToInt16Scale(dst, src, s)` | Normalized float to PCM int16 | 8x (AVX2) / 4x (NEON) |
 | `Float32ToInt32ScaleClamp(dst, src, s, o, lo, hi)` | Affine float to clamped int32, truncating (`int32(clamp(src*s+o, lo, hi))`) | 8x (AVX2) / 4x (NEON) |
@@ -422,6 +423,14 @@ unless `1 <= buckets <= 256`.
 
 `ExpE1InPlace` is the in-place form. The kernel is a single pass with its own
 range-reduced exp core, so it does not inherit the roughly 7e-6 error of `Exp`.
+
+**FIR filtering** (f32-specific):
+
+| Function | Description | SIMD Width |
+| --- | --- | --- |
+| `PairSumScaleAdd(dst, acc, a, b, c)` | Symmetric-tap accumulate `acc[i] + c*(a[i]+b[i])` for linear-phase FIR | 8x (AVX) / 4x (NEON) |
+
+`PairSumScaleAdd` rounds the pair sum, the product and the accumulate separately on every path (never an FMA, never `c*a + c*b`), so it is bit-identical to `Add`, `Scale`, `Add` through a temporary, NaN bit patterns aside. `dst` may equal `acc`, `a` or `b` exactly.
 
 **IIR filtering** (f32-specific):
 
@@ -500,8 +509,11 @@ Results are identical to the per-row path either way.
 | --- | --- | --- |
 | `MinIdxOfSum(a, b) (int, float32)` | Pairwise argmin of `a[i]+b[i]`, ties resolve to the lowest index | Pure Go |
 | `MinIdxOfSumRows(vals, idxs, a, k, base, slide)` | Batched sliding-window argmin: row `r` scores `a[i]+k[base+r*slide+i]` for every `i`, writing the winning value and index per row | 8x/4x (AVX2) / 4x (NEON) |
+| `MinIdxOfSumRowsAdd(dst, idxs, node, a, k, base, slide, limit, sentinel)` | Fused Viterbi step: per row the same argmin, then `node[r]+min` and the index when `min < limit`, otherwise `sentinel` and index -1 | 8x/4x (AVX2) / 4x (NEON) |
 
 `MinIdxOfSum` stays scalar on every path by design: at the motivating sizes (n around 11 to 17) a pairwise kernel projects to cap near 1.5x, not enough to justify a separate assembly path, so `MinIdxOfSumRows` exists to batch many argmin rows into one call. `MinIdxOfSumRows` routes slide +1 and slide -1 (the sliding-window shapes) through SIMD, eight-then-four rows per block on AMD64 AVX2 and four rows per block on ARM64 NEON. A remainder of two or three rows is then covered by one overlapping SIMD block that recomputes the last few rows; because each row's argmin is independent and the kernel is pure, recomputing already-covered rows is bit-identical, so only a lone leftover row (and shapes below the block width) fall to the scalar reference. The overlap runs only for a remainder of two or three because the block's cost is fixed regardless of how many rows it recomputes, so it pays off only when it replaces at least two scalar rows. Non-unit slides and hosts without the SIMD tier take the pure-Go reference. Every path is bit-exact: each candidate is a single float32 addition (never fused), ties resolve to the lowest index, and NaN candidates never displace the incumbent.
+
+`MinIdxOfSumRowsAdd` shares those search kernels and adds the gate and the node add in registers: the gate tests the row minimum alone (NaN, equality with `limit` and an empty `a` are all dead), `idxs[r] == -1` exactly on rows that took the sentinel, and `node[r]+min` is one rounding. `dst` may equal `node` exactly; in that case the remainder rows run through the scalar reference instead of the overlapping SIMD block, since recomputing a row would add its minimum a second time.
 
 ### `f16` - float16 (Half-Precision) Operations
 
@@ -1230,7 +1242,7 @@ AVX+FMA / AVX / SSE2 / scalar); a package whose minimum is above that tier (e.g.
 AVX2 sits between AVX+FMA and AVX-512 for `f32` and `f64` and is easy to miss,
 because the kernels behind it keep the `...AVX` name and only their dispatch
 guard names AVX2. Both packages gate `Sigmoid`, `Tanh`, `Exp`, `Log`, `Pow`,
-`InterleaveN` and `DeinterleaveN` on it; `f32` adds `MinIdxOfSumRows` (unit
+`InterleaveN` and `DeinterleaveN` on it; `f32` adds `MinIdxOfSumRows` and `MinIdxOfSumRowsAdd` (unit
 slides), `Int16ToFloat32Scale`, `Float32ToInt16Scale` and `Float32ToUint8Bucket`
 (its kernel is named `...AVX2`) and `ExpE1` (its kernel is named `...AVX2` and also needs FMA), and `f64` adds
 `Autocorrelate`, `RealFFTUnpack` and `RealFFTPower`. `cpu.Info()` cannot show this: it collapses

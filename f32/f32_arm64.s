@@ -2211,6 +2211,90 @@ i32tof32add_neon_scalar_loop:
 i32tof32add_neon_done:
     RET
 
+// func pairSumScaleAddNEON(dst, acc, a, b []float32, c float32)
+// Symmetric-tap accumulate: dst[i] = acc[i] + c*(a[i]+b[i]) with three roundings.
+// NEON, no FMLA: the pair sum (FADD), the product (FMUL) and the accumulate (FADD)
+// each round to float32, so the result is bit-identical to the Go reference and
+// the Add, Scale, Add composition. Never reassociated as c*a + c*b. Keeping the
+// multiply and add separate is the #156 single-rounding contract (asserted by
+// TestNoFMAContract).
+// The tail is scalar, never an overlapping final vector block: dst = acc + p is
+// not idempotent, so re-running lanes over an aliased acc would add p twice.
+//
+// NEON opcodes (hand-encoded; the Go assembler lacks these vector forms):
+// FADD  Vd.4S, Vn.4S, Vm.4S: add
+// FMUL  Vd.4S, Vn.4S, Vm.4S: multiply
+// DUP   Vd.4S, Vn.S[0]:      broadcast lane 0
+//
+// The main loop handles 8 elements per iteration (two independent 4-lane halves,
+// paired loads), then one optional 4-lane step, then the scalar tail.
+//
+// Frame: dst(24) + acc(24) + a(24) + b(24) + c(4) = 100 bytes.
+TEXT ·pairSumScaleAddNEON(SB), NOSPLIT, $0-100
+    MOVD dst_base+0(FP), R0        // R0 = dst pointer
+    MOVD dst_len+8(FP), R3         // R3 = length
+    MOVD acc_base+24(FP), R2       // R2 = acc pointer
+    MOVD a_base+48(FP), R1         // R1 = a pointer
+    MOVD b_base+72(FP), R6         // R6 = b pointer
+    FMOVS c+96(FP), F2             // F2 = c
+
+    WORD $0x4E040442               // DUP V2.4S, V2.S[0]  (broadcast c)
+
+    LSR $3, R3, R4                 // R4 = len / 8
+    CBZ R4, pairsumscaleadd_neon_tail4
+
+pairsumscaleadd_neon_loop8:
+    VLD1.P 32(R1), [V0.S4, V1.S4] // V0, V1 = a[i:i+8]
+    VLD1.P 32(R6), [V4.S4, V5.S4] // V4, V5 = b[i:i+8]
+    VLD1.P 32(R2), [V6.S4, V7.S4] // V6, V7 = acc[i:i+8]
+    WORD $0x4E24D400               // FADD V0.4S, V0.4S, V4.4S  (a + b, first rounding)
+    WORD $0x4E25D421               // FADD V1.4S, V1.4S, V5.4S  (a + b, first rounding)
+    WORD $0x6E22DC00               // FMUL V0.4S, V0.4S, V2.4S  (c * sum, second rounding)
+    WORD $0x6E22DC21               // FMUL V1.4S, V1.4S, V2.4S  (c * sum, second rounding)
+    WORD $0x4E20D4C0               // FADD V0.4S, V6.4S, V0.4S  (acc + product, third rounding)
+    WORD $0x4E21D4E1               // FADD V1.4S, V7.4S, V1.4S  (acc + product, third rounding)
+    VST1.P [V0.S4, V1.S4], 32(R0)  // store 8 x float32 (all loads are done)
+    SUB $1, R4
+    CBNZ R4, pairsumscaleadd_neon_loop8
+
+pairsumscaleadd_neon_tail4:
+    AND $7, R3, R4
+    LSR $2, R4, R4                 // R4 = (len % 8) / 4, 0 or 1
+    CBZ R4, pairsumscaleadd_neon_scalar
+
+pairsumscaleadd_neon_loop4:
+    VLD1.P 16(R1), [V0.S4]         // V0 = a[i:i+4]
+    VLD1.P 16(R6), [V1.S4]         // V1 = b[i:i+4]
+    VLD1.P 16(R2), [V3.S4]         // V3 = acc[i:i+4]
+    WORD $0x4E21D400               // FADD V0.4S, V0.4S, V1.4S  (a + b, first rounding)
+    WORD $0x6E22DC00               // FMUL V0.4S, V0.4S, V2.4S  (c * sum, second rounding)
+    WORD $0x4E20D460               // FADD V0.4S, V3.4S, V0.4S  (acc + product, third rounding)
+    VST1.P [V0.S4], 16(R0)         // store 4 x float32 (all loads are done)
+    SUB $1, R4
+    CBNZ R4, pairsumscaleadd_neon_loop4
+
+pairsumscaleadd_neon_scalar:
+    AND $3, R3                     // remainder = len % 4
+    CBZ R3, pairsumscaleadd_neon_done
+
+pairsumscaleadd_neon_scalar_loop:
+    FMOVS (R1), F0                 // F0 = a[i]
+    FMOVS (R6), F1                 // F1 = b[i]
+    FMOVS (R2), F3                 // F3 = acc[i]
+    FADDS F1, F0, F0               // F0 = a + b (first rounding)
+    FMULS F2, F0, F0               // F0 = c * (a+b) (second rounding)
+    FADDS F0, F3, F0               // F0 = acc + product (third rounding)
+    FMOVS F0, (R0)                 // store float32
+    ADD $4, R0
+    ADD $4, R1
+    ADD $4, R2
+    ADD $4, R6
+    SUB $1, R3
+    CBNZ R3, pairsumscaleadd_neon_scalar_loop
+
+pairsumscaleadd_neon_done:
+    RET
+
 // func int16ToFloat32ScaleNEON(dst []float32, src []int16, scale float32)
 // Converts int16 samples to float32 and multiplies by scale in one pass.
 // dst[i] = float32(src[i]) * scale
@@ -5640,7 +5724,7 @@ expe1neon_body:
 expe1neon_done:
     RET
 
-// func minIdxOfSumRows4NEON(vals []float32, idxs []int32, a, k []float32, rev int)
+// func minIdxOfSumRows4NEON(vals []float32, idxs []int32, a, k []float32, rev int, node []float32, limit, sentinel float32)
 // Lane-per-row argmin-of-sum for a block of four rows. Each of the four NEON
 // lanes owns one output row and replays the scalar loop exactly: candidate i
 // (i in [0, n), n = len(a)) broadcasts a[i], adds it to the four rows' k values
@@ -5661,7 +5745,21 @@ expe1neon_done:
 // row r in lane 3, so rev == 1 reverses the two result vectors once at store
 // (REV64 + EXT) to restore lane l == row r+l. Either way every read stays inside
 // the union of the four rows' validated windows, so there is no over-read.
-TEXT ·minIdxOfSumRows4NEON(SB), NOSPLIT, $0-104
+//
+// Fused mode (len(node) != 0, MinIdxOfSumRowsAdd): after the rev permutation the
+// results are in row order, so node[0:4] lines up with the lanes. The epilogue
+// gates on the minimum alone, mask = limit > bestVal (FCMGT, false for NaN), and
+// stores dst = mask ? node+bestVal : sentinel into the vals slot and
+// idx = mask ? bestIdx : -1 into the idxs slot. node+bestVal is one FADD (one
+// rounding); on a dead lane it is computed and discarded by the select, so a NaN
+// there cannot leak. len(node) == 0 skips the epilogue and stores the raw results.
+//
+// Epilogue opcodes (hand-encoded; the Go assembler lacks these vector forms):
+// FCMGT V19.4S, V17.4S, V0.4S:  mask = limit > bestVal
+// FADD  V16.4S, V16.4S, V0.4S:  node + bestVal
+// BIT   V18.16B, V16.16B, V19.16B: sentinel <- sum where mask
+// ORN   V1.16B, V1.16B, V19.16B: idx = mask ? bestIdx : all ones
+TEXT ·minIdxOfSumRows4NEON(SB), NOSPLIT, $0-136
     MOVD vals_base+0(FP), R0
     MOVD idxs_base+24(FP), R1
     MOVD a_base+48(FP), R2
@@ -5698,12 +5796,27 @@ minidxrows4_loop:
     CBNZ R6, minidxrows4_loop
 
 minidxrows4_store:
-    CBZ R5, minidxrows4_write      // rev == 0: lanes already in row order
+    CBZ R5, minidxrows4_epilogue   // rev == 0: lanes already in row order
     // rev == 1: full lane reversal [0,1,2,3] -> [3,2,1,0] on both results.
     WORD $0x4EA00800              // REV64 V0.4S, V0.4S            [1,0,3,2]
     WORD $0x6E004000              // EXT V0.16B, V0.16B, V0.16B, #8  [3,2,1,0]
     WORD $0x4EA00821              // REV64 V1.4S, V1.4S
     WORD $0x6E014021              // EXT V1.16B, V1.16B, V1.16B, #8
+
+minidxrows4_epilogue:
+    MOVD node_len+112(FP), R9
+    CBZ R9, minidxrows4_write      // raw mode: store bestVal / bestIdx as is
+    MOVD node_base+104(FP), R8
+    VLD1 (R8), [V16.S4]            // node[0:4]
+    FMOVS limit+128(FP), F17
+    VDUP V17.S[0], V17.S4          // limit in all lanes
+    FMOVS sentinel+132(FP), F18
+    VDUP V18.S[0], V18.S4          // sentinel in all lanes
+    WORD $0x6EA0E633              // FCMGT V19.4S, V17.4S, V0.4S   mask = limit > bestVal
+    WORD $0x4E20D610              // FADD V16.4S, V16.4S, V0.4S    node + bestVal
+    WORD $0x6EB31E12              // BIT V18.16B, V16.16B, V19.16B sentinel <- sum where mask
+    WORD $0x4EF31C21              // ORN V1.16B, V1.16B, V19.16B   idx = mask ? bestIdx : -1
+    VMOV V18.B16, V0.B16           // dst values into V0 for the shared store
 
 minidxrows4_write:
     VST1 [V0.S4], (R0)             // vals[0:4]

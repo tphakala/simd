@@ -76,6 +76,8 @@ func int32ToFloat32ScaleAdd(dst, a []float32, src []int32, s float32) {
 	int32ToFloat32ScaleAddGo(dst, a, src, s)
 }
 
+func pairSumScaleAdd(dst, acc, a, b []float32, c float32) { pairSumScaleAddGo(dst, acc, a, b, c) }
+
 func int16ToFloat32Scale(dst []float32, src []int16, s float32) { int16ToFloat32ScaleGo(dst, src, s) }
 
 func float32ToInt16Scale(dst []int16, src []float32, s float32) { float32ToInt16ScaleGo(dst, src, s) }
@@ -125,8 +127,8 @@ func expE1_32(dst, src []float32)           { expE1Go(dst, src) }
 func log10_32(dst, src []float32)           { log10Go(dst, src) }
 func pow32(dst, src []float32, exp float32) { powGo(dst, src, exp) }
 func powElem32(dst, base, exp []float32)    { powElemGo(dst, base, exp) }
-func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
-	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
+func minIdxOfSumRows32(vals []float32, idxs []int32, node, a, k []float32, base, slide int, limit, sentinel float32) {
+	minIdxOfSumRowsScalar(vals, idxs, node, a, k, base, slide, limit, sentinel)
 }
 
 func biquadCascade32(dst, src, coeffs, state []float32) {

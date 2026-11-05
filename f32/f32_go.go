@@ -851,6 +851,27 @@ func int32ToFloat32ScaleAddGo(dst, a []float32, src []int32, scale float32) {
 	}
 }
 
+// pairSumScaleAddGo is the pure-Go reference for PairSumScaleAdd:
+// dst[i] = acc[i] + c*(a[i]+b[i]) with three separate roundings (the sum, the
+// product, the accumulate). The explicit float32() on both the sum and the product
+// is load-bearing: the sum conversion pins the reference to a[i]+b[i] rounded
+// before the multiply (never c*a + c*b), and the product conversion stops the Go
+// compiler from contracting the multiply and the add into a fused multiply-add on
+// architectures that have one (arm64), which would round once and break bit-parity
+// with the SIMD kernels and the Add, Scale, Add composition (#156).
+func pairSumScaleAddGo(dst, acc, a, b []float32, c float32) {
+	n := len(dst)
+	if n == 0 {
+		return
+	}
+	acc = acc[:n] // hoist the acc/a/b bounds checks out of the loop
+	a = a[:n]
+	b = b[:n]
+	for i := range dst {
+		dst[i] = acc[i] + float32(c*float32(a[i]+b[i]))
+	}
+}
+
 // int16ToFloat32ScaleGo converts int16 samples to float32 and scales.
 // dst[i] = float32(src[i]) * scale
 // int16 values are exactly representable in float32, so this is a single
@@ -1303,6 +1324,55 @@ func minIdxOfSumRowsGo(vals []float32, idxs []int32, a, k []float32, base, slide
 		vals[r] = v
 		idxs[r] = int32(i)
 	}
+}
+
+// minIdxOfSumRowsAddGo is the bit-exact reference for MinIdxOfSumRowsAdd. Per row r
+// it takes minIdxOfSumGo over the k window (the same argmin as minIdxOfSumRowsGo),
+// then gates on the minimum alone: v < limit writes node[r]+v and the argmin,
+// anything else (v >= limit, NaN v, NaN limit, an empty a) writes sentinel and -1.
+// node[r] is read before dst[r] is written, so dst == node exactly is safe. The
+// caller validates the windows.
+func minIdxOfSumRowsAddGo(dst []float32, idxs []int32, node, a, k []float32, base, slide int, limit, sentinel float32) {
+	for r := range dst {
+		off := base + r*slide
+		i, v := minIdxOfSumGo(a, k[off:off+len(a)])
+		if len(a) > 0 && v < limit {
+			dst[r] = node[r] + v
+			idxs[r] = int32(i)
+		} else {
+			dst[r] = sentinel
+			idxs[r] = -1
+		}
+	}
+}
+
+// minIdxOfSumRowsScalar runs the scalar reference for a run of rows: the raw form
+// (MinIdxOfSumRows) when node is empty, the fused form otherwise. vals is dst in
+// the fused form.
+func minIdxOfSumRowsScalar(vals []float32, idxs []int32, node, a, k []float32, base, slide int, limit, sentinel float32) {
+	if len(node) == 0 {
+		minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
+		return
+	}
+	minIdxOfSumRowsAddGo(vals, idxs, node, a, k, base, slide, limit, sentinel)
+}
+
+// valsAliasNode reports whether vals and node start at the same element, the
+// dst == node overlay of MinIdxOfSumRowsAdd. A dispatcher must then not recompute
+// rows through an overlapping block: the recomputed row would read the node[r]+v
+// it already wrote and add v a second time. The scalar reference reads node[r]
+// before it writes dst[r], so it is safe.
+func valsAliasNode(vals, node []float32) bool {
+	return len(node) != 0 && &vals[0] == &node[0]
+}
+
+// nodeRows reslices node to rows [r, r+w) next to the matching vals rows, keeping
+// a nil (raw mode) node nil.
+func nodeRows(node []float32, r, w int) []float32 {
+	if len(node) == 0 {
+		return nil
+	}
+	return node[r : r+w]
 }
 
 // biquadCascadeGo is the pure-Go reference for BiquadCascade. It runs the
