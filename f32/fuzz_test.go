@@ -567,3 +567,145 @@ func FuzzF32MinIdxOfSumRows(f *testing.F) {
 		}
 	})
 }
+
+// FuzzF32PairSumScaleAdd differentially fuzzes the dispatched PairSumScaleAdd
+// against its pure-Go reference, then checks the exact in-place overlay
+// (dst == acc) against the fresh-destination result. Raw bits flow through
+// unchanged so NaN, Inf and subnormal operands reach the three-rounding contract.
+// The input is split into acc, a and b of equal length after one leading float
+// that supplies c.
+func FuzzF32PairSumScaleAdd(f *testing.F) {
+	addByteLenSeeds(f)
+	// 3n+1 floats put the AVX 8-lane and NEON 4-lane block boundaries on n.
+	for _, n := range []int{3, 4, 7, 8, 9, 16, 17, 33} {
+		raw := make([]byte, (3*n+1)*4)
+		for i := range raw {
+			raw[i] = byte(i*53 + 7)
+		}
+		f.Add(raw)
+	}
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		pool := f32sBits(raw)
+		if len(pool) < 4 {
+			return
+		}
+		c := pool[0]
+		n := (len(pool) - 1) / 3
+		acc := pool[1 : 1+n]
+		a := pool[1+n : 1+2*n]
+		b := pool[1+2*n : 1+3*n]
+
+		got := make([]float32, n)
+		ref := make([]float32, n)
+		PairSumScaleAdd(got, acc, a, b, c)
+		pairSumScaleAddGo(ref, acc, a, b, c)
+		for i := range got {
+			if !bitsEqF32(got[i], ref[i]) {
+				t.Fatalf("lane %d of %d: got %#x ref %#x (c=%#x)", i, n,
+					math.Float32bits(got[i]), math.Float32bits(ref[i]), math.Float32bits(c))
+			}
+		}
+
+		inPlace := append([]float32(nil), acc...)
+		PairSumScaleAdd(inPlace, inPlace, a, b, c)
+		for i := range inPlace {
+			if !bitsEqF32(inPlace[i], got[i]) {
+				t.Fatalf("in place lane %d of %d: got %#x want %#x", i, n,
+					math.Float32bits(inPlace[i]), math.Float32bits(got[i]))
+			}
+		}
+	})
+}
+
+// FuzzF32MinIdxOfSumRowsAdd differentially fuzzes the dispatched
+// MinIdxOfSumRowsAdd against its Go reference and against the composition
+// (MinIdxOfSumRows then the limit gate), then checks that the call with
+// dst == node matches the separate-destination call. Rows run 1..40 so the 8-row,
+// 4-row, overlapping-tail and scalar paths of both kernels are reached; slide is
+// -1, 0 or +1; limit comes from a byte-selected pool that includes NaN.
+func FuzzF32MinIdxOfSumRowsAdd(f *testing.F) {
+	addByteLenSeeds(f)
+	// Seeds that decode to slide +1 and -1 with row counts around the block widths.
+	for _, rows := range []int{4, 6, 8, 12, 14, 19} {
+		for _, slide := range []byte{2, 0} { // raw[2]%3-1: 2 -> +1, 0 -> -1
+			raw := make([]byte, 4+4*(32+80))
+			for i := range raw {
+				raw[i] = byte(i*29 + 3)
+			}
+			raw[0] = 7
+			raw[1] = byte(rows - 1)
+			raw[2] = slide
+			raw[3] = byte(rows)
+			f.Add(raw)
+		}
+	}
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if len(raw) < 6 {
+			return
+		}
+		n := 1 + int(raw[0])%32
+		rows := 1 + int(raw[1])%40
+		slide := int(raw[2]%3) - 1
+		base, klen := windowLayout(rows, n, slide)
+		pool := f32sUnit(raw[4:])
+		if len(pool) < n+klen+rows {
+			return
+		}
+		quant := func(x float32) float32 { return float32(math.Round(float64(x)*4)) / 4 }
+		a := make([]float32, n)
+		for i := range a {
+			a[i] = quant(pool[i])
+		}
+		k := make([]float32, klen)
+		for i := range k {
+			v := quant(pool[n+i])
+			switch raw[(i+int(raw[3]))%len(raw)] % 9 {
+			case 0:
+				v = float32(math.Inf(1))
+			case 1:
+				v = float32(math.NaN())
+			case 2:
+				v = math.MaxFloat32
+			}
+			k[i] = v
+		}
+		node := make([]float32, rows)
+		for i := range node {
+			node[i] = quant(pool[n+klen+i]) * 4
+		}
+		limits := []float32{math.MaxFloat32, float32(math.Inf(1)), quant(pool[0]), float32(math.NaN())}
+		limit := limits[int(raw[3])%len(limits)]
+		sentinel := float32(raw[3]) - 100
+
+		got := make([]float32, rows)
+		gi := make([]int32, rows)
+		MinIdxOfSumRowsAdd(got, gi, node, a, k, base, slide, limit, sentinel)
+		ref := make([]float32, rows)
+		ri := make([]int32, rows)
+		minIdxOfSumRowsAddGo(ref, ri, node, a, k, base, slide, limit, sentinel)
+		comp := make([]float32, rows)
+		ci := make([]int32, rows)
+		composeRowsAdd(comp, ci, node, a, k, base, slide, limit, sentinel)
+		if r, ok := rowsAddEqual(got, gi, ref, ri); !ok {
+			t.Fatalf("row %d: got (%#x,%d) go (%#x,%d) rows=%d n=%d slide=%d", r,
+				math.Float32bits(got[r]), gi[r], math.Float32bits(ref[r]), ri[r], rows, n, slide)
+		}
+		if r, ok := rowsAddEqual(got, gi, comp, ci); !ok {
+			t.Fatalf("row %d: got (%#x,%d) composition (%#x,%d) rows=%d n=%d slide=%d", r,
+				math.Float32bits(got[r]), gi[r], math.Float32bits(comp[r]), ci[r], rows, n, slide)
+		}
+		for r := range gi {
+			if gi[r] == -1 && !bitsEqF32(got[r], sentinel) {
+				t.Fatalf("row %d: idx -1 without the sentinel", r)
+			}
+		}
+
+		inPlace := append([]float32(nil), node...)
+		ii := make([]int32, rows)
+		MinIdxOfSumRowsAdd(inPlace, ii, inPlace, a, k, base, slide, limit, sentinel)
+		if r, ok := rowsAddEqual(inPlace, ii, got, gi); !ok {
+			t.Fatalf("in place row %d: (%#x,%d) want (%#x,%d) rows=%d n=%d slide=%d", r,
+				math.Float32bits(inPlace[r]), ii[r], math.Float32bits(got[r]), gi[r], rows, n, slide)
+		}
+	})
+}

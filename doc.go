@@ -88,11 +88,11 @@
 // Transcendental (f32/f64): Log, Log2, Log10, Pow, PowElem (plus LogInPlace, PowInPlace),
 // SIMD-accelerated on AVX2+FMA and NEON; ExpE1 (f32 only, plus ExpE1InPlace)
 //
-// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int32ToFloat32ScaleAdd (fused dequantize-accumulate dst[i] = a[i] + float32(src[i])*scale, two roundings), Int16ToFloat32Scale, Float32ToInt16Scale
+// Audio DSP: Interleave2, Deinterleave2, ConvolveValid, ConvolveValidMulti, ConvolveValidMaxAbs, ConvolveValidMaxAbsMulti, ConvolveDecimate, AccumulateAdd, CumulativeSum, CubicInterpDot, Int32ToFloat32Scale, Int32ToFloat32ScaleAdd (fused dequantize-accumulate dst[i] = a[i] + float32(src[i])*scale, two roundings), PairSumScaleAdd (fused symmetric-tap accumulate dst[i] = acc[i] + c*(a[i]+b[i]), three roundings), Int16ToFloat32Scale, Float32ToInt16Scale
 //
 // IIR filtering (f32): BiquadCascade (Direct Form I biquad cascade with state in and out; bit-exact with the scalar no-FMA recurrence), BiquadCascadeN (planar multichannel form with shared coefficients and per-channel state; each channel is identical to BiquadCascade, NaN bit patterns aside)
 //
-// Sliding-window argmin (f32): MinIdxOfSum, MinIdxOfSumRows (batched sliding-window argmin of a[i]+k[base+r*slide+i], first-index-wins ties, bit-exact across all paths)
+// Sliding-window argmin (f32): MinIdxOfSum, MinIdxOfSumRows (batched sliding-window argmin of a[i]+k[base+r*slide+i], first-index-wins ties, bit-exact across all paths), MinIdxOfSumRowsAdd (fused Viterbi step: row argmin, then node+min or a sentinel)
 //
 // Spectral (f64, f32): STFTPlan (NewSTFTPlan, STFT, STFTPower, STFTPowerInto, NumFrames, NumBins, NFFT, RFFT, IRFFT, ISTFT) - fused real-input short-time Fourier transform and its inverse, with optional librosa-style center=true framing (PadMode: NoPad/PadZero/PadReflect)
 //

@@ -589,15 +589,16 @@ func maxIdx32(a []float32) int {
 // call); it doubles as the minimum m the overlapping remainder block can serve.
 const minIdxRowsNEON = 4
 
-func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
+func minIdxOfSumRows32(vals []float32, idxs []int32, node, a, k []float32, base, slide int, limit, sentinel float32) {
 	if hasNEON && (slide == 1 || slide == -1) {
 		r := 0
 		for ; r+minIdxRowsNEON <= len(vals); r += minIdxRowsNEON {
 			off := base + r*slide
+			nd := nodeRows(node, r, minIdxRowsNEON)
 			if slide == 1 {
-				minIdxOfSumRows4NEON(vals[r:r+minIdxRowsNEON], idxs[r:r+minIdxRowsNEON], a, k[off:], 0)
+				minIdxOfSumRows4NEON(vals[r:r+minIdxRowsNEON], idxs[r:r+minIdxRowsNEON], a, k[off:], 0, nd, limit, sentinel)
 			} else {
-				minIdxOfSumRows4NEON(vals[r:r+minIdxRowsNEON], idxs[r:r+minIdxRowsNEON], a, k[off-3:], 1)
+				minIdxOfSumRows4NEON(vals[r:r+minIdxRowsNEON], idxs[r:r+minIdxRowsNEON], a, k[off-3:], 1, nd, limit, sentinel)
 			}
 		}
 		// The 0-3 leftover rows go through SIMD via one overlapping 4-wide block
@@ -610,26 +611,35 @@ func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide
 		// range-validated every row's window, so the overlap reads stay in bounds.
 		// A single leftover row, or m<4 (no wide-enough block), stays scalar; a
 		// leftover of 0 leaves r == m and skips this block entirely.
+		//
+		// Fused mode adds one condition: with dst aliasing node exactly the
+		// leftover rows stay scalar (see valsAliasNode).
 		if r < len(vals) {
 			m := len(vals)
-			if m >= minIdxRowsNEON && m-r >= 2 {
+			inPlace := valsAliasNode(vals, node)
+			if m >= minIdxRowsNEON && m-r >= 2 && !inPlace {
 				off := base + (m-minIdxRowsNEON)*slide
+				nd := nodeRows(node, m-minIdxRowsNEON, minIdxRowsNEON)
 				if slide == 1 {
-					minIdxOfSumRows4NEON(vals[m-minIdxRowsNEON:], idxs[m-minIdxRowsNEON:], a, k[off:], 0)
+					minIdxOfSumRows4NEON(vals[m-minIdxRowsNEON:], idxs[m-minIdxRowsNEON:], a, k[off:], 0, nd, limit, sentinel)
 				} else {
-					minIdxOfSumRows4NEON(vals[m-minIdxRowsNEON:], idxs[m-minIdxRowsNEON:], a, k[off-3:], 1)
+					minIdxOfSumRows4NEON(vals[m-minIdxRowsNEON:], idxs[m-minIdxRowsNEON:], a, k[off-3:], 1, nd, limit, sentinel)
 				}
 			} else {
-				minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+				if len(node) == 0 {
+					minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+				} else {
+					minIdxOfSumRowsAddGo(vals[r:], idxs[r:], node[r:], a, k, base+r*slide, slide, limit, sentinel)
+				}
 			}
 		}
 		return
 	}
-	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
+	minIdxOfSumRowsScalar(vals, idxs, node, a, k, base, slide, limit, sentinel)
 }
 
 //go:noescape
-func minIdxOfSumRows4NEON(vals []float32, idxs []int32, a, k []float32, rev int)
+func minIdxOfSumRows4NEON(vals []float32, idxs []int32, a, k []float32, rev int, node []float32, limit, sentinel float32)
 
 func addScaled32(dst []float32, alpha float32, s []float32) {
 	if hasNEON && len(dst) >= 4 {
@@ -839,6 +849,19 @@ func int32ToFloat32ScaleAdd(dst, a []float32, src []int32, scale float32) {
 
 //go:noescape
 func int32ToFloat32ScaleAddNEON(dst, a []float32, src []int32, scale float32)
+
+func pairSumScaleAdd(dst, acc, a, b []float32, c float32) {
+	// NEON keeps the sum, product and accumulate as three separate roundings (FADD,
+	// FMUL, FADD), see the #156 contract. Direct branch to a noescape kernel.
+	if hasNEON && len(dst) >= 4 {
+		pairSumScaleAddNEON(dst, acc, a, b, c)
+		return
+	}
+	pairSumScaleAddGo(dst, acc, a, b, c)
+}
+
+//go:noescape
+func pairSumScaleAddNEON(dst, acc, a, b []float32, c float32)
 
 func int16ToFloat32Scale(dst []float32, src []int16, scale float32) {
 	if hasNEON && len(dst) >= 4 {

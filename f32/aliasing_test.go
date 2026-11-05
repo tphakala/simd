@@ -14,7 +14,7 @@ import (
 // separate destination, once with the destination physically overlaid on an
 // input, and asserts the two results are bit-identical. forTiers forces each
 // amd64 function-pointer dispatch tier and both the Go and NEON arm64 paths. A
-// few f32 ops (CopySign, AbsPow34, and the transcendentals) dispatch through an
+// few f32 ops (CopySign, AbsPow34, PairSumScaleAdd, and the transcendentals) dispatch through an
 // inline CPU-feature branch the harness cannot rebind; the size sweep still runs
 // their Go and native-SIMD kernels, and TestAliasingDirectKernels (amd64)
 // exercises the CopySign and AbsPow34 SSE and Go kernels that an AVX host would
@@ -109,6 +109,9 @@ func f32AliasCases() []aliastest.Case {
 
 		// Fused multiply-add (dst may overlay a, b, or c exactly).
 		aliastest.TernaryCase("FMA", aliasEqF32, genF32, FMA),
+		aliastest.TernaryCase("PairSumScaleAdd", aliasEqF32, genF32, func(dst, acc, a, b []float32) {
+			PairSumScaleAdd(dst, acc, a, b, aliasScaleK)
+		}),
 	}
 }
 

@@ -4834,6 +4834,64 @@ i32tof32add_done:
     VZEROUPPER
     RET
 
+// func pairSumScaleAddAVX(dst, acc, a, b []float32, c float32)
+// Symmetric-tap accumulate: dst[i] = acc[i] + c*(a[i]+b[i]) with three roundings.
+// Plain AVX, no FMA: the pair sum (VADDPS), the product (VMULPS) and the
+// accumulate (VADDPS) each round to float32, so the result is bit-identical to the
+// Go reference and the Add, Scale, Add composition. Never reassociated as
+// c*a + c*b. Keeping the multiply and add separate is the #156 single-rounding
+// contract (asserted by TestNoFMAContract).
+// The tail is scalar, never an overlapping final vector block: dst = acc + p is
+// not idempotent, so re-running lanes over an aliased acc would add p twice.
+// Frame: dst(24) + acc(24) + a(24) + b(24) + c(4) = 100 bytes.
+TEXT ·pairSumScaleAddAVX(SB), NOSPLIT, $0-100
+    MOVQ dst_base+0(FP), DX        // DX = dst pointer
+    MOVQ dst_len+8(FP), CX         // CX = length
+    MOVQ acc_base+24(FP), BX       // BX = acc pointer
+    MOVQ a_base+48(FP), SI         // SI = a pointer
+    MOVQ b_base+72(FP), DI         // DI = b pointer
+
+    // Broadcast c to all 8 lanes (memory source keeps this AVX1, not AVX2).
+    VBROADCASTSS c+96(FP), Y2      // Y2 = {c, ...}
+
+    MOVQ CX, AX
+    SHRQ $3, AX                    // len / 8
+    JZ   pairsumscaleadd_remainder
+
+pairsumscaleadd_loop8:
+    VMOVUPS (SI), Y0               // Y0 = a[i:i+8]
+    VADDPS (DI), Y0, Y0            // Y0 = a + b (first rounding)
+    VMULPS Y2, Y0, Y0              // Y0 = c * (a+b) (second rounding)
+    VADDPS (BX), Y0, Y0            // Y0 = acc + product (third rounding, not an FMA)
+    VMOVUPS Y0, (DX)               // store 8 x float32 (all loads are done)
+    ADDQ $32, SI
+    ADDQ $32, DI
+    ADDQ $32, BX
+    ADDQ $32, DX
+    DECQ AX
+    JNZ  pairsumscaleadd_loop8
+
+pairsumscaleadd_remainder:
+    ANDQ $7, CX                    // remainder = len % 8
+    JZ   pairsumscaleadd_done
+
+pairsumscaleadd_scalar:
+    VMOVSS (SI), X0                // X0 = a[i]
+    VADDSS (DI), X0, X0            // X0 = a + b (first rounding)
+    VMULSS X2, X0, X0              // X0 = c * (a+b) (second rounding)
+    VADDSS (BX), X0, X0            // X0 = acc + product (third rounding)
+    VMOVSS X0, (DX)                // store float32
+    ADDQ $4, SI
+    ADDQ $4, DI
+    ADDQ $4, BX
+    ADDQ $4, DX
+    DECQ CX
+    JNZ  pairsumscaleadd_scalar
+
+pairsumscaleadd_done:
+    VZEROUPPER
+    RET
+
 // func int16ToFloat32ScaleAVX(dst []float32, src []int16, scale float32)
 // Converts int16 samples to float32 and multiplies by scale in one pass.
 // dst[i] = float32(src[i]) * scale
@@ -9460,7 +9518,7 @@ DATA minidxrev8<>+0x18(SB)/4, $1
 DATA minidxrev8<>+0x1c(SB)/4, $0
 GLOBL minidxrev8<>(SB), RODATA|NOPTR, $32
 
-// func minIdxOfSumRows8AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
+// func minIdxOfSumRows8AVX2(vals []float32, idxs []int32, a, k []float32, rev int, node []float32, limit, sentinel float32)
 // Lane-per-row argmin-of-sum for a block of eight rows (one per YMM lane). Each
 // lane replays the scalar loop exactly: candidate i (i in [0, n), n = len(a))
 // broadcasts a[i], adds it to the eight rows' k values with a single VADDPS (one
@@ -9481,7 +9539,15 @@ GLOBL minidxrev8<>(SB), RODATA|NOPTR, $32
 // row r in lane 7, so rev == 1 reverses both result vectors once at store
 // (VPERMPS) to restore lane l == row r+l. Either way every read stays inside the
 // union of the eight rows' validated windows, so there is no over-read.
-TEXT ·minIdxOfSumRows8AVX2(SB), NOSPLIT, $0-104
+//
+// Fused mode (len(node) != 0, MinIdxOfSumRowsAdd): after the rev permutation the
+// results are in row order, so node[0:8] lines up with the lanes. The epilogue
+// gates on the minimum alone, mask = bestVal LT_OQ limit (false for NaN), and
+// stores dst = mask ? node+bestVal : sentinel into the vals slot and
+// idx = mask ? bestIdx : -1 into the idxs slot. node+bestVal is one VADDPS (one
+// rounding); on a dead lane it is computed and discarded by the blend, so a NaN
+// there cannot leak. len(node) == 0 skips the epilogue and stores the raw results.
+TEXT ·minIdxOfSumRows8AVX2(SB), NOSPLIT, $0-136
     MOVQ vals_base+0(FP), AX
     MOVQ idxs_base+24(FP), BX
     MOVQ a_base+48(FP), SI
@@ -9518,11 +9584,25 @@ minidxofsumrows8_avx2_loop:
 
 minidxofsumrows8_avx2_store:
     TESTQ DX, DX
-    JZ    minidxofsumrows8_avx2_write
+    JZ    minidxofsumrows8_avx2_epilogue
     // rev == 1: reverse all eight lanes of both results in one shuffle each.
     VMOVUPS minidxrev8<>(SB), Y8   // control {7,6,5,4,3,2,1,0}
     VPERMPS Y0, Y8, Y0             // bestVal lanes reversed
     VPERMPS Y1, Y8, Y1             // bestIdx lanes reversed
+
+minidxofsumrows8_avx2_epilogue:
+    MOVQ node_len+112(FP), R10
+    TESTQ R10, R10
+    JZ    minidxofsumrows8_avx2_write  // raw mode: store bestVal / bestIdx as is
+    MOVQ node_base+104(FP), R8
+    VMOVUPS (R8), Y2               // node[0:8]
+    VBROADCASTSS limit+128(FP), Y3
+    VBROADCASTSS sentinel+132(FP), Y4
+    VCMPPS $0x11, Y3, Y0, Y5       // Y5 = mask (bestVal LT_OQ limit)
+    VADDPS Y0, Y2, Y2              // Y2 = node + bestVal (one rounding)
+    VBLENDVPS Y5, Y2, Y4, Y0       // dst = mask ? node+bestVal : sentinel
+    VPCMPEQD Y6, Y6, Y6            // Y6 = all ones = -1
+    VBLENDVPS Y5, Y1, Y6, Y1       // idx = mask ? bestIdx : -1
 
 minidxofsumrows8_avx2_write:
     VMOVUPS Y0, (AX)               // vals[0:8]
@@ -9530,15 +9610,16 @@ minidxofsumrows8_avx2_write:
     VZEROUPPER
     RET
 
-// func minIdxOfSumRows4AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
+// func minIdxOfSumRows4AVX2(vals []float32, idxs []int32, a, k []float32, rev int, node []float32, limit, sentinel float32)
 // The 4-wide (XMM) sibling of minIdxOfSumRows8AVX2: same lane-per-row argmin-of-
 // sum, four rows per block, used for the 4-row sub-block a row count leaves after
 // the 8-wide blocks (a count near 11 to 17 can leave a 4-or-more remainder,
 // e.g. 12 -> 8+4, 14 -> 8+4+2, hence this kernel).
 // The k union is n+3 wide; rev == 1 reverses the four lanes with VPERMILPS imm
 // [3,2,1,0]. This kernel is VEX.128-only (no YMM touched), so VZEROUPPER is not
-// required before RET.
-TEXT ·minIdxOfSumRows4AVX2(SB), NOSPLIT, $0-104
+// required before RET. The fused epilogue (len(node) != 0) is the 4-lane form of
+// the one documented on minIdxOfSumRows8AVX2.
+TEXT ·minIdxOfSumRows4AVX2(SB), NOSPLIT, $0-136
     MOVQ vals_base+0(FP), AX
     MOVQ idxs_base+24(FP), BX
     MOVQ a_base+48(FP), SI
@@ -9575,10 +9656,24 @@ minidxofsumrows4_avx2_loop:
 
 minidxofsumrows4_avx2_store:
     TESTQ DX, DX
-    JZ    minidxofsumrows4_avx2_write
+    JZ    minidxofsumrows4_avx2_epilogue
     // rev == 1: reverse the four lanes of both results, [3,2,1,0].
     VPERMILPS $0x1B, X0, X0        // bestVal lanes reversed
     VPERMILPS $0x1B, X1, X1        // bestIdx lanes reversed
+
+minidxofsumrows4_avx2_epilogue:
+    MOVQ node_len+112(FP), R10
+    TESTQ R10, R10
+    JZ    minidxofsumrows4_avx2_write  // raw mode: store bestVal / bestIdx as is
+    MOVQ node_base+104(FP), R8
+    VMOVUPS (R8), X2               // node[0:4]
+    VBROADCASTSS limit+128(FP), X3
+    VBROADCASTSS sentinel+132(FP), X4
+    VCMPPS $0x11, X3, X0, X5       // X5 = mask (bestVal LT_OQ limit)
+    VADDPS X0, X2, X2              // X2 = node + bestVal (one rounding)
+    VBLENDVPS X5, X2, X4, X0       // dst = mask ? node+bestVal : sentinel
+    VPCMPEQD X6, X6, X6            // X6 = all ones = -1
+    VBLENDVPS X5, X1, X6, X1       // idx = mask ? bestIdx : -1
 
 minidxofsumrows4_avx2_write:
     VMOVUPS X0, (AX)               // vals[0:4]

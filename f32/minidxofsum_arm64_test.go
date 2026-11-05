@@ -62,7 +62,7 @@ func TestMinIdxOfSumRows4NEON_ParityWithGo(t *testing.T) {
 
 				vals := make([]float32, 4)
 				idxs := make([]int32, 4)
-				minIdxOfSumRows4NEON(vals, idxs, a, kUnion, rev)
+				minIdxOfSumRows4NEON(vals, idxs, a, kUnion, rev, nil, 0, 0)
 
 				refVals := make([]float32, 4)
 				refIdxs := make([]int32, 4)
@@ -109,7 +109,7 @@ func TestMinIdxOfSumRows4NEON_LengthExact(t *testing.T) {
 
 			vals := make([]float32, 4)
 			idxs := make([]int32, 4)
-			minIdxOfSumRows4NEON(vals, idxs, a, kUnion, rev)
+			minIdxOfSumRows4NEON(vals, idxs, a, kUnion, rev, nil, 0, 0)
 
 			refVals := make([]float32, 4)
 			refIdxs := make([]int32, 4)
@@ -164,7 +164,7 @@ func TestMinIdxOfSumRows4NEON_OverReadPoison(t *testing.T) {
 
 			vals := make([]float32, width)
 			idxs := make([]int32, width)
-			minIdxOfSumRows4NEON(vals, idxs, a, k, rev)
+			minIdxOfSumRows4NEON(vals, idxs, a, k, rev, nil, 0, 0)
 
 			// Reference over ONLY the valid window (poison sliced off) is what a
 			// non-over-reading kernel must reproduce.
@@ -294,7 +294,7 @@ func BenchmarkMinIdxOfSumRows4NEON_N(b *testing.B) {
 		idxs := make([]int32, 4)
 		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				minIdxOfSumRows4NEON(vals, idxs, a, kUnion, 0)
+				minIdxOfSumRows4NEON(vals, idxs, a, kUnion, 0, nil, 0, 0)
 			}
 		})
 	}

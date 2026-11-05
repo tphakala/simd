@@ -394,23 +394,25 @@ const (
 	minIdxRows4 = 4
 )
 
-func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide int) {
+func minIdxOfSumRows32(vals []float32, idxs []int32, node, a, k []float32, base, slide int, limit, sentinel float32) {
 	if cpu.X86.AVX2 && (slide == 1 || slide == -1) {
 		r := 0
 		for ; r+minIdxRows8 <= len(vals); r += minIdxRows8 {
 			off := base + r*slide
+			nd := nodeRows(node, r, minIdxRows8)
 			if slide == 1 {
-				minIdxOfSumRows8AVX2(vals[r:r+minIdxRows8], idxs[r:r+minIdxRows8], a, k[off:], 0)
+				minIdxOfSumRows8AVX2(vals[r:r+minIdxRows8], idxs[r:r+minIdxRows8], a, k[off:], 0, nd, limit, sentinel)
 			} else {
-				minIdxOfSumRows8AVX2(vals[r:r+minIdxRows8], idxs[r:r+minIdxRows8], a, k[off-7:], 1)
+				minIdxOfSumRows8AVX2(vals[r:r+minIdxRows8], idxs[r:r+minIdxRows8], a, k[off-7:], 1, nd, limit, sentinel)
 			}
 		}
 		if r+minIdxRows4 <= len(vals) {
 			off := base + r*slide
+			nd := nodeRows(node, r, minIdxRows4)
 			if slide == 1 {
-				minIdxOfSumRows4AVX2(vals[r:r+minIdxRows4], idxs[r:r+minIdxRows4], a, k[off:], 0)
+				minIdxOfSumRows4AVX2(vals[r:r+minIdxRows4], idxs[r:r+minIdxRows4], a, k[off:], 0, nd, limit, sentinel)
 			} else {
-				minIdxOfSumRows4AVX2(vals[r:r+minIdxRows4], idxs[r:r+minIdxRows4], a, k[off-3:], 1)
+				minIdxOfSumRows4AVX2(vals[r:r+minIdxRows4], idxs[r:r+minIdxRows4], a, k[off-3:], 1, nd, limit, sentinel)
 			}
 			r += minIdxRows4
 		}
@@ -428,29 +430,38 @@ func minIdxOfSumRows32(vals []float32, idxs []int32, a, k []float32, base, slide
 		// window, so the overlap reads stay in bounds. A single leftover row, or
 		// m<4 (no wide-enough block), stays scalar; a leftover of 0 leaves r == m
 		// and skips this block entirely. Same rule as the NEON dispatcher.
+		//
+		// Fused mode adds one condition: with dst aliasing node exactly the
+		// leftover rows stay scalar (see valsAliasNode).
 		if r < len(vals) {
 			m := len(vals)
-			if m >= minIdxRows4 && m-r >= 2 {
+			inPlace := valsAliasNode(vals, node)
+			if m >= minIdxRows4 && m-r >= 2 && !inPlace {
 				off := base + (m-minIdxRows4)*slide
+				nd := nodeRows(node, m-minIdxRows4, minIdxRows4)
 				if slide == 1 {
-					minIdxOfSumRows4AVX2(vals[m-minIdxRows4:], idxs[m-minIdxRows4:], a, k[off:], 0)
+					minIdxOfSumRows4AVX2(vals[m-minIdxRows4:], idxs[m-minIdxRows4:], a, k[off:], 0, nd, limit, sentinel)
 				} else {
-					minIdxOfSumRows4AVX2(vals[m-minIdxRows4:], idxs[m-minIdxRows4:], a, k[off-3:], 1)
+					minIdxOfSumRows4AVX2(vals[m-minIdxRows4:], idxs[m-minIdxRows4:], a, k[off-3:], 1, nd, limit, sentinel)
 				}
 			} else {
-				minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+				if len(node) == 0 {
+					minIdxOfSumRowsGo(vals[r:], idxs[r:], a, k, base+r*slide, slide)
+				} else {
+					minIdxOfSumRowsAddGo(vals[r:], idxs[r:], node[r:], a, k, base+r*slide, slide, limit, sentinel)
+				}
 			}
 		}
 		return
 	}
-	minIdxOfSumRowsGo(vals, idxs, a, k, base, slide)
+	minIdxOfSumRowsScalar(vals, idxs, node, a, k, base, slide, limit, sentinel)
 }
 
 //go:noescape
-func minIdxOfSumRows8AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
+func minIdxOfSumRows8AVX2(vals []float32, idxs []int32, a, k []float32, rev int, node []float32, limit, sentinel float32)
 
 //go:noescape
-func minIdxOfSumRows4AVX2(vals []float32, idxs []int32, a, k []float32, rev int)
+func minIdxOfSumRows4AVX2(vals []float32, idxs []int32, a, k []float32, rev int, node []float32, limit, sentinel float32)
 
 func addScaled32(dst []float32, alpha float32, s []float32) {
 	addScaledImpl(dst, alpha, s)
@@ -1267,6 +1278,19 @@ func int32ToFloat32ScaleAdd(dst, a []float32, src []int32, scale float32) {
 
 //go:noescape
 func int32ToFloat32ScaleAddAVX(dst, a []float32, src []int32, scale float32)
+
+func pairSumScaleAdd(dst, acc, a, b []float32, c float32) {
+	// Plain AVX, no FMA: three separate roundings (VADDPS, VMULPS, VADDPS), see the
+	// #156 contract. Direct branch to a noescape kernel, never a function variable.
+	if cpu.X86.AVX && len(dst) >= minAVXElements {
+		pairSumScaleAddAVX(dst, acc, a, b, c)
+		return
+	}
+	pairSumScaleAddGo(dst, acc, a, b, c)
+}
+
+//go:noescape
+func pairSumScaleAddAVX(dst, acc, a, b []float32, c float32)
 
 func int16ToFloat32Scale(dst []float32, src []int16, scale float32) {
 	// AVX2 is required because widening int16 to int32 uses VPMOVSXWD (ymm form).
