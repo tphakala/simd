@@ -12,11 +12,11 @@
 // rounded instruction. The elementwise scale, offset, clamp and float-to-fixed
 // conversion primitives (for example [Scale], [AddScalar], [Affine], [ClampScale],
 // [Float32ToInt32ScaleClamp], [Float32ToInt32ScaleClampSigned],
-// [Float32ToUint8Bucket], [PairSumScaleAdd] and the Int*ToFloat32Scale family) and the recurrences
-// [BiquadCascade] and [BiquadCascadeN] never contract a multiply and a
-// following add into a fused multiply-add: a consumer that reproduces a scalar
-// reference bit-for-bit depends on the product rounding to float32 before the
-// add. Where fusion is wanted, use [FMA], the AXPY [AddScaled], or the multiply-accumulate [MulAdd],
+// [Float32ToUint8Bucket], [PairSumScaleAdd] and the Int*ToFloat32Scale family)
+// and the recurrences [BiquadCascade] and [BiquadCascadeN] never contract a
+// multiply and a following add into a fused multiply-add: a consumer that
+// reproduces a scalar reference bit-for-bit depends on the product rounding to
+// float32 before the add. Where fusion is wanted, use [FMA], the AXPY [AddScaled], or the multiply-accumulate [MulAdd],
 // whose names say so.
 // Reductions and math functions such as
 // [DotProduct] and the exp/log family do use FMA, where a single fused rounding
@@ -34,12 +34,12 @@
 // ClampScale, Pow), for the two-pass
 // CumulativeSum and Normalize (dst==a), for the binary maps (Add, Sub, Mul, Div,
 // PowElem, CopySign, AbsSqComplex, where dst may alias any input, or all of them
-// at once), for the fused multiply-add FMA (dst may alias a, b or c), for [PairSumScaleAdd] (dst may
-// alias acc, a or b), and for the
-// split-complex products MulComplex and MulConjComplex, whose result may
-// overwrite either input vector (dstRe==aRe with dstIm==aIm, or dstRe==bRe with
-// dstIm==bIm). The guarantee is mechanical: each SIMD block reads its whole block
-// of inputs into registers before storing any output lane, and the scalar tail
+// at once), for the fused multiply-add FMA (dst may alias a, b or c), for
+// [PairSumScaleAdd] (dst may alias acc, a or b), and for the split-complex
+// products MulComplex and MulConjComplex, whose result may overwrite either
+// input vector (dstRe==aRe with dstIm==aIm, or dstRe==bRe with dstIm==bIm).
+// The guarantee is mechanical: each SIMD block reads its whole block of inputs
+// into registers before storing any output lane, and the scalar tail
 // reads each lane before it writes that lane (the ExpE1 SIMD kernels have no
 // scalar tail: their overlapping final block is loaded before the first store),
 // so an exact overlay is well defined lane by lane on every dispatch path
