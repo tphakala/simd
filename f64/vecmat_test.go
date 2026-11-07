@@ -184,18 +184,20 @@ func TestVecMatSpecialValues(t *testing.T) {
 			return 1 + e
 		}), same(0))
 
-		// Ascending order absorbs the 1; reversed or pairwise order keeps it.
-		vals := []float64{1e16, 1, -1e16}
-		expect(t, "order", []float64{1, 1, 1}, vecMatFill(3, c, func(r int) float64 { return vals[r] }), same(0))
+		// Ascending order gives 1 (the first 1 is absorbed, the last survives);
+		// descending order gives 0 and a pairwise or two-accumulator sum gives 0 or 2.
+		vals := []float64{1e16, 1, -1e16, 1}
+		expect(t, "order", []float64{1, 1, 1, 1}, vecMatFill(4, c, func(r int) float64 { return vals[r] }), same(1))
 
 		// All products -0.0 still sum to +0.0 from the +0.0 seed.
 		expect(t, "negative zero x", []float64{negZero, negZero}, vecMatFill(2, c, func(int) float64 { return 1 }), same(0))
 		expect(t, "negative zero m", []float64{1, 1}, vecMatFill(2, c, func(int) float64 { return negZero }), same(0))
 		expect(t, "empty x", nil, nil, same(0))
 
-		// Subnormal result is exact (no flush to zero).
-		tiny := math.Ldexp(1, -540)
-		expect(t, "subnormal", []float64{tiny}, vecMatFill(1, c, func(int) float64 { return tiny }), same(math.Ldexp(1, -1080)))
+		// A subnormal product is exact (no flush to zero): 2^-540 * 2^-520 = 2^-1060.
+		expect(t, "subnormal product", []float64{math.Ldexp(1, -540)}, vecMatFill(1, c, func(int) float64 { return math.Ldexp(1, -520) }), same(math.Ldexp(1, -1060)))
+		// A subnormal input is not treated as zero: 2^-1060 * 2^1000 = 2^-60.
+		expect(t, "subnormal input", []float64{math.Ldexp(1, -1060)}, vecMatFill(1, c, func(int) float64 { return math.Ldexp(1, 1000) }), same(math.Ldexp(1, -60)))
 
 		inf := math.Inf(1)
 		expect(t, "Inf times zero", []float64{inf}, vecMatFill(1, c, func(int) float64 { return 0 }), same(math.NaN()))
@@ -237,7 +239,7 @@ func TestVecMatPanics(t *testing.T) {
 		{"matrix one short", 4, 3, 2*5 + 4 - 1, false, 5, true},
 		{"single row short matrix", 4, 1, 3, false, 4, true},
 		{"single row nil matrix", 4, 1, 0, true, 4, true},
-		{"row offset overflow", 4, 3, 100, false, math.MaxInt / 2, true},
+		{"row offset overflow", 4, 5, 100, false, math.MaxInt/2 + 1, true},
 		{"empty dst ignores stride", 0, 3, 0, true, -1, false},
 		{"empty dst empty x", 0, 0, 0, true, -1, false},
 	}
