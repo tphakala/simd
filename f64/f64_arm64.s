@@ -3059,7 +3059,7 @@ bfstage_neon_span1_tail_pre:
     FMOVD 8(R1), F3                  // lowerIm
     // The twiddle is already in registers: F12/F13 alias lane 0 of the V12/V13
     // splats built at bfstage_neon_span1, and the vector loop above only ever
-    // reads V12/V13 (they are sources of the FMUL/FMLS/FMLA words, never
+    // reads V12/V13 (they are sources of the FMUL words, never
     // destinations), so lane 0 still holds twRe[0]/twIm[0]. Reloading them from
     // (R2)/(R3) would be two redundant loads.
     FMULD F2, F12, F6

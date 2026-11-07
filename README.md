@@ -171,8 +171,8 @@ overhead disappears and the short spans that cannot fill a vector along `j`
 vectorize across blocks instead. Measured over one stage of a 1024-point
 transform on an x86 core, that collapses the cost spread across spans from
 roughly 30x to under 2x, so the small-span stages stop dominating the transform.
-`ButterflyComplexStage` is also bit-identical on every path (AVX, SSE2, NEON and
-pure Go, NaN bit patterns aside), while `ButterflyComplex` and
+The f64 `ButterflyComplexStage` is also bit-identical on every path (AVX, SSE2,
+NEON and pure Go, NaN bit patterns aside), while the f64 `ButterflyComplex` and
 `ButterflyComplexStage4` fuse and are tolerance-stable.
 
 | Category        | Function                            | Description                   | SIMD Width                          |
