@@ -1284,3 +1284,21 @@ func vecMatBlock16AVX(dst, x, m []float64, stride int)
 //
 //go:noescape
 func vecMatBlock4AVX(dst, x, m []float64, stride int)
+
+// quantizePow34Bands calls the SSE2 kernel directly, as a //go:noescape call
+// rather than through a function pointer (TestQuantizePow34Bands_AllocFree pins
+// the zero allocations). SSE2 is the amd64 baseline, but the flag is still
+// tested so SIMD_DISABLE=all reaches the Go path. There is no AVX tier: it
+// measured slower than this kernel on sparse input (BenchmarkQuantizePow34Bands).
+// The kernel derives every address from the band widths, so the wrapper
+// guarantees sum(widths) <= min(len(dst), len(src)) before calling.
+func quantizePow34Bands(dst []int32, src []float64, widths []int, scales []float64, rounding, limit, z float64) {
+	if cpu.X86.SSE2 {
+		quantizePow34BandsSSE2(dst, src, widths, scales, rounding, limit, z)
+		return
+	}
+	quantizePow34BandsGo(dst, src, widths, scales, rounding, limit, z)
+}
+
+//go:noescape
+func quantizePow34BandsSSE2(dst []int32, src []float64, widths []int, scales []float64, rounding, limit, z float64)

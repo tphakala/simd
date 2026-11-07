@@ -307,7 +307,10 @@ func TestNoGoroutineRegisterClobber(t *testing.T) {
 // reference bit-for-bit (go-aac's quantize path #155; the f32/f64 Affine
 // kernels' bit-identity to Scale then AddScalar, #298; the f64 radix-2 FFT stage
 // and its consumers that reproduce a pure-Go butterfly bit-for-bit) depends on
-// the intermediate rounding. See the package docs and #156.
+// the intermediate rounding. Kernels whose exact reference has a multiply and an
+// add that must stay separate even without an a*b+c shape (the f64 power-law
+// quantizer) are listed too, so a fused rewrite fails the suite. See the package
+// docs and #156.
 type singleRoundingKernel struct {
 	file, fn string
 	mul, add string // the two separate mnemonics that must both appear
@@ -347,6 +350,9 @@ var singleRoundingKernels = []singleRoundingKernel{
 	{"f64/f64_amd64.s", "butterflyComplexStageAVX", "VMULPD", "VADDPD"},
 	{"f64/f64_amd64.s", "butterflyComplexStageSSE2", "MULPD", "ADDPD"},
 	{"f64/f64_arm64.s", "butterflyComplexStageNEON", "FMUL", "FADD"},
+
+	{"f64/f64_amd64.s", "quantizePow34BandsSSE2", "MULPD", "ADDPD"},
+	{"f64/f64_arm64.s", "quantizePow34BandsNEON", "FMUL", "FADD"},
 }
 
 // asmFuncBody returns the lines of the TEXT ·fn(...) block, from its TEXT line to

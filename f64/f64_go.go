@@ -943,3 +943,81 @@ func vecMatGo(dst, x, m []float64, stride int) {
 		}
 	}
 }
+
+// pow34ZeroBoundMargin biases the zero-skip boundary estimate low. The estimate
+// only has to be cheap and close; pow34ZeroBound verifies it against the real
+// float64 chain, so a low bias costs a few ulps of skip range and nothing else.
+const pow34ZeroBoundMargin = 1 - 0x1p-20
+
+// pow34ZeroBound returns a threshold z such that every t >= 0 with t < z gives
+// a quantized magnitude of 0 in QuantizePow34Bands, or -Inf when no such
+// threshold can be proven (no line is then skipped; t < -Inf is false for every
+// t including NaN).
+//
+// Let N(t) = fl(fl(sqrt(fl(t*fl(sqrt(t))))) + rounding) for float64 t >= 0.
+// Each step is a correctly rounded IEEE operation on non-negative operands
+// (sqrt, a product of non-negative values, an addition of the constant
+// rounding), and correct rounding is monotone non-decreasing, so N is
+// non-decreasing in t, and N(t) >= rounding. For -1 < rounding < 1 and
+// N(z) < 1 it follows that every t < z has N(t) in (-1, 1): the int32
+// truncation is 0, and a clamp to limit < 1 gives int32(limit) = 0 as well.
+// Only the one evaluation N(z) < 1 is checked; z itself comes from an estimate
+// of the true boundary (1-rounding)^(4/3), biased low by
+// pow34ZeroBoundMargin. rounding outside (-1, 1) (or NaN) disables the skip.
+// The caller must also disable it for a negative or NaN band scale (see
+// quantPow34Threshold) and guarantee limit >= 0; this proof covers neither.
+func pow34ZeroBound(rounding float64) float64 {
+	if !(rounding > -1 && rounding < 1) {
+		return math.Inf(-1)
+	}
+	u := 1 - rounding
+	c := float64(u*math.Cbrt(u)) * pow34ZeroBoundMargin
+	// The add operand is a sqrt result, not a product, so nothing here can fuse.
+	if math.Sqrt(float64(c*math.Sqrt(c)))+rounding < 1 {
+		return c
+	}
+	return math.Inf(-1)
+}
+
+// quantPow34Threshold returns the zero-skip threshold QuantizePow34Bands passes
+// to its kernels: pow34ZeroBound(rounding) when the proof applies (every band
+// scale is >= 0; the wrapper's domain check guarantees limit >= 0), else -Inf.
+func quantPow34Threshold(scales []float64, rounding float64) float64 {
+	for _, s := range scales {
+		if !(s >= 0) {
+			return math.Inf(-1)
+		}
+	}
+	return pow34ZeroBound(rounding)
+}
+
+// quantizePow34BandsGo is the portable QuantizePow34Bands loop. Every product
+// is wrapped in an explicit float64 conversion, which the Go specification
+// guarantees is never fused, so the chain keeps the five separate roundings
+// that the SIMD kernels perform. dst and src hold exactly sum(widths) lines.
+func quantizePow34BandsGo(dst []int32, src []float64, widths []int, scales []float64, rounding, limit, z float64) {
+	limitInt := int32(limit)
+	i := 0
+	for b, w := range widths {
+		s := scales[b]
+		for end := i + w; i < end; i++ {
+			x := src[i]
+			t := float64(math.Abs(x) * s)
+			if t < z {
+				dst[i] = 0
+				continue
+			}
+			v := math.Sqrt(float64(t * math.Sqrt(t)))
+			var m int32
+			if n := v + rounding; n <= limit {
+				m = int32(n)
+			} else {
+				m = limitInt
+			}
+			if x < 0 {
+				m = -m
+			}
+			dst[i] = m
+		}
+	}
+}

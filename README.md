@@ -160,7 +160,8 @@ FFT butterfly building blocks (`ButterflyComplex`, `ButterflyComplexStage`,
 `ButterflyComplexStage4`, `RealFFTUnpack`, `RealFFTPower`) that a
 double-precision FFT/STFT path needs, plus `FFTPlan`, an in-place power-of-two
 complex FFT built on them, and `DFTPlan`, an in-place complex DFT of any length
-built on that. The broader
+built on that. `QuantizePow34Bands` is the bit-exact MP3 power-law quantizer
+with per-band scales. The broader
 audio/ML helpers (PCM conversions, the general split-format complex ops such as
 `MulComplex` / `AbsSqComplex`, indexed/strided dot products) live in `f32`
 instead, so the two float surfaces remain intentionally asymmetric.
@@ -238,6 +239,7 @@ NEON and pure Go, NaN bit patterns aside), while the f64 `ButterflyComplex` and
 |                 | `InterleaveN(dst, srcs)`            | Pack N planar streams (any N; N-stream Interleave2) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
 |                 | `DeinterleaveN(dsts, src)`          | Unpack N interleaved streams (any N) | N=2,4,8 AVX, N=3,6 AVX2 / N=2,3,4 NEON; else Go |
 |                 | `CubicInterpDot(hist,a,b,c,d,x)`    | Fused cubic interp dot product| 4x / 2x                             |
+|                 | `QuantizePow34Bands(dst,src,widths,scales,r,lim)` | Signed \|x*s\|^(3/4) + r to int32, per-band scale, bit-exact | 1.4-2.0x (SSE2) / 1.0-1.4x (NEON) |
 
 `DotProductBatch` scores its `[][]float64` rows in groups of four, keeping the
 query vector resident in registers across each group via a fused 4-row kernel on

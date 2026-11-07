@@ -3973,3 +3973,142 @@ vecMatBlock2NEON_row:
 
     VST1 [V0.D2], (R0)
     RET
+
+// ---------------------------------------------------------------------------
+// QuantizePow34Bands: banded power-law quantizer to int32 (see f64.go).
+//
+// func quantizePow34BandsNEON(dst []int32, src []float64, widths []int, scales []float64, rounding, limit, z float64)
+//
+// Per line: t = |x|*scale; n = sqrt(t*sqrt(t)) + rounding; m = int32(min(n, limit));
+// negated when x < 0. Every operation is a separate rounding (no FMA). FMINNM
+// returns the number when one operand is a quiet NaN, so a NaN chain takes
+// limit; the sign comes from the ordered compare x < 0, which is false for NaN
+// of either sign and for -0. Inside the parameter domain the clamped, signed
+// value is within +-(2^31-1), so FCVTZS .2D then XTN is exact.
+//
+// A pair whose two t are below z (FCMGT is false for NaN) is stored as zeros
+// without the square roots. A pair with exactly one such line stores the zero
+// and runs the other line through the same chain with scalar instructions, so
+// it pays for one square root chain instead of two (a two-lane FSQRT costs about
+// two scalar ones). A band's last odd line takes the scalar chain too.
+//
+// The go1.25 floor assembles none of the vector float mnemonics used here, so
+// they are WORD encodings; the decoded form is in the comment (checked by
+// TestArm64WordEncodings).
+//
+// V27 = z, V28 = scale, V29 = rounding, V30 = limit, V31 = sign mask.
+TEXT ·quantizePow34BandsNEON(SB), NOSPLIT, $0-120
+	MOVD   dst_base+0(FP), R1
+	MOVD   src_base+24(FP), R0
+	MOVD   widths_base+48(FP), R3
+	MOVD   widths_len+56(FP), R4
+	MOVD   scales_base+72(FP), R2
+	MOVD   $rounding+96(FP), R5
+	VLD1R  (R5), [V29.D2]
+	MOVD   $limit+104(FP), R5
+	VLD1R  (R5), [V30.D2]
+	MOVD   $z+112(FP), R5
+	VLD1R  (R5), [V27.D2]
+	MOVD   $0x8000000000000000, R5
+	VDUP   R5, V31.D2
+	CBZ    R4, q34neon_done
+
+q34neon_band:
+	VLD1R  (R2), [V28.D2]
+	MOVD   (R3), R6
+
+q34neon_pair:
+	CMP    $2, R6
+	BLT    q34neon_single
+	VLD1.P 16(R0), [V0.D2]
+	WORD   $0x4EE0F802         // FABS V2.2D, V0.2D
+	WORD   $0x6E7CDC42         // FMUL V2.2D, V2.2D, V28.2D
+	WORD   $0x6EE2E766         // FCMGT V6.2D, V27.2D, V2.2D
+	WORD   $0x6EB0A8C7         // UMAXV S7, V6.4S
+	FMOVS  F7, R7
+	CBNZW  R7, q34neon_pairlow
+	WORD   $0x6EE1F844         // FSQRT V4.2D, V2.2D
+	WORD   $0x6E64DC44         // FMUL V4.2D, V2.2D, V4.2D
+	WORD   $0x6EE1F884         // FSQRT V4.2D, V4.2D
+	WORD   $0x4E7DD484         // FADD V4.2D, V4.2D, V29.2D
+	WORD   $0x4EFEC484         // FMINNM V4.2D, V4.2D, V30.2D
+	WORD   $0x4EE0E806         // FCMLT V6.2D, V0.2D, #0
+	VAND   V31.B16, V6.B16, V6.B16
+	VEOR   V6.B16, V4.B16, V4.B16
+	WORD   $0x4EE1B884         // FCVTZS V4.2D, V4.2D
+	WORD   $0x0EA12884         // XTN V4.2S, V4.2D
+	VST1.P [V4.S2], 8(R1)
+	SUB    $2, R6
+	B      q34neon_pair
+
+q34neon_pairlow:
+	WORD   $0x6EB1A8C7         // UMINV S7, V6.4S
+	FMOVS  F7, R7
+	CBNZW  R7, q34neon_pairzero
+	VMOV   V6.D[0], R7
+	CBNZ   R7, q34neon_pairhi
+	FSQRTD F2, F4
+	FMULD  F4, F2, F4
+	FSQRTD F4, F4
+	FADDD  F29, F4, F4
+	FMINNMD F30, F4, F4
+	FCVTZSDW F4, R8
+	FCMPD  $(0.0), F0
+	CNEGW  MI, R8, R8
+	MOVW   R8, (R1)
+	MOVW   ZR, 4(R1)
+	ADD    $8, R1
+	SUB    $2, R6
+	B      q34neon_pair
+
+q34neon_pairhi:
+	VDUP   V2.D[1], V8.D2
+	VDUP   V0.D[1], V9.D2
+	FSQRTD F8, F4
+	FMULD  F4, F8, F4
+	FSQRTD F4, F4
+	FADDD  F29, F4, F4
+	FMINNMD F30, F4, F4
+	FCVTZSDW F4, R8
+	FCMPD  $(0.0), F9
+	CNEGW  MI, R8, R8
+	MOVW   ZR, (R1)
+	MOVW   R8, 4(R1)
+	ADD    $8, R1
+	SUB    $2, R6
+	B      q34neon_pair
+
+q34neon_pairzero:
+	MOVD.P ZR, 8(R1)
+	SUB    $2, R6
+	B      q34neon_pair
+
+q34neon_single:
+	CBZ    R6, q34neon_next
+	FMOVD.P 8(R0), F0
+	FABSD  F0, F2
+	FMULD  F28, F2, F2
+	FCMPD  F27, F2
+	BMI    q34neon_singlezero
+	FSQRTD F2, F4
+	FMULD  F4, F2, F4
+	FSQRTD F4, F4
+	FADDD  F29, F4, F4
+	FMINNMD F30, F4, F4
+	FCVTZSDW F4, R8
+	FCMPD  $(0.0), F0
+	CNEGW  MI, R8, R8
+	MOVW.P R8, 4(R1)
+	B      q34neon_next
+
+q34neon_singlezero:
+	MOVW.P ZR, 4(R1)
+
+q34neon_next:
+	ADD    $8, R2
+	ADD    $8, R3
+	SUBS   $1, R4, R4
+	BNE    q34neon_band
+
+q34neon_done:
+	RET
