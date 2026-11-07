@@ -133,14 +133,10 @@ func TestVecMatMatchesOracle(t *testing.T) {
 // check with the result.
 func vecMatRun(t *testing.T, c int, x, m []float64, stride int, check func(name string, dst []float64)) {
 	t.Helper()
-	type run struct {
-		name string
-		fn   func(dst, x, m []float64, stride int)
-	}
-	runs := []run{{"VecMat", VecMat}}
+	runs := []vecMatPath{{"VecMat", VecMat, 0}}
 	for _, p := range vecMatPaths() {
 		if c >= p.minC && len(x) > 0 { // direct paths require len(x) >= 1
-			runs = append(runs, run{p.name, p.fn})
+			runs = append(runs, p)
 		}
 	}
 	for _, r := range runs {
@@ -165,6 +161,7 @@ func vecMatFill(r, c int, col func(row int) float64) []float64 {
 }
 
 func TestVecMatSpecialValues(t *testing.T) {
+	same := func(v float64) func(int) float64 { return func(int) float64 { return v } }
 	negZero := math.Copysign(0, -1)
 	for _, c := range []int{1, 2, 3, 5, 17, 33, 62} {
 		expect := func(t *testing.T, label string, x, m []float64, want func(col int) float64) {
@@ -177,7 +174,6 @@ func TestVecMatSpecialValues(t *testing.T) {
 				}
 			})
 		}
-		same := func(v float64) func(int) float64 { return func(int) float64 { return v } }
 
 		// Unfused the sum is exactly +0.0; fused it would be 2^-60.
 		e := math.Ldexp(1, -30)
@@ -231,20 +227,19 @@ func TestVecMatSpecialValues(t *testing.T) {
 func TestVecMatPanics(t *testing.T) {
 	mk := func(n int) []float64 { return make([]float64, n) }
 	cases := []struct {
-		name         string
-		dst, x, m    int
-		nilM         bool
-		stride       int
-		mustPanic    bool
-		dstUntouched bool
+		name      string
+		dst, x, m int
+		nilM      bool
+		stride    int
+		mustPanic bool
 	}{
-		{"stride below columns", 4, 2, 100, false, 3, true, true},
-		{"matrix one short", 4, 3, 2*5 + 4 - 1, false, 5, true, true},
-		{"single row short matrix", 4, 1, 3, false, 4, true, true},
-		{"single row nil matrix", 4, 1, 0, true, 4, true, true},
-		{"row offset overflow", 4, 3, 100, false, math.MaxInt / 2, true, true},
-		{"empty dst ignores stride", 0, 3, 0, true, -1, false, false},
-		{"empty dst empty x", 0, 0, 0, true, -1, false, false},
+		{"stride below columns", 4, 2, 100, false, 3, true},
+		{"matrix one short", 4, 3, 2*5 + 4 - 1, false, 5, true},
+		{"single row short matrix", 4, 1, 3, false, 4, true},
+		{"single row nil matrix", 4, 1, 0, true, 4, true},
+		{"row offset overflow", 4, 3, 100, false, math.MaxInt / 2, true},
+		{"empty dst ignores stride", 0, 3, 0, true, -1, false},
+		{"empty dst empty x", 0, 0, 0, true, -1, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

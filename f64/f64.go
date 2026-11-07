@@ -16,8 +16,8 @@
 // multiply-accumulate [MulAdd], whose names say so; the exp/log family uses FMA
 // internally, where a single fused rounding is correct. [VecMat] never contracts
 // either: each column is summed from +0.0 in row order with separately rounded
-// products, bit-identical on every path, NaN bit patterns aside. The no-fuse contract is
-// asmcheck-enforced (see TestNoFMAContract in the module root).
+// products, bit-identical on every path, NaN bit patterns aside. The no-fuse
+// contract is asmcheck-enforced (see TestNoFMAContract in the module root).
 //
 // # Aliasing
 //

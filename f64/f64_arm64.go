@@ -712,6 +712,8 @@ const (
 	vecMatBlock16 = 16
 )
 
+// vecMat dispatches directly instead of through an xxxImpl pointer so the
+// callers' local arrays do not escape to the heap.
 func vecMat(dst, x, m []float64, stride int) {
 	if hasNEON && len(dst) >= vecMatBlock2 {
 		vecMatNEON(dst, x, m, stride)

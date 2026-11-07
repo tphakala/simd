@@ -215,7 +215,7 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 |                 | `Pow(dst, src, exp)`                | Scalar power x^exp (PCEN, dB) | 4x (AVX2+FMA) / 2x (NEON)           |
 |                 | `PowElem(dst, base, exp)`           | Elementwise base^exp          | 4x (AVX2+FMA) / 2x (NEON)           |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
-|                 | `VecMat(dst, x, m, stride)`         | Row vector times strided matrix, ordered and unfused (bit-exact) | 4x (AVX) / 2x (NEON) |
+|                 | `VecMat(dst, x, m, stride)`         | Row vector x strided matrix (unfused, bit-exact) | 4x (AVX) / 2x (NEON) |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMaxAbs(sig, k)`       | Fused FIR abs-max peak (no scratch) | 8x / 4x / 2x                  |
