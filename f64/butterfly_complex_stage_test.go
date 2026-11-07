@@ -336,11 +336,24 @@ func checkStageKnownAnswer(t *testing.T, in [6]float64, want [4]float64, span, b
 // host's default tier; the sweep above covers the forced tiers.
 func FuzzButterflyComplexStage(f *testing.F) {
 	addByteLenSeeds(f)
+	// One seed per known-answer row, laid out so the decoder below sees span 1,
+	// four blocks (the dispatcher's threshold for leaving the Go path) and no
+	// skew: re = (upper, lower) per block, likewise im, and the twiddle repeated
+	// to fill its quarter.
 	for _, row := range stageKnownAnswers {
-		raw := make([]byte, 0, 3+6*8)
-		raw = append(raw, 1, 0, 0)
-		for _, v := range row.in {
-			raw = binary.LittleEndian.AppendUint64(raw, math.Float64bits(v))
+		in := row.in // lower re/im, twiddle re/im, upper re/im
+		raw := []byte{0, 0, 0}
+		var quarters [4][]float64
+		for range 4 {
+			quarters[0] = append(quarters[0], in[4], in[0])
+			quarters[1] = append(quarters[1], in[5], in[1])
+			quarters[2] = append(quarters[2], in[2], in[2])
+			quarters[3] = append(quarters[3], in[3], in[3])
+		}
+		for _, q := range quarters {
+			for _, v := range q {
+				raw = binary.LittleEndian.AppendUint64(raw, math.Float64bits(v))
+			}
 		}
 		f.Add(raw)
 	}

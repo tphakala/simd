@@ -111,6 +111,7 @@ func TestInitGo(t *testing.T) {
 	saved := snapshotDispatch()
 	t.Cleanup(func() { restoreDispatch(&saved) })
 
+	butterflyStageTier = -1 // no tier uses it: the check sees only this init function
 	initGo()
 
 	if butterflyStageTier != stageTierGo {
@@ -134,6 +135,7 @@ func TestInitSSE2(t *testing.T) {
 	saved := snapshotDispatch()
 	t.Cleanup(func() { restoreDispatch(&saved) })
 
+	butterflyStageTier = -1 // no tier uses it: the check sees only this init function
 	initSSE2()
 
 	if butterflyStageTier != stageTierSSE2 {
@@ -153,6 +155,22 @@ func TestInitSSE2(t *testing.T) {
 	}
 }
 
+func TestInitAVX(t *testing.T) {
+	if !cpu.X86.AVX || !cpu.X86.FMA {
+		t.Skip("AVX+FMA not supported on this CPU")
+	}
+
+	saved := snapshotDispatch()
+	t.Cleanup(func() { restoreDispatch(&saved) })
+
+	butterflyStageTier = -1 // no tier uses it: the check sees only this init function
+	initAVX()
+
+	if butterflyStageTier != stageTierAVX {
+		t.Errorf("initAVX: butterflyStageTier = %d, want stageTierAVX", butterflyStageTier)
+	}
+}
+
 func TestInitAVX512(t *testing.T) {
 	if !cpu.X86.AVX512F || !cpu.X86.AVX512VL {
 		t.Skip("AVX-512 not supported on this CPU")
@@ -161,6 +179,7 @@ func TestInitAVX512(t *testing.T) {
 	saved := snapshotDispatch()
 	t.Cleanup(func() { restoreDispatch(&saved) })
 
+	butterflyStageTier = -1 // no tier uses it: the check sees only this init function
 	initAVX512()
 
 	if butterflyStageTier != stageTierAVX {
@@ -194,6 +213,7 @@ func TestInitAVXNoFMA(t *testing.T) {
 	saved := snapshotDispatch()
 	t.Cleanup(func() { restoreDispatch(&saved) })
 
+	butterflyStageTier = -1 // no tier uses it: the check sees only this init function
 	initAVXNoFMA()
 
 	if butterflyStageTier != stageTierAVX {
