@@ -704,3 +704,65 @@ func reluNEON64(dst, src []float64)
 
 //go:noescape
 func tanhNEON64(dst, src []float64)
+
+// VecMat block widths: columns per NEON kernel call.
+const (
+	vecMatBlock2  = 2
+	vecMatBlock4  = 4
+	vecMatBlock16 = 16
+)
+
+// vecMat dispatches directly instead of through an xxxImpl pointer so the
+// callers' local arrays do not escape to the heap.
+func vecMat(dst, x, m []float64, stride int) {
+	if hasNEON && len(dst) >= vecMatBlock2 {
+		vecMatNEON(dst, x, m, stride)
+		return
+	}
+	vecMatGo(dst, x, m, stride)
+}
+
+// vecMatNEON covers [0, len(dst)) with blocks of w columns, the last one starting
+// at len(dst)-w so it overlaps its predecessor; exactly ceil(len(dst)/w) kernel
+// calls. A column covered twice is recomputed to the same bits. It requires
+// len(dst) >= vecMatBlock2 and len(x) >= 1.
+func vecMatNEON(dst, x, m []float64, stride int) {
+	w := vecMatBlock2
+	switch c := len(dst); {
+	case c >= vecMatBlock16:
+		w = vecMatBlock16
+	case c >= vecMatBlock4:
+		w = vecMatBlock4
+	}
+	last := len(dst) - w
+	for c0 := 0; ; c0 += w {
+		c0 = min(c0, last)
+		d, mm := dst[c0:c0+w], m[c0:]
+		switch w {
+		case vecMatBlock16:
+			vecMatBlock16NEON(d, x, mm, stride)
+		case vecMatBlock4:
+			vecMatBlock4NEON(d, x, mm, stride)
+		default:
+			vecMatBlock2NEON(d, x, mm, stride)
+		}
+		if c0 == last {
+			return
+		}
+	}
+}
+
+// vecMatBlock16NEON computes dst[0:16] of VecMat with eight two-lane accumulators.
+//
+//go:noescape
+func vecMatBlock16NEON(dst, x, m []float64, stride int)
+
+// vecMatBlock4NEON computes dst[0:4] of VecMat with two two-lane accumulators.
+//
+//go:noescape
+func vecMatBlock4NEON(dst, x, m []float64, stride int)
+
+// vecMatBlock2NEON computes dst[0:2] of VecMat with one two-lane accumulator.
+//
+//go:noescape
+func vecMatBlock2NEON(dst, x, m []float64, stride int)

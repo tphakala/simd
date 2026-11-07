@@ -817,3 +817,57 @@ func BenchmarkSummary(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkVecMat measures VecMat at the shapes of its consumers (filterbank,
+// MDCT, psychoacoustic spreading). ScaleAdd is the same result composed from
+// existing ops: clear, then Scale and Add per row.
+func BenchmarkVecMat(b *testing.B) {
+	shapes := []struct {
+		name         string
+		r, c, stride int
+	}{
+		{"filterbank_64x32", 64, 32, 32},
+		{"mdct_36x32", 36, 32, 32},
+		{"mdcttr_36x18", 36, 18, 18},
+		{"psylong_62x62s62", 62, 62, 62},
+		{"psylong_59x59s62", 59, 59, 62},
+		{"psyshort_44x44s44", 44, 44, 44},
+		{"psyshort_41x41s44", 41, 41, 44},
+		{"psyshort_39x39s44", 39, 39, 44},
+		{"fixed_1x32", 1, 32, 32},
+	}
+	for _, s := range shapes {
+		x := make([]float64, s.r)
+		m := make([]float64, (s.r-1)*s.stride+s.c)
+		for i := range x {
+			x[i] = float64(i%7) - 3.25
+		}
+		for i := range m {
+			m[i] = float64(i%11)*0.125 - 0.5
+		}
+		dst := make([]float64, s.c)
+		tmp := make([]float64, s.c)
+		b.Run(s.name+"/SIMD", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				VecMat(dst, x, m, s.stride)
+			}
+		})
+		b.Run(s.name+"/Go", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				vecMatGo(dst, x, m, s.stride)
+			}
+		})
+		b.Run(s.name+"/ScaleAdd", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				clear(dst)
+				for r, xr := range x {
+					Scale(tmp, m[r*s.stride:r*s.stride+s.c], xr)
+					Add(dst, dst, tmp)
+				}
+			}
+		})
+	}
+}

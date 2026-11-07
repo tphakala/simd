@@ -14,8 +14,10 @@
 // [Affine] is bit-identical to [Scale] followed by [AddScalar]. Where a single
 // fused rounding is wanted, use [FMA], the AXPY [AddScaled], or the
 // multiply-accumulate [MulAdd], whose names say so; the exp/log family uses FMA
-// internally, where a single fused rounding is correct. The no-fuse contract is
-// asmcheck-enforced (see TestNoFMAContract in the module root).
+// internally, where a single fused rounding is correct. [VecMat] never contracts
+// either: each column is summed from +0.0 in row order with separately rounded
+// products, bit-identical on every path, NaN bit patterns aside. The no-fuse
+// contract is asmcheck-enforced (see TestNoFMAContract in the module root).
 //
 // # Aliasing
 //
@@ -49,7 +51,7 @@
 //     length.
 //   - The mirror, window, stride, interleave, batch and resample operations
 //     (Interleave2/N, Deinterleave2/N, ConvolveValid and ConvolveValidMulti,
-//     ConvolveDecimate, DotProductBatch, Autocorrelate, RealFFTUnpack and RealFFTPower)
+//     ConvolveDecimate, DotProductBatch, Autocorrelate, VecMat, RealFFTUnpack and RealFFTPower)
 //     index inputs and outputs at different positions,
 //     so their outputs must not overlap any input; RealFFTUnpack and RealFFTPower
 //     carry their own detailed notes.

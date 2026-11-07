@@ -7329,3 +7329,133 @@ realfftpow64_remainder:
 realfftpow64_done:
     VZEROUPPER
     RET
+
+// func vecMatBlock32AVX(dst, x, m []float64, stride int)
+// dst[0:32] = sum over r in [0, len(x)) of x[r]*m[r*stride+0:32]. Requires len(x) >= 1,
+// len(dst) >= 32 and m covering 32 columns of every row. Lane per output column:
+// each accumulator is zeroed (+0.0), then every row adds broadcast(x[r]) times the
+// row's contiguous columns, in ascending r. Separate VMULPD and VADDPD, never a
+// VFMADD, so it runs on AVX CPUs without FMA3 and keeps the double rounding of the
+// scalar sum. The broadcast is memory-source (AVX1; the register form is AVX2).
+// MXCSR is not touched.
+TEXT ·vecMatBlock32AVX(SB), NOSPLIT, $0-80
+    MOVQ dst_base+0(FP), DI
+    MOVQ x_base+24(FP), SI
+    MOVQ x_len+32(FP), CX
+    MOVQ m_base+48(FP), DX
+    MOVQ stride+72(FP), BX
+    SHLQ $3, BX
+    VXORPD Y0, Y0, Y0
+    VXORPD Y1, Y1, Y1
+    VXORPD Y2, Y2, Y2
+    VXORPD Y3, Y3, Y3
+    VXORPD Y4, Y4, Y4
+    VXORPD Y5, Y5, Y5
+    VXORPD Y6, Y6, Y6
+    VXORPD Y7, Y7, Y7
+
+vecMatBlock32AVX_row:
+    VBROADCASTSD (SI), Y8
+    VMULPD 0(DX), Y8, Y9
+    VADDPD Y9, Y0, Y0
+    VMULPD 32(DX), Y8, Y10
+    VADDPD Y10, Y1, Y1
+    VMULPD 64(DX), Y8, Y11
+    VADDPD Y11, Y2, Y2
+    VMULPD 96(DX), Y8, Y12
+    VADDPD Y12, Y3, Y3
+    VMULPD 128(DX), Y8, Y9
+    VADDPD Y9, Y4, Y4
+    VMULPD 160(DX), Y8, Y10
+    VADDPD Y10, Y5, Y5
+    VMULPD 192(DX), Y8, Y11
+    VADDPD Y11, Y6, Y6
+    VMULPD 224(DX), Y8, Y12
+    VADDPD Y12, Y7, Y7
+    ADDQ $8, SI
+    ADDQ BX, DX
+    DECQ CX
+    JNZ  vecMatBlock32AVX_row
+
+    VMOVUPD Y0, 0(DI)
+    VMOVUPD Y1, 32(DI)
+    VMOVUPD Y2, 64(DI)
+    VMOVUPD Y3, 96(DI)
+    VMOVUPD Y4, 128(DI)
+    VMOVUPD Y5, 160(DI)
+    VMOVUPD Y6, 192(DI)
+    VMOVUPD Y7, 224(DI)
+    VZEROUPPER
+    RET
+
+// func vecMatBlock16AVX(dst, x, m []float64, stride int)
+// dst[0:16] = sum over r in [0, len(x)) of x[r]*m[r*stride+0:16]. Requires len(x) >= 1,
+// len(dst) >= 16 and m covering 16 columns of every row. Lane per output column:
+// each accumulator is zeroed (+0.0), then every row adds broadcast(x[r]) times the
+// row's contiguous columns, in ascending r. Separate VMULPD and VADDPD, never a
+// VFMADD, so it runs on AVX CPUs without FMA3 and keeps the double rounding of the
+// scalar sum. The broadcast is memory-source (AVX1; the register form is AVX2).
+// MXCSR is not touched.
+TEXT ·vecMatBlock16AVX(SB), NOSPLIT, $0-80
+    MOVQ dst_base+0(FP), DI
+    MOVQ x_base+24(FP), SI
+    MOVQ x_len+32(FP), CX
+    MOVQ m_base+48(FP), DX
+    MOVQ stride+72(FP), BX
+    SHLQ $3, BX
+    VXORPD Y0, Y0, Y0
+    VXORPD Y1, Y1, Y1
+    VXORPD Y2, Y2, Y2
+    VXORPD Y3, Y3, Y3
+
+vecMatBlock16AVX_row:
+    VBROADCASTSD (SI), Y8
+    VMULPD 0(DX), Y8, Y9
+    VADDPD Y9, Y0, Y0
+    VMULPD 32(DX), Y8, Y10
+    VADDPD Y10, Y1, Y1
+    VMULPD 64(DX), Y8, Y11
+    VADDPD Y11, Y2, Y2
+    VMULPD 96(DX), Y8, Y12
+    VADDPD Y12, Y3, Y3
+    ADDQ $8, SI
+    ADDQ BX, DX
+    DECQ CX
+    JNZ  vecMatBlock16AVX_row
+
+    VMOVUPD Y0, 0(DI)
+    VMOVUPD Y1, 32(DI)
+    VMOVUPD Y2, 64(DI)
+    VMOVUPD Y3, 96(DI)
+    VZEROUPPER
+    RET
+
+// func vecMatBlock4AVX(dst, x, m []float64, stride int)
+// dst[0:4] = sum over r in [0, len(x)) of x[r]*m[r*stride+0:4]. Requires len(x) >= 1,
+// len(dst) >= 4 and m covering 4 columns of every row. Lane per output column:
+// each accumulator is zeroed (+0.0), then every row adds broadcast(x[r]) times the
+// row's contiguous columns, in ascending r. Separate VMULPD and VADDPD, never a
+// VFMADD, so it runs on AVX CPUs without FMA3 and keeps the double rounding of the
+// scalar sum. The broadcast is memory-source (AVX1; the register form is AVX2).
+// MXCSR is not touched.
+TEXT ·vecMatBlock4AVX(SB), NOSPLIT, $0-80
+    MOVQ dst_base+0(FP), DI
+    MOVQ x_base+24(FP), SI
+    MOVQ x_len+32(FP), CX
+    MOVQ m_base+48(FP), DX
+    MOVQ stride+72(FP), BX
+    SHLQ $3, BX
+    VXORPD Y0, Y0, Y0
+
+vecMatBlock4AVX_row:
+    VBROADCASTSD (SI), Y8
+    VMULPD 0(DX), Y8, Y9
+    VADDPD Y9, Y0, Y0
+    ADDQ $8, SI
+    ADDQ BX, DX
+    DECQ CX
+    JNZ  vecMatBlock4AVX_row
+
+    VMOVUPD Y0, 0(DI)
+    VZEROUPPER
+    RET
