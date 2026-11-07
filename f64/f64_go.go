@@ -97,7 +97,8 @@ func affineGo(dst, a []float64, alpha, beta float64) {
 	_ = a[len(dst)-1]
 	// float64() rounds the product before beta is added; the Go spec forbids
 	// fusing float64(x*y) + z, so this stays bit-identical to scaleGo then
-	// addScalarGo on FMA-capable backends (arm64, amd64 v3+).
+	// addScalarGo on backends that contract a multiply-add (arm64 and amd64 v3+,
+	// among others).
 	for i := range dst {
 		dst[i] = float64(a[i]*alpha) + beta
 	}

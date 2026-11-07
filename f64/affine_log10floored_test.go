@@ -63,10 +63,11 @@ func TestAffine(t *testing.T) {
 // rounds before the add. With a = alpha = 1+2^-30 the exact product is
 // 1 + 2^-29 + 2^-60; rounded first it is 1 + 2^-29, so adding beta = -1 gives
 // exactly 2^-29, while a fused multiply-add keeps the 2^-60 term. Every tier,
-// the Go fallback included, must give 2^-29. The Go fallback is only fused by
-// the compiler on arm64 and amd64 GOAMD64=v3, so that is where this catches a
-// lost barrier. n = 1 takes the scalar path; 4 and 17 reach the vector bodies
-// and their tails.
+// the Go fallback included, must give 2^-29. A lost barrier in the Go fallback
+// only shows where the compiler contracts a float multiply-add: as of Go 1.27
+// that is arm64, ppc64, s390x, riscv64, loong64, and amd64 at GOAMD64=v3 or
+// higher. CI runs it on arm64. n = 1 takes the scalar path; 4 and 17 reach the
+// vector bodies and their tails.
 func TestAffineUnfused(t *testing.T) {
 	const x = 1 + 0x1p-30
 	forTiers(t, func(t *testing.T) {
