@@ -93,3 +93,5 @@ func realFFTUnpack64(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int) {
 func realFFTPower64(dst, zRe, zIm, twRe, twIm []float64, n int) {
 	realFFTPower64Go(dst, zRe, zIm, twRe, twIm, n)
 }
+
+func vecMat(dst, x, m []float64, stride int) { vecMatGo(dst, x, m, stride) }

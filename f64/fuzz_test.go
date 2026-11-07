@@ -500,3 +500,55 @@ func FuzzF64RealFFTPower(f *testing.F) {
 		}
 	})
 }
+
+// FuzzF64VecMat checks VecMat against the column-outer scalar oracle bit for bit
+// (any NaN equals any NaN). Bytes 0..2 pick R, C and the stride padding; the rest
+// is raw float64 bits cycled to fill x and m.
+func FuzzF64VecMat(f *testing.F) {
+	for _, s := range [][3]byte{
+		{64, 32, 0}, {36, 32, 0}, {36, 18, 0}, {62, 62, 0}, {59, 59, 3}, {44, 44, 0},
+		{39, 39, 5}, {1, 1, 0}, {0, 5, 0}, {3, 4, 1}, {3, 15, 0}, {3, 16, 0},
+		{3, 17, 2}, {3, 31, 0}, {3, 33, 1}, {3, 63, 0}, {3, 65, 3}, {7, 2, 0}, {7, 3, 3},
+	} {
+		raw := append([]byte{s[0], s[1], s[2]}, make([]byte, 8*17)...)
+		for i := 3; i < len(raw); i++ {
+			raw[i] = byte(i*37 + 11)
+		}
+		f.Add(raw)
+	}
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if len(raw) < 11 {
+			return
+		}
+		r := int(raw[0]) % 71
+		c := int(raw[1])%70 + 1
+		stride := c + int(raw[2])%4
+		vals := f64sBits(raw[3:])
+		if len(vals) == 0 {
+			return
+		}
+		fill := func(n int) []float64 {
+			v := make([]float64, n)
+			for i := range v {
+				v[i] = vals[i%len(vals)]
+			}
+			return v
+		}
+		x := fill(r)
+		var m []float64
+		if r > 0 {
+			m = fill((r-1)*stride + c)
+		}
+		dbuf := make([]float64, c+1)
+		dbuf[c] = vecMatSentinel
+		VecMat(dbuf[:c], x, m, stride)
+		for j := range c {
+			if want := vecMatNaive(x, m, stride, j); !bitsEqF64(dbuf[j], want) {
+				t.Fatalf("R=%d C=%d stride=%d: dst[%d] = %x, want %x", r, c, stride, j, math.Float64bits(dbuf[j]), math.Float64bits(want))
+			}
+		}
+		if dbuf[c] != vecMatSentinel {
+			t.Fatal("store past len(dst)")
+		}
+	})
+}

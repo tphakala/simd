@@ -215,6 +215,7 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 |                 | `Pow(dst, src, exp)`                | Scalar power x^exp (PCEN, dB) | 4x (AVX2+FMA) / 2x (NEON)           |
 |                 | `PowElem(dst, base, exp)`           | Elementwise base^exp          | 4x (AVX2+FMA) / 2x (NEON)           |
 | **Batch**       | `DotProductBatch(r, rows, v)`       | Multiple dot products         | 8x / 4x / 2x                        |
+|                 | `VecMat(dst, x, m, stride)`         | Row vector times strided matrix, ordered and unfused (bit-exact) | 4x (AVX) / 2x (NEON) |
 | **Signal**      | `ConvolveValid(dst, sig, k)`        | FIR filter / convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMulti(dsts, sig, ks)` | Multi-kernel convolution      | 8x / 4x / 2x                        |
 |                 | `ConvolveValidMaxAbs(sig, k)`       | Fused FIR abs-max peak (no scratch) | 8x / 4x / 2x                  |
@@ -247,6 +248,18 @@ lag, never fusing the multiply-add), so each lag's sum keeps the exact left-to-r
 order of the scalar loop and every build emits byte-identical results to the pure-Go
 reference. The AVX2 path accumulates four lags per YMM, NEON two lags per V register;
 non-AVX2/NEON CPUs and short blocks use the scalar reference.
+
+`VecMat` multiplies a row vector by a strided row-major matrix,
+`dst[c] = Σ x[r]·m[r*stride+c]`. Store the matrix so each output is a column: one
+accumulator lane per output column, one contiguous matrix row per step, so a
+64x32 filterbank or a 62x62 spreading table is one call. Each column is summed
+from +0.0 in ascending row order and every product rounds before its add (never
+fused), so the result is bit-identical on every path, NaN bit patterns aside. The
+last block of a row starts at `len(dst)-w` and overlaps its predecessor instead of
+running a slow remainder loop. `stride` may exceed `len(dst)` for a narrower
+output window; `VecMat` panics if `stride < len(dst)` or the matrix is too short.
+The AVX kernels serve every AVX tier (AVX-512, AVX+FMA, AVX without FMA); CPUs
+without AVX use the Go reference.
 
 #### STFT (fused real-input short-time Fourier transform)
 

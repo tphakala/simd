@@ -3858,3 +3858,114 @@ realfftpow64_neon_scalar:
 
 realfftpow64_neon_done:
     RET
+
+// func vecMatBlock16NEON(dst, x, m []float64, stride int)
+// dst[0:16] = sum over r in [0, len(x)) of x[r]*m[r*stride+0:16]. Requires len(x) >= 1,
+// len(dst) >= 16 and m covering 16 columns of every row. Lane per output column:
+// each accumulator is zeroed (+0.0), then every row adds broadcast(x[r]) times the
+// row's contiguous columns, in ascending r. Separate FMUL and FADD (WORD encoded),
+// never FMLA, to keep the double rounding of the scalar sum. FPCR is not touched.
+// A multi-register VLD1/VST1 moves at most four registers and has no displacement
+// form, so a second pointer R5 (row + 64 bytes) serves columns 8..15.
+TEXT ·vecMatBlock16NEON(SB), NOSPLIT, $0-80
+    MOVD dst_base+0(FP), R0
+    MOVD x_base+24(FP), R1
+    MOVD x_len+32(FP), R2
+    MOVD m_base+48(FP), R3
+    MOVD stride+72(FP), R4
+    LSL $3, R4, R4
+    VEOR V0.B16, V0.B16, V0.B16
+    VEOR V1.B16, V1.B16, V1.B16
+    VEOR V2.B16, V2.B16, V2.B16
+    VEOR V3.B16, V3.B16, V3.B16
+    VEOR V4.B16, V4.B16, V4.B16
+    VEOR V5.B16, V5.B16, V5.B16
+    VEOR V6.B16, V6.B16, V6.B16
+    VEOR V7.B16, V7.B16, V7.B16
+
+vecMatBlock16NEON_row:
+    VLD1R.P 8(R1), [V8.D2]
+    VLD1 (R3), [V16.D2, V17.D2, V18.D2, V19.D2]
+    ADD $64, R3, R5
+    VLD1 (R5), [V20.D2, V21.D2, V22.D2, V23.D2]
+    WORD $0x6E68DE10           // FMUL V16.2D, V16.2D, V8.2D
+    WORD $0x4E70D400           // FADD V0.2D, V0.2D, V16.2D
+    WORD $0x6E68DE31           // FMUL V17.2D, V17.2D, V8.2D
+    WORD $0x4E71D421           // FADD V1.2D, V1.2D, V17.2D
+    WORD $0x6E68DE52           // FMUL V18.2D, V18.2D, V8.2D
+    WORD $0x4E72D442           // FADD V2.2D, V2.2D, V18.2D
+    WORD $0x6E68DE73           // FMUL V19.2D, V19.2D, V8.2D
+    WORD $0x4E73D463           // FADD V3.2D, V3.2D, V19.2D
+    WORD $0x6E68DE94           // FMUL V20.2D, V20.2D, V8.2D
+    WORD $0x4E74D484           // FADD V4.2D, V4.2D, V20.2D
+    WORD $0x6E68DEB5           // FMUL V21.2D, V21.2D, V8.2D
+    WORD $0x4E75D4A5           // FADD V5.2D, V5.2D, V21.2D
+    WORD $0x6E68DED6           // FMUL V22.2D, V22.2D, V8.2D
+    WORD $0x4E76D4C6           // FADD V6.2D, V6.2D, V22.2D
+    WORD $0x6E68DEF7           // FMUL V23.2D, V23.2D, V8.2D
+    WORD $0x4E77D4E7           // FADD V7.2D, V7.2D, V23.2D
+    ADD R4, R3, R3
+    SUB $1, R2, R2
+    CBNZ R2, vecMatBlock16NEON_row
+
+    VST1 [V0.D2, V1.D2, V2.D2, V3.D2], (R0)
+    ADD $64, R0, R5
+    VST1 [V4.D2, V5.D2, V6.D2, V7.D2], (R5)
+    RET
+
+// func vecMatBlock4NEON(dst, x, m []float64, stride int)
+// dst[0:4] = sum over r in [0, len(x)) of x[r]*m[r*stride+0:4]. Requires len(x) >= 1,
+// len(dst) >= 4 and m covering 4 columns of every row. Lane per output column:
+// each accumulator is zeroed (+0.0), then every row adds broadcast(x[r]) times the
+// row's contiguous columns, in ascending r. Separate FMUL and FADD (WORD encoded),
+// never FMLA, to keep the double rounding of the scalar sum. FPCR is not touched.
+TEXT ·vecMatBlock4NEON(SB), NOSPLIT, $0-80
+    MOVD dst_base+0(FP), R0
+    MOVD x_base+24(FP), R1
+    MOVD x_len+32(FP), R2
+    MOVD m_base+48(FP), R3
+    MOVD stride+72(FP), R4
+    LSL $3, R4, R4
+    VEOR V0.B16, V0.B16, V0.B16
+    VEOR V1.B16, V1.B16, V1.B16
+
+vecMatBlock4NEON_row:
+    VLD1R.P 8(R1), [V8.D2]
+    VLD1 (R3), [V16.D2, V17.D2]
+    WORD $0x6E68DE10           // FMUL V16.2D, V16.2D, V8.2D
+    WORD $0x4E70D400           // FADD V0.2D, V0.2D, V16.2D
+    WORD $0x6E68DE31           // FMUL V17.2D, V17.2D, V8.2D
+    WORD $0x4E71D421           // FADD V1.2D, V1.2D, V17.2D
+    ADD R4, R3, R3
+    SUB $1, R2, R2
+    CBNZ R2, vecMatBlock4NEON_row
+
+    VST1 [V0.D2, V1.D2], (R0)
+    RET
+
+// func vecMatBlock2NEON(dst, x, m []float64, stride int)
+// dst[0:2] = sum over r in [0, len(x)) of x[r]*m[r*stride+0:2]. Requires len(x) >= 1,
+// len(dst) >= 2 and m covering 2 columns of every row. Lane per output column:
+// each accumulator is zeroed (+0.0), then every row adds broadcast(x[r]) times the
+// row's contiguous columns, in ascending r. Separate FMUL and FADD (WORD encoded),
+// never FMLA, to keep the double rounding of the scalar sum. FPCR is not touched.
+TEXT ·vecMatBlock2NEON(SB), NOSPLIT, $0-80
+    MOVD dst_base+0(FP), R0
+    MOVD x_base+24(FP), R1
+    MOVD x_len+32(FP), R2
+    MOVD m_base+48(FP), R3
+    MOVD stride+72(FP), R4
+    LSL $3, R4, R4
+    VEOR V0.B16, V0.B16, V0.B16
+
+vecMatBlock2NEON_row:
+    VLD1R.P 8(R1), [V8.D2]
+    VLD1 (R3), [V16.D2]
+    WORD $0x6E68DE10           // FMUL V16.2D, V16.2D, V8.2D
+    WORD $0x4E70D400           // FADD V0.2D, V0.2D, V16.2D
+    ADD R4, R3, R3
+    SUB $1, R2, R2
+    CBNZ R2, vecMatBlock2NEON_row
+
+    VST1 [V0.D2], (R0)
+    RET

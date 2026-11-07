@@ -1186,3 +1186,67 @@ func realFFTUnpackAVX(outRe, outIm, zRe, zIm, twRe, twIm []float64, n int)
 //
 //go:noescape
 func realFFTPowerAVX(dst, zRe, zIm, twRe, twIm []float64, n int)
+
+// VecMat block widths: columns per AVX kernel call.
+const (
+	vecMatBlock4  = 4
+	vecMatBlock16 = 16
+	vecMatBlock32 = 32
+)
+
+// vecMat takes the AVX kernels on every AVX tier (AVX-512, AVX+FMA, AVX without
+// FMA): they use separate multiply and add, so one family serves them all. It
+// dispatches directly instead of through an xxxImpl pointer so the callers'
+// local arrays do not escape to the heap.
+func vecMat(dst, x, m []float64, stride int) {
+	if cpu.X86.AVX && len(dst) >= vecMatBlock4 {
+		vecMatAVX(dst, x, m, stride)
+		return
+	}
+	vecMatGo(dst, x, m, stride)
+}
+
+// vecMatAVX covers [0, len(dst)) with blocks of w columns, the last one starting
+// at len(dst)-w so it overlaps its predecessor; exactly ceil(len(dst)/w) kernel
+// calls. A column covered twice is recomputed to the same bits. It requires
+// len(dst) >= vecMatBlock4 and len(x) >= 1.
+func vecMatAVX(dst, x, m []float64, stride int) {
+	w := vecMatBlock4
+	switch c := len(dst); {
+	case c >= vecMatBlock32:
+		w = vecMatBlock32
+	case c >= vecMatBlock16:
+		w = vecMatBlock16
+	}
+	last := len(dst) - w
+	for c0 := 0; ; c0 += w {
+		c0 = min(c0, last)
+		d, mm := dst[c0:c0+w], m[c0:]
+		switch w {
+		case vecMatBlock32:
+			vecMatBlock32AVX(d, x, mm, stride)
+		case vecMatBlock16:
+			vecMatBlock16AVX(d, x, mm, stride)
+		default:
+			vecMatBlock4AVX(d, x, mm, stride)
+		}
+		if c0 == last {
+			return
+		}
+	}
+}
+
+// vecMatBlock32AVX computes dst[0:32] of VecMat with eight YMM accumulators.
+//
+//go:noescape
+func vecMatBlock32AVX(dst, x, m []float64, stride int)
+
+// vecMatBlock16AVX computes dst[0:16] of VecMat with four YMM accumulators.
+//
+//go:noescape
+func vecMatBlock16AVX(dst, x, m []float64, stride int)
+
+// vecMatBlock4AVX computes dst[0:4] of VecMat with one YMM accumulator.
+//
+//go:noescape
+func vecMatBlock4AVX(dst, x, m []float64, stride int)

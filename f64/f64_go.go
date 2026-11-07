@@ -904,3 +904,22 @@ func realFFTPower64Go(dst, zRe, zIm, twRe, twIm []float64, n int) {
 		dst[k] = xRe*xRe + xIm*xIm
 	}
 }
+
+// vecMatGo is the reference for VecMat: dst[c] = sum over r of x[r]*m[r*stride+c],
+// each column summed from +0.0 in ascending r with every product rounded to
+// float64 before its add. The caller has validated the shapes (len(x) >= 1 and
+// the matrix covers every element read).
+//
+// The float64() conversion around the product is the fusion barrier the Go spec
+// guarantees (Arithmetic operators: an explicit conversion rounds, so d[j] +=
+// float64(x*y) may not be contracted into a fused multiply-add). Without it the
+// compiler may fuse on arm64 and on amd64 with GOAMD64=v3, changing the result.
+func vecMatGo(dst, x, m []float64, stride int) {
+	clear(dst) // each column is the empty sum, +0.0, before row 0
+	for r, xr := range x {
+		row := m[r*stride : r*stride+len(dst)]
+		for j := range dst {
+			dst[j] += float64(xr * row[j])
+		}
+	}
+}

@@ -337,6 +337,12 @@ var singleRoundingKernels = []singleRoundingKernel{
 	{"f64/f64_amd64.s", "affineAVX512", "VMULPD", "VADDPD"},
 	{"f64/f64_amd64.s", "affineSSE2", "MULPD", "ADDPD"},
 	{"f64/f64_arm64.s", "affineNEON", "FMUL", "FADD"},
+	{"f64/f64_amd64.s", "vecMatBlock32AVX", "VMULPD", "VADDPD"},
+	{"f64/f64_amd64.s", "vecMatBlock16AVX", "VMULPD", "VADDPD"},
+	{"f64/f64_amd64.s", "vecMatBlock4AVX", "VMULPD", "VADDPD"},
+	{"f64/f64_arm64.s", "vecMatBlock16NEON", "FMUL", "FADD"},
+	{"f64/f64_arm64.s", "vecMatBlock4NEON", "FMUL", "FADD"},
+	{"f64/f64_arm64.s", "vecMatBlock2NEON", "FMUL", "FADD"},
 }
 
 // asmFuncBody returns the lines of the TEXT ·fn(...) block, from its TEXT line to

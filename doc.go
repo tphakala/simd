@@ -79,6 +79,8 @@
 //
 // Reductions: Sum, DotProduct, DotProductBatch, DotProductIndexed, DotProductStrided, Min, Max, MaxAbs, MinIdx, MaxIdx
 //
+// Matrix (f64): VecMat (row vector times a strided row-major matrix; each output is summed from +0.0 in row order with separately rounded products, bit-identical on every path, NaN bit patterns aside)
+//
 // Statistics: Mean, Variance, StdDev, EuclideanDistance, Normalize
 //
 // Element-wise: Abs, Neg, Sqrt, Reciprocal, Clamp
