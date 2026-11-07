@@ -768,3 +768,14 @@ func vecMatBlock4NEON(dst, x, m []float64, stride int)
 //
 //go:noescape
 func vecMatBlock2NEON(dst, x, m []float64, stride int)
+
+func quantizePow34Bands(dst []int32, src []float64, widths []int, scales []float64, rounding, limit, z float64) {
+	if hasNEON {
+		quantizePow34BandsNEON(dst, src, widths, scales, rounding, limit, z)
+		return
+	}
+	quantizePow34BandsGo(dst, src, widths, scales, rounding, limit, z)
+}
+
+//go:noescape
+func quantizePow34BandsNEON(dst []int32, src []float64, widths []int, scales []float64, rounding, limit, z float64)

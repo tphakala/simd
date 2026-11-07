@@ -190,3 +190,15 @@ func ExampleDFTPlan() {
 	fmt.Printf("%.3f\n", mag)
 	// Output: [0.000 3.000 0.000 0.000 0.000 3.000]
 }
+
+func ExampleQuantizePow34Bands() {
+	// Two bands of three lines; each band has its own scale.
+	src := []float64{1, -8, 100, 1, -8, 100}
+	widths := []int{3, 3}
+	scales := []float64{1, 0.25}
+	dst := make([]int32, len(src))
+
+	f64.QuantizePow34Bands(dst, src, widths, scales, 0.4054, 8206)
+	fmt.Println(dst)
+	// Output: [1 -5 32 0 -2 11]
+}

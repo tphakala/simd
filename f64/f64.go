@@ -334,6 +334,69 @@ func Sqrt(dst, a []float64) {
 	sqrt64(dst[:n], a[:n])
 }
 
+// QuantizePow34Bands applies the MP3 (ISO 11172-3 annex C) power-law quantizer
+// band by band, with one scale per band:
+//
+//	t := math.Abs(src[i]) * scale
+//	n := math.Sqrt(t*math.Sqrt(t)) + rounding // |x*scale|^(3/4) + rounding
+//	m := int32(limit)
+//	if n <= limit { m = int32(n) } // false for NaN, so NaN gives limit
+//	if src[i] < 0 { m = -m }
+//	dst[i] = m
+//
+// Band b covers widths[b] lines after the previous bands and uses scales[b]; a
+// single-scale caller passes []int{len(src)} and []float64{s}. The motivating
+// call is the MP3 encoder's, rounding = 0.4054 and limit = 8206.
+//
+// Every operation is a separate IEEE-754 float64 rounding and is never fused,
+// so the result is bit-identical on SSE2, NEON and the portable path; there is
+// no relaxed tier. Lines whose scaled magnitude is certainly below the rounding
+// boundary are stored as 0 without the square roots; this never changes a
+// result.
+//
+// Edge cases: NaN input of either sign gives +int32(limit) (unlike
+// Float32ToInt32ScaleClamp, where NaN gives 0), +Inf gives int32(limit), -Inf
+// gives -int32(limit), and +-0 gives int32(rounding) clamped, which is 0 for
+// rounding < 1. A negative scale makes sqrt see a negative t, so lines give
+// int32(limit), negated when x < 0 (NaN input gives +int32(limit)), unless
+// |x|*scale underflows to -0 (which includes +-0 input with a finite scale),
+// which gives int32(min(rounding, limit)) negated when x < 0 (so +-0 input is
+// not negated); scale -0 does the same for every finite x. A scale of +Inf or
+// NaN makes t Inf or NaN, so every line gives +-int32(limit), with +limit for
+// +-0 and NaN input. t*sqrt(t) can overflow to +Inf while t is finite (giving
+// the limit) and underflows to 0 for tiny t. Negative or NaN scales are valid
+// and run with the zero skip disabled.
+//
+// Panics if len(widths) != len(scales), if a width is negative, if
+// sum(widths) > min(len(dst), len(src)), if limit is not in [0, 2147483647], or
+// if rounding is NaN or <= -1. Within that domain every int32 conversion is in
+// range, which is what makes the result identical on every architecture. dst
+// lines past sum(widths) are left untouched. Zero allocations.
+func QuantizePow34Bands(dst []int32, src []float64, widths []int, scales []float64, rounding, limit float64) {
+	if len(widths) != len(scales) {
+		panic("simd: len(widths) must equal len(scales)")
+	}
+	n := min(len(dst), len(src))
+	total := 0
+	for _, w := range widths {
+		if w < 0 || w > n-total {
+			panic("simd: band widths must be non-negative and sum to at most min(len(dst), len(src))")
+		}
+		total += w
+	}
+	if !(limit >= 0 && limit <= math.MaxInt32) {
+		panic("simd: limit must be in [0, 2147483647]")
+	}
+	if !(rounding > -1) {
+		panic("simd: rounding must be greater than -1")
+	}
+	if total == 0 {
+		return
+	}
+	z := quantPow34Threshold(scales, rounding)
+	quantizePow34Bands(dst[:total], src[:total], widths, scales, rounding, limit, z)
+}
+
 // Reciprocal computes element-wise reciprocal: dst[i] = 1/a[i].
 // Processes min(len(dst), len(a)) elements.
 func Reciprocal(dst, a []float64) {

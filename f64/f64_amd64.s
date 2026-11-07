@@ -7650,3 +7650,119 @@ vecMatBlock4AVX_row:
     VMOVUPD Y0, 0(DI)
     VZEROUPPER
     RET
+
+// ---------------------------------------------------------------------------
+// QuantizePow34Bands: banded power-law quantizer to int32 (see f64.go).
+//
+// func quantizePow34BandsSSE2(dst []int32, src []float64, widths []int, scales []float64, rounding, limit, z float64)
+//
+// Per line: t = |x|*scale; n = sqrt(t*sqrt(t)) + rounding; m = int32(min(n, limit));
+// negated when x < 0. Every operation is a separate rounding (no FMA). A pair
+// whose lanes both have t < z (ordered compare, false for NaN) is stored as
+// zeros without the square roots. MINPD returns its second source (limit) on
+// NaN, and the sign comes from the ordered compare x < 0 applied in the float
+// domain, so NaN of either sign gives +limit.
+//
+// 2-lane steps and a 1-lane tail finish each band, so nothing past the band
+// total is read or written; the caller guarantees sum(widths) <= len(dst),
+// len(src). Legacy SSE is destructive and its memory operands must be 16-byte
+// aligned, so x and t are copied with MOVAPD before the destructive ops and
+// every constant sits in a register. No SSE3 (MOVDDUP) or SSE4.1 (BLENDVPD)
+// forms.
+TEXT ·quantizePow34BandsSSE2(SB), NOSPLIT, $0-120
+	MOVQ     dst_base+0(FP), DI
+	MOVQ     src_base+24(FP), SI
+	MOVQ     widths_base+48(FP), R9
+	MOVQ     widths_len+56(FP), CX
+	MOVQ     scales_base+72(FP), R8
+	MOVSD    rounding+96(FP), X13
+	UNPCKLPD X13, X13
+	MOVSD    limit+104(FP), X12
+	UNPCKLPD X12, X12
+	MOVSD    z+112(FP), X9
+	UNPCKLPD X9, X9
+	MOVUPD   absf64mask<>(SB), X15
+	MOVUPD   roundf64_signmask<>(SB), X10
+	XORPD    X11, X11
+	TESTQ    CX, CX
+	JZ       q34sse_done
+
+q34sse_band:
+	MOVSD    (R8), X14
+	UNPCKLPD X14, X14
+	MOVQ     (R9), DX
+
+q34sse_pair:
+	CMPQ      DX, $2
+	JLT       q34sse_single
+	MOVUPD    (SI), X0
+	MOVAPD    X0, X1
+	ANDPD     X15, X1
+	MULPD     X14, X1
+	MOVAPD    X1, X3
+	CMPPD     X9, X3, $1
+	MOVMSKPD  X3, AX
+	CMPL      AX, $3
+	JEQ       q34sse_pairzero
+	SQRTPD    X1, X2
+	MULPD     X1, X2
+	SQRTPD    X2, X2
+	ADDPD     X13, X2
+	MINPD     X12, X2
+	MOVAPD    X0, X3
+	CMPPD     X11, X3, $1
+	ANDPD     X10, X3
+	XORPD     X3, X2
+	CVTTPD2PL X2, X4
+	MOVQ      X4, (DI)
+	JMP       q34sse_pairstep
+
+q34sse_pairzero:
+	MOVQ X11, (DI)
+
+q34sse_pairstep:
+	ADDQ $16, SI
+	ADDQ $8, DI
+	SUBQ $2, DX
+	JMP  q34sse_pair
+
+q34sse_single:
+	TESTQ     DX, DX
+	JZ        q34sse_next
+	MOVSD     (SI), X0
+	MOVAPD    X0, X1
+	ANDPD     X15, X1
+	MULPD     X14, X1
+	MOVAPD    X1, X3
+	CMPPD     X9, X3, $1
+	MOVMSKPD  X3, AX
+	TESTL     $1, AX
+	JNZ       q34sse_singlezero
+	SQRTPD    X1, X2
+	MULPD     X1, X2
+	SQRTPD    X2, X2
+	ADDPD     X13, X2
+	MINPD     X12, X2
+	MOVAPD    X0, X3
+	CMPPD     X11, X3, $1
+	ANDPD     X10, X3
+	XORPD     X3, X2
+	CVTTPD2PL X2, X4
+	MOVL      X4, (DI)
+	JMP       q34sse_singlestep
+
+q34sse_singlezero:
+	MOVL X11, (DI)
+
+q34sse_singlestep:
+	ADDQ $8, SI
+	ADDQ $4, DI
+
+q34sse_next:
+	ADDQ $8, R8
+	ADDQ $8, R9
+	DECQ CX
+	JNZ  q34sse_band
+
+q34sse_done:
+	RET

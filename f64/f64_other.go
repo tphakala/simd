@@ -95,3 +95,7 @@ func realFFTPower64(dst, zRe, zIm, twRe, twIm []float64, n int) {
 }
 
 func vecMat(dst, x, m []float64, stride int) { vecMatGo(dst, x, m, stride) }
+
+func quantizePow34Bands(dst []int32, src []float64, widths []int, scales []float64, rounding, limit, z float64) {
+	quantizePow34BandsGo(dst, src, widths, scales, rounding, limit, z)
+}

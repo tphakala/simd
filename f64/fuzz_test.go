@@ -553,3 +553,80 @@ func FuzzF64VecMat(f *testing.F) {
 		}
 	})
 }
+
+// FuzzF64QuantizePow34Bands drives every kernel and the public API with
+// arbitrary parameters, band splits (including zero and odd widths) and scales
+// (negative, NaN, Inf) and compares them with the literal formula.
+func FuzzF64QuantizePow34Bands(f *testing.F) {
+	addByteLenSeeds(f)
+	f.Add(quantPow34GranuleSeed())
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := f64sBits(raw)
+		if len(v) < 3 {
+			return
+		}
+		rounding := v[0]
+		if math.IsNaN(rounding) {
+			rounding = 0.4054
+		}
+		if rounding <= -1 {
+			rounding = -rounding
+		}
+		limit := v[1]
+		if math.IsNaN(limit) {
+			limit = 8206
+		}
+		limit = math.Min(math.Abs(limit), math.MaxInt32)
+		src := v[2:]
+		var widths []int
+		var scales []float64
+		rem := len(src)
+		for i := 0; i < len(src) && rem > 0; i++ {
+			w := min(int(math.Float64bits(src[i])&0xff)%9, rem)
+			widths = append(widths, w)
+			scales = append(scales, src[i])
+			rem -= w
+		}
+		if rem > 0 {
+			widths = append(widths, rem)
+			scales = append(scales, 1)
+		}
+		total := quantPow34Total(widths)
+		want := quantPow34Want(src, widths, scales, rounding, limit)
+		for _, k := range append([]quantPow34Kernel{quantPow34API}, quantPow34Kernels()...) {
+			got := make([]int32, len(src))
+			runQuantPow34Kernel(k, got, src, widths, scales, rounding, limit)
+			for i := range total {
+				if got[i] != want[i] {
+					t.Fatalf("%s line %d: x=%v got %d, want %d", k.name, i, src[i], got[i], want[i])
+				}
+			}
+		}
+	})
+}
+
+// quantPow34GranuleSeed encodes a granule-like input in the fuzz byte format:
+// rounding 0.4054, limit 8206, then 576 values. The fuzz target reads each
+// band's scale from the leading values and the band width from the low byte,
+// so the first values are positive scales near the zero-skip boundary (the skip
+// stays enabled), widths cycle through 4, 4, 3, 5, 0, 1, 2 so every tail length
+// occurs, and the later lines spread over several magnitudes.
+func quantPow34GranuleSeed() []byte {
+	widthByte := []uint64{4, 4, 3, 5, 0, 1, 2}
+	vals := make([]float64, 0, 578)
+	vals = append(vals, 0.4054, 8206)
+	for i := range 576 {
+		var x float64
+		if i < 230 {
+			x = 0.3 + 1.2*float64(i%11)/10
+		} else {
+			x = math.Pow(10, float64(i%9-3)) * (1 + float64(i%7)/10)
+		}
+		vals = append(vals, math.Float64frombits(math.Float64bits(x)&^0xff|widthByte[i%7]))
+	}
+	raw := make([]byte, 8*len(vals))
+	for i, x := range vals {
+		binary.LittleEndian.PutUint64(raw[i*8:], math.Float64bits(x))
+	}
+	return raw
+}
