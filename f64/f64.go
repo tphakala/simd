@@ -19,8 +19,8 @@
 // products, bit-identical on every path, NaN bit patterns aside.
 // [ButterflyComplexStage] never fuses either and is bit-identical on every path;
 // [ButterflyComplex] and [ButterflyComplexStage4] fuse, and are tolerance-stable
-// only. The no-fuse
-// contract is asmcheck-enforced (see TestNoFMAContract in the module root).
+// only. The no-fuse contract is asmcheck-enforced (see TestNoFMAContract in the
+// module root).
 //
 // # Aliasing
 //

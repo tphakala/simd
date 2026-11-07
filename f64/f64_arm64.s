@@ -2994,8 +2994,9 @@ bfstage_neon_next:
     // The loop body's four loads, the two ADDs that address them, and its four
     // stores could be two multi-register loads and two multi-register stores
     // instead (VLD1 (R0), [V0.D2, V1.D2] and VST1.P [V0.D2, V1.D2], 32(R0)),
-    // dropping 6 of its 28 instructions. Measured on a Cortex-A76 over span 1
-    // of a 1024-point stage, in paired interleaved rounds: under 1%, which is
+    // dropping 6 of its instructions. Measured on a Cortex-A76, on the earlier
+    // fused 28 instruction body, over span 1 of a 1024-point stage, in paired
+    // interleaved rounds: under 1%, which is
     // not worth rewriting a hot kernel for. Neither throughput floor binds here
     // (about 13 cycles per iteration against a decode floor of 7 and an ASIMD
     // floor of 8), and none of the six removed instructions is ASIMD, so the
