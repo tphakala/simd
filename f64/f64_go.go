@@ -95,19 +95,12 @@ func affineGo(dst, a []float64, alpha, beta float64) {
 		return
 	}
 	_ = a[len(dst)-1]
-	// Two separate passes with a memory round-trip between them force the product
-	// to round to float64 before beta is added, keeping this bit-identical to
-	// scaleGo then addScalarGo. A single a*alpha+beta expression is unsafe here:
-	// the Go spec permits contracting it into one FMADD (a single rounding) on
-	// FMA-capable backends (arm64, amd64 v3+), and unlike the narrowing float32()
-	// barrier the f32 path uses, a same-width float64() conversion is not a
-	// spec-guaranteed fusion barrier (it discards no rounding), even though the
-	// current gc toolchain happens to emit one. Two passes are robust regardless.
+	// float64() rounds the product before beta is added; the Go spec forbids
+	// fusing float64(x*y) + z, so this stays bit-identical to scaleGo then
+	// addScalarGo on backends that contract a multiply-add (arm64 and amd64 v3+,
+	// among others).
 	for i := range dst {
-		dst[i] = a[i] * alpha
-	}
-	for i := range dst {
-		dst[i] += beta
+		dst[i] = float64(a[i]*alpha) + beta
 	}
 }
 

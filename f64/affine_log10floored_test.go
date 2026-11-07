@@ -7,17 +7,11 @@ import (
 )
 
 // affineRef is the scalar reference for Affine: dst[i] = alpha*a[i] + beta with a
-// separate multiply and add (two roundings), matching the pure-Go fallback and the
-// split-rounding kernels.
+// separate multiply and add (two roundings; the float64() conversion blocks
+// fusion), matching the pure-Go fallback and the split-rounding kernels.
 func affineRef(dst, a []float64, alpha, beta float64) {
-	// Two passes force the product to round to float64 before beta is added, so an
-	// FMA-capable backend cannot contract this into a single FMADD (a same-width
-	// float64() conversion is not a guaranteed fusion barrier; see affineGo).
 	for i := range dst {
-		dst[i] = a[i] * alpha
-	}
-	for i := range dst {
-		dst[i] += beta
+		dst[i] = float64(a[i]*alpha) + beta
 	}
 }
 
@@ -59,6 +53,35 @@ func TestAffine(t *testing.T) {
 						t.Fatalf("Affine vs affineRef n=%d a=%v b=%v lane %d: got %v want %v",
 							n, p.alpha, p.beta, i, got[i], wantRef[i])
 					}
+				}
+			}
+		}
+	})
+}
+
+// TestAffineUnfused pins an input whose result depends on whether the product
+// rounds before the add. With a = alpha = 1+2^-30 the exact product is
+// 1 + 2^-29 + 2^-60; rounded first it is 1 + 2^-29, so adding beta = -1 gives
+// exactly 2^-29, while a fused multiply-add keeps the 2^-60 term. Every tier,
+// the Go fallback included, must give 2^-29. A lost barrier in the Go fallback
+// only shows where the compiler contracts a float multiply-add: as of Go 1.27
+// that is arm64, ppc64, s390x, riscv64, loong64, and amd64 at GOAMD64=v3 or
+// higher. CI runs it on arm64. n = 1 takes the scalar path; 4 and 17 reach the
+// vector bodies and their tails.
+func TestAffineUnfused(t *testing.T) {
+	const x = 1 + 0x1p-30
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		for _, n := range []int{1, 4, 17} {
+			src := make([]float64, n)
+			for i := range src {
+				src[i] = x
+			}
+			got := make([]float64, n)
+			Affine(got, src, x, -1)
+			for i, v := range got {
+				if v != 0x1p-29 {
+					t.Fatalf("n=%d lane %d: got %x, want 0x1p-29 (fused multiply-add?)", n, i, v)
 				}
 			}
 		}
