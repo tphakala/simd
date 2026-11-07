@@ -16,7 +16,10 @@
 // multiply-accumulate [MulAdd], whose names say so; the exp/log family uses FMA
 // internally, where a single fused rounding is correct. [VecMat] never contracts
 // either: each column is summed from +0.0 in row order with separately rounded
-// products, bit-identical on every path, NaN bit patterns aside. The no-fuse
+// products, bit-identical on every path, NaN bit patterns aside.
+// [ButterflyComplexStage] never fuses either and is bit-identical on every path;
+// [ButterflyComplex] and [ButterflyComplexStage4] fuse, and are tolerance-stable
+// only. The no-fuse
 // contract is asmcheck-enforced (see TestNoFMAContract in the module root).
 //
 // # Aliasing
@@ -1043,13 +1046,16 @@ const butterflyStageRadix = 2
 // every j in [0, span), it performs the ButterflyComplex operation on the pair
 // (k+j, k+span+j) with twiddle (twRe[j], twIm[j]):
 //
-//	temp_re = re[k+span+j]*twRe[j] - im[k+span+j]*twIm[j]
-//	temp_im = re[k+span+j]*twIm[j] + im[k+span+j]*twRe[j]
+//	temp_re = float64(re[k+span+j]*twRe[j]) - float64(im[k+span+j]*twIm[j])
+//	temp_im = float64(re[k+span+j]*twIm[j]) + float64(im[k+span+j]*twRe[j])
 //	re[k+j], re[k+span+j] = re[k+j]+temp_re, re[k+j]-temp_re
 //	im[k+j], im[k+span+j] = im[k+j]+temp_im, im[k+j]-temp_im
 //
-// It is the stage-level form of [ButterflyComplex]. Driving a stage through
-// ButterflyComplex costs one call per block, so the call count grows as the
+// Each product rounds to float64 on its own, as the conversions show.
+//
+// It computes the same butterflies as [ButterflyComplex] but, unlike it, never
+// fuses a multiply into an add, so the two can differ in the last bit. Driving
+// a stage through ButterflyComplex costs one call per block, so the call count grows as the
 // runs get short and per-call overhead dominates the small-span stages. Taking
 // the whole stage lets the implementation pick its own vectorization axis,
 // which is not expressible through the per-block API: across j when span is
@@ -1065,10 +1071,10 @@ const butterflyStageRadix = 2
 // Aliasing: the stage updates re and im in place; re and im must not overlap
 // each other, and the twiddles twRe/twIm must not overlap either.
 //
-// Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
-// [ButterflyComplex], results are not guaranteed bit-identical between the
-// vector and fallback paths, so do not depend on exact equality across build
-// targets or across spans.
+// The result is bit-identical on every path (AVX, or SSE2 on CPUs without AVX,
+// on AMD64; NEON on ARM64; pure Go elsewhere), for every span and block count,
+// NaN bit patterns aside: the stage never uses a fused multiply-add. Subnormals
+// and signed zeros are part of that contract.
 func ButterflyComplexStage(re, im []float64, span int, twRe, twIm []float64) {
 	if span <= 0 || len(twRe) < span || len(twIm) < span {
 		return
@@ -1142,9 +1148,10 @@ const butterflyStage4Radix = 4
 // and im must not overlap each other, and none of the six twiddle slices may
 // overlap them.
 //
-// Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. As with
-// [ButterflyComplexStage], results are not guaranteed bit-identical between the
-// vector and fallback paths, so do not depend on exact equality across build
+// Uses AVX+FMA on AMD64, NEON on ARM64, with a pure Go fallback. Unlike
+// [ButterflyComplexStage], which never fuses, this stage fuses its multiply-adds
+// on the vector paths, so results are not guaranteed bit-identical between the
+// vector and fallback paths: do not depend on exact equality across build
 // targets or across spans.
 func ButterflyComplexStage4(re, im []float64, span int,
 	tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float64) {

@@ -526,7 +526,9 @@ func butterflyComplexNEON(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float
 func butterflyComplexStage64(re, im []float64, span, blocks int, twRe, twIm []float64) {
 	// butterflyComplexStageNEON vectorizes across j for span >= 2 and across
 	// blocks for span == 1, so every span has a vector path. One iteration needs
-	// 2 float64 lanes, so anything below 2 total butterflies falls to Go.
+	// 2 float64 lanes, so anything below 2 total butterflies falls to Go. Both paths
+	// compute the same bits (see ButterflyComplexStage), so the threshold is only
+	// about call overhead.
 	if hasNEON && blocks*span >= 2 {
 		butterflyComplexStageNEON(re, im, span, blocks, twRe, twIm)
 		return

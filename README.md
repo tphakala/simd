@@ -171,6 +171,9 @@ overhead disappears and the short spans that cannot fill a vector along `j`
 vectorize across blocks instead. Measured over one stage of a 1024-point
 transform on an x86 core, that collapses the cost spread across spans from
 roughly 30x to under 2x, so the small-span stages stop dominating the transform.
+`ButterflyComplexStage` is also bit-identical on every path (AVX, SSE2, NEON and
+pure Go, NaN bit patterns aside), while `ButterflyComplex` and
+`ButterflyComplexStage4` fuse and are tolerance-stable.
 
 | Category        | Function                            | Description                   | SIMD Width                          |
 | --------------- | ----------------------------------- | ----------------------------- | ----------------------------------- |
@@ -224,7 +227,7 @@ roughly 30x to under 2x, so the small-span stages stop dominating the transform.
 |                 | `AccumulateAdd(dst, src, off)`      | Overlap-add: dst[off:] += src | 8x / 4x / 2x                        |
 |                 | `Autocorrelate(autoc, x, maxLag)`   | LPC autocorrelation Σ x[i]·x[i-lag] (bit-exact) | 4x (AVX2) / 2x (NEON)     |
 | **Complex/FFT** | `ButterflyComplex(uRe,uIm,lRe,lIm,twRe,twIm)` | FFT butterfly with twiddle multiply | 4x (AVX+FMA) / 2x (NEON)   |
-|                 | `ButterflyComplexStage(re,im,span,twRe,twIm)` | One whole radix-2 DIT stage (any span) | 4x (AVX+FMA) / 2x (NEON)   |
+|                 | `ButterflyComplexStage(re,im,span,twRe,twIm)` | One whole radix-2 DIT stage (any span, bit-exact) | 4x (AVX) / 2x (SSE2) / 2x (NEON)   |
 |                 | `ButterflyComplexStage4(re,im,span,tw1..tw3)` | One whole radix-4 DIT stage (two radix-2 stages in one pass) | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `FFTPlan.Forward(re,im)` / `.Inverse(re,im)` (`NewFFTPlan(maxN)`, `.MaxLen()`) | In-place power-of-two complex FFT, split re/im, unscaled inverse | 4x (AVX+FMA) / 2x (NEON)   |
 |                 | `DFTPlan.Forward(re,im)` / `.Inverse(re,im)` (`NewDFTPlan(capacity)`, `.Capacity()`) | In-place complex DFT of any length (Bluestein over the FFTPlan core), split re/im, unscaled inverse | 4x (AVX+FMA) / 2x (NEON)   |

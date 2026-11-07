@@ -122,7 +122,7 @@ func newFFTCore(maxN int) fftCore {
 // does not check this. The core is radix-4: each ButterflyComplexStage4 call
 // advances two radix-2 stages at once, with at most one trailing
 // ButterflyComplexStage when n is not a power of four, so the butterflies take
-// the AVX+FMA / NEON vector paths where the span and block count justify them.
+// the vector paths where the span and block count justify them.
 func (c *fftCore) transform(re, im []float64) {
 	n := len(re)
 	sh := c.logMax - bits.TrailingZeros(uint(n))
@@ -173,7 +173,7 @@ func (c *fftCore) transform(re, im []float64) {
 // is not safe for concurrent use.
 //
 // Twiddles come from math.Sincos directly, never from a recurrence, so the error
-// is O(eps*log2 n) in relative L2. The butterflies take the AVX+FMA / NEON path
+// is O(eps*log2 n) in relative L2. The butterflies take the vector path
 // where the span and block count justify it and scalar Go otherwise, so results
 // are tolerance-stable, not bit-stable, across CPU tiers.
 //

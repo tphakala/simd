@@ -37,6 +37,7 @@ type implSnapshot struct {
 	addScaled           addScaledFunc
 	convolveValidMaxAbs convolveValidMaxAbsFunc
 	minSIMDElements     int
+	butterflyStageTier  int
 }
 
 func snapshotDispatch() implSnapshot {
@@ -66,6 +67,7 @@ func snapshotDispatch() implSnapshot {
 		addScaled:           addScaledImpl,
 		convolveValidMaxAbs: convolveValidMaxAbsImpl,
 		minSIMDElements:     minSIMDElements,
+		butterflyStageTier:  butterflyStageTier,
 	}
 }
 
@@ -95,6 +97,7 @@ func restoreDispatch(s *implSnapshot) {
 	addScaledImpl = s.addScaled
 	convolveValidMaxAbsImpl = s.convolveValidMaxAbs
 	minSIMDElements = s.minSIMDElements
+	butterflyStageTier = s.butterflyStageTier
 }
 
 func samePointer(a, b any) bool {
@@ -109,6 +112,10 @@ func TestInitGo(t *testing.T) {
 	t.Cleanup(func() { restoreDispatch(&saved) })
 
 	initGo()
+
+	if butterflyStageTier != stageTierGo {
+		t.Errorf("InitGo: butterflyStageTier = %d, want stageTierGo", butterflyStageTier)
+	}
 
 	a := []float64{1, 2, 3, 4}
 	b := []float64{4, 3, 2, 1}
@@ -128,6 +135,10 @@ func TestInitSSE2(t *testing.T) {
 	t.Cleanup(func() { restoreDispatch(&saved) })
 
 	initSSE2()
+
+	if butterflyStageTier != stageTierSSE2 {
+		t.Errorf("InitSSE2: butterflyStageTier = %d, want stageTierSSE2", butterflyStageTier)
+	}
 
 	a := []float64{1, 2, 3, 4}
 	b := []float64{4, 3, 2, 1}
@@ -151,6 +162,10 @@ func TestInitAVX512(t *testing.T) {
 	t.Cleanup(func() { restoreDispatch(&saved) })
 
 	initAVX512()
+
+	if butterflyStageTier != stageTierAVX {
+		t.Errorf("initAVX512: butterflyStageTier = %d, want stageTierAVX", butterflyStageTier)
+	}
 
 	a := []float64{1, 2, 3, 4}
 	b := []float64{4, 3, 2, 1}
@@ -180,6 +195,10 @@ func TestInitAVXNoFMA(t *testing.T) {
 	t.Cleanup(func() { restoreDispatch(&saved) })
 
 	initAVXNoFMA()
+
+	if butterflyStageTier != stageTierAVX {
+		t.Errorf("initAVXNoFMA: butterflyStageTier = %d, want stageTierAVX", butterflyStageTier)
+	}
 
 	// FMA-free AVX kernels stay on AVX paths.
 	for _, c := range []struct {
