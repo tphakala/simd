@@ -7,11 +7,9 @@ import (
 )
 
 // affineRef is the scalar reference for Affine: dst[i] = alpha*a[i] + beta with a
-// separate multiply and add (two roundings), matching the pure-Go fallback and the
-// split-rounding kernels.
+// separate multiply and add (two roundings; the float64() conversion blocks
+// fusion), matching the pure-Go fallback and the split-rounding kernels.
 func affineRef(dst, a []float64, alpha, beta float64) {
-	// The explicit float64() conversion rounds the product before beta is added;
-	// the Go spec forbids contracting float64(x*y) + z into a fused multiply-add.
 	for i := range dst {
 		dst[i] = float64(a[i]*alpha) + beta
 	}
@@ -65,18 +63,21 @@ func TestAffine(t *testing.T) {
 // rounds before the add. With a = alpha = 1+2^-30 the exact product is
 // 1 + 2^-29 + 2^-60; rounded first it is 1 + 2^-29, so adding beta = -1 gives
 // exactly 2^-29, while a fused multiply-add keeps the 2^-60 term. Every tier,
-// the Go fallback included, must give 2^-29.
+// the Go fallback included, must give 2^-29. The Go fallback is only fused by
+// the compiler on arm64 and amd64 GOAMD64=v3, so that is where this catches a
+// lost barrier. n = 1 takes the scalar path; 4 and 17 reach the vector bodies
+// and their tails.
 func TestAffineUnfused(t *testing.T) {
-	const a = 1 + 0x1p-30
+	const x = 1 + 0x1p-30
 	forTiers(t, func(t *testing.T) {
 		t.Helper()
 		for _, n := range []int{1, 4, 17} {
 			src := make([]float64, n)
 			for i := range src {
-				src[i] = a
+				src[i] = x
 			}
 			got := make([]float64, n)
-			Affine(got, src, a, -1)
+			Affine(got, src, x, -1)
 			for i, v := range got {
 				if v != 0x1p-29 {
 					t.Fatalf("n=%d lane %d: got %x, want 0x1p-29 (fused multiply-add?)", n, i, v)

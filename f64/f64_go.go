@@ -95,13 +95,9 @@ func affineGo(dst, a []float64, alpha, beta float64) {
 		return
 	}
 	_ = a[len(dst)-1]
-	// The explicit float64() conversion rounds the product before beta is added,
-	// keeping this bit-identical to scaleGo then addScalarGo. The Go spec
-	// (Floating-point operators) guarantees that: an explicit conversion rounds to
-	// the target precision, so float64(x*y) + z may not be contracted into a fused
-	// multiply-add on FMA-capable backends (arm64, amd64 v3+). A bare
-	// a[i]*alpha + beta may be fused, and so may a product stored to memory and
-	// added in a second pass.
+	// float64() rounds the product before beta is added; the Go spec forbids
+	// fusing float64(x*y) + z, so this stays bit-identical to scaleGo then
+	// addScalarGo on FMA-capable backends (arm64, amd64 v3+).
 	for i := range dst {
 		dst[i] = float64(a[i]*alpha) + beta
 	}

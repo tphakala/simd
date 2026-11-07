@@ -20,12 +20,11 @@ import (
 // slice), and shares no code with the implementation.
 //
 // It computes in two passes per block, the four products stored into
-// test-allocated arrays first and combined second, instead of using float64()
-// conversions the way the implementation does. That makes it an independently
-// written computation rather than a second copy of the implementation's barrier.
-// A store and reload is not itself a spec-guaranteed fusion barrier, though, so
-// TestButterflyComplexStage_KnownAnswers pins constants that depend on no
-// compiled reference.
+// test-allocated arrays first and combined second, so it is written
+// independently of the implementation. Each stored product is wrapped in
+// float64(), the fusion barrier the Go spec guarantees; a store and reload alone
+// is not one. TestButterflyComplexStage_KnownAnswers also pins constants that
+// depend on no compiled reference.
 func butterflyComplexStageRef(re, im []float64, span int, twRe, twIm []float64) {
 	if span <= 0 || len(twRe) < span || len(twIm) < span {
 		return
@@ -39,10 +38,10 @@ func butterflyComplexStageRef(re, im []float64, span int, twRe, twIm []float64) 
 	for k := 0; k+2*span <= n; k += 2 * span {
 		for j := range span {
 			l := k + span + j
-			p1[j] = re[l] * twRe[j]
-			p2[j] = im[l] * twIm[j]
-			p3[j] = re[l] * twIm[j]
-			p4[j] = im[l] * twRe[j]
+			p1[j] = float64(re[l] * twRe[j])
+			p2[j] = float64(im[l] * twIm[j])
+			p3[j] = float64(re[l] * twIm[j])
+			p4[j] = float64(im[l] * twRe[j])
 		}
 		for j := range span {
 			u, l := k+j, k+span+j
@@ -275,8 +274,7 @@ var negZero = math.Copysign(0, -1)
 //
 // Regression it catches that the random sweep cannot: the sweep's oracle is
 // compiled by the same Go compiler as the fallback, so a toolchain that fused
-// across the oracle's store and reload as well as past a float64() conversion
-// would make both agree. These constants do not move. Under the Go tier on
+// past a float64() conversion would make both agree. These constants do not move. Under the Go tier on
 // arm64 the four fuse-* rows are the proof that the fallback is not contracted.
 // The subnormal rows catch a flush-to-zero change, signed-zero an operand order
 // change that keeps values but flips zero signs.
