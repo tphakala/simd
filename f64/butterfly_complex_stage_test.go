@@ -1,8 +1,10 @@
 package f64
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"testing"
 )
 
@@ -10,28 +12,44 @@ import (
 // BUTTERFLY COMPLEX STAGE TESTS (float64)
 // =============================================================================
 
-// butterflyComplexStageRef is an independent reference for one radix-2
-// decimation-in-time stage. It indexes re/im directly rather than delegating to
-// butterflyComplex64Go, so it does not share code with the implementation under
-// test.
+// butterflyComplexStageRef is the separately rounded oracle for one radix-2
+// decimation-in-time stage: every product rounds to float64 on its own, then the
+// sub/add and the butterfly's upper/lower sums follow, which is the contract
+// ButterflyComplexStage documents. It indexes re/im directly, models the public
+// API's shape rules (partial trailing block untouched, no-op on a short twiddle
+// slice), and shares no code with the implementation.
 //
-// It is not an unfused baseline: whether these expressions fuse is the Go
-// compiler's choice, and it makes different choices per architecture (it
-// contracts them on ARM64, not on AMD64). Comparisons against it are therefore
-// tolerance-based, never bit-exact.
+// It computes in two passes per block, the four products stored into
+// test-allocated arrays first and combined second, instead of using float64()
+// conversions the way the implementation does. That makes it an independently
+// written computation rather than a second copy of the implementation's barrier.
+// A store and reload is not itself a spec-guaranteed fusion barrier, though, so
+// TestButterflyComplexStage_KnownAnswers pins constants that depend on no
+// compiled reference.
 func butterflyComplexStageRef(re, im []float64, span int, twRe, twIm []float64) {
 	if span <= 0 || len(twRe) < span || len(twIm) < span {
 		return
 	}
 	n := min(len(re), len(im))
+	scratch := make([]float64, 4*span)
+	p1 := scratch[:span]           // lr*tr
+	p2 := scratch[span : 2*span]   // li*ti
+	p3 := scratch[2*span : 3*span] // lr*ti
+	p4 := scratch[3*span:]         // li*tr
 	for k := 0; k+2*span <= n; k += 2 * span {
 		for j := range span {
+			l := k + span + j
+			p1[j] = re[l] * twRe[j]
+			p2[j] = im[l] * twIm[j]
+			p3[j] = re[l] * twIm[j]
+			p4[j] = im[l] * twRe[j]
+		}
+		for j := range span {
 			u, l := k+j, k+span+j
-
-			lr, li := re[l], im[l]
-			tr, ti := twRe[j], twIm[j]
-			tempRe := lr*tr - li*ti
-			tempIm := lr*ti + li*tr
+			tempRe := p1[j]
+			tempRe -= p2[j]
+			tempIm := p3[j]
+			tempIm += p4[j]
 
 			ur, ui := re[u], im[u]
 			re[u] = ur + tempRe
@@ -83,13 +101,12 @@ const stageTwiddlePhase = 0.4
 
 // Tolerances for closeEnough.
 //
-// Three of this file's tests compare two implementations of the same butterfly
-// over the same data, differing only in how their multiply-adds fuse: SIMD vs
-// butterflyComplexStageRef, SIMD vs the per-block ButterflyComplex loop, and
-// SIMD vs the Go fallback. All three use this one bound rather than inventing
-// their own. Over the full stageSpans x stageBlockCounts sweep the largest
-// difference any of them produces is 1.78e-15, on both an AVX+FMA amd64 core
-// and a NEON Cortex-A76.
+// ButterflyComplexStage itself is bit-exact and its tests compare bits. These
+// bounds serve the comparisons against the fused primitives: the stage versus a
+// per-block ButterflyComplex loop (ButterflyComplex fuses on AVX+FMA and NEON,
+// the stage never does), and the Stage4 tests. Over the full stageSpans x
+// stageBlockCounts sweep the largest difference any of them produces is 1.78e-15,
+// on both an AVX+FMA amd64 core and a NEON Cortex-A76.
 //
 // The bound has to be absolute rather than relative, because the butterfly's
 // sum and difference can cancel to near zero while the rounding that produced
@@ -104,9 +121,8 @@ const (
 	stageRelTol = 1e-14
 )
 
-// closeEnough is the tolerance used throughout: the vector and scalar paths fuse
-// their multiply-adds differently, so they agree to within rounding rather than
-// exactly.
+// closeEnough is the tolerance used where a fused primitive is compared with the
+// stage: they agree to within rounding rather than exactly.
 func closeEnough(got, want float64) bool {
 	diff := math.Abs(got - want)
 	return diff <= stageAbsTol || diff <= math.Abs(want)*stageRelTol
@@ -123,58 +139,259 @@ var stageSpans = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 32, 64}
 // leftover case for both.
 var stageBlockCounts = []int{1, 2, 3, 4, 5, 6, 7, 8, 16, 33}
 
-// TestButterflyComplexStage is the one of this file's three parity tests that
-// still asserts something on a tier where the dispatcher declines SIMD, so do not
-// delete it as redundant with the two below. Its reference,
-// butterflyComplexStageRef, indexes re/im directly instead of delegating, while
-// the other two compare against code that reduces to the same Go fallback:
-// butterflyComplexStage64Go is only a loop over butterflyComplex64Go.
+// stageRandData fills a stage's operands with random mantissas scaled by 2^e,
+// e uniform in [-30, 30]. The wide exponent spread is what separates fused from
+// unfused arithmetic: with it a fused kernel differs from the separately rounded
+// oracle on about 4% of the elements.
+func stageRandData(rng *rand.Rand, n, span int) (re, im, twRe, twIm []float64) {
+	draw := func() float64 {
+		return math.Ldexp(rng.Float64()*2-1, rng.IntN(61)-30)
+	}
+	re = make([]float64, n)
+	im = make([]float64, n)
+	twRe = make([]float64, span)
+	twIm = make([]float64, span)
+	for i := range n {
+		re[i], im[i] = draw(), draw()
+	}
+	for j := range span {
+		twRe[j], twIm[j] = draw(), draw()
+	}
+	return re, im, twRe, twIm
+}
+
+// checkStageExact runs ButterflyComplexStage and the oracle on copies of the
+// operands and requires every element, partial trailing block included, to match
+// bit for bit.
+func checkStageExact(t *testing.T, re, im []float64, span int, twRe, twIm []float64) {
+	t.Helper()
+	reGot := append([]float64(nil), re...)
+	imGot := append([]float64(nil), im...)
+	reWant := append([]float64(nil), re...)
+	imWant := append([]float64(nil), im...)
+
+	ButterflyComplexStage(reGot, imGot, span, twRe, twIm)
+	butterflyComplexStageRef(reWant, imWant, span, twRe, twIm)
+
+	for _, part := range []struct {
+		name      string
+		got, want []float64
+	}{{"re", reGot, reWant}, {"im", imGot, imWant}} {
+		for i := range part.got {
+			if !bitsEqF64(part.got[i], part.want[i]) {
+				t.Fatalf("span=%d len(re)=%d len(im)=%d: %s[%d] = %v (%#x), want %v (%#x)",
+					span, len(re), len(im), part.name, i, part.got[i], math.Float64bits(part.got[i]),
+					part.want[i], math.Float64bits(part.want[i]))
+			}
+		}
+	}
+}
+
+// TestButterflyComplexStage pins the stage's contract: bit-identical to the
+// separately rounded oracle on every tier forTiers can force, for every span and
+// block count. Under forTiers each tier, the Go tier and the below-threshold
+// shapes that always take Go included, is held to the same oracle.
 //
-// MEASURED by flipping the sign in butterflyComplex64Go's complex multiply. Under
-// SIMD_DISABLE=all, which models the sub-AVX2 qemu legs added in #203/#213, this
-// test fails while MatchesPerBlockLoop and SIMDvsGo both stay green. Natively on
-// AVX2 all three fail. It is not the only net on those legs, since
-// TestButterflyComplexStage_FullFFT also catches that mutation there; it is the
-// only one of the three parity tests that does.
+// Three shape families: every span of a 256 and a 1024 point transform (non
+// divisor spans leave a trailing partial block that must stay untouched, and is
+// compared as part of the whole slice), the stageSpans x stageBlockCounts grid
+// (block-axis remainders 1..7 that n = 256 and 1024 cannot produce at span 1 and
+// 2), and two odd shapes: a longer im than re, and twiddle slices longer than span.
 func TestButterflyComplexStage(t *testing.T) {
-	for _, span := range stageSpans {
-		for _, blocks := range stageBlockCounts {
-			t.Run(fmt.Sprintf("span=%d/blocks=%d", span, blocks), func(t *testing.T) {
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		rng := rand.New(rand.NewPCG(0xb7f1, 0x57a6e))
+
+		t.Run("transform-spans", func(t *testing.T) {
+			for _, n := range []int{256, 1024} {
+				for span := 1; span <= n/2; span++ {
+					re, im, twRe, twIm := stageRandData(rng, n, span)
+					checkStageExact(t, re, im, span, twRe, twIm)
+				}
+			}
+		})
+
+		t.Run("grid", func(t *testing.T) {
+			for _, span := range stageSpans {
+				for _, blocks := range stageBlockCounts {
+					re, im, twRe, twIm := stageRandData(rng, 2*span*blocks, span)
+					checkStageExact(t, re, im, span, twRe, twIm)
+				}
+			}
+		})
+
+		t.Run("odd-shapes", func(t *testing.T) {
+			for _, span := range []int{1, 2, 3, 4, 7, 16} {
+				const blocks = 5
 				n := 2 * span * blocks
-				re, im, twRe, twIm := stageTestData(n, span)
+				re, im, twRe, twIm := stageRandData(rng, n, span)
+				checkStageExact(t, re, append(im, 0, 0, 0), span, twRe, twIm)
+				checkStageExact(t, append(re, 0, 0, 0), im, span, twRe, twIm)
 
-				reRef := make([]float64, n)
-				imRef := make([]float64, n)
-				copy(reRef, re)
-				copy(imRef, im)
+				_, _, twRe, twIm = stageRandData(rng, 0, span+3)
+				checkStageExact(t, re, im, span, twRe, twIm)
+			}
+		})
+	})
+}
 
-				ButterflyComplexStage(re, im, span, twRe, twIm)
-				butterflyComplexStageRef(reRef, imRef, span, twRe, twIm)
+// stageKnownAnswers rows are (lower re, lower im, twiddle re, twiddle im, upper
+// re, upper im) -> (new upper re, new upper im, new lower re, new lower im),
+// broadcast to every butterfly of a stage. They are hand-derived, so they depend
+// on no compiled reference.
+//
+// With a = 1+2^-27 and c = 1+2^-26, a*a rounds to c and c*a ties to even at
+// 1+2^-26+2^-27. Each detector row makes one product's rounding cancel exactly:
+// unfused arithmetic gives exactly 0 in the detected component, while fusing that
+// product leaves +-2^-54.
+var stageKnownAnswers = []struct {
+	name string
+	in   [6]float64
+	want [4]float64
+}{
+	{"fuse-lr*wr", [6]float64{a27, c26, a27, 1, 0, 0}, [4]float64{0, s25, 0, -s25}},
+	{"fuse-li*wi", [6]float64{c26, a27, 1, a27, 0, 0}, [4]float64{0, s25, 0, -s25}},
+	{"fuse-lr*wi", [6]float64{a27, -c26, 1, a27, 0, 0}, [4]float64{s25, 0, -s25, 0}},
+	{"fuse-li*wr", [6]float64{-c26, a27, a27, 1, 0, 0}, [4]float64{-s25, 0, s25, 0}},
+	{"signed-zero", [6]float64{negZero, 0, 1, 1, negZero, negZero}, [4]float64{negZero, 0, 0, negZero}},
+	{"subnormal-product-ties-to-even", [6]float64{3 * 0x1p-1074, 0, 0.5, 0, 0, 0}, [4]float64{0x1p-1073, 0, -0x1p-1073, 0}},
+	{"subnormal-cancel", [6]float64{0x1p-1074, 0x1p-1074, 1, 1, 0x1p-1073, 0}, [4]float64{0x1p-1073, 0x1p-1073, 0x1p-1073, -0x1p-1073}},
+	{"inf-times-zero-re", [6]float64{math.Inf(1), 0, 0, 1, 1, 1}, [4]float64{math.NaN(), math.Inf(1), math.NaN(), math.Inf(-1)}},
+	{"inf-times-zero-im", [6]float64{math.Inf(1), 0, 1, 0, 1, 1}, [4]float64{math.Inf(1), math.NaN(), math.Inf(-1), math.NaN()}},
+	{"nan", [6]float64{math.NaN(), 1, 1, 1, 1, 1}, [4]float64{math.NaN(), math.NaN(), math.NaN(), math.NaN()}},
+}
 
-				for i := range n {
-					if !closeEnough(re[i], reRef[i]) {
-						t.Errorf("re[%d] = %v, want %v", i, re[i], reRef[i])
-					}
-					if !closeEnough(im[i], imRef[i]) {
-						t.Errorf("im[%d] = %v, want %v", i, im[i], imRef[i])
+const (
+	a27 = 1 + 0x1p-27
+	c26 = 1 + 0x1p-26
+	s25 = 2 + 0x1p-25
+)
+
+var negZero = math.Copysign(0, -1)
+
+// TestButterflyComplexStage_KnownAnswers checks the rows of stageKnownAnswers on
+// every forceable tier, for spans and block counts that reach every vector body,
+// remainder and scalar tail.
+//
+// Regression it catches that the random sweep cannot: the sweep's oracle is
+// compiled by the same Go compiler as the fallback, so a toolchain that fused
+// across the oracle's store and reload as well as past a float64() conversion
+// would make both agree. These constants do not move. Under the Go tier on
+// arm64 the four fuse-* rows are the proof that the fallback is not contracted.
+// The subnormal rows catch a flush-to-zero change, signed-zero an operand order
+// change that keeps values but flips zero signs.
+func TestButterflyComplexStage_KnownAnswers(t *testing.T) {
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		for _, row := range stageKnownAnswers {
+			t.Run(row.name, func(t *testing.T) {
+				for _, span := range []int{1, 2, 3, 4, 5, 8} {
+					for blocks := 1; blocks <= 5; blocks++ {
+						checkStageKnownAnswer(t, row.in, row.want, span, blocks)
 					}
 				}
 			})
 		}
+	})
+}
+
+// checkStageKnownAnswer broadcasts one known-answer row to every butterfly of a
+// span x blocks stage and compares all four outputs of each bitwise.
+func checkStageKnownAnswer(t *testing.T, in [6]float64, want [4]float64, span, blocks int) {
+	t.Helper()
+	n := 2 * span * blocks
+	re := make([]float64, n)
+	im := make([]float64, n)
+	twRe := make([]float64, span)
+	twIm := make([]float64, span)
+	for j := range span {
+		twRe[j], twIm[j] = in[2], in[3]
 	}
+	for k := 0; k < n; k += 2 * span {
+		for j := range span {
+			re[k+j], im[k+j] = in[4], in[5]
+			re[k+span+j], im[k+span+j] = in[0], in[1]
+		}
+	}
+
+	ButterflyComplexStage(re, im, span, twRe, twIm)
+
+	for k := 0; k < n; k += 2 * span {
+		for j := range span {
+			got := [4]float64{re[k+j], im[k+j], re[k+span+j], im[k+span+j]}
+			for c := range got {
+				if !bitsEqF64(got[c], want[c]) {
+					t.Fatalf("span=%d blocks=%d block start %d j=%d component %d = %v (%#x), want %v (%#x)",
+						span, blocks, k, j, c, got[c], math.Float64bits(got[c]),
+						want[c], math.Float64bits(want[c]))
+				}
+			}
+		}
+	}
+}
+
+// FuzzButterflyComplexStage compares the stage with the oracle on arbitrary bit
+// patterns (NaN, Inf, subnormals, exponent extremes) and shapes: span, a re/im
+// length skew and extra twiddle length all come from the input. It runs on the
+// host's default tier; the sweep above covers the forced tiers.
+func FuzzButterflyComplexStage(f *testing.F) {
+	addByteLenSeeds(f)
+	// One seed per known-answer row, laid out so the decoder below sees span 1,
+	// four blocks (the dispatcher's threshold for leaving the Go path) and no
+	// skew: re = (upper, lower) per block, likewise im, and the twiddle repeated
+	// to fill its quarter.
+	for _, row := range stageKnownAnswers {
+		in := row.in // lower re/im, twiddle re/im, upper re/im
+		raw := []byte{0, 0, 0}
+		var quarters [4][]float64
+		for range 4 {
+			quarters[0] = append(quarters[0], in[4], in[0])
+			quarters[1] = append(quarters[1], in[5], in[1])
+			quarters[2] = append(quarters[2], in[2], in[2])
+			quarters[3] = append(quarters[3], in[3], in[3])
+		}
+		for _, q := range quarters {
+			for _, v := range q {
+				raw = binary.LittleEndian.AppendUint64(raw, math.Float64bits(v))
+			}
+		}
+		f.Add(raw)
+	}
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if len(raw) < 3 {
+			return
+		}
+		spans := [...]int{128, 255, 512}
+		span := int(raw[0])%64 + 1
+		if raw[0] >= 192 {
+			span = spans[int(raw[0])%len(spans)]
+		}
+		skew, twExtra := int(raw[1]%4), int(raw[2]%4)
+		v := f64sBits(raw[3:])
+
+		// Split into re, im, twRe, twIm in equal quarters, so every length is
+		// reachable from the byte count.
+		q := len(v) / 4
+		re, im := v[:q], v[q:2*q]
+		twRe, twIm := v[2*q:3*q], v[3*q:4*q]
+		if skew > 0 && len(im) > skew {
+			im = im[:len(im)-skew]
+		}
+		if len(twRe) > span+twExtra {
+			twRe, twIm = twRe[:span+twExtra], twIm[:span+twExtra]
+		}
+		checkStageExact(t, re, im, span, twRe, twIm)
+	})
 }
 
 // TestButterflyComplexStage_MatchesPerBlockLoop pins the migration contract that
 // motivates the API: a consumer replacing its per-block ButterflyComplex loop
 // with one ButterflyComplexStage call must get the same spectrum back.
 //
-// Exact equality is not required. The stage and the per-block wrapper can reach
-// different code for the same span (below its SIMD threshold ButterflyComplex
-// runs the scalar fallback while the stage still vectorizes), and the two do not
-// round identically. Which side is fused is not uniform either: the Go compiler
-// contracts the fallback's multiply-add on ARM64 but not on AMD64, so the
-// direction of the difference is arch-dependent and only the tolerance is
-// portable.
+// Exact equality is not required. The stage never fuses, while ButterflyComplex
+// fuses its multiply-adds on AVX+FMA and NEON (and the Go compiler contracts its
+// fallback on ARM64), so the two agree to within rounding and only the tolerance
+// is portable.
 func TestButterflyComplexStage_MatchesPerBlockLoop(t *testing.T) {
 	for _, span := range stageSpans {
 		for _, blocks := range []int{1, 3, 8} {
@@ -203,42 +420,6 @@ func TestButterflyComplexStage_MatchesPerBlockLoop(t *testing.T) {
 					}
 					if !closeEnough(im[i], imLoop[i]) {
 						t.Errorf("im[%d]: stage=%v, per-block loop=%v", i, im[i], imLoop[i])
-					}
-				}
-			})
-		}
-	}
-}
-
-// TestButterflyComplexStage_SIMDvsGo compares the dispatched kernel against the
-// Go fallback over an explicit (span, blocks) grid, rather than through the
-// public wrapper, which derives blocks from the slice lengths.
-//
-// This does NOT get below the SIMD-versus-Go threshold: that lives inside
-// butterflyComplexStage64, which is the function called here, so rows under it
-// compare the Go path against itself. On amd64 that is 5 of the 140 rows
-// (blocks*span < 4), on arm64 1 (blocks*span < 2).
-func TestButterflyComplexStage_SIMDvsGo(t *testing.T) {
-	for _, span := range stageSpans {
-		for _, blocks := range stageBlockCounts {
-			t.Run(fmt.Sprintf("span=%d/blocks=%d", span, blocks), func(t *testing.T) {
-				n := 2 * span * blocks
-				re, im, twRe, twIm := stageTestData(n, span)
-
-				reGo := make([]float64, n)
-				imGo := make([]float64, n)
-				copy(reGo, re)
-				copy(imGo, im)
-
-				butterflyComplexStage64(re, im, span, blocks, twRe, twIm)
-				butterflyComplexStage64Go(reGo, imGo, span, blocks, twRe, twIm)
-
-				for i := range n {
-					if !closeEnough(re[i], reGo[i]) {
-						t.Errorf("re[%d]: SIMD=%v, Go=%v", i, re[i], reGo[i])
-					}
-					if !closeEnough(im[i], imGo[i]) {
-						t.Errorf("im[%d]: SIMD=%v, Go=%v", i, im[i], imGo[i])
 					}
 				}
 			})
@@ -463,26 +644,52 @@ func TestButterflyComplexStage_Degenerate(t *testing.T) {
 	}
 }
 
+// stageLocalArrays calls the stage on slices of its own local arrays, the shape
+// go-mp3 uses. A dispatch through a function value would force both arrays to the
+// heap here (2 allocations per call), which the heap-slice cases below cannot see.
+//
+//go:noinline
+func stageLocalArrays(span int, twRe, twIm []float64) {
+	var re, im [64]float64
+	ButterflyComplexStage(re[:], im[:], span, twRe, twIm)
+}
+
+//go:noinline
+func stageLocalStruct(span int, twRe, twIm []float64) {
+	var buf struct{ re, im [64]float64 }
+	ButterflyComplexStage(buf.re[:], buf.im[:], span, twRe, twIm)
+}
+
 func TestButterflyComplexStage_AllocFree(t *testing.T) {
-	// One case per vectorization path, so an allocation introduced in any of
-	// them fails here rather than only in the one shape a single case happens
-	// to take.
-	for _, span := range []int{1, 2, 3, 8} {
-		t.Run(fmt.Sprintf("span=%d", span), func(t *testing.T) {
-			n := 2 * span * 16
-			re, im, twRe, twIm := stageTestData(n, span)
-			fn := func() { ButterflyComplexStage(re, im, span, twRe, twIm) }
-			if a := testing.AllocsPerRun(50, fn); a != 0 {
-				t.Errorf("ButterflyComplexStage allocated %v times per run, want 0", a)
-			}
-		})
-	}
+	forTiers(t, func(t *testing.T) {
+		t.Helper()
+		// One case per vectorization path, so an allocation introduced in any of
+		// them fails here rather than only in the one shape a single case happens
+		// to take.
+		for _, span := range []int{1, 2, 3, 8} {
+			t.Run(fmt.Sprintf("span=%d", span), func(t *testing.T) {
+				n := 2 * span * 16
+				re, im, twRe, twIm := stageTestData(n, span)
+				fn := func() { ButterflyComplexStage(re, im, span, twRe, twIm) }
+				if a := testing.AllocsPerRun(50, fn); a != 0 {
+					t.Errorf("ButterflyComplexStage allocated %v times per run, want 0", a)
+				}
+
+				if a := testing.AllocsPerRun(50, func() { stageLocalArrays(span, twRe, twIm) }); a != 0 {
+					t.Errorf("local arrays: %v allocs per run, want 0", a)
+				}
+				if a := testing.AllocsPerRun(50, func() { stageLocalStruct(span, twRe, twIm) }); a != 0 {
+					t.Errorf("local struct: %v allocs per run, want 0", a)
+				}
+			})
+		}
+	})
 }
 
 func BenchmarkButterflyComplexStage(b *testing.B) {
-	// A fixed 1024-point transform's worth of butterflies per stage, swept over
-	// span. Work is identical in every row: blocks*span is constant at 512, so the
-	// only variable is how short the runs are. This is the shape issue #198 measured.
+	// A fixed 256- or 1024-point transform's worth of butterflies per stage, swept
+	// over span. Work is identical within an n: blocks*span is constant at n/2, so
+	// the only variable is how short the runs are. This is the shape issue #198 measured.
 	//
 	// Measure on an IDLE host, and interleave by running one full sweep per process
 	// invocation at -test.count=1 rather than using -test.count=N. Two reasons:
@@ -502,7 +709,13 @@ func BenchmarkButterflyComplexStage(b *testing.B) {
 	// whole run there; that costs nothing (Inf and NaN are full rate, and since the
 	// butterfly doubles energy per application the data grows away from the denormal
 	// range rather than into it), and it hits all three variants identically.
-	const n = 1024
+	for _, n := range []int{256, 1024} {
+		benchStageSweep(b, n)
+	}
+}
+
+func benchStageSweep(b *testing.B, n int) {
+	b.Helper()
 
 	// 6 and 10 are in the sweep because both leave span%4 == 2, so they are the only
 	// rows that measure the j-axis scalar tail; every power-of-two span skips it.
@@ -511,18 +724,21 @@ func BenchmarkButterflyComplexStage(b *testing.B) {
 	// blocks%2 != 0 at span 2, which n = 1024 cannot produce. Those are covered by
 	// stageBlockCounts in the correctness tests, not by this benchmark.
 	for _, span := range []int{1, 2, 4, 6, 8, 10, 16, 32, 64, 128, 256, 512} {
+		if span > n/2 {
+			continue
+		}
 		blocks := n / (2 * span)
 
 		// Fresh buffers per sub-benchmark so every variant starts from the same
 		// data rather than from whatever the previous one left behind.
-		b.Run(fmt.Sprintf("Stage/span=%d", span), func(b *testing.B) {
+		b.Run(fmt.Sprintf("Stage/n=%d/span=%d", n, span), func(b *testing.B) {
 			re, im, twRe, twIm := stageTestData(n, span)
 			for b.Loop() {
 				ButterflyComplexStage(re, im, span, twRe, twIm)
 			}
 		})
 
-		b.Run(fmt.Sprintf("PerBlock/span=%d", span), func(b *testing.B) {
+		b.Run(fmt.Sprintf("PerBlock/n=%d/span=%d", n, span), func(b *testing.B) {
 			re, im, twRe, twIm := stageTestData(n, span)
 			for b.Loop() {
 				for k := 0; k < blocks*2*span; k += 2 * span {
@@ -535,7 +751,7 @@ func BenchmarkButterflyComplexStage(b *testing.B) {
 			}
 		})
 
-		b.Run(fmt.Sprintf("Go/span=%d", span), func(b *testing.B) {
+		b.Run(fmt.Sprintf("Go/n=%d/span=%d", n, span), func(b *testing.B) {
 			re, im, twRe, twIm := stageTestData(n, span)
 			for b.Loop() {
 				butterflyComplexStage64Go(re, im, span, blocks, twRe, twIm)

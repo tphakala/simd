@@ -92,6 +92,7 @@ func init() {
 }
 
 func initAVX512() {
+	butterflyStageTier = stageTierAVX
 	minSIMDElements = minAVX512Elements
 	dotProductImpl = dotProductAVX512
 	addImpl = addAVX512
@@ -127,6 +128,7 @@ func initAVX512() {
 }
 
 func initAVX() {
+	butterflyStageTier = stageTierAVX
 	minSIMDElements = minAVXElements
 	dotProductImpl = dotProductAVX
 	addImpl = addAVX
@@ -161,6 +163,7 @@ func initAVX() {
 // AVX kernels that don't depend on FMA stay on AVX paths; FMA-dependent kernels
 // fall back to SSE2 variants which use scalar/SSE multiply-add sequences.
 func initAVXNoFMA() {
+	butterflyStageTier = stageTierAVX
 	minSIMDElements = minAVXElements
 	dotProductImpl = dotProductSSE2
 	addImpl = addAVX
@@ -191,6 +194,7 @@ func initAVXNoFMA() {
 }
 
 func initSSE2() {
+	butterflyStageTier = stageTierSSE2
 	dotProductImpl = dotProductSSE2
 	addImpl = addSSE2
 	subImpl = subSSE2
@@ -220,6 +224,7 @@ func initSSE2() {
 }
 
 func initGo() {
+	butterflyStageTier = stageTierGo
 	dotProductImpl = dotProductGo
 	addImpl = addGo
 	subImpl = subGo
@@ -685,30 +690,53 @@ func butterflyComplex64(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float64
 	butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm)
 }
 
+// Stage kernel tiers, selected by the init* tier functions through
+// butterflyStageTier.
+const (
+	stageTierGo = iota
+	stageTierSSE2
+	stageTierAVX
+)
+
+// butterflyStageTier selects the radix-2 stage kernel. The init* tier functions
+// set it, so forTiers can force a tier without a function pointer: a func value
+// defeats //go:noescape, and every caller's local arrays would then escape to the
+// heap (measured: 2 allocs per call with a caller-local [64]float64 pair).
+var butterflyStageTier int
+
 func butterflyComplexStage64(re, im []float64, span, blocks int, twRe, twIm []float64) {
-	// butterflyComplexStageAVX is correct for every span: across j when span fills a
-	// 4-wide YMM, across blocks for span 1 and 2. span == 3 fills neither and runs
-	// through the kernel's scalar tail, which still beats the Go fallback by roughly
-	// 2-3x because the kernel absorbs the whole block loop into one call while the
-	// Go path pays a call per block that is over the inliner's budget.
+	// Every path computes the same bits (see ButterflyComplexStage), so the
+	// threshold below is about call overhead only, never about which result a
+	// shape gets. A stage carrying fewer than minAVXElements butterflies goes to Go
+	// regardless of its span; the kernels are correct below it too, and see #206
+	// for relaxing it.
 	//
-	// The guard below is about total work, not about span: a stage carrying fewer
-	// than minAVXElements butterflies goes to Go regardless of its span. So "every
-	// span" describes what the kernel handles, not what always reaches it. The
-	// threshold is conservative rather than load-bearing, since the kernel is
-	// correct below it too; see #206 for relaxing it, which needs coverage first
-	// because every current test enters through this guard.
+	// The AVX kernel is correct for every span: across j when span fills a 4-wide
+	// YMM, across blocks for span 1 and 2. span == 3 fills neither and runs through
+	// the kernel's scalar tail, which still beats the Go fallback because the
+	// kernel absorbs the whole block loop into one call. It needs AVX alone: it no
+	// longer fuses, so there is no FMA conjunct, and no AVX2 anywhere. The
+	// block-axis paths shuffle with VUNPCKLPD/VUNPCKHPD and VPERM2F128 and splat
+	// their twiddles with the memory-source forms of VBROADCASTSD and VBROADCASTF128.
+	// The register-source VBROADCASTSD would be AVX2, which is the trap #196/#197
+	// swept for; see the realFFTUnpack64 comment below. CPUs without AVX take the
+	// SSE2 kernel.
 	//
-	// AVX+FMA is the whole requirement, with no AVX2 anywhere: the block-axis paths
-	// shuffle with VUNPCKLPD/VUNPCKHPD and VPERM2F128 and splat their twiddles with
-	// the memory-source forms of VBROADCASTSD and VBROADCASTF128. The register-source
-	// VBROADCASTSD would be AVX2, which is the trap #196/#197 swept for; see the
-	// realFFTUnpack64 comment below.
-	if cpu.X86.AVX && cpu.X86.FMA && blocks*span >= minAVXElements {
+	// These are direct calls on purpose, not a function pointer: a func value
+	// defeats //go:noescape and makes callers' local arrays escape. The AVX case
+	// tests cpu.X86.AVX itself, besides the tier, because the asmcheck AVX guard
+	// analysis reads the dispatch condition and cannot see that only AVX tiers
+	// set the tier variable.
+	switch {
+	case blocks*span < minAVXElements:
+		butterflyComplexStage64Go(re, im, span, blocks, twRe, twIm)
+	case cpu.X86.AVX && butterflyStageTier == stageTierAVX:
 		butterflyComplexStageAVX(re, im, span, blocks, twRe, twIm)
-		return
+	case butterflyStageTier >= stageTierSSE2:
+		butterflyComplexStageSSE2(re, im, span, blocks, twRe, twIm)
+	default:
+		butterflyComplexStage64Go(re, im, span, blocks, twRe, twIm)
 	}
-	butterflyComplexStage64Go(re, im, span, blocks, twRe, twIm)
 }
 
 func butterflyComplexStage4x64(re, im []float64, span, blocks int,
@@ -1164,6 +1192,12 @@ func butterflyComplexAVX(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float6
 //
 //go:noescape
 func butterflyComplexStageAVX(re, im []float64, span, blocks int, twRe, twIm []float64)
+
+// butterflyComplexStageSSE2 is the SSE2 form of butterflyComplexStageAVX, with
+// the same preconditions.
+//
+//go:noescape
+func butterflyComplexStageSSE2(re, im []float64, span, blocks int, twRe, twIm []float64)
 
 // ButterflyComplexStage4 assembly function declaration.
 //

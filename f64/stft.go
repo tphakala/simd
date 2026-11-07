@@ -31,7 +31,7 @@ import (
 // (ButterflyComplexStage4, with at most one trailing radix-2
 // ButterflyComplexStage; the core lives in fft.go), and the real-input unravel
 // is RealFFTUnpack or, for the power spectrum, RealFFTPower. Each takes the
-// AVX+FMA / NEON vector path where its size justifies it and falls back to scalar
+// vector path where its size justifies it and falls back to scalar
 // Go otherwise; the bit-reversal reorder, padded edge frames and rows shorter
 // than NumBins stay scalar. See #108, #205, #243 and #257.
 //

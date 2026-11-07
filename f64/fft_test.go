@@ -411,7 +411,7 @@ func BenchmarkFFTPlanForward(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	for _, n := range []int{256, 4096, 8192, 32768, 65536} {
+	for _, n := range []int{256, 1024, 2048, 4096, 8192, 32768, 65536} {
 		b.Run("n"+strconv.Itoa(n), func(b *testing.B) {
 			xr, xi := fftTestInput(n, 8)
 			re, im := make([]float64, n), make([]float64, n)

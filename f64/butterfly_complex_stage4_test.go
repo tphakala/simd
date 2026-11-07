@@ -13,8 +13,9 @@ import (
 // =============================================================================
 //
 // These reuse closeEnough, stageAbsTol/stageRelTol and stageFFTTolPerN2 from
-// butterfly_complex_stage_test.go: both stages combine the same butterflies and
-// round the same way, so one tolerance policy covers both.
+// butterfly_complex_stage_test.go: both stages combine the same butterflies, but
+// the radix-2 stage never fuses while this one does on the vector paths, so one
+// tolerance policy covers the difference.
 
 // stage4FillTwiddles writes the three radix-4 twiddle powers for one span into
 // caller-provided buffers of length span:

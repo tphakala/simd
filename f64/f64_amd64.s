@@ -6268,13 +6268,14 @@ butterfly_done:
 // func butterflyComplexStageAVX(re, im []float64, span, blocks int, twRe, twIm []float64)
 // One complete radix-2 decimation-in-time stage, in place over split-complex
 // float64. For every block k in steps of 2*span and every j in [0, span), the
-// butterfly at (k+j, k+span+j) with twiddle tw[j]. Same arithmetic sequence as
-// butterflyComplexAVX above (VMULPD/VMULPD/VSUBPD then VMULPD/VFMADD231PD), so
-// a stage produces the same bits as driving THAT KERNEL per block, for every span
-// and block count tested. That is a kernel-to-kernel statement, not a claim about
-// the exported ButterflyComplex: its dispatch withholds short slices from this
-// kernel, so a per-block loop through the public API can land on the Go path and
-// round differently. Compare kernels, not entry points.
+// butterfly at (k+j, k+span+j) with twiddle tw[j]. The arithmetic is exactly
+// butterflyComplexStage64Go's: four separately rounded products (VMULPD, never an
+// FMA), temp_re = lr*tr - li*ti, temp_im = lr*ti + li*tr, then upper+temp and
+// upper-temp. Every path (this kernel, butterflyComplexStageSSE2, the NEON kernel
+// and the Go fallback) therefore produces the same bits, NaN bit patterns aside.
+// This is NOT the arithmetic of butterflyComplexAVX above, which still fuses its
+// imaginary part, so a stage and a per-block loop through that kernel can differ
+// in the last bit.
 //
 // The stage form exists to pick its own vectorization axis. Long spans vectorize
 // across j, where the twiddles and both halves of the block are contiguous. Spans
@@ -6288,11 +6289,13 @@ butterfly_done:
 // scalar tail. It is still dispatched here, because absorbing the block loop into
 // one call beats the Go fallback's call per block.
 //
-// AVX+FMA only, no AVX2: the block-axis shuffles are VUNPCKLPD/VUNPCKHPD and
+// AVX only (no FMA, no AVX2): the block-axis shuffles are VUNPCKLPD/VUNPCKHPD and
 // VPERM2F128, the twiddle splats are the memory-source forms of VBROADCASTSD and
 // VBROADCASTF128 (the register-source VBROADCASTSD would be AVX2), and all vector
-// arithmetic is floating point, in 256-bit, 128-bit and scalar widths. Frame:
-// re(24)+im(24)+span(8)+blocks(8)+twRe(24)+twIm(24) = 112 bytes.
+// arithmetic is floating point, in 256-bit, 128-bit and scalar widths. The
+// unfused temp_im needs one scratch register beyond the FMA form: Y6/X6 in the
+// j-axis body and tail, Y12/X12 in the span 1 and 2 bodies, X8 in the span 1
+// tail. Frame: re(24)+im(24)+span(8)+blocks(8)+twRe(24)+twIm(24) = 112 bytes.
 TEXT ·butterflyComplexStageAVX(SB), NOSPLIT, $0-112
     MOVQ re_base+0(FP), DX           // DX = re block base
     MOVQ im_base+24(FP), R8          // R8 = im block base
@@ -6337,7 +6340,8 @@ bfstage_vec:
     VMULPD Y1, Y3, Y5                // Y5 = li*ti
     VSUBPD Y5, Y4, Y4                // Y4 = temp_re = lr*tr - li*ti
     VMULPD Y0, Y3, Y5                // Y5 = lr*ti
-    VFMADD231PD Y1, Y2, Y5           // Y5 = temp_im = lr*ti + li*tr
+    VMULPD Y1, Y2, Y6                // Y6 = li*tr
+    VADDPD Y6, Y5, Y5                // Y5 = temp_im = lr*ti + li*tr
 
     VMOVUPD (DX)(BX*8), Y0           // Y0 = upper_re[j:j+4]
     VMOVUPD (R8)(BX*8), Y1           // Y1 = upper_im[j:j+4]
@@ -6369,7 +6373,8 @@ bfstage_tail:
     VMULSD X1, X3, X5
     VSUBSD X5, X4, X4                // X4 = temp_re
     VMULSD X0, X3, X5
-    VFMADD231SD X1, X2, X5           // X5 = temp_im
+    VMULSD X1, X2, X6                // li*tr
+    VADDSD X6, X5, X5                // X5 = temp_im = lr*ti + li*tr
 
     VMOVSD (DX)(BX*8), X0            // X0 = upper_re[j]
     VMOVSD (R8)(BX*8), X1            // X1 = upper_im[j]
@@ -6425,7 +6430,8 @@ bfstage_span1_vec:
     VMULPD Y9, Y7, Y11               // li*ti
     VSUBPD Y11, Y10, Y10             // Y10 = temp_re
     VMULPD Y5, Y7, Y11               // lr*ti
-    VFMADD231PD Y9, Y6, Y11          // Y11 = temp_im
+    VMULPD Y9, Y6, Y12               // li*tr
+    VADDPD Y12, Y11, Y11             // Y11 = temp_im = lr*ti + li*tr
 
     VADDPD Y4, Y10, Y0               // new upper_re
     VSUBPD Y10, Y4, Y1               // new lower_re
@@ -6457,7 +6463,8 @@ bfstage_span1_tail:
     VMULSD X1, X7, X5
     VSUBSD X5, X4, X4                // temp_re
     VMULSD X0, X7, X5
-    VFMADD231SD X1, X6, X5           // temp_im
+    VMULSD X1, X6, X8                // li*tr
+    VADDSD X8, X5, X5                // temp_im = lr*ti + li*tr
 
     VMOVSD (DX), X0                  // upper_re
     VMOVSD (R8), X1                  // upper_im
@@ -6505,7 +6512,8 @@ bfstage_span2_vec:
     VMULPD Y9, Y7, Y11
     VSUBPD Y11, Y10, Y10             // Y10 = temp_re
     VMULPD Y5, Y7, Y11
-    VFMADD231PD Y9, Y6, Y11          // Y11 = temp_im
+    VMULPD Y9, Y6, Y12               // li*tr
+    VADDPD Y12, Y11, Y11             // Y11 = temp_im = lr*ti + li*tr
 
     VADDPD Y4, Y10, Y0               // new upper_re
     VSUBPD Y10, Y4, Y1               // new lower_re
@@ -6540,7 +6548,8 @@ bfstage_span2_tail_pre:
     VMULPD X9, X7, X11
     VSUBPD X11, X10, X10             // temp_re
     VMULPD X5, X7, X11
-    VFMADD231PD X9, X6, X11          // temp_im
+    VMULPD X9, X6, X12               // li*tr
+    VADDPD X12, X11, X11             // X11 = temp_im = lr*ti + li*tr
 
     VADDPD X4, X10, X0
     VSUBPD X10, X4, X1
@@ -6555,6 +6564,187 @@ bfstage_done:
     VZEROUPPER
     RET
 
+// func butterflyComplexStageSSE2(re, im []float64, span, blocks int, twRe, twIm []float64)
+// The radix-2 stage of butterflyComplexStageAVX for CPUs without AVX: same
+// contract, same arithmetic (four separately rounded products, temp_re = lr*tr -
+// li*ti, temp_im = lr*ti + li*tr, then upper+temp and upper-temp), so the result
+// is bit-identical to the AVX kernel and the Go fallback, NaN bit patterns aside.
+//
+// Two vectorization axes, picked by span, in 2-wide XMM. span >= 2 vectorizes
+// across j, 2 butterflies per iteration with a one-butterfly scalar tail for odd
+// span. span == 1 vectorizes across blocks: two blocks per iteration, split into
+// their even and odd elements with UNPCKLPD/UNPCKHPD, the splatted twiddle applied,
+// and the halves rejoined the same way, then a one-block scalar tail.
+//
+// Legacy SSE2 only (MOVUPD/MOVAPD/MOVSD, MULPD/ADDPD/SUBPD, MULSD/ADDSD/SUBSD,
+// UNPCKLPD/UNPCKHPD). Registers: DX/R8 re+im block cursors, SI/DI the lower-half
+// re+im cursors of the current block, R9/R10 twiddle bases, CX span, AX block
+// counter, BX element index (span >= 2) or pair counter (span 1), R11 span*8, R12
+// span*16, R13 span&^1, X0-X13 scratch. No R14/R15/BP. Frame:
+// re(24)+im(24)+span(8)+blocks(8)+twRe(24)+twIm(24) = 112 bytes.
+TEXT ·butterflyComplexStageSSE2(SB), NOSPLIT, $0-112
+    MOVQ re_base+0(FP), DX
+    MOVQ im_base+24(FP), R8
+    MOVQ span+48(FP), CX
+    MOVQ blocks+56(FP), AX
+    MOVQ twRe_base+64(FP), R9
+    MOVQ twIm_base+88(FP), R10
+    TESTQ AX, AX
+    JZ   bfstage_sse2_done
+    CMPQ CX, $1
+    JEQ  bfstage_sse2_span1
+    MOVQ CX, R11
+    SHLQ $3, R11
+    MOVQ CX, R12
+    SHLQ $4, R12
+    MOVQ CX, R13
+    ANDQ $-2, R13
+bfstage_sse2_block:                      // span >= 2: one block per pass
+    LEAQ (DX)(R11*1), SI
+    LEAQ (R8)(R11*1), DI
+    XORQ BX, BX
+    CMPQ BX, R13
+    JGE  bfstage_sse2_tail
+bfstage_sse2_vec:                        // 2 butterflies across j
+    MOVUPD (SI)(BX*8), X0
+    MOVUPD (DI)(BX*8), X1
+    MOVUPD (R9)(BX*8), X2
+    MOVUPD (R10)(BX*8), X3
+    MOVAPD X0, X4
+    MULPD  X2, X4
+    MOVAPD X1, X5
+    MULPD  X3, X5
+    SUBPD  X5, X4
+    MOVAPD X0, X5
+    MULPD  X3, X5
+    MOVAPD X1, X6
+    MULPD  X2, X6
+    ADDPD  X6, X5
+    MOVUPD (DX)(BX*8), X0
+    MOVUPD (R8)(BX*8), X1
+    MOVAPD X0, X2
+    ADDPD  X4, X2
+    SUBPD  X4, X0
+    MOVUPD X2, (DX)(BX*8)
+    MOVUPD X0, (SI)(BX*8)
+    MOVAPD X1, X3
+    ADDPD  X5, X3
+    SUBPD  X5, X1
+    MOVUPD X3, (R8)(BX*8)
+    MOVUPD X1, (DI)(BX*8)
+    ADDQ $2, BX
+    CMPQ BX, R13
+    JLT  bfstage_sse2_vec
+bfstage_sse2_tail:                       // odd span: last butterfly
+    CMPQ BX, CX
+    JGE  bfstage_sse2_next
+    MOVSD (SI)(BX*8), X0
+    MOVSD (DI)(BX*8), X1
+    MOVSD (R9)(BX*8), X2
+    MOVSD (R10)(BX*8), X3
+    MOVAPD X0, X4
+    MULSD  X2, X4
+    MOVAPD X1, X5
+    MULSD  X3, X5
+    SUBSD  X5, X4
+    MOVAPD X0, X5
+    MULSD  X3, X5
+    MOVAPD X1, X6
+    MULSD  X2, X6
+    ADDSD  X6, X5
+    MOVSD (DX)(BX*8), X0
+    MOVSD (R8)(BX*8), X1
+    MOVAPD X0, X2
+    ADDSD  X4, X2
+    SUBSD  X4, X0
+    MOVSD X2, (DX)(BX*8)
+    MOVSD X0, (SI)(BX*8)
+    MOVAPD X1, X3
+    ADDSD  X5, X3
+    SUBSD  X5, X1
+    MOVSD X3, (R8)(BX*8)
+    MOVSD X1, (DI)(BX*8)
+bfstage_sse2_next:
+    ADDQ R12, DX
+    ADDQ R12, R8
+    DECQ AX
+    JNZ  bfstage_sse2_block
+    RET
+bfstage_sse2_span1:                     // span 1: vectorize across blocks
+    MOVSD (R9), X6
+    UNPCKLPD X6, X6
+    MOVSD (R10), X7
+    UNPCKLPD X7, X7
+    MOVQ AX, BX
+    SHRQ $1, BX
+    JZ   bfstage_sse2_span1_tail
+bfstage_sse2_span1_vec:
+    MOVUPD (DX), X0
+    MOVUPD 16(DX), X1
+    MOVAPD X0, X2
+    UNPCKLPD X1, X2
+    UNPCKHPD X1, X0
+    MOVUPD (R8), X3
+    MOVUPD 16(R8), X4
+    MOVAPD X3, X5
+    UNPCKLPD X4, X5
+    UNPCKHPD X4, X3
+    MOVAPD X0, X8
+    MULPD  X6, X8
+    MOVAPD X3, X9
+    MULPD  X7, X9
+    SUBPD  X9, X8
+    MULPD  X7, X0
+    MULPD  X6, X3
+    ADDPD  X3, X0
+    MOVAPD X2, X10
+    ADDPD  X8, X10
+    SUBPD  X8, X2
+    MOVAPD X5, X11
+    ADDPD  X0, X11
+    SUBPD  X0, X5
+    MOVAPD X10, X12
+    UNPCKLPD X2, X12
+    UNPCKHPD X2, X10
+    MOVUPD X12, (DX)
+    MOVUPD X10, 16(DX)
+    MOVAPD X11, X13
+    UNPCKLPD X5, X13
+    UNPCKHPD X5, X11
+    MOVUPD X13, (R8)
+    MOVUPD X11, 16(R8)
+    ADDQ $32, DX
+    ADDQ $32, R8
+    DECQ BX
+    JNZ  bfstage_sse2_span1_vec
+bfstage_sse2_span1_tail:                // odd block count: last block
+    ANDQ $1, AX
+    JZ   bfstage_sse2_done
+    MOVSD 8(DX), X0
+    MOVSD 8(R8), X1
+    MOVAPD X0, X4
+    MULSD  X6, X4
+    MOVAPD X1, X5
+    MULSD  X7, X5
+    SUBSD  X5, X4
+    MULSD  X7, X0
+    MULSD  X6, X1
+    ADDSD  X1, X0
+    MOVSD (DX), X2
+    MOVSD (R8), X3
+    MOVAPD X2, X8
+    ADDSD  X4, X8
+    SUBSD  X4, X2
+    MOVAPD X3, X9
+    ADDSD  X0, X9
+    SUBSD  X0, X3
+    MOVSD X8, (DX)
+    MOVSD X2, 8(DX)
+    MOVSD X9, (R8)
+    MOVSD X3, 8(R8)
+bfstage_sse2_done:
+    RET
+
 // func butterflyComplexStage4AVX(re, im []float64, span, blocks int, tw1Re, tw1Im, tw2Re, tw2Im, tw3Re, tw3Im []float64)
 // One complete radix-4 decimation-in-time stage, in place over split-complex
 // float64. For every block k in steps of 4*span and every j in [0, span), the
@@ -6565,7 +6755,8 @@ bfstage_done:
 //   y0 = a+c; y1 = b - i*d; y2 = a-c; y3 = b + i*d
 // where -i*(dr,di) = (di,-dr) and +i*(dr,di) = (-di,dr). Each complex multiply is
 // VMULPD/VMULPD/VSUBPD for the real part and VMULPD/VFMADD231PD for the imaginary
-// part, the same sequence butterflyComplexStageAVX uses.
+// part. Unlike butterflyComplexStageAVX, which no longer fuses, this kernel does,
+// so the two are tolerance-equal rather than bit-identical.
 //
 // Two vectorization axes, picked by span. span >= 2 vectorizes across j, where the
 // three twiddles and all four sub-vectors are contiguous runs addressed by the

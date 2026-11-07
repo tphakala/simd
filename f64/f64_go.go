@@ -738,6 +738,15 @@ func butterflyComplex64Go(upperRe, upperIm, lowerRe, lowerIm, twRe, twIm []float
 // butterflyComplexStage64Go applies one radix-2 decimation-in-time stage in
 // place over split-complex data. blocks is the number of complete 2*span
 // blocks; the caller has already reconciled it against len(re)/len(im).
+//
+// It is the source of truth for ButterflyComplexStage's bits: each of the four
+// products rounds to float64 on its own, then the real part is a subtraction and
+// the imaginary part an addition, in this operand order. The float64()
+// conversions are what guarantee that. The Go spec says "An explicit
+// floating-point type conversion rounds to the precision of the target type,
+// preventing fusion that would discard that rounding". Without them gc contracts
+// both parts into fused multiply-adds on arm64 and the imaginary part under
+// GOAMD64=v3 (measured), and the result would differ from the vector kernels.
 func butterflyComplexStage64Go(re, im []float64, span, blocks int, twRe, twIm []float64) {
 	tr, ti := twRe[:span], twIm[:span]
 	for b := range blocks {
@@ -745,7 +754,18 @@ func butterflyComplexStage64Go(re, im []float64, span, blocks int, twRe, twIm []
 		mid, end := k+span, k+butterflyStageRadix*span
 		upRe, upIm := re[k:mid:mid], im[k:mid:mid]
 		loRe, loIm := re[mid:end:end], im[mid:end:end]
-		butterflyComplex64Go(upRe, upIm, loRe, loIm, tr, ti)
+		for j := range upRe {
+			lr, li := loRe[j], loIm[j]
+			wr, wi := tr[j], ti[j]
+			tempRe := float64(lr*wr) - float64(li*wi)
+			tempIm := float64(lr*wi) + float64(li*wr)
+
+			ur, ui := upRe[j], upIm[j]
+			upRe[j] = ur + tempRe
+			upIm[j] = ui + tempIm
+			loRe[j] = ur - tempRe
+			loIm[j] = ui - tempIm
+		}
 	}
 }
 

@@ -2866,18 +2866,14 @@ butterfly_neon_done:
 // func butterflyComplexStageNEON(re, im []float64, span, blocks int, twRe, twIm []float64)
 // One complete radix-2 decimation-in-time stage, in place over split-complex
 // float64. For every block k in steps of 2*span and every j in [0, span), the
-// butterfly at (k+j, k+span+j) with twiddle tw[j]. The arithmetic is the same
-// sequence butterflyComplexNEON uses: FMUL+FMLS for temp_re and FMUL+FMLA for
-// temp_im in the vector body, unfused FMUL/FMUL/FSUB and FMUL/FMUL/FADD in the
-// scalar tail.
-//
-// That makes a stage bit-identical to driving butterflyComplexNEON per block for
-// span >= 2, where both take their vector body (verified across every span and
-// block count the tests sweep). It does NOT extend to span 1: this kernel fuses
-// across blocks there, while butterflyComplexNEON handed a length-1 slice falls
-// to its unfused scalar tail, so the two are not the same computation even though
-// they agree for some inputs. The combination is unreachable through
-// butterflyComplex64, which gates NEON on len >= 2.
+// butterfly at (k+j, k+span+j) with twiddle tw[j]. The arithmetic is exactly
+// butterflyComplexStage64Go's: four separately rounded products (FMUL, never
+// FMLA/FMLS), temp_re = lr*tr - li*ti, temp_im = lr*ti + li*tr, then upper+temp
+// and upper-temp, in the vector body and in the scalar tail alike. Every path
+// (this kernel, the AVX and SSE2 kernels and the Go fallback) therefore produces
+// the same bits, NaN bit patterns aside. This is NOT the arithmetic of
+// butterflyComplexNEON, which still fuses, so a stage and a per-block loop
+// through that kernel can differ in the last bit.
 //
 // Two vectorization axes, picked by span. span >= 2 vectorizes across j, where
 // the twiddles and both halves of a block are contiguous, and the block loop is
@@ -2892,7 +2888,9 @@ butterfly_neon_done:
 // lower pointers, R21/R22 twiddle pointers, R23 inner counter, R24 span bytes,
 // R25 block bytes. The span == 1 path uses R0/R1 as the running re+im cursors,
 // R6/R7 as the second block's addresses, V12/V13 as the splat twiddle and R23
-// as the block-pair counter; it never writes R8, R9, R19-R22, R24 or R25.
+// as the block-pair counter; it never writes R8, R9, R19-R22, R24 or R25. The
+// unfused products need two extra scratch vectors: V12/V13 in the span >= 2 body
+// (free there), V16/V17 in the span == 1 body (V12/V13 hold the twiddle).
 // Frame: re(24)+im(24)+span(8)+blocks(8)+twRe(24)+twIm(24) = 112 bytes.
 TEXT ·butterflyComplexStageNEON(SB), NOSPLIT, $0-112
     MOVD re_base+0(FP), R0           // R0 = re block base
@@ -2935,11 +2933,13 @@ bfstage_neon_vec:
 
     // tempRe = lowerRe*twRe - lowerIm*twIm
     WORD $0x6E64DC46                 // FMUL V6.2D, V2.2D, V4.2D
-    WORD $0x4EE5CC66                 // FMLS V6.2D, V3.2D, V5.2D
+    WORD $0x6E65DC6C                 // FMUL V12.2D, V3.2D, V5.2D
+    WORD $0x4EECD4C6                 // FSUB V6.2D, V6.2D, V12.2D
 
     // tempIm = lowerRe*twIm + lowerIm*twRe
     WORD $0x6E65DC47                 // FMUL V7.2D, V2.2D, V5.2D
-    WORD $0x4E64CC67                 // FMLA V7.2D, V3.2D, V4.2D
+    WORD $0x6E64DC6D                 // FMUL V13.2D, V3.2D, V4.2D
+    WORD $0x4E6DD4E7                 // FADD V7.2D, V7.2D, V13.2D
 
     WORD $0x4E66D408                 // FADD V8.2D, V0.2D, V6.2D  (new upperRe)
     WORD $0x4EE6D40A                 // FSUB V10.2D, V0.2D, V6.2D (new lowerRe)
@@ -2994,8 +2994,9 @@ bfstage_neon_next:
     // The loop body's four loads, the two ADDs that address them, and its four
     // stores could be two multi-register loads and two multi-register stores
     // instead (VLD1 (R0), [V0.D2, V1.D2] and VST1.P [V0.D2, V1.D2], 32(R0)),
-    // dropping 6 of its 28 instructions. Measured on a Cortex-A76 over span 1
-    // of a 1024-point stage, in paired interleaved rounds: under 1%, which is
+    // dropping 6 of its instructions. Measured on a Cortex-A76, on the earlier
+    // fused 28 instruction body, over span 1 of a 1024-point stage, in paired
+    // interleaved rounds: under 1%, which is
     // not worth rewriting a hot kernel for. Neither throughput floor binds here
     // (about 13 cycles per iteration against a decode floor of 7 and an ASIMD
     // floor of 8), and none of the six removed instructions is ASIMD, so the
@@ -3025,11 +3026,13 @@ bfstage_neon_span1_vec:
 
     // tempRe = lowerRe*twRe - lowerIm*twIm
     WORD $0x6E6CDC68                 // FMUL V8.2D, V3.2D, V12.2D
-    WORD $0x4EEDCCE8                 // FMLS V8.2D, V7.2D, V13.2D
+    WORD $0x6E6DDCF0                 // FMUL V16.2D, V7.2D, V13.2D
+    WORD $0x4EF0D508                 // FSUB V8.2D, V8.2D, V16.2D
 
     // tempIm = lowerRe*twIm + lowerIm*twRe
     WORD $0x6E6DDC69                 // FMUL V9.2D, V3.2D, V13.2D
-    WORD $0x4E6CCCE9                 // FMLA V9.2D, V7.2D, V12.2D
+    WORD $0x6E6CDCF1                 // FMUL V17.2D, V7.2D, V12.2D
+    WORD $0x4E71D529                 // FADD V9.2D, V9.2D, V17.2D
 
     WORD $0x4E68D44A                 // FADD V10.2D, V2.2D, V8.2D  (new upperRe)
     WORD $0x4EE8D44B                 // FSUB V11.2D, V2.2D, V8.2D  (new lowerRe)
@@ -3057,7 +3060,7 @@ bfstage_neon_span1_tail_pre:
     FMOVD 8(R1), F3                  // lowerIm
     // The twiddle is already in registers: F12/F13 alias lane 0 of the V12/V13
     // splats built at bfstage_neon_span1, and the vector loop above only ever
-    // reads V12/V13 (they are sources of the FMUL/FMLS/FMLA words, never
+    // reads V12/V13 (they are sources of the FMUL words, never
     // destinations), so lane 0 still holds twRe[0]/twIm[0]. Reloading them from
     // (R2)/(R3) would be two redundant loads.
     FMULD F2, F12, F6
@@ -3088,8 +3091,9 @@ bfstage_neon_done:
 //   t1 = x1*tw1; t2 = x2*tw2; t3 = x3*tw3    (FMUL+FMLS for re, FMUL+FMLA for im)
 //   a = x0+t1; b = x0-t1; c = t2+t3; d = t2-t3
 //   y0 = a+c; y1 = b - i*d; y2 = a-c; y3 = b + i*d
-// where -i*(dr,di) = (di,-dr) and +i*(dr,di) = (-di,dr). Same arithmetic sequence
-// as butterflyComplexStageNEON, extended from a radix-2 pair to a radix-4 group.
+// where -i*(dr,di) = (di,-dr) and +i*(dr,di) = (-di,dr). Unlike
+// butterflyComplexStageNEON, which no longer fuses, this kernel does (FMUL+FMLS,
+// FMUL+FMLA), so the two are tolerance-equal rather than bit-identical.
 //
 // Two vectorization axes, picked by span. span >= 2 vectorizes across j, two lanes
 // (.2D) per iteration with a scalar tail for odd span; the four sub-vector cursors
